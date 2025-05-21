@@ -4,7 +4,7 @@
 #include "rapidjson/document.h"
 #include "version.h"
 
-#define NEWS_MOTD_DEFAULT "Welcome to IW4x Multiplayer!"
+#define NEWS_MOTD_DEFAULT "Welcome to Zombie Warfare 3!"
 
 /*
   MOTD, Changelog and popup messages are fetched as JSON using Cache::GetFile.
@@ -140,17 +140,20 @@ namespace Components
 		if (!parseResult || !jsonDocument.IsObject())
 			return;
 
-		auto motd = ExtractStringByMemberName(jsonDocument, "motd");
+		/*auto motd = ExtractStringByMemberName(jsonDocument, "motd");
 		auto changelog = ExtractStringByMemberName(jsonDocument, "changelog");
 
 		if (!motd.has_value())
 			motd = NEWS_MOTD_DEFAULT;
 
 		if (!changelog.has_value())
-			changelog = "Changelog could not be retrieved.";
+			changelog = "Changelog could not be retrieved.";*/
 
-		Localization::Set("MPUI_MOTD_TEXT", motd.value());
-		Changelog::SetChangelog(changelog.value());
+		//Localization::Set("MPUI_MOTD_TEXT", motd.value());
+		//Changelog::SetChangelog(changelog.value());
+
+		Localization::Set("MPUI_MOTD_TEXT", NEWS_MOTD_DEFAULT);
+		Changelog::SetChangelog("Changelog not available.");
 
 		ProcessPopmenus(jsonDocument);
 	}

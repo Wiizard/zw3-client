@@ -4,6 +4,10 @@
 #include "ScriptExtension.hpp"
 #include "Script.hpp"
 
+#include <windows.h>
+#include <wininet.h>
+#pragma comment(lib, "wininet.lib")
+
 namespace Components::GSC
 {
 	std::unordered_map<const char*, const char*> ScriptExtension::ReplacedFunctions;

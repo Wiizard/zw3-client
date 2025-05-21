@@ -41,6 +41,8 @@ namespace Components
 		static void InsertRequest(Network::Address address);
 		static void Insert(const Network::Address& address, const Utils::InfoString& info);
 
+		static void DisableQuickRefresh([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
+
 		static ServerInfo* GetCurrentServer();
 
 		static bool IsFavouriteList();

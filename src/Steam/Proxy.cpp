@@ -156,7 +156,7 @@ namespace Steam
 		gameID.type = 1; // k_EGameIDTypeGameMod
 		gameID.appID = Proxy::AppId & 0xFFFFFF;
 
-		const char* modId = "IW4x";
+		const char* modId = "Call of Duty: Zombie Warfare 3";
 		gameID.modID = *reinterpret_cast<const unsigned int*>(modId) | 0x80000000;
 
 		Interface clientUtils(Proxy::ClientEngine->GetIClientUtils(Proxy::SteamPipe));

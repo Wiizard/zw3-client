@@ -410,7 +410,7 @@ namespace Components
 
 		Scheduler::Loop(RunFrame, Scheduler::Pipeline::MAIN);
 
-		Scheduler::OnGameInitialized([]
+		/*Scheduler::OnGameInitialized([]
 			{
 
 				Session::Handle("nodeListResponse", HandleResponse);
@@ -422,7 +422,7 @@ namespace Components
 				Migrate();
 				LoadNodePreset();
 				LoadNodes();
-			}, Scheduler::Pipeline::MAIN);
+			}, Scheduler::Pipeline::MAIN);*/
 
 		Command::Add("listNodes", [](const Command::Params*)
 			{

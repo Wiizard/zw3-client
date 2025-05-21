@@ -62,18 +62,18 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName", "IW4x"
+            VALUE "CompanyName", "Call of Duty: Zombie Warfare 3"
 #ifdef _DEBUG
-            VALUE "FileDescription", "IW4 client modification (DEBUG)"
+            VALUE "FileDescription", "ZW3 client modification (Debug)"
 #else
-            VALUE "FileDescription", "IW4 client modification"
+            VALUE "FileDescription", "ZW3 client modification"
 #endif
             VALUE "FileVersion", REVISION_STR
-            VALUE "InternalName", "iw4x"
-            VALUE "LegalCopyright", "Copyright 2023 The IW4x Team. All rights reserved."
-            VALUE "OriginalFilename", "iw4x.dll"
-            VALUE "ProductName", "IW4x"
-            VALUE "ProductVersion", REVISION_STR
+            VALUE "InternalName", "ZW3"
+            VALUE "LegalCopyright", "Copyright 2025 The Zombie Warfare Team. All rights reserved."
+            VALUE "OriginalFilename", "zw3.dll"
+            VALUE "ProductName", "Call of Duty: Zombie Warfare 3"
+            VALUE "ProductVersion", "1.0.0"
         END
     END
     BLOCK "VarFileInfo"

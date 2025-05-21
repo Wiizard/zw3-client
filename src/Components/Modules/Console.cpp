@@ -98,9 +98,9 @@ namespace Components
 		else if (IsWindow(GetWindow()) != FALSE)
 		{
 #ifdef EXPERIMENTAL_BUILD
-			SetWindowTextA(GetWindow(), Utils::String::Format("IW4x " REVISION_STR "-develop : {}", hostname));
+			SetWindowTextA(GetWindow(), Utils::String::Format("Call of Duty: Zombie Warfare 3: {}", hostname));
 #else
-			SetWindowTextA(GetWindow(), Utils::String::Format("IW4x " REVISION_STR " : {}", hostname));
+			SetWindowTextA(GetWindow(), Utils::String::Format("Call of Duty: Zombie Warfare 3: {}", hostname));
 #endif
 		}
 	}
@@ -109,7 +109,7 @@ namespace Components
 	{
 		wattron(InputWindow, COLOR_PAIR(10) | A_BOLD);
 #ifdef EXPERIMENTAL_BUILD
-		wprintw(InputWindow, "%s-develop> ", REVISION_STR);
+		wprintw(InputWindow, "%s> ", REVISION_STR);
 #else
 		wprintw(InputWindow, "%s> ", REVISION_STR);
 #endif
@@ -861,9 +861,9 @@ namespace Components
 
 		// Console '%s: %s> ' string
 #ifdef EXPERIMENTAL_BUILD
-		Utils::Hook::Set<const char*>(0x5A44B4, "IW4x MP: " REVISION_STR "-develop> ");
+		Utils::Hook::Set<const char*>(0x5A44B4, "Call of Duty: Zombie Warfare 3> ");
 #else
-		Utils::Hook::Set<const char*>(0x5A44B4, "IW4x MP: " REVISION_STR "> ");
+		Utils::Hook::Set<const char*>(0x5A44B4, "Call of Duty: Zombie Warfare 3> ");
 #endif
 
 		// Patch console color

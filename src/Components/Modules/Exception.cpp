@@ -60,13 +60,14 @@ namespace Components
 
 	std::wstring Exception::GetErrorMessage(const std::string& error)
 	{
-		const auto clientVersion = (*Game::shortversion)->current.string;
+		//const auto clientVersion = (*Game::shortversion)->current.string;
+		const std::string clientVersion = "1.0.0";
 		const auto osVersion = Utils::IsWineEnvironment() ? "Wine" : Utils::GetWindowsVersion();
 		const auto launchParams = Utils::String::Convert(Utils::GetLaunchParameters());
 
 		std::string clientInfo = std::format(R"(
 			Client Info:
-			IW4x Version: {}
+			ZW3 Version: {}
 			OS Version: {}
 			Parameters: {})",
 			clientVersion, osVersion, launchParams);
@@ -106,7 +107,8 @@ namespace Components
 
 		// Get info for a dedicated server
 		{
-			const auto serverVersion = Dvar::Var("sv_version").get<std::string>();
+			//const auto serverVersion = Dvar::Var("sv_version").get<std::string>();
+			const std::string serverVersion = "1.0.0";
 			const auto ipAddress = Network::Address(*Game::connectedHost).getString();
 
 			char serverName[256]{ 0 };
@@ -116,7 +118,7 @@ namespace Components
 			std::string serverInfo = std::format(R"(
 				Server Info:
 				Type: Dedicated Server							
-				IW4x Version: {}
+				ZW3 Version: {}
 				Server Name: {}
 				IP Address: {}					
 				Gametype: {}

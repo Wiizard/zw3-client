@@ -9,9 +9,9 @@ namespace Components
 	Dvar::Var Branding::CGDrawVersionY;
 
 #ifdef _DEBUG
-	constexpr auto* BUILD_TYPE = "IW4x_DEV MP";
+	constexpr auto* BUILD_TYPE = "Call of Duty: Zombie Warfare 3 (Debug)";
 #else
-	constexpr auto* BUILD_TYPE = "IW4x MP";
+	constexpr auto* BUILD_TYPE = "Call of Duty: Zombie Warfare 3";
 #endif
 
 	void Branding::CG_DrawVersion()
@@ -48,9 +48,9 @@ namespace Components
 	const char* Branding::GetBuildNumber()
 	{
 #ifdef EXPERIMENTAL_BUILD
-		return REVISION_STR "-develop latest " __DATE__ " " __TIME__;
+		return "ZW3-client (built " __DATE__ " " __TIME__ ")";
 #else
-		return REVISION_STR " latest " __DATE__ " " __TIME__;
+		return "ZW3-client (built " __DATE__ " " __TIME__ ")";
 #endif
 	}
 
@@ -100,7 +100,7 @@ namespace Components
 		RegisterBrandingDvars();
 
 		// UI version string
-		Utils::Hook::Set<const char*>(0x43F73B, "IW4x " REVISION_STR);
+		Utils::Hook::Set<const char*>(0x43F73B, "Call of Duty: Zombie Warfare 3");
 
 		// Short version dvar
 		Utils::Hook::Set<const char*>(0x60BD91, REVISION_STR);
@@ -108,7 +108,7 @@ namespace Components
 		// Com_Init_Try_Block_Function
 		Utils::Hook::Set<const char*>(0x60BAF4, BUILD_TYPE);
 #ifdef EXPERIMENTAL_BUILD
-		Utils::Hook::Set<const char*>(0x60BAEf, REVISION_STR "-develop");
+		Utils::Hook::Set<const char*>(0x60BAEf, "Call of Duty: Zombie Warfare 3");
 #else
 		Utils::Hook::Set<const char*>(0x60BAEf, REVISION_STR);
 #endif
@@ -136,19 +136,19 @@ namespace Components
 		// Console title
 		if (ZoneBuilder::IsEnabled())
 		{
-			Utils::Hook::Set<const char*>(0x4289E8, "IW4x (" REVISION_STR "): ZoneBuilder");
+			Utils::Hook::Set<const char*>(0x4289E8, "Call of Duty: Zombie Warfare 3 [ZoneBuilder]");
 		}
 		else if (Dedicated::IsEnabled())
 		{
 #ifdef EXPERIMENTAL_BUILD
-			Utils::Hook::Set<const char*>(0x4289E8, "IW4x " REVISION_STR "-develop: Dedicated");
+			Utils::Hook::Set<const char*>(0x4289E8, "Call of Duty: Zombie Warfare 3 [Dedicated]");
 #else
-			Utils::Hook::Set<const char*>(0x4289E8, "IW4x " REVISION_STR ": Dedicated");
+			Utils::Hook::Set<const char*>(0x4289E8, "Call of Duty: Zombie Warfare 3 [Dedicated]");
 #endif
 		}
 		else
 		{
-			Utils::Hook::Set<const char*>(0x4289E8, "IW4x (" REVISION_STR "): Console");
+			Utils::Hook::Set<const char*>(0x4289E8, "Call of Duty: Zombie Warfare 3 [Console]");
 		}
 	}
 }

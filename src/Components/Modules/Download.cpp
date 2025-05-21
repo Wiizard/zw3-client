@@ -11,6 +11,9 @@
 
 #include <mongoose.h>
 
+#include "GSC/Script.hpp"
+#include "GSC/ScriptExtension.hpp"
+
 #define MG_OVERRIDE_LOG_FN
 
 namespace Components
@@ -25,6 +28,8 @@ namespace Components
 	Dvar::Var Download::UIDlTransRate;
 
 	Download::ClientDownload Download::CLDownload;
+	std::vector<std::shared_ptr<Download::ScriptDownload>> Download::ScriptDownloads;
+	std::vector<std::shared_ptr<Download::ScriptPost>> Download::ScriptPosts;
 
 	std::thread Download::ServerThread;
 	volatile bool Download::Terminate;
@@ -791,7 +796,7 @@ namespace Components
 
 		if (!handled)
 		{
-			mg_http_serve_opts opts = { .root_dir = "iw4x/html" }; // Serve local dir
+			mg_http_serve_opts opts = { .root_dir = "zw3/html" }; // Serve local dir
 			mg_http_serve_dir(c, hm, &opts);
 		}
 
@@ -866,6 +871,117 @@ namespace Components
 			SV_wwwDownload = Dvar::Register<bool>("sv_wwwDownload", false, Game::DVAR_NONE, "Set to true to enable downloading maps/mods from an external server.");
 			SV_wwwBaseUrl = Dvar::Register<const char*>("sv_wwwBaseUrl", "", Game::DVAR_NONE, "Set to the base url for the external map download.");
 		});
+
+		Scheduler::Loop([]
+		{
+			int workingCount = 0;
+
+			for (auto i = Download::ScriptDownloads.begin(); i != Download::ScriptDownloads.end();)
+			{
+				auto download = *i;
+
+				if (download->isDone())
+				{
+					download->notifyDone();
+					i = Download::ScriptDownloads.erase(i);
+					continue;
+				}
+
+				if (download->isWorking())
+				{
+					download->notifyProgress();
+					++workingCount;
+				}
+
+				++i;
+			}
+
+			for (auto& download : Download::ScriptDownloads)
+			{
+				if (workingCount > 5) break;
+				if (!download->isWorking())
+				{
+					download->startWorking();
+					++workingCount;
+				}
+			}
+		}, Scheduler::Pipeline::CLIENT);
+
+		Scheduler::Loop([] {
+			int workingCount = 0;
+
+			for (auto i = Download::ScriptPosts.begin(); i != Download::ScriptPosts.end();)
+			{
+				auto post = *i;
+
+				if (post->isDone())
+				{
+					post->notifyDone();
+					i = Download::ScriptPosts.erase(i);
+					continue;
+				}
+
+				if (post->isWorking())
+				{
+					post->notifyProgress();
+					++workingCount;
+				}
+
+				++i;
+			}
+
+			for (auto& post : Download::ScriptPosts)
+			{
+				if (workingCount > 5) break;
+				if (!post->isWorking())
+				{
+					post->startWorking();
+					++workingCount;
+				}
+			}
+
+			}, Scheduler::Pipeline::CLIENT);
+
+		Events::OnVMShutdown([]()
+		{
+			Download::ScriptDownloads.clear();
+		});
+
+		GSC::Script::AddFunction("HttpGet", []
+		{
+			//if (!Flags::HasFlag("scriptablehttp"))
+				//return;
+
+			const auto* url = Game::Scr_GetString(0);
+
+			if (url == nullptr)
+			{
+				Game::Scr_ParamError(0, "^1HttpGet: Illegal parameter!\n");
+				return;
+			}
+
+			auto object = Game::AllocObject();
+			Game::Scr_AddObject(object);
+			Download::ScriptDownloads.push_back(std::make_shared<ScriptDownload>(url, object));
+			Game::RemoveRefToObject(object);
+		});
+
+		GSC::Script::AddFunction("HttpPost", []
+		{
+			const char* url = Game::Scr_GetString(0);
+			const char* body = Game::Scr_GetString(1);
+
+			if (!url || !body)
+			{
+				Game::Scr_ParamError(0, "^1HttpPost: Invalid parameters!\n");
+				return;
+			}
+
+			auto object = Game::AllocObject();
+			Game::Scr_AddObject(object);
+			Download::ScriptPosts.push_back(std::make_shared<ScriptPost>(url, body, object));
+			Game::RemoveRefToObject(object);
+		});
 	}
 
 	Download::~Download()
@@ -888,6 +1004,8 @@ namespace Components
 		{
 			CLDownload.clear();
 		}
+
+		ScriptDownloads.clear();
 	}
 
 	bool Download::ClientDownload::File::allowed() const

@@ -7,7 +7,7 @@ namespace Components
 	public:
 		Discord();
 
-		static std::string GetDiscordServerLink() { return "https://discord.gg/2ETE8engZM"; }
+		static std::string GetDiscordServerLink() { return "https://discord.gg/QqnF2NFNVV"; }
 
 		void preDestroy() override;
 
@@ -15,5 +15,13 @@ namespace Components
 		static bool Initialized_;
 
 		static void UpdateDiscord();
+
+		static bool IsPrivateMatchOpen();
+
+		static bool IsServerListOpen();
+
+		static bool IsMainMenuOpen();
+
+		static bool IsPartyLobbyOpen();
 	};
 }

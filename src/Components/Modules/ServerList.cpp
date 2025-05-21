@@ -253,6 +253,9 @@ namespace Components
 		{
 			auto* serverInfo = &(*list)[i];
 
+			// Only include servers with "zw3" in the mod name
+			//if (!Utils::String::Contains(serverInfo->mod, "zw3")) continue;
+
 			// Filter full servers
 			if (!ui_browserShowFull && serverInfo->clients >= serverInfo->maxClients) continue;
 
@@ -286,14 +289,14 @@ namespace Components
 		if (!result || !doc.IsObject())
 		{
 			UseMasterServer = false;
-			Logger::Print("Unable to parse JSON response. Using the Node System\n");
+			Logger::Print("Unable to parse JSON response.\n");
 			return;
 		}
 
 		if (!doc.HasMember("servers"))
 		{
 			UseMasterServer = false;
-			Logger::Print("Unable to parse JSON response: we were unable to find any server. Using the Node System\n");
+			Logger::Print("Unable to parse JSON response: we were unable to find any server.\n");
 			return;
 		}
 
@@ -301,7 +304,7 @@ namespace Components
 		if (!list.IsArray() || list.Empty())
 		{
 			UseMasterServer = false;
-			Logger::Print("Unable to parse JSON response: we were unable to find any server. Using the Node System\n");
+			Logger::Print("Unable to parse JSON response: we were unable to find any server.\n");
 			return;
 		}
 
@@ -345,7 +348,7 @@ namespace Components
 		if (!count)
 		{
 			UseMasterServer = false;
-			Logger::Print("Despite receiving what looked like a valid response from the master server, we got {} servers. Using the Node System\n", count);
+			Logger::Print("Despite receiving what looked like a valid response from the master server, we got {} servers.\n", count);
 			return;
 		}
 
@@ -371,7 +374,7 @@ namespace Components
 
 		if (IsOfflineList())
 		{
-			Discovery::Perform();
+			//Discovery::Perform();
 		}
 		else if (IsOnlineList())
 		{
@@ -381,14 +384,14 @@ namespace Components
 			RefreshContainer.awatingList = true;
 			RefreshContainer.awaitTime = Game::Sys_Milliseconds();
 
-			Toast::Show("cardicon_headshot", "Server Browser", "Fetching servers...", 3000);
+			Toast::Show("cardicon_redhand", "Fetching Servers", "This may take some time. Please wait...", 3000);
 
-			const auto url = std::format("http://iw4x.getserve.rs/v1/servers/iw4x?protocol={}", PROTOCOL);
-			const auto reply = Utils::WebIO("IW4x", url).setTimeout(5000)->get();
+			const auto url = std::format("http://master.fwgclan.eu/v1/servers/zw3?protocol={}", PROTOCOL);
+			const auto reply = Utils::WebIO("zw3", url).setTimeout(5000)->get();
 			if (reply.empty())
 			{
-				Logger::Print("Response from {} was empty or the request timed out. Using the Node System\n", url);
-				Toast::Show("cardicon_headshot", "^1Error", std::format("Could not get a response from {}. Using the Node System", url), 5000);
+				Logger::Print("Response was empty or the request timed out.\n", url);
+				Toast::Show("cardicon_redhand", "^1Error", std::format("Could not get a response.", url), 5000);
 				UseMasterServer = false;
 				return;
 			}
@@ -821,7 +824,7 @@ namespace Components
 				Logger::Print("We haven't received a response from the master within {} seconds!\n", (Game::Sys_Milliseconds() - RefreshContainer.awaitTime) / 1000);
 
 				UseMasterServer = false;
-				Node::Synchronize();
+				//Node::Synchronize();
 			}
 		}
 
@@ -882,8 +885,35 @@ namespace Components
 		static auto bots = 0;
 
 		auto* list = GetList();
+		if (!list) return;
 
-		if (list)
+		int newServers = 0;
+		int newPlayers = 0;
+		int newBots = 0;
+
+		for (const auto& visibleIndex : VisibleList)
+		{
+			const auto& server = list->at(visibleIndex);
+
+			// Count only zw3 servers
+			//if (!Utils::String::Contains(server.mod, "zw3"))
+				//continue;
+
+			newServers++;
+			newPlayers += server.clients;
+			newBots += server.bots;
+		}
+
+		if (newServers != servers || newPlayers != players || newBots != bots)
+		{
+			servers = newServers;
+			players = newPlayers;
+			bots = newBots;
+
+			Localization::Set("MPUI_SERVERQUERIED", std::format("Servers: {}\nPlayers: {} ({})", servers, players, bots));
+		}
+
+		/*if (list)
 		{
 			auto newSevers = static_cast<int>(list->size());
 			auto newPlayers = 0;
@@ -903,7 +933,7 @@ namespace Components
 
 				Localization::Set("MPUI_SERVERQUERIED", std::format("Servers: {}\nPlayers: {} ({})", servers, players, bots));
 			}
-		}
+		}*/
 	}
 
 	bool ServerList::GetMasterServer(const char* ip, int port, Game::netadr_t& address)
@@ -920,6 +950,11 @@ namespace Components
 		}
 
 		return Game::Menu_IsVisible(Game::uiContext, menu);
+	}
+
+	void ServerList::DisableQuickRefresh([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+	{
+		//stub - just disable
 	}
 
 	ServerList::ServerList()
@@ -979,7 +1014,7 @@ namespace Components
 			});
 
 		// Set default masterServerName + port and save it
-		Utils::Hook::Set<const char*>(0x60AD92, "server.alterware.dev");
+		Utils::Hook::Set<const char*>(0x60AD92, "master.fwgclan.eu");
 		Utils::Hook::Set<std::uint8_t>(0x60AD90, Game::DVAR_NONE); // masterServerName
 		Utils::Hook::Set<std::uint8_t>(0x60ADC6, Game::DVAR_NONE); // masterPort
 
@@ -988,7 +1023,7 @@ namespace Components
 
 		// Add required UIScripts
 		UIScript::Add("UpdateFilter", RefreshVisibleList);
-		UIScript::Add("RefreshFilter", UpdateVisibleList);
+		UIScript::Add("RefreshFilter", DisableQuickRefresh);
 
 		UIScript::Add("RefreshServers", Refresh);
 

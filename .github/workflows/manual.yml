@@ -18,7 +18,7 @@ jobs:
       uses: microsoft/setup-msbuild@v2
 
     - name: Build iw4x.vcxproj only
-      run: msbuild path\to\iw4x.vcxproj /m /p:Configuration=Release /p:Platform=x64
+      run: msbuild build\iw4x.vcxproj /m /p:Configuration=Release /p:Platform=x64
 
     - name: List output files
       run: dir /s /b path\to\output\folder

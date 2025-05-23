@@ -1,0 +1,30 @@
+name: Build ZW3 DLL
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Build iw4x.vcxproj only
+      run: msbuild path\to\iw4x.vcxproj /m /p:Configuration=Release /p:Platform=x64
+
+    - name: List output files
+      run: dir /s /b path\to\output\folder
+
+    - name: Upload zw3.dll
+      uses: actions/upload-artifact@v4
+      with:
+        name: zw3.dll
+        path: path\to\output\folder\zw3.dll

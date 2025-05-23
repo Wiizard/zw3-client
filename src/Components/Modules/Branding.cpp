@@ -9,9 +9,9 @@ namespace Components
 	Dvar::Var Branding::CGDrawVersionY;
 
 #ifdef _DEBUG
-	constexpr auto* BUILD_TYPE = "Call of Duty: Zombie Warfare 3 (Debug)";
+	constexpr auto* BUILD_TYPE = "Zombie Warfare 3 (Debug)";
 #else
-	constexpr auto* BUILD_TYPE = "Call of Duty: Zombie Warfare 3";
+	constexpr auto* BUILD_TYPE = "Zombie Warfare 3";
 #endif
 
 	void Branding::CG_DrawVersion()
@@ -100,7 +100,7 @@ namespace Components
 		RegisterBrandingDvars();
 
 		// UI version string
-		Utils::Hook::Set<const char*>(0x43F73B, "Call of Duty: Zombie Warfare 3");
+		Utils::Hook::Set<const char*>(0x43F73B, "Zombie Warfare 3");
 
 		// Short version dvar
 		Utils::Hook::Set<const char*>(0x60BD91, REVISION_STR);
@@ -108,7 +108,7 @@ namespace Components
 		// Com_Init_Try_Block_Function
 		Utils::Hook::Set<const char*>(0x60BAF4, BUILD_TYPE);
 #ifdef EXPERIMENTAL_BUILD
-		Utils::Hook::Set<const char*>(0x60BAEf, "Call of Duty: Zombie Warfare 3");
+		Utils::Hook::Set<const char*>(0x60BAEf, "Zombie Warfare 3");
 #else
 		Utils::Hook::Set<const char*>(0x60BAEf, REVISION_STR);
 #endif
@@ -136,19 +136,19 @@ namespace Components
 		// Console title
 		if (ZoneBuilder::IsEnabled())
 		{
-			Utils::Hook::Set<const char*>(0x4289E8, "Call of Duty: Zombie Warfare 3 [ZoneBuilder]");
+			Utils::Hook::Set<const char*>(0x4289E8, "Zombie Warfare 3 [ZoneBuilder]");
 		}
 		else if (Dedicated::IsEnabled())
 		{
 #ifdef EXPERIMENTAL_BUILD
-			Utils::Hook::Set<const char*>(0x4289E8, "Call of Duty: Zombie Warfare 3 [Dedicated]");
+			Utils::Hook::Set<const char*>(0x4289E8, "Zombie Warfare 3 [Dedicated]");
 #else
-			Utils::Hook::Set<const char*>(0x4289E8, "Call of Duty: Zombie Warfare 3 [Dedicated]");
+			Utils::Hook::Set<const char*>(0x4289E8, "Zombie Warfare 3 [Dedicated]");
 #endif
 		}
 		else
 		{
-			Utils::Hook::Set<const char*>(0x4289E8, "Call of Duty: Zombie Warfare 3 [Console]");
+			Utils::Hook::Set<const char*>(0x4289E8, "Zombie Warfare 3 [Console]");
 		}
 	}
 }

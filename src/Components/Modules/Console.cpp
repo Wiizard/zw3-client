@@ -98,9 +98,9 @@ namespace Components
 		else if (IsWindow(GetWindow()) != FALSE)
 		{
 #ifdef EXPERIMENTAL_BUILD
-			SetWindowTextA(GetWindow(), Utils::String::Format("Call of Duty: Zombie Warfare 3: {}", hostname));
+			SetWindowTextA(GetWindow(), Utils::String::Format("Zombie Warfare 3: {}", hostname));
 #else
-			SetWindowTextA(GetWindow(), Utils::String::Format("Call of Duty: Zombie Warfare 3: {}", hostname));
+			SetWindowTextA(GetWindow(), Utils::String::Format("Zombie Warfare 3: {}", hostname));
 #endif
 		}
 	}
@@ -861,9 +861,9 @@ namespace Components
 
 		// Console '%s: %s> ' string
 #ifdef EXPERIMENTAL_BUILD
-		Utils::Hook::Set<const char*>(0x5A44B4, "Call of Duty: Zombie Warfare 3> ");
+		Utils::Hook::Set<const char*>(0x5A44B4, "Zombie Warfare 3> ");
 #else
-		Utils::Hook::Set<const char*>(0x5A44B4, "Call of Duty: Zombie Warfare 3> ");
+		Utils::Hook::Set<const char*>(0x5A44B4, "Zombie Warfare 3> ");
 #endif
 
 		// Patch console color

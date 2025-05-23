@@ -27,9 +27,9 @@ namespace Components
 		if (Flags::HasFlag("version"))
 		{
 #ifdef EXPERIMENTAL_BUILD
-			printf("%s", "Call of Duty: Zombie Warfare 3 (built " __DATE__ " " __TIME__ ")\n");
+			printf("%s", "Zombie Warfare 3 (built " __DATE__ " " __TIME__ ")\n");
 #else
-			printf("%s", "Call of Duty: Zombie Warfare 3 (built " __DATE__ " " __TIME__ ")\n");
+			printf("%s", "Zombie Warfare 3 (built " __DATE__ " " __TIME__ ")\n");
 #endif
 
 			ExitProcess(EXIT_SUCCESS);

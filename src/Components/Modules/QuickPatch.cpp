@@ -340,7 +340,7 @@ namespace Components
 		Utils::Hook::Set<const char*>(0x6431D1, BASEGAME);
 
 		// window title
-		Utils::Hook::Set<const char*>(0x5076A0, "Call of Duty: Zombie Warfare 3");
+		Utils::Hook::Set<const char*>(0x5076A0, "Zombie Warfare 3");
 
 		// sv_hostname
 		Utils::Hook::Set<const char*>(0x4D378B, "ZW3Host");

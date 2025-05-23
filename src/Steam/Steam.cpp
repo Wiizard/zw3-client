@@ -128,7 +128,7 @@ namespace Steam
 			}
 			else
 			{
-				Proxy::SetMod("Call of Duty: Zombie Warfare 3");
+				Proxy::SetMod("Zombie Warfare 3");
 				Proxy::RunGame();
 			}
 

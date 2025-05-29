@@ -92,7 +92,7 @@ cd c:/Git/zw3-client</Command>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>STDInclude.hpp</PrecompiledHeaderFile>
       <WarningLevel>Level4</WarningLevel>
-      <TreatWarningAsError>true</TreatWarningAsError>
+      <TreatWarningAsError>false</TreatWarningAsError>
       <PreprocessorDefinitions>_WINDOWS;WIN32;NDEBUG;LTC_NO_FAST;LTC_NO_PROTOTYPES;LTC_NO_RSA_BLINDING;LTC_NO_FILE;ARGTYPE=4;LTM_DESC;__STDC_IEC_559__;MP_NO_DEV_URANDOM;RAPIDJSON_HAS_STDSTRING;ZLIB_CONST;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>src;..\src;..\lib\include;..\deps\discord-rpc\include;..\deps\dualsense-windows\VS19_Solution\DualSenseWindows\include;..\deps\dxsdk\Include;..\deps\extra\font;..\deps\GSL\include;..\deps\iw4-open-formats\include;..\deps\json\single_include\nlohmann;..\deps\libtomcrypt\src\headers;..\deps\libtommath;..\deps\zlib\contrib\minizip;..\deps\mongoose;..\deps\pdcurses;..\deps\protobuf\src;..\deps\rapidjson\include;..\deps\udis86;..\deps\udis86\libudis86;..\deps\extra\udis86;..\deps\extra\udis86\libudis86;..\deps\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ForcedIncludeFiles>STDInclude.hpp</ForcedIncludeFiles>

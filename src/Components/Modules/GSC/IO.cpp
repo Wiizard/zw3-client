@@ -238,6 +238,35 @@ namespace Components::GSC
 		});
 
 		Script::AddFunction("ReadStream", GScr_ReadStream);
+
+		Script::AddMethod("setanim", [](Game::scr_entref_t entref) // Usage: self setanim(<int>);
+			{
+				const auto* ent = Script::Scr_GetPlayerEntity(entref);
+				int anim = Game::Scr_GetInt(0);
+				ent->client->ps.weapState->weapAnim = anim;
+				ent->client->ps.weapState[0x0].weaponDelay = 0;
+				ent->client->ps.weapState[0x0].weaponRestrictKickTime = 0;
+				ent->client->ps.weapState[0x0].weaponState = 0;
+				ent->client->ps.weapState[0x0].weaponTime = 0;
+				ent->client->ps.weapState[0x1].weaponDelay = 0;
+				ent->client->ps.weapState[0x1].weaponRestrictKickTime = 0;
+				ent->client->ps.weapState[0x1].weaponState = 0;
+				ent->client->ps.weapState[0x1].weaponTime = 0;
+			});
+
+		Script::AddMethod("setAnimTime", [](Game::scr_entref_t entref) // Usage: self setanimtime(<int>);
+			{
+				const auto* ent = Script::Scr_GetPlayerEntity(entref);
+				int anim = Game::Scr_GetInt(0);
+				ent->client->ps.weapState[0x0].weaponTime = anim;
+				ent->client->ps.weapState[0x1].weaponTime = anim;
+			});
+
+		Script::AddFunction("SetAnim", [] // gsc: SetAnim(<AnimIndex>)
+			{
+				const auto* filepath = Game::Scr_GetString(0);
+				Utils::Hook::Set<int>(0x59B270, 0);
+			});
 	}
 
 	IO::IO()

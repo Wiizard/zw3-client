@@ -606,7 +606,6 @@ namespace Components
 			ServerInfo server;
 			server.hostname = info.get("hostname");
 			server.mapname = info.get("mapname");
-			server.gametype = info.get("gametype");
 			server.version = info.get("version");
 			server.mod = info.get("fs_game");
 			server.matchType = std::strtol(info.get("matchtype").data(), nullptr, 10);
@@ -622,6 +621,16 @@ namespace Components
 			server.ping = (Game::Sys_Milliseconds() - i->sendTime);
 			server.addr = address;
 
+			const auto zombiemode = info.get("zombiemode");
+			if (!zombiemode.empty())
+			{
+				server.gametype = zombiemode;
+			}
+			else
+			{
+				server.gametype = std::string("Normal");
+			}
+
 			std::hash<ServerInfo> hashFn;
 			server.hash = hashFn(server);
 
@@ -635,7 +644,7 @@ namespace Components
 			}
 
 			server.mapname = TextRenderer::StripMaterialTextIcons(server.mapname);
-			server.gametype = TextRenderer::StripMaterialTextIcons(server.gametype);
+			//server.gametype = TextRenderer::StripMaterialTextIcons(server.gametype);
 			server.mod = TextRenderer::StripMaterialTextIcons(server.mod);
 
 			// Remove server from queue

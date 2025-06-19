@@ -222,6 +222,16 @@ namespace Components
 
 	Command::Command()
 	{
+		AssertSize(Game::cmd_function_s, 24);
+
+		Command::Add("openLink", [](const Command::Params* params)
+		{
+			if (params->size() > 1)
+			{
+				Utils::OpenUrl(params->get(1));
+			}
+		});
+
 		// Protect players from invasive servers
 		Utils::Hook(0x434BD4, CL_ShouldSendNotify_Hk, HOOK_CALL).install()->quick();  // CL_CheckNotify
 	}

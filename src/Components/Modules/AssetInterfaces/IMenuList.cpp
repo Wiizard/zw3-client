@@ -1,3 +1,4 @@
+#include <STDInclude.hpp>
 #include "IMenuList.hpp"
 
 namespace Assets
@@ -7,7 +8,7 @@ namespace Assets
 		Utils::Memory::Allocator* allocator = builder->getAllocator();
 
 		// actually gets the whole list
-		auto menus = Components::Menus::LoadMenuByName_Recursive(name);
+		auto menus = Components::Menus::LoadMenu(name);
 		if (menus.empty()) return;
 
 		// Allocate new menu list
@@ -27,7 +28,7 @@ namespace Assets
 		// Copy new menus
 		for (unsigned int i = 0; i < menus.size(); ++i)
 		{
-			newList->menus[i] = menus[i];
+			newList->menus[i] = menus[i].second;
 		}
 
 		header->menuList = newList;

@@ -8,12 +8,12 @@ namespace Assets
 	void ImenuDef_t::load(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* /*builder*/)
 	{
 		// load from disk
-		auto menus = Components::Menus::LoadMenuByName_Recursive(std::format("ui_mp/{}.menu", name));
+		auto menus = Components::Menus::LoadMenu(name);
 
 		if (menus.empty()) return;
 		if (menus.size() > 1) Components::Logger::Print("Menu '{}' on disk has more than one menudef in it. Only saving the first one\n", name);
 
-		header->menu = menus[0];
+		header->menu = menus[0].second;
 	}
 
 

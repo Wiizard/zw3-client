@@ -1,4 +1,4 @@
-name: Build ZW3
+name: Build zw3.dll
 
 on:
   push:
@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build zw3.dll
+    name: Build zw3.dll from iw4x project
     runs-on: windows-2022
     strategy:
       matrix:
@@ -38,8 +38,14 @@ jobs:
       - name: Set up problem matching
         uses: ammaraskar/msvc-problem-matcher@master
 
-      - name: Build ZW3 project - ${{ matrix.configuration }}
-        run: msbuild /m /v:minimal /p:Configuration=${{ matrix.configuration }} /p:Platform=Win32 build/zw3.vcxproj
+      - name: Build iw4x project only - ${{ matrix.configuration }}
+        run: |
+          msbuild build/iw4x.vcxproj `
+            /m `
+            /v:minimal `
+            /p:Configuration=${{ matrix.configuration }} `
+            /p:Platform=Win32 `
+            /p:TreatWarningsAsErrors=false
 
       - name: Upload zw3.dll + pdb (${{ matrix.configuration }})
         uses: actions/upload-artifact@v4

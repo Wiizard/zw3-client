@@ -7,13 +7,18 @@ namespace Assets
 
 	void ImenuDef_t::load(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* /*builder*/)
 	{
-		// load from disk
-		auto menus = Components::Menus::LoadMenu(name);
+		auto menus = Components::Menus::LoadMenuByName_Recursive(std::format("ui_mp/{}.menu", name));
 
-		if (menus.empty()) return;
-		if (menus.size() > 1) Components::Logger::Print("Menu '{}' on disk has more than one menudef in it. Only saving the first one\n", name);
+		if (menus.empty())
+		{
+			header->menu = nullptr;
+			return;
+		}
+		if (menus.size() > 1) {
+			Components::Logger::Print("Menu '{}' on disk has more than one menudef in it. Only saving the first one\n", name);
+		}
 
-		header->menu = menus[0].second;
+		header->menu = menus[0];
 	}
 
 
@@ -426,7 +431,7 @@ namespace Assets
 			}
 		}
 		// HexRays spaghetti
-		else if (type != 4 && type != 9 && type != 16 && type != 18 && type != 11 && type != 14 && type != 10 && type != 17	&& type != 22 && type != 23 && type != 0)
+		else if (type != 4 && type != 9 && type != 16 && type != 18 && type != 11 && type != 14 && type != 10 && type != 17 && type != 22 && type != 23 && type != 0)
 		{
 			switch (type)
 			{
@@ -484,7 +489,7 @@ namespace Assets
 #endif
 	}
 
-	void ImenuDef_t::save_itemDef_s(Game::itemDef_s *asset, Components::ZoneBuilder::Zone* builder)
+	void ImenuDef_t::save_itemDef_s(Game::itemDef_s* asset, Components::ZoneBuilder::Zone* builder)
 	{
 		AssertSize(Game::itemDef_s, 0x17C);
 

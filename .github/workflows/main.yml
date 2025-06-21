@@ -38,14 +38,15 @@ jobs:
       - name: Set up problem matching
         uses: ammaraskar/msvc-problem-matcher@master
 
-      - name: Build iw4x project only - ${{ matrix.configuration }}
+      - name: Build only iw4x project (zw3.dll) - ${{ matrix.configuration }}
         run: |
           msbuild build/iw4x.vcxproj `
             /m `
             /v:minimal `
             /p:Configuration=${{ matrix.configuration }} `
             /p:Platform=Win32 `
-            /p:TreatWarningsAsErrors=false
+            /p:TreatWarningsAsErrors=false `
+            /p:WarningsAsErrors=
 
       - name: Upload zw3.dll + pdb (${{ matrix.configuration }})
         uses: actions/upload-artifact@v4

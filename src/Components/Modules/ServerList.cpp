@@ -919,7 +919,7 @@ namespace Components
 			players = newPlayers;
 			bots = newBots;
 
-			Localization::Set("MPUI_SERVERQUERIED", std::format("Servers: {}\nPlayers: {} ({})", servers, players, bots));
+			Localization::Set("MPUI_SERVERQUERIED", std::format("Players: {}\nBots: {}\nServers: {}", players, bots, servers));
 		}
 
 		/*if (list)

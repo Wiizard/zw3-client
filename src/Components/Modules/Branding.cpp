@@ -100,7 +100,7 @@ namespace Components
 		RegisterBrandingDvars();
 
 		// UI version string
-		Utils::Hook::Set<const char*>(0x43F73B, "Zombie Warfare 3");
+		Utils::Hook::Set<const char*>(0x43F73B, "");
 
 		// Short version dvar
 		Utils::Hook::Set<const char*>(0x60BD91, REVISION_STR);
@@ -108,7 +108,7 @@ namespace Components
 		// Com_Init_Try_Block_Function
 		Utils::Hook::Set<const char*>(0x60BAF4, BUILD_TYPE);
 #ifdef EXPERIMENTAL_BUILD
-		Utils::Hook::Set<const char*>(0x60BAEf, "Zombie Warfare 3");
+		Utils::Hook::Set<const char*>(0x60BAEf, "");
 #else
 		Utils::Hook::Set<const char*>(0x60BAEf, REVISION_STR);
 #endif

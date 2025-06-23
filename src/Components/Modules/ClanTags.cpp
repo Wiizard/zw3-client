@@ -1,4 +1,3 @@
-
 #include "ClanTags.hpp"
 #include "Events.hpp"
 #include "PlayerName.hpp"
@@ -20,7 +19,7 @@ namespace Components
 			return playerName;
 		}
 
-		return Utils::String::VA("[%s]%s", ClientState[clientNum], playerName);
+		return Utils::String::VA("[%s^7]%s", ClientState[clientNum], playerName);
 	}
 
 	void ClanTags::SendClanTagsToClients()

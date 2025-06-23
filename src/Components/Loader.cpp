@@ -1,5 +1,6 @@
 #include <Utils/InfoString.hpp>
 
+#include "Loader.hpp"
 #include "Modules/ArenaLength.hpp"
 #include "Modules/Auth.hpp"
 #include "Modules/Bans.hpp"

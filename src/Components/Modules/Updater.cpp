@@ -53,19 +53,16 @@ namespace Components
 		// Depending on Linux/Windows 32/64 there are a few things we must check
 		std::optional<std::string> GetLauncher()
 		{
-			if (Utils::IO::FileExists("alterware-launcher.exe"))
-			{
-				return "alterware-launcher.exe";
-			}
+			const char* launchers[] = {
+				"iw4x-launcher.exe",
+				"iw4x-launcher-x86.exe",
+				Utils::IsWineEnvironment() ? "iw4x-launcher" : nullptr
+			};
 
-			if (Utils::IO::FileExists("alterware-launcher-x86.exe"))
-			{
-				return "alterware-launcher-x86.exe";
-			}
-
-			if (Utils::IsWineEnvironment() && Utils::IO::FileExists("alterware-launcher"))
-			{
-				return "alterware-launcher";
+			for (const char* launcher : launchers) {
+				if (launcher && Utils::IO::FileExists(launcher)) {
+					return launcher;
+				}
 			}
 
 			return {};
@@ -84,7 +81,8 @@ namespace Components
 
 		UIScript::Add("getAutoUpdate", [](const UIScript::Token& /*token*/, const Game::uiInfo_s* /*info*/)
 		{
-			if (const auto exe = GetLauncher(); exe.has_value())
+			const auto exe = GetLauncher();
+			if (exe.has_value())
 			{
 				Game::Sys_QuitAndStartProcess(exe.value().data());
 				return;

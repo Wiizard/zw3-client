@@ -189,6 +189,11 @@ namespace Components
 				return;
 			}
 
+			if (Components::Flags::HasFlag("disable-mod-unloading"))
+			{
+				return;
+			}
+
 			ClearMods();
 		});
 	}

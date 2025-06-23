@@ -1,3 +1,4 @@
+#include "AssetHandler.hpp"
 #include "FastFiles.hpp"
 #include "Weapon.hpp"
 
@@ -595,7 +596,24 @@ namespace Components
 				}
 			});
 
+
 		Game::ReallocateAssetPool(Game::ASSET_TYPE_GAMEWORLD_SP, 1);
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_IMAGE, ZoneBuilder::IsEnabled() ? 70000 : 15000);
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_LOADED_SOUND, 3000 * 2);
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_FX, 1500 * 2);
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_LOCALIZE_ENTRY, 16000);
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_XANIMPARTS, 40000);
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_XMODEL, 25000);
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_PHYSPRESET, 128);
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_PIXELSHADER, ZoneBuilder::IsEnabled() ? 40000 : 25000);
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_VERTEXSHADER, ZoneBuilder::IsEnabled() ? 20000 : 10000);
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_MATERIAL, 40000);
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_VERTEXDECL, ZoneBuilder::IsEnabled() ? 0x500 : 250);
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_WEAPON, Weapon::WEAPON_LIMIT);
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_STRINGTABLE, 1000);
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_IMPACT_FX, 10);
+
+		/*Game::ReallocateAssetPool(Game::ASSET_TYPE_GAMEWORLD_SP, 1);
 		Game::ReallocateAssetPool(Game::ASSET_TYPE_IMAGE, ZoneBuilder::IsEnabled() ? 14336 * 2 : 7168);
 		Game::ReallocateAssetPool(Game::ASSET_TYPE_LOADED_SOUND, 2700 * 2);
 		Game::ReallocateAssetPool(Game::ASSET_TYPE_FX, 1200 * 2);
@@ -609,7 +627,7 @@ namespace Components
 		Game::ReallocateAssetPool(Game::ASSET_TYPE_VERTEXDECL, ZoneBuilder::IsEnabled() ? 0x400 : 196);
 		Game::ReallocateAssetPool(Game::ASSET_TYPE_WEAPON, Weapon::WEAPON_LIMIT);
 		Game::ReallocateAssetPool(Game::ASSET_TYPE_STRINGTABLE, 800);
-		Game::ReallocateAssetPool(Game::ASSET_TYPE_IMPACT_FX, 8);
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_IMPACT_FX, 8);*/
 
 		// Register asset interfaces
 		if (ZoneBuilder::IsEnabled())

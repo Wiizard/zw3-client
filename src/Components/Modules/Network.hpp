@@ -92,13 +92,6 @@ struct std::hash<Components::Network::Address>
 {
 	std::size_t operator()(const Components::Network::Address& x) const noexcept
 	{
-		uint32_t ip_raw;
-		auto ip = x.getIP();
-		std::memcpy(&ip_raw, ip.bytes, sizeof(ip_raw));
-
-		std::size_t h1 = std::hash<uint32_t>{}(ip_raw);
-		std::size_t h2 = std::hash<uint16_t>{}(x.getPort());
-
-		return h1 ^ (h2 << 1);
+		return std::hash<std::uint32_t>()(*reinterpret_cast<const std::uint32_t*>(x.getIP().bytes)) ^ std::hash<std::uint16_t>()(x.getPort());
 	}
 };

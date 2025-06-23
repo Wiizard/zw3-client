@@ -11,9 +11,6 @@
 
 #include <mongoose.h>
 
-#include "GSC/Script.hpp"
-#include "GSC/ScriptExtension.hpp"
-
 #define MG_OVERRIDE_LOG_FN
 
 namespace Components
@@ -28,8 +25,6 @@ namespace Components
 	Dvar::Var Download::UIDlTransRate;
 
 	Download::ClientDownload Download::CLDownload;
-	std::vector<std::shared_ptr<Download::ScriptDownload>> Download::ScriptDownloads;
-	std::vector<std::shared_ptr<Download::ScriptPost>> Download::ScriptPosts;
 
 	std::thread Download::ServerThread;
 	volatile bool Download::Terminate;
@@ -44,16 +39,16 @@ namespace Components
 		InitiateClientDownload(map, needPassword, true);
 	}
 
-	void Download::InitiateClientDownload(const std::string& mod, bool needPassword, bool map)
+	void Download::InitiateClientDownload(const std::string& mod, bool needPassword, bool map, bool downloadOnly)
 	{
 		if (CLDownload.running_) return;
 
 		Scheduler::Once([]
-		{
-			UIDlTimeLeft.set(Utils::String::FormatTimeSpan(0));
-			UIDlProgress.set("(0/0) %");
-			UIDlTransRate.set("0.0 MB/s");
-		}, Scheduler::Pipeline::MAIN);
+			{
+				UIDlTimeLeft.set(Utils::String::FormatTimeSpan(0));
+				UIDlProgress.set("(0/0) %");
+				UIDlTransRate.set("0.0 MB/s");
+			}, Scheduler::Pipeline::MAIN);
 
 		Command::Execute("openmenu mod_download_popmenu", false);
 
@@ -74,6 +69,7 @@ namespace Components
 		CLDownload.isMap_ = map;
 		CLDownload.mod_ = mod;
 		CLDownload.terminateThread_ = false;
+		CLDownload.downloadOnly_ = downloadOnly;
 		CLDownload.totalBytes_ = 0;
 		CLDownload.lastTimeStamp_ = 0;
 		CLDownload.downBytes_ = 0;
@@ -171,10 +167,10 @@ namespace Components
 			download->clear();
 
 			Scheduler::Once([]
-			{
-				Command::Execute("closemenu mod_download_popmenu");
-				Party::ConnectError("HTTPS not supported for downloading!");
-			}, Scheduler::Pipeline::CLIENT);
+				{
+					Command::Execute("closemenu mod_download_popmenu");
+					Party::ConnectError("HTTPS not supported for downloading!");
+				}, Scheduler::Pipeline::CLIENT);
 
 			return false;
 		}
@@ -227,15 +223,15 @@ namespace Components
 
 		Utils::WebIO webIO;
 		webIO.setProgressCallback([&fDownload, &webIO](std::size_t bytes, std::size_t)
-		{
-			if(!fDownload.downloading || fDownload.download->terminateThread_)
 			{
-				webIO.cancelDownload();
-				return;
-			}
+				if (!fDownload.downloading || fDownload.download->terminateThread_)
+				{
+					webIO.cancelDownload();
+					return;
+				}
 
-			DownloadProgress(&fDownload, bytes - fDownload.receivedBytes);
-		});
+				DownloadProgress(&fDownload, bytes - fDownload.receivedBytes);
+			});
 
 		auto result = false;
 		fDownload.buffer = webIO.get(url, &result);
@@ -273,10 +269,10 @@ namespace Components
 			download->clear();
 
 			Scheduler::Once([]
-			{
-				Command::Execute("closemenu mod_download_popmenu");
-				Party::ConnectError("Failed to download the modlist!");
-			}, Scheduler::Pipeline::CLIENT);
+				{
+					Command::Execute("closemenu mod_download_popmenu");
+					Party::ConnectError("Failed to download the modlist!");
+				}, Scheduler::Pipeline::CLIENT);
 
 			return;
 		}
@@ -291,10 +287,10 @@ namespace Components
 			download->clear();
 
 			Scheduler::Once([]
-			{
-				Command::Execute("closemenu mod_download_popmenu");
-				Party::ConnectError("Failed to parse the modlist!");
-			}, Scheduler::Pipeline::CLIENT);
+				{
+					Command::Execute("closemenu mod_download_popmenu");
+					Party::ConnectError("Failed to parse the modlist!");
+				}, Scheduler::Pipeline::CLIENT);
 
 			return;
 		}
@@ -317,13 +313,13 @@ namespace Components
 				download->clear();
 
 				Scheduler::Once([]
-				{
-					Dvar::Var("partyend_reason").set(mod);
-					mod.clear();
+					{
+						Dvar::Var("partyend_reason").set(mod);
+						mod.clear();
 
-					Command::Execute("closemenu mod_download_popmenu");
-					Command::Execute("openmenu menu_xboxlive_partyended");
-				}, Scheduler::Pipeline::CLIENT);
+						Command::Execute("closemenu mod_download_popmenu");
+						Command::Execute("openmenu menu_xboxlive_partyended");
+					}, Scheduler::Pipeline::CLIENT);
 
 				return;
 			}
@@ -337,31 +333,44 @@ namespace Components
 		if (download->isMap_)
 		{
 			Scheduler::Once([]
-			{
-				Command::Execute("reconnect", false);
-			}, Scheduler::Pipeline::CLIENT);
+				{
+					Command::Execute("reconnect", false);
+				}, Scheduler::Pipeline::CLIENT);
 		}
 		else
 		{
 			// Run this on the main thread
-			Scheduler::Once([]
-			{
-				Game::Dvar_SetString(*Game::fs_gameDirVar, mod.data());
-
-				Logger::Print("Mod {} downloaded!\n", mod);
-				mod.clear();
-
-				Command::Execute("closemenu mod_download_popmenu");
-
-				if (ModList::cl_modVidRestart.get<bool>())
+			Scheduler::Once([download]
 				{
-					Logger::Print("Restarting video...\n");
-					Command::Execute("vid_restart");
-				}
-				
-				Logger::Print("Reconnecting to server...\n");
-				Command::Execute("reconnect");
-			}, Scheduler::Pipeline::MAIN);
+					Game::Dvar_SetString(*Game::fs_gameDirVar, mod.data());
+
+					auto statFile = (*Game::fs_basepath)->current.string + "\\players\\"s + mod + "\\iw4x.stat"s;
+					bool statFileExists = Utils::IO::FileExists(statFile);
+
+					Logger::Print("Mod {} downloaded!\n", mod);
+					mod.clear();
+
+					Command::Execute("closemenu mod_download_popmenu");
+
+					if (!statFileExists && !download->downloadOnly_)
+					{
+						Logger::Print("Opening stats menu...\n");
+						Command::Execute("openmenu stats_mod_warning");
+					}
+					else {
+						if (ModList::cl_modVidRestart.get<bool>())
+						{
+							Logger::Print("Restarting video...\n");
+							Command::Execute("vid_restart");
+						}
+
+						if (!download->downloadOnly_)
+						{
+							Logger::Print("Reconnecting to server...\n");
+							Command::Execute("reconnect");
+						}
+					}
+				}, Scheduler::Pipeline::MAIN);
 		}
 	}
 
@@ -388,10 +397,10 @@ namespace Components
 
 			framePushed = true;
 			Scheduler::Once([]
-			{
-				framePushed = false;
-				UIDlProgress.set(std::format("({}/{}) {}%", dlIndex, dlSize, dlProgress));
-			}, Scheduler::Pipeline::MAIN);
+				{
+					framePushed = false;
+					UIDlProgress.set(std::format("({}/{}) {}%", dlIndex, dlSize, dlProgress));
+				}, Scheduler::Pipeline::MAIN);
 		}
 
 		auto delta = Game::Sys_Milliseconds() - fDownload->download->lastTimeStamp_;
@@ -418,10 +427,10 @@ namespace Components
 				dlTsBytes = fDownload->download->timeStampBytes_;
 
 				Scheduler::Once([]
-				{
-					UIDlTimeLeft.set(Utils::String::FormatTimeSpan(dlTimeLeft));
-					UIDlTransRate.set(Utils::String::FormatBandwidth(dlTsBytes, dlDelta));
-				}, Scheduler::Pipeline::MAIN);
+					{
+						UIDlTimeLeft.set(Utils::String::FormatTimeSpan(dlTimeLeft));
+						UIDlTransRate.set(Utils::String::FormatBandwidth(dlTsBytes, dlDelta));
+					}, Scheduler::Pipeline::MAIN);
 			}
 
 			fDownload->download->timeStampBytes_ = 0;
@@ -448,7 +457,7 @@ namespace Components
 	void Download::ReplyError(mg_connection* connection, int code, std::string messageOverride)
 	{
 		std::string msg{};
-		switch(code)
+		switch (code)
 		{
 		case 400:
 			msg = "Bad request";
@@ -757,17 +766,17 @@ namespace Components
 		using callback = std::function<std::optional<std::string>(mg_connection*, const mg_http_message*)>;
 
 		static const auto handlers = []() -> std::unordered_map<std::string, callback>
-		{
-			std::unordered_map<std::string, callback> f;
+			{
+				std::unordered_map<std::string, callback> f;
 
-			f["/file"] = FileHandler;
-			f["/info"] = InfoHandler;
-			f["/list"] = ListHandler;
-			f["/map"] = MapHandler;
-			f["/serverlist"] = ServerListHandler;
+				f["/file"] = FileHandler;
+				f["/info"] = InfoHandler;
+				f["/list"] = ListHandler;
+				f["/map"] = MapHandler;
+				f["/serverlist"] = ServerListHandler;
 
-			return f;
-		}();
+				return f;
+			}();
 
 		if (ev != MG_EV_HTTP_MSG)
 		{
@@ -796,7 +805,7 @@ namespace Components
 
 		if (!handled)
 		{
-			mg_http_serve_opts opts = { .root_dir = "zw3/html" }; // Serve local dir
+			mg_http_serve_opts opts = { .root_dir = "iw4x/html" }; // Serve local dir
 			mg_http_serve_dir(c, hm, &opts);
 		}
 
@@ -829,159 +838,48 @@ namespace Components
 				mg_mgr_init(&Mgr);
 
 				Events::OnNetworkInit([]() -> void
-				{
-					const auto* nc = mg_http_listen(&Mgr, Utils::String::VA(":%hu", Network::GetPort()), &EventHandler, &Mgr);
-					if (!nc)
 					{
-						Logger::PrintError(Game::CON_CHANNEL_ERROR, "Failed to bind TCP socket, mod download won't work!\n");
-						Terminate = true;
-					}
-				});
+						const auto* nc = mg_http_listen(&Mgr, Utils::String::VA(":%hu", Network::GetPort()), &EventHandler, &Mgr);
+						if (!nc)
+						{
+							Logger::PrintError(Game::CON_CHANNEL_ERROR, "Failed to bind TCP socket, mod download won't work!\n");
+							Terminate = true;
+						}
+					});
 
 				ServerRunning = true;
 				Terminate = false;
 				ServerThread = Utils::Thread::CreateNamedThread("Mongoose", []() -> void
-				{
-					Com_InitThreadData();
-
-					while (!Terminate)
 					{
-						mg_mgr_poll(&Mgr, 1000);
-					}
-				});
+						Com_InitThreadData();
+
+						while (!Terminate)
+						{
+							mg_mgr_poll(&Mgr, 1000);
+						}
+					});
 			}
 		}
 		else
 		{
 			Events::OnDvarInit([]() -> void
-			{
-				UIDlTimeLeft = Dvar::Register<const char*>("ui_dl_timeLeft", "", Game::DVAR_NONE, "");
-				UIDlProgress = Dvar::Register<const char*>("ui_dl_progress", "", Game::DVAR_NONE, "");
-				UIDlTransRate = Dvar::Register<const char*>("ui_dl_transRate", "", Game::DVAR_NONE, "");
-			});
+				{
+					UIDlTimeLeft = Dvar::Register<const char*>("ui_dl_timeLeft", "", Game::DVAR_NONE, "");
+					UIDlProgress = Dvar::Register<const char*>("ui_dl_progress", "", Game::DVAR_NONE, "");
+					UIDlTransRate = Dvar::Register<const char*>("ui_dl_transRate", "", Game::DVAR_NONE, "");
+				});
 
 			UIScript::Add("mod_download_cancel", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
-			{
-				CLDownload.clear();
-			});
+				{
+					CLDownload.clear();
+				});
 		}
 
 		Events::OnDvarInit([]
-		{
-			SV_wwwDownload = Dvar::Register<bool>("sv_wwwDownload", false, Game::DVAR_NONE, "Set to true to enable downloading maps/mods from an external server.");
-			SV_wwwBaseUrl = Dvar::Register<const char*>("sv_wwwBaseUrl", "", Game::DVAR_NONE, "Set to the base url for the external map download.");
-		});
-
-		Scheduler::Loop([]
-		{
-			int workingCount = 0;
-
-			for (auto i = Download::ScriptDownloads.begin(); i != Download::ScriptDownloads.end();)
 			{
-				auto download = *i;
-
-				if (download->isDone())
-				{
-					download->notifyDone();
-					i = Download::ScriptDownloads.erase(i);
-					continue;
-				}
-
-				if (download->isWorking())
-				{
-					download->notifyProgress();
-					++workingCount;
-				}
-
-				++i;
-			}
-
-			for (auto& download : Download::ScriptDownloads)
-			{
-				if (workingCount > 5) break;
-				if (!download->isWorking())
-				{
-					download->startWorking();
-					++workingCount;
-				}
-			}
-		}, Scheduler::Pipeline::CLIENT);
-
-		Scheduler::Loop([] {
-			int workingCount = 0;
-
-			for (auto i = Download::ScriptPosts.begin(); i != Download::ScriptPosts.end();)
-			{
-				auto post = *i;
-
-				if (post->isDone())
-				{
-					post->notifyDone();
-					i = Download::ScriptPosts.erase(i);
-					continue;
-				}
-
-				if (post->isWorking())
-				{
-					post->notifyProgress();
-					++workingCount;
-				}
-
-				++i;
-			}
-
-			for (auto& post : Download::ScriptPosts)
-			{
-				if (workingCount > 5) break;
-				if (!post->isWorking())
-				{
-					post->startWorking();
-					++workingCount;
-				}
-			}
-
-			}, Scheduler::Pipeline::CLIENT);
-
-		Events::OnVMShutdown([]()
-		{
-			Download::ScriptDownloads.clear();
-		});
-
-		GSC::Script::AddFunction("HttpGet", []
-		{
-			//if (!Flags::HasFlag("scriptablehttp"))
-				//return;
-
-			const auto* url = Game::Scr_GetString(0);
-
-			if (url == nullptr)
-			{
-				Game::Scr_ParamError(0, "^1HttpGet: Illegal parameter!\n");
-				return;
-			}
-
-			auto object = Game::AllocObject();
-			Game::Scr_AddObject(object);
-			Download::ScriptDownloads.push_back(std::make_shared<ScriptDownload>(url, object));
-			Game::RemoveRefToObject(object);
-		});
-
-		GSC::Script::AddFunction("HttpPost", []
-		{
-			const char* url = Game::Scr_GetString(0);
-			const char* body = Game::Scr_GetString(1);
-
-			if (!url || !body)
-			{
-				Game::Scr_ParamError(0, "^1HttpPost: Invalid parameters!\n");
-				return;
-			}
-
-			auto object = Game::AllocObject();
-			Game::Scr_AddObject(object);
-			Download::ScriptPosts.push_back(std::make_shared<ScriptPost>(url, body, object));
-			Game::RemoveRefToObject(object);
-		});
+				SV_wwwDownload = Dvar::Register<bool>("sv_wwwDownload", false, Game::DVAR_NONE, "Set to true to enable downloading maps/mods from an external server.");
+				SV_wwwBaseUrl = Dvar::Register<const char*>("sv_wwwBaseUrl", "", Game::DVAR_NONE, "Set to the base url for the external map download.");
+			});
 	}
 
 	Download::~Download()
@@ -1004,8 +902,6 @@ namespace Components
 		{
 			CLDownload.clear();
 		}
-
-		ScriptDownloads.clear();
 	}
 
 	bool Download::ClientDownload::File::allowed() const

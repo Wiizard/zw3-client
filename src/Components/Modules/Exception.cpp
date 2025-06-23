@@ -1,6 +1,5 @@
-
-#include "Console.hpp"
 #include "Exception.hpp"
+#include "Console.hpp"
 #include "Window.hpp"
 #include "Party.hpp"
 #include "TextRenderer.hpp"
@@ -108,7 +107,7 @@ namespace Components
 		// Get info for a dedicated server
 		{
 			//const auto serverVersion = Dvar::Var("sv_version").get<std::string>();
-			const std::string serverVersion = "1.0.0";
+			const std::string serverVersion = "2.0.0";
 			const auto ipAddress = Network::Address(*Game::connectedHost).getString();
 
 			char serverName[256]{ 0 };
@@ -117,10 +116,10 @@ namespace Components
 
 			std::string serverInfo = std::format(R"(
 				Server Info:
-				Type: Dedicated Server							
+				Type: Dedicated Server
 				ZW3 Version: {}
 				Server Name: {}
-				IP Address: {}					
+				IP Address: {}
 				Gametype: {}
 				Map Name: {}
 				Mod Name: {})",

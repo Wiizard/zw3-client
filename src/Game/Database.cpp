@@ -37,27 +37,11 @@ namespace Game
 
 	XAssetHeader ReallocateAssetPool(XAssetType type, unsigned int newSize)
 	{
-		const auto assetByteSize = DB_GetXAssetSizeHandlers[type]();
-		unsigned long long totalRequestedBytes = (unsigned long long)newSize * assetByteSize;
-		void* newlyAllocatedMemory = Utils::Memory::GetAllocator()->allocate(totalRequestedBytes);
-
-		if (newlyAllocatedMemory == nullptr)
-		{
-			return DB_XAssetPool[type];
-		}
-		else
-		{
-			if (DB_XAssetPool[type].data != nullptr)
-			{
-				Utils::Memory::GetAllocator()->free(DB_XAssetPool[type].data);
-			}
-
-			XAssetHeader newPoolHeader = { newlyAllocatedMemory };
-			DB_XAssetPool[type] = newPoolHeader;
-			g_poolSize[type] = newSize;
-
-			return newPoolHeader;
-		}
+		const auto size = DB_GetXAssetSizeHandlers[type]();
+		XAssetHeader poolEntry = { Utils::Memory::GetAllocator()->allocate(newSize * size) };
+		DB_XAssetPool[type] = poolEntry;
+		g_poolSize[type] = newSize;
+		return poolEntry;
 	}
 
 	const char* DB_GetXAssetName(XAsset* asset)

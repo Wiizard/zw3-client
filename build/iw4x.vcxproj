@@ -120,7 +120,8 @@ cd c:/Git/zw3-client</Command>
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalLibraryDirectories>..\deps\dxsdk\Lib\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <ImportLibrary>bin\Win32\Release\iw4x.lib</ImportLibrary>
-      <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
+      <TreatLinkerWarningAsErrors>
+      </TreatLinkerWarningAsErrors>
       <AdditionalOptions>/IGNORE:4702 /LTCG %(AdditionalOptions)</AdditionalOptions>
       <LargeAddressAware>
       </LargeAddressAware>

@@ -264,7 +264,6 @@ namespace Components::GSC
 
 		Script::AddFunction("SetAnim", [] // gsc: SetAnim(<AnimIndex>)
 			{
-				const auto* filepath = Game::Scr_GetString(0);
 				Utils::Hook::Set<int>(0x59B270, 0);
 			});
 	}

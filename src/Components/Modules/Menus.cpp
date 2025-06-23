@@ -1721,6 +1721,8 @@ namespace Components
 
 	Game::XAssetHeader Menus::MenuListFindHook(Game::XAssetType type, const std::string& filename)
 	{
+		(void)type;
+
 		// This hook needs to return YOUR loaded menulist, if it exists.
 		if (MenuListsFromDisk.contains(filename))
 		{

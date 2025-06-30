@@ -1673,7 +1673,7 @@ namespace Components
 		Add("ui_mp/stats_unlock.menu");
 		Add("ui_mp/stats_mod_warning.menu");
 		Add("ui_mp/theater_menu.menu");
-		Add("ui_mp/connect.menu"); // Explicitly add custom connect.menu for loading
+		Add("ui_mp/connect.menu");
 	}
 
 	void Menus::preDestroy()

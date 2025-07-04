@@ -73,7 +73,7 @@ namespace Components
 				DiscordPresence.state = "Rallying other survivors";
 			}
 
-			DiscordPresence.largeImageKey = "https://i.imghippo.com/files/RM5546xQ.png";
+			DiscordPresence.largeImageKey = "https://i.imghippo.com/files/iAOF6351ypo.png";
 		}
 		else
 		{
@@ -118,7 +118,7 @@ namespace Components
 
 			DiscordPresence.partySize = Game::cgArray[0].snap ? Game::cgArray[0].snap->numClients : 1;
 			DiscordPresence.partyMax = Party::GetMaxClients();
-			DiscordPresence.largeImageKey = "https://i.imghippo.com/files/RM5546xQ.png";
+			DiscordPresence.largeImageKey = "https://i.imghippo.com/files/iAOF6351ypo.png";
 
 			if (DiscordPresenceStartTime == 0)
 			{

@@ -503,7 +503,7 @@ namespace Components
 	{
 		AssertSize(Game::XAssetEntry, 16);
 
-		size_t size = (ZoneBuilder::IsEnabled() ? 1183968 : 789312);
+		size_t size = (ZoneBuilder::IsEnabled() ? 1572864 : 1048576); // was 1183968 : 789312
 		Game::XAssetEntry* entryPool = Utils::Memory::GetAllocator()->allocateArray<Game::XAssetEntry>(size);
 
 		// Apply new size
@@ -596,21 +596,21 @@ namespace Components
 				}
 			});
 
-		Game::ReallocateAssetPool(Game::ASSET_TYPE_GAMEWORLD_SP, 1);
-		Game::ReallocateAssetPool(Game::ASSET_TYPE_IMAGE, ZoneBuilder::IsEnabled() ? 14336 * 2 : 7168);
-		Game::ReallocateAssetPool(Game::ASSET_TYPE_LOADED_SOUND, 2700 * 2);
-		Game::ReallocateAssetPool(Game::ASSET_TYPE_FX, 1200 * 2);
-		Game::ReallocateAssetPool(Game::ASSET_TYPE_LOCALIZE_ENTRY, 14000);
-		Game::ReallocateAssetPool(Game::ASSET_TYPE_XANIMPARTS, 8192 * 2);
-		Game::ReallocateAssetPool(Game::ASSET_TYPE_XMODEL, 5125 * 2);
-		Game::ReallocateAssetPool(Game::ASSET_TYPE_PHYSPRESET, 128);
-		Game::ReallocateAssetPool(Game::ASSET_TYPE_PIXELSHADER, ZoneBuilder::IsEnabled() ? 0x4000 : 10000);
-		Game::ReallocateAssetPool(Game::ASSET_TYPE_VERTEXSHADER, ZoneBuilder::IsEnabled() ? 0x2000 : 3072);
-		Game::ReallocateAssetPool(Game::ASSET_TYPE_MATERIAL, 8192 * 2);
-		Game::ReallocateAssetPool(Game::ASSET_TYPE_VERTEXDECL, ZoneBuilder::IsEnabled() ? 0x400 : 196);
-		Game::ReallocateAssetPool(Game::ASSET_TYPE_WEAPON, Weapon::WEAPON_LIMIT);
-		Game::ReallocateAssetPool(Game::ASSET_TYPE_STRINGTABLE, 800);
-		Game::ReallocateAssetPool(Game::ASSET_TYPE_IMPACT_FX, 8);
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_GAMEWORLD_SP, 2); // was 1
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_IMAGE, ZoneBuilder::IsEnabled() ? 18000 : 9000); // was 14336 * 2 or 7168
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_LOADED_SOUND, 6750); // was 5400
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_FX, 3000); // was 2400
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_LOCALIZE_ENTRY, 18000); // was 14000
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_XANIMPARTS, 20480); // was 16384
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_XMODEL, 13000); // was 10250
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_PHYSPRESET, 160); // was 128
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_PIXELSHADER, ZoneBuilder::IsEnabled() ? 0x5000 : 12500); // was 0x4000 or 10000
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_VERTEXSHADER, ZoneBuilder::IsEnabled() ? 0x2800 : 4000); // was 0x2000 or 3072
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_MATERIAL, 20480); // was 16384
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_VERTEXDECL, ZoneBuilder::IsEnabled() ? 0x500 : 256); // was 0x400 or 196
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_WEAPON, Weapon::WEAPON_LIMIT); // unchanged (since dynamic)
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_STRINGTABLE, 1024); // was 800
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_IMPACT_FX, 16); // was 8
 
 		// Register asset interfaces
 		if (ZoneBuilder::IsEnabled())

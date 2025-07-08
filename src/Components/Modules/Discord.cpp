@@ -3,12 +3,10 @@
 #include "TextRenderer.hpp"
 
 #include <discord_rpc.h>
-#include <chrono>
 
 namespace Components
 {
 	static DiscordRichPresence DiscordPresence;
-	static long long DiscordPresenceStartTime = 0;
 
 	bool Discord::Initialized_;
 
@@ -20,7 +18,13 @@ namespace Components
 
 	static void Ready([[maybe_unused]] const DiscordUser* request)
 	{
+		ZeroMemory(&DiscordPresence, sizeof(DiscordPresence));
+
+		DiscordPresence.instance = 1;
+
 		Logger::Print("Discord: Ready\n");
+
+		Discord_UpdatePresence(&DiscordPresence);
 	}
 
 	static void JoinGame(const char* joinSecret)
@@ -39,21 +43,14 @@ namespace Components
 		Logger::Print(Game::CON_CHANNEL_ERROR, "Discord: Error ({}): {}\n", errorCode, message);
 	}
 
-	static void ResetDiscordPresence()
-	{
-		ZeroMemory(&DiscordPresence, sizeof(DiscordPresence));
-		DiscordPresence.instance = 1;
-		DiscordPresenceStartTime = 0;
-	}
-
 	void Discord::UpdateDiscord()
 	{
 		Discord_RunCallbacks();
 
-		ResetDiscordPresence();
-
 		if (!Game::CL_IsCgameInitialized())
 		{
+			DiscordPresence.state = "";
+
 			if (Discord::IsMainMenuOpen())
 			{
 				DiscordPresence.details = "At the main menu";
@@ -74,58 +71,63 @@ namespace Components
 			}
 
 			DiscordPresence.largeImageKey = "https://i.imghippo.com/files/iAOF6351ypo.png";
+			DiscordPresence.partySize = 0;
+			DiscordPresence.partyMax = 0;
+			DiscordPresence.startTimestamp = 0;
+
+			Discord_UpdatePresence(&DiscordPresence);
+
+			return;
+		}
+
+		char hostNameBuffer[256]{};
+
+		const auto* map = Game::UI_GetMapDisplayName((*Game::ui_mapname)->current.string);
+
+		const Game::StringTable* table;
+		Game::StringTable_GetAsset_FastFile("mp/gameTypesTable.csv", &table);
+		const auto row = Game::StringTable_LookupRowNumForValue(table, 0, (*Game::ui_gametype)->current.string);
+
+		if (row != -1)
+		{
+			const auto* value = Game::StringTable_GetColumnValueForRow(table, row, 1);
+			const auto* localize = Game::DB_FindXAssetHeader(Game::ASSET_TYPE_LOCALIZE_ENTRY, value).localize;
+			DiscordPresence.details = Utils::String::Format("Playing Zombies on {1}", localize ? localize->value : "Zombies", map);
 		}
 		else
 		{
-			char hostNameBuffer[256]{};
-
-			const auto* map = Game::UI_GetMapDisplayName((*Game::ui_mapname)->current.string);
-
-			const Game::StringTable* table;
-			Game::StringTable_GetAsset_FastFile("mp/gameTypesTable.csv", &table);
-			const auto row = Game::StringTable_LookupRowNumForValue(table, 0, (*Game::ui_gametype)->current.string);
-
-			if (row != -1)
-			{
-				const auto* value = Game::StringTable_GetColumnValueForRow(table, row, 1);
-				const auto* localize = Game::DB_FindXAssetHeader(Game::ASSET_TYPE_LOCALIZE_ENTRY, value).localize;
-				DiscordPresence.details = Utils::String::Format("Playing Zombies on {1}", localize ? localize->value : "Zombies", map);
-			}
-			else
-			{
-				DiscordPresence.details = Utils::String::Format("Playing Zombies on {}", map);
-			}
-
-			if (std::strcmp(Game::cls->servername, "localhost") == 0)
-			{
-				DiscordPresence.state = Utils::String::Format("In a private match on {}", map);
-				DiscordPresence.partyPrivacy = DISCORD_PARTY_PRIVATE;
-			}
-			else
-			{
-				TextRenderer::StripColors(Party::GetHostName().data(), hostNameBuffer, sizeof(hostNameBuffer));
-				TextRenderer::StripAllTextIcons(hostNameBuffer, hostNameBuffer, sizeof(hostNameBuffer));
-
-				DiscordPresence.state = hostNameBuffer;
-				DiscordPresence.partyPrivacy = DISCORD_PARTY_PUBLIC;
-
-				std::hash<Network::Address> hashFn;
-				const auto address = Party::Target();
-
-				DiscordPresence.partyId = Utils::String::VA("%s - %zu", hostNameBuffer, hashFn(address) ^ GetDiscordNonce());
-				DiscordPresence.joinSecret = address.getCString();
-			}
-
-			DiscordPresence.partySize = Game::cgArray[0].snap ? Game::cgArray[0].snap->numClients : 1;
-			DiscordPresence.partyMax = Party::GetMaxClients();
-			DiscordPresence.largeImageKey = "https://i.imghippo.com/files/iAOF6351ypo.png";
-
-			if (DiscordPresenceStartTime == 0)
-			{
-				DiscordPresenceStartTime = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-			}
-			DiscordPresence.startTimestamp = DiscordPresenceStartTime;
+			DiscordPresence.details = Utils::String::Format("Playing Zombies on {}", map);
 		}
+
+		if (std::strcmp(Game::cls->servername, "localhost") == 0)
+		{
+			DiscordPresence.state = Utils::String::Format("In a private match on {}", map);
+			DiscordPresence.partyPrivacy = DISCORD_PARTY_PRIVATE;
+		}
+		else
+		{
+			TextRenderer::StripColors(Party::GetHostName().data(), hostNameBuffer, sizeof(hostNameBuffer));
+			TextRenderer::StripAllTextIcons(hostNameBuffer, hostNameBuffer, sizeof(hostNameBuffer));
+
+			DiscordPresence.state = hostNameBuffer;
+			DiscordPresence.partyPrivacy = DISCORD_PARTY_PUBLIC;
+		}
+
+		std::hash<Network::Address> hashFn;
+		const auto address = Party::Target();
+
+		DiscordPresence.partyId = Utils::String::VA("%s - %zu", hostNameBuffer, hashFn(address) ^ GetDiscordNonce());
+		DiscordPresence.joinSecret = address.getCString();
+
+		DiscordPresence.partySize = Game::cgArray[0].snap ? Game::cgArray[0].snap->numClients : 1;
+		DiscordPresence.partyMax = Party::GetMaxClients();
+
+		if (!DiscordPresence.startTimestamp)
+		{
+			DiscordPresence.startTimestamp = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+		}
+
+		DiscordPresence.largeImageKey = "https://i.imghippo.com/files/iAOF6351ypo.png";
 
 		Discord_UpdatePresence(&DiscordPresence);
 	}
@@ -210,8 +212,6 @@ namespace Components
 			return;
 		}
 
-		ResetDiscordPresence();
-		Discord_UpdatePresence(&DiscordPresence);
 		Discord_Shutdown();
 	}
 }

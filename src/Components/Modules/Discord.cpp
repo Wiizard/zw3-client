@@ -61,12 +61,29 @@ namespace Components
 			}
 			if (Discord::IsPrivateMatchOpen())
 			{
-				DiscordPresence.details = "In a lobby";
-				DiscordPresence.state = "Setting up a private match";
+				std::string raw = Dvar::Var("party_lobbyPlayerCount").get<std::string>();
+				int numPlayers = 1;
+				int numMaxPlayers = 1;
+				sscanf(raw.c_str(), "%d/%d", &numPlayers, &numMaxPlayers);
+
+				DiscordPresence.details = Utils::String::Format("In a lobby ({} of {})", numPlayers, numMaxPlayers);
+
+				if (Dvar::Var("party_host").get<bool>())
+				{
+					DiscordPresence.state = "Setting up a private match";
+				}
+				else
+				{
+					DiscordPresence.state = "Waiting for host to start a match";
+				}
 			}
 			if (Discord::IsPartyLobbyOpen())
 			{
-				DiscordPresence.details = "In a lobby";
+				std::string raw = Dvar::Var("party_lobbyPlayerCount").get<std::string>();
+				int numPlayers = 1;
+				int numMaxPlayers = 1;
+				sscanf(raw.c_str(), "%d/%d", &numPlayers, &numMaxPlayers);
+				DiscordPresence.details = Utils::String::Format("In a lobby ({} of {})", numPlayers, numMaxPlayers);
 				DiscordPresence.state = "Rallying other survivors";
 			}
 

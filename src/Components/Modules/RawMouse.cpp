@@ -114,7 +114,7 @@ namespace Components
 
 	void RawMouse::IN_RawMouse_Init()
 	{
-		if (Window::GetWindow() && M_RawInput.get<bool>())
+		if (Window::GetWindow() && M_RawInput.get<bool>() && !Gamepad::IsGamePadInUse())
 		{
 			Logger::Debug("Raw Mouse Init");
 
@@ -136,7 +136,7 @@ namespace Components
 
 	void RawMouse::IN_MouseMove()
 	{
-		if (M_RawInput.get<bool>())
+		if (M_RawInput.get<bool>() && !Gamepad::IsGamePadInUse())
 		{
 			IN_RawMouseMove();
 		}

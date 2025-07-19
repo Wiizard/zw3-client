@@ -118,7 +118,11 @@ namespace Components
 
 		if (std::strcmp(Game::cls->servername, "localhost") == 0)
 		{
-			DiscordPresence.state = Utils::String::Format("In a private match on {}", map);
+			std::string raw = Dvar::Var("party_lobbyPlayerCount").get<std::string>();
+			int numPlayers = 1;
+			int numMaxPlayers = 1;
+			sscanf(raw.c_str(), "%d/%d", &numPlayers, &numMaxPlayers);
+			DiscordPresence.state = Utils::String::Format("In a private match on {} ({} of {})", map, numPlayers, numMaxPlayers);
 			DiscordPresence.partyPrivacy = DISCORD_PARTY_PRIVATE;
 		}
 		else

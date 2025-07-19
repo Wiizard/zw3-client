@@ -27,6 +27,10 @@ namespace Components
 		static std::string GetHostName();
 		static int GetMaxClients();
 
+		// ZW3 - Real-time dvar broadcasting
+		static void BroadcastDvarUpdate();
+		static std::map<uint64_t, Network::Address> g_xuidToPublicAddressMap;
+
 	private:
 		static std::map<std::uint64_t, Network::Address> LobbyMap;
 

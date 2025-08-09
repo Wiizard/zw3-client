@@ -327,11 +327,11 @@ namespace Components
 	{
 		switch (id)
 		{
-		case 0: return "Richtofen";
-		case 1: return "Dempsey";
-		case 2:	return "Nikolai";
-		case 3:	return "Takeo";
-		default: return "None";
+			case 0: return "Richtofen";
+			case 1: return "Dempsey";
+			case 2:	return "Nikolai";
+			case 3:	return "Takeo";
+			default: return "None";
 		}
 	}
 	int GetCharacterIdFromName(const char* name)
@@ -353,32 +353,24 @@ namespace Components
 		int totalPlayers = realPlayers + botsToAdd;
 
 		std::vector<int> allCharacterIds = { 0, 1, 2, 3 };
-		std::vector<int> availableCharacterIds;
-		std::vector<int> reservedCharacterIds;
+		std::vector<int> assignedCharacterIds;
 
-		for (int i = 0; i < realPlayers; ++i) {
+		for (int i = 0; i < totalPlayers; ++i) {
 			std::string charDvarName = Utils::String::VA("character_%d", i + 1);
-			std::string currentPlayer = Dvar::Var(Utils::String::VA("character_%d_player", i + 1)).get<std::string>();
 			std::string currentCharacter = Dvar::Var(charDvarName).get<std::string>();
-			std::string realPlayerGamertag = Game::g_lobbyData->partyMembers[i].gamertag;
 
-			if (Game::g_lobbyData->partyMembers[i].status != 0 && !currentCharacter.empty() && currentCharacter != "None" && currentPlayer == realPlayerGamertag) {
-				int characterId = GetCharacterIdFromName(currentCharacter.c_str());
-				if (characterId != -1) {
-					reservedCharacterIds.push_back(characterId);
-				}
+			int characterId = GetCharacterIdFromName(currentCharacter.c_str());
+
+			bool isAlreadyAssigned = std::find(assignedCharacterIds.begin(), assignedCharacterIds.end(), characterId) != assignedCharacterIds.end();
+
+			if (characterId != -1 && !isAlreadyAssigned) {
+				assignedCharacterIds.push_back(characterId);
 			}
 		}
 
+		std::vector<int> availableCharacterIds;
 		for (int id : allCharacterIds) {
-			bool isReserved = false;
-			for (int reservedId : reservedCharacterIds) {
-				if (id == reservedId) {
-					isReserved = true;
-					break;
-				}
-			}
-			if (!isReserved) {
+			if (std::find(assignedCharacterIds.begin(), assignedCharacterIds.end(), id) == assignedCharacterIds.end()) {
 				availableCharacterIds.push_back(id);
 			}
 		}
@@ -387,41 +379,40 @@ namespace Components
 		std::shuffle(availableCharacterIds.begin(), availableCharacterIds.end(), std::default_random_engine(seed));
 
 		int availableIndex = 0;
-		for (int i = 0; i < MAX_PARTY_SLOTS; ++i) {
+
+		for (int i = 0; i < totalPlayers; ++i) {
 			std::string charDvarName = Utils::String::VA("character_%d", i + 1);
 			std::string playerDvarName = Utils::String::VA("character_%d_player", i + 1);
+			std::string currentCharacter = Dvar::Var(charDvarName).get<std::string>();
 
-			if (i < realPlayers) {
-				std::string currentCharacter = Dvar::Var(charDvarName).get<std::string>();
-				std::string realPlayerGamertag = Game::g_lobbyData->partyMembers[i].gamertag;
-				Dvar::Var(playerDvarName).set(realPlayerGamertag.c_str());
-
-				if (currentCharacter.empty() || currentCharacter == "None") {
-					if (availableIndex < availableCharacterIds.size()) {
-						const char* newCharacterName = GetCharacterNameFromId(availableCharacterIds[availableIndex++]);
-						Dvar::Var(charDvarName).set(newCharacterName);
-					}
-					else {
-						Dvar::Var(charDvarName).set("None");
-					}
-				}
-			}
-			else if (i < totalPlayers) {
+			if (currentCharacter.empty() || currentCharacter == "None" || GetCharacterIdFromName(currentCharacter.c_str()) == -1) {
 				if (availableIndex < availableCharacterIds.size()) {
 					const char* newCharacterName = GetCharacterNameFromId(availableCharacterIds[availableIndex++]);
-					std::string botName = Utils::String::VA("[BOT] %s", newCharacterName);
-					Dvar::Var(playerDvarName).set(botName.c_str());
 					Dvar::Var(charDvarName).set(newCharacterName);
 				}
 				else {
-					Dvar::Var(playerDvarName).set("None");
 					Dvar::Var(charDvarName).set("None");
 				}
 			}
-			else {
-				Dvar::Var(playerDvarName).set("None");
-				Dvar::Var(charDvarName).set("None");
+
+			if (i < realPlayers) {
+				Dvar::Var(playerDvarName).set(Game::g_lobbyData->partyMembers[i].gamertag);
 			}
+			else {
+				std::string assignedCharacter = Dvar::Var(charDvarName).get<std::string>();
+				if (!assignedCharacter.empty() && assignedCharacter != "None") {
+					std::string botName = Utils::String::VA("[BOT] %s", assignedCharacter.c_str());
+					Dvar::Var(playerDvarName).set(botName.c_str());
+				}
+				else {
+					Dvar::Var(playerDvarName).set("None");
+				}
+			}
+		}
+
+		for (int i = totalPlayers; i < MAX_PARTY_SLOTS; ++i) {
+			Dvar::Var(Utils::String::VA("character_%d", i + 1)).set("None");
+			Dvar::Var(Utils::String::VA("character_%d_player", i + 1)).set("None");
 		}
 	}
 

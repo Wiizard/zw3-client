@@ -230,7 +230,7 @@ namespace Components
 
 			if (std::find(BannedUids.begin(), BannedUids.end(), xuid) != BannedUids.end())
 			{
-				Network::Send(address, "error\nYour online profile is invalid. Delete your players folder and restart ^2IW4x^7.");
+				Network::Send(address, "error\nYour online profile is invalid. Delete your players folder and restart ^1ZW3^7.");
 				return;
 			}
 

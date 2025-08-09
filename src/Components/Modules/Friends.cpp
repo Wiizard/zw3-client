@@ -194,7 +194,7 @@ namespace Components
 		{
 			std::lock_guard<std::recursive_mutex> _(Friends::Mutex);
 
-			const auto modId = *reinterpret_cast<const unsigned int*>("IW4x") | 0x80000000;
+			const auto modId = *reinterpret_cast<const unsigned int*>("Zombie Warfare 3") | 0x80000000;
 
 			// Split up the list
 			for (const auto& entry : Friends::FriendsList)

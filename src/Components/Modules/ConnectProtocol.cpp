@@ -180,7 +180,7 @@ namespace Components
 
 		std::string cmdLine = GetCommandLineA();
 
-		auto pos = cmdLine.find("iw4x://");
+		auto pos = cmdLine.find("zw3://");
 
 		if (pos != std::string::npos)
 		{

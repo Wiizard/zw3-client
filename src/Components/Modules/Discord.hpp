@@ -23,5 +23,7 @@ namespace Components
 		static bool IsMainMenuOpen();
 
 		static bool IsPartyLobbyOpen();
+
+		static const char* GetHostDiscordInviteIP();
 	};
 }

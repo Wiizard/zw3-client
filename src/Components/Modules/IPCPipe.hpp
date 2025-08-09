@@ -4,8 +4,8 @@
 #define IPC_COMMAND_SIZE 100
 #define IPC_BUFFER_SIZE 0x2000
 
-#define IPC_PIPE_NAME_SERVER "IW4x-Server"
-#define IPC_PIPE_NAME_CLIENT "IW4x-Client"
+#define IPC_PIPE_NAME_SERVER "ZW3-Server"
+#define IPC_PIPE_NAME_CLIENT "ZW3-Client"
 
 namespace Components
 {

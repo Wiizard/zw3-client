@@ -123,39 +123,74 @@ namespace Components
 
 	int Bots::BuildConnectString(char* buffer, const char* connectString, int num, int, int protocol, int checksum, int statVer, int stats, int port)
 	{
+		static std::vector<bool> usedDvars;
+
 		std::string botName;
 		std::string clanName;
 
-		static const auto botNames = []() -> std::vector<botData>
-			{
-				auto names = LoadBotNames();
-				if (names.empty())
-				{
-					Logger::Print("bots.txt was empty. Using the names from the master server\n");
-					names = RemoteBotNames;
-				}
+		bool foundCharacterDvar = false;
 
-				if (sv_randomBotNames->current.enabled)
-				{
-					std::random_device rd;
-					std::mt19937 gen(rd());
-					std::ranges::shuffle(names, gen);
-				}
-
-				return names;
-			}();
-
-		if (!botNames.empty())
+		if (usedDvars.empty())
 		{
-			BotDataIndex %= botNames.size();
-			const auto index = BotDataIndex++;
-			botName = botNames[index].first;
-			clanName = botNames[index].second;
+			usedDvars.resize(4, false);
 		}
-		else
+
+		for (int i = 0; i < 4; ++i)
 		{
-			botName = std::format("bot{}", num);
-			clanName = "BOT"s;
+			if (usedDvars[i])
+			{
+				continue;
+			}
+
+			std::string dvarName = Utils::String::VA("character_%d_player", i + 1);
+			auto dvarValue = Dvar::Var(dvarName).get<std::string>();
+			if (dvarValue.rfind("[BOT]", 0) == 0)
+			{
+				size_t start = dvarValue.find(']');
+				if (start != std::string::npos)
+				{
+					botName = dvarValue;
+					clanName = "";
+					foundCharacterDvar = true;
+					usedDvars[i] = true;
+					break;
+				}
+			}
+		}
+
+		if (!foundCharacterDvar)
+		{
+			static const auto botNames = []() -> std::vector<botData>
+				{
+					auto names = LoadBotNames();
+					if (names.empty())
+					{
+						Logger::Print("bots.txt was empty. Using the names from the master server\n");
+						names = RemoteBotNames;
+					}
+
+					if (sv_randomBotNames->current.enabled)
+					{
+						std::random_device rd;
+						std::mt19937 gen(rd());
+						std::ranges::shuffle(names, gen);
+					}
+
+					return names;
+				}();
+
+			if (!botNames.empty())
+			{
+				BotDataIndex %= botNames.size();
+				const auto index = BotDataIndex++;
+				botName = botNames[index].first;
+				clanName = botNames[index].second;
+			}
+			else
+			{
+				botName = std::format("bot{}", num);
+				clanName = "BOT"s;
+			}
 		}
 
 		return _snprintf_s(buffer, 0x400, _TRUNCATE, connectString, num, botName.data(), clanName.data(), protocol, checksum, statVer, stats, port);

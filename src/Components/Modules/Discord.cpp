@@ -3,12 +3,17 @@
 #include "TextRenderer.hpp"
 
 #include <discord_rpc.h>
+#include <Utils/WebIO.hpp>
 
 namespace Components
 {
 	static DiscordRichPresence DiscordPresence;
 
 	bool Discord::Initialized_;
+
+	static unsigned int privateMatchNonce = 0;
+	std::string hostIP = "";
+	bool ipFetchInitiated = false;
 
 	static unsigned int GetDiscordNonce()
 	{
@@ -19,17 +24,15 @@ namespace Components
 	static void Ready([[maybe_unused]] const DiscordUser* request)
 	{
 		ZeroMemory(&DiscordPresence, sizeof(DiscordPresence));
-
 		DiscordPresence.instance = 1;
-
 		Logger::Print("Discord: Ready\n");
-
 		Discord_UpdatePresence(&DiscordPresence);
 	}
 
 	static void JoinGame(const char* joinSecret)
 	{
-		Game::Cbuf_AddText(0, Utils::String::VA("connect %s\n", joinSecret));
+		const char* connect_cmd = Utils::String::VA("connect %s\n", joinSecret);
+		Game::Cbuf_AddText(0, connect_cmd);
 	}
 
 	static void JoinRequest(const DiscordUser* request)
@@ -43,13 +46,54 @@ namespace Components
 		Logger::Print(Game::CON_CHANNEL_ERROR, "Discord: Error ({}): {}\n", errorCode, message);
 	}
 
+	static void FetchPublicIPAsync()
+	{
+		Utils::WebIO webio("zw3-get-host-ip");
+		bool success = false;
+		std::string ip = webio.get("https://api.ipify.org", &success);
+
+		if (success)
+		{
+			hostIP = ip;
+		}
+		else
+		{
+			hostIP = "0.0.0.0";
+		}
+	}
+
+	const char* Discord::GetHostDiscordInviteIP()
+	{
+		if (!hostIP.empty() && hostIP != "0.0.0.0")
+		{
+			return hostIP.c_str();
+		}
+		if (!ipFetchInitiated)
+		{
+			ipFetchInitiated = true;
+			std::thread(FetchPublicIPAsync).detach();
+		}
+		return "0.0.0.0";
+	}
+
 	void Discord::UpdateDiscord()
 	{
 		Discord_RunCallbacks();
 
+		ZeroMemory(&DiscordPresence, sizeof(DiscordPresence));
+		DiscordPresence.instance = 1;
+		DiscordPresence.largeImageKey = "https://i.imghippo.com/files/iAOF6351ypo.png";
+
 		if (!Game::CL_IsCgameInitialized())
 		{
-			DiscordPresence.state = "";
+			bool isInPrivateMatch = Discord::IsPrivateMatchOpen();
+			bool isInPartyLobby = Discord::IsPartyLobbyOpen();
+
+			if (!isInPrivateMatch && !isInPartyLobby) {
+				privateMatchNonce = 0;
+				hostIP = "";
+				ipFetchInitiated = false;
+			}
 
 			if (Discord::IsMainMenuOpen())
 			{
@@ -59,96 +103,149 @@ namespace Components
 			{
 				DiscordPresence.details = "Browsing servers";
 			}
-			if (Discord::IsPrivateMatchOpen())
+			if (isInPrivateMatch || isInPartyLobby)
 			{
-				std::string raw = Dvar::Var("party_lobbyPlayerCount").get<std::string>();
-				int numPlayers = 1;
-				int numMaxPlayers = 1;
-				sscanf(raw.c_str(), "%d/%d", &numPlayers, &numMaxPlayers);
+				const auto address = Party::Target();
+				const bool isHosting = Dvar::Var("party_host").get<bool>();
 
-				DiscordPresence.details = Utils::String::Format("In a lobby ({} of {})", numPlayers, numMaxPlayers);
+				const bool isPrivate = Dvar::Var("partyPrivacy").get<int>() == 1;
+				const char* lobbyType = isPrivate ? "a party (Private)" : "a party (Public)";
 
-				if (Dvar::Var("party_host").get<bool>())
+				DiscordPresence.details = Utils::String::Format("In {}", lobbyType);
+
+				int realPlayers = Dvar::Var("party_realPlayers").get<int>();
+				int totalPlayers = Dvar::Var("party_currentPlayers").get<int>();
+				int numBots = totalPlayers - realPlayers;
+
+				int numMaxPlayers = 4;
+				if (isInPartyLobby) {
+					std::string raw = Dvar::Var("party_lobbyPlayerCount").get<std::string>();
+					int lobbyRealPlayers = 0;
+					int lobbyMaxPlayers = 0;
+					sscanf(raw.c_str(), "%d/%d", &lobbyRealPlayers, &lobbyMaxPlayers);
+					numMaxPlayers = lobbyMaxPlayers;
+				}
+
+				DiscordPresence.partySize = realPlayers;
+				DiscordPresence.partyMax = numMaxPlayers;
+
+				if (isHosting)
 				{
-					DiscordPresence.state = "Setting up a private match";
+					if (numBots > 0) {
+						if(numBots == 1) DiscordPresence.state = Utils::String::Format("Setting up a private match (with {} bot)", numBots);
+						else DiscordPresence.state = Utils::String::Format("Setting up a private match (with {} bots)", numBots);
+					}
+					else {
+						DiscordPresence.state = "Setting up a private match";
+					}
+
+					const char* publicIp = Discord::GetHostDiscordInviteIP();
+					if (std::strcmp(publicIp, "0.0.0.0") != 0) {
+						if (privateMatchNonce == 0) {
+							privateMatchNonce = Utils::Cryptography::Rand::GenerateInt();
+						}
+						const auto address = Party::Target();
+						DiscordPresence.joinSecret = Utils::String::VA("%s", publicIp);
+					}
+					else {
+						DiscordPresence.joinSecret = nullptr;
+					}
 				}
 				else
 				{
 					DiscordPresence.state = "Waiting for host to start a match";
 				}
-			}
-			if (Discord::IsPartyLobbyOpen())
-			{
-				std::string raw = Dvar::Var("party_lobbyPlayerCount").get<std::string>();
-				int numPlayers = 1;
-				int numMaxPlayers = 1;
-				sscanf(raw.c_str(), "%d/%d", &numPlayers, &numMaxPlayers);
-				DiscordPresence.details = Utils::String::Format("In a lobby ({} of {})", numPlayers, numMaxPlayers);
-				DiscordPresence.state = "Rallying other survivors";
-			}
 
-			DiscordPresence.largeImageKey = "https://i.imghippo.com/files/iAOF6351ypo.png";
-			DiscordPresence.partySize = 0;
-			DiscordPresence.partyMax = 0;
-			DiscordPresence.startTimestamp = 0;
+				if (isHosting) {
+					DiscordPresence.partyPrivacy = isPrivate ? DISCORD_PARTY_PRIVATE : DISCORD_PARTY_PUBLIC;
+				}
+
+				std::hash<Network::Address> hashFn;
+				if (privateMatchNonce == 0) {
+					privateMatchNonce = Utils::Cryptography::Rand::GenerateInt();
+				}
+				DiscordPresence.partyId = Utils::String::VA("private_match_%zu_%u", hashFn(address), privateMatchNonce);
+			}
 
 			Discord_UpdatePresence(&DiscordPresence);
-
 			return;
 		}
 
 		char hostNameBuffer[256]{};
-
 		const auto* map = Game::UI_GetMapDisplayName((*Game::ui_mapname)->current.string);
-
 		const Game::StringTable* table;
 		Game::StringTable_GetAsset_FastFile("mp/gameTypesTable.csv", &table);
 		const auto row = Game::StringTable_LookupRowNumForValue(table, 0, (*Game::ui_gametype)->current.string);
 
-		if (row != -1)
-		{
+		if (row != -1) {
 			const auto* value = Game::StringTable_GetColumnValueForRow(table, row, 1);
 			const auto* localize = Game::DB_FindXAssetHeader(Game::ASSET_TYPE_LOCALIZE_ENTRY, value).localize;
 			DiscordPresence.details = Utils::String::Format("Playing Zombies on {1}", localize ? localize->value : "Zombies", map);
 		}
-		else
-		{
+		else {
 			DiscordPresence.details = Utils::String::Format("Playing Zombies on {}", map);
 		}
 
-		if (std::strcmp(Game::cls->servername, "localhost") == 0)
+		const bool isHosting = Dvar::Var("party_host").get<bool>();
+
+		if (isHosting)
 		{
-			std::string raw = Dvar::Var("party_lobbyPlayerCount").get<std::string>();
-			int numPlayers = 1;
-			int numMaxPlayers = 1;
-			sscanf(raw.c_str(), "%d/%d", &numPlayers, &numMaxPlayers);
-			DiscordPresence.state = Utils::String::Format("In a private match on {} ({} of {})", map, numPlayers, numMaxPlayers);
-			DiscordPresence.partyPrivacy = DISCORD_PARTY_PRIVATE;
+			int numMaxPlayers = 4;
+			int totalPlayers = Dvar::Var("party_currentPlayers").get<int>();
+			int realPlayers = Dvar::Var("party_realPlayers").get<int>();
+			int numBots = totalPlayers - realPlayers;
+
+			if (numBots > 0) {
+				if(numBots == 1) DiscordPresence.state = Utils::String::Format("In a private match (with {} bot)", numBots);
+				else DiscordPresence.state = Utils::String::Format("In a private match (with {} bots)", numBots);
+			}
+			else {
+				DiscordPresence.state = "In a private match";
+			}
+
+			int partyPrivacyDvar = Dvar::Var("partyPrivacy").get<int>();
+			DiscordPresence.partyPrivacy = partyPrivacyDvar == 1 ? DISCORD_PARTY_PRIVATE : DISCORD_PARTY_PUBLIC;
+
+			if (privateMatchNonce == 0) {
+				privateMatchNonce = Utils::Cryptography::Rand::GenerateInt();
+			}
+
+			const auto address = Party::Target();
+			std::hash<Network::Address> hashFn;
+			DiscordPresence.partyId = Utils::String::VA("private_match_%zu_%u", hashFn(address), privateMatchNonce);
+
+			const char* publicIp = Discord::GetHostDiscordInviteIP();
+			if (std::strcmp(publicIp, "0.0.0.0") != 0) {
+				DiscordPresence.joinSecret = Utils::String::VA("%s", publicIp);
+			}
+			else {
+				DiscordPresence.joinSecret = nullptr;
+			}
+
+			DiscordPresence.partySize = realPlayers;
+			DiscordPresence.partyMax = numMaxPlayers;
 		}
 		else
 		{
 			TextRenderer::StripColors(Party::GetHostName().data(), hostNameBuffer, sizeof(hostNameBuffer));
 			TextRenderer::StripAllTextIcons(hostNameBuffer, hostNameBuffer, sizeof(hostNameBuffer));
-
 			DiscordPresence.state = hostNameBuffer;
 			DiscordPresence.partyPrivacy = DISCORD_PARTY_PUBLIC;
+
+			std::hash<Network::Address> hashFn;
+			const auto address = Party::Target();
+
+			DiscordPresence.partyId = Utils::String::VA("%s - %zu", hostNameBuffer, hashFn(address) ^ GetDiscordNonce());
+			DiscordPresence.joinSecret = address.getCString();
+
+			DiscordPresence.partySize = Game::cgArray[0].snap ? Game::cgArray[0].snap->numClients : 1;
+			DiscordPresence.partyMax = Party::GetMaxClients();
 		}
-
-		std::hash<Network::Address> hashFn;
-		const auto address = Party::Target();
-
-		DiscordPresence.partyId = Utils::String::VA("%s - %zu", hostNameBuffer, hashFn(address) ^ GetDiscordNonce());
-		DiscordPresence.joinSecret = address.getCString();
-
-		DiscordPresence.partySize = Game::cgArray[0].snap ? Game::cgArray[0].snap->numClients : 1;
-		DiscordPresence.partyMax = Party::GetMaxClients();
 
 		if (!DiscordPresence.startTimestamp)
 		{
 			DiscordPresence.startTimestamp = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 		}
-
-		DiscordPresence.largeImageKey = "https://i.imghippo.com/files/iAOF6351ypo.png";
 
 		Discord_UpdatePresence(&DiscordPresence);
 	}
@@ -163,17 +260,13 @@ namespace Components
 		{
 			return true;
 		}
-
 		return false;
 	}
 
 	bool Discord::IsServerListOpen()
 	{
 		auto* menu = Game::Menus_FindByName(Game::uiContext, "pc_join_unranked");
-		if (!menu)
-		{
-			return false;
-		}
+		if (!menu) return false;
 		return Game::Menu_IsVisible(Game::uiContext, menu);
 	}
 
@@ -187,18 +280,13 @@ namespace Components
 		{
 			return true;
 		}
-
 		return false;
 	}
 
 	bool Discord::IsPartyLobbyOpen()
 	{
 		auto* menu = Game::Menus_FindByName(Game::uiContext, "menu_xboxlive_lobby");
-
-		if (!menu)
-		{
-			return false;
-		}
+		if (!menu) return false;
 		return Game::Menu_IsVisible(Game::uiContext, menu);
 	}
 
@@ -232,7 +320,6 @@ namespace Components
 		{
 			return;
 		}
-
 		Discord_Shutdown();
 	}
 }

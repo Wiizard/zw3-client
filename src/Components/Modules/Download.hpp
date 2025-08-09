@@ -1,5 +1,7 @@
 #pragma once
 
+#include <Game/Functions.hpp>
+#include <Utils/WebIO.hpp>
 
 struct mg_connection;
 struct mg_http_message;
@@ -97,7 +99,217 @@ namespace Components
 			std::size_t receivedBytes;
 		};
 
+		class ScriptDownload
+		{
+		public:
+			ScriptDownload(const std::string& _url, unsigned int _object) : url(_url), object(_object), webIO(nullptr), done(false), notifyRequired(false), totalSize(0), currentSize(0)
+			{
+				Game::AddRefToObject(this->getObject());
+			}
+
+			ScriptDownload(ScriptDownload&& other) noexcept = delete;
+			ScriptDownload& operator=(ScriptDownload&& other) noexcept = delete;
+
+			~ScriptDownload()
+			{
+				if (this->getObject())
+				{
+					Game::RemoveRefToObject(this->getObject());
+					this->object = 0;
+				}
+
+				if (this->workerThread.joinable())
+				{
+					this->workerThread.join();
+				}
+
+				this->destroyWebIO();
+			}
+
+			void startWorking()
+			{
+				if (!this->isWorking())
+				{
+					this->workerThread = std::thread(std::bind(&ScriptDownload::handler, this));
+				}
+			}
+
+			bool isWorking()
+			{
+				return this->workerThread.joinable();
+			}
+
+			void notifyProgress()
+			{
+				if (this->notifyRequired)
+				{
+					this->notifyRequired = false;
+
+					if (Game::Scr_IsSystemActive())
+					{
+						Game::Scr_AddInt(static_cast<int>(this->totalSize));
+						Game::Scr_AddInt(static_cast<int>(this->currentSize));
+						Game::Scr_NotifyId(this->getObject(), Game::SL_GetString("progress", 0), 2);
+					}
+				}
+			}
+
+			void updateProgress(size_t _currentSize, size_t _toalSize)
+			{
+				this->currentSize = _currentSize;
+				this->totalSize = _toalSize;
+				this->notifyRequired = true;
+			}
+
+			void notifyDone()
+			{
+				if (!this->isDone()) return;
+
+				if (Game::Scr_IsSystemActive())
+				{
+					Game::Scr_AddString(this->result.data()); // No binary data supported yet
+					Game::Scr_AddInt(this->success);
+					Game::Scr_NotifyId(this->getObject(), Game::SL_GetString("done", 0), 2);
+				}
+			}
+
+			bool isDone() { return this->done; };
+
+			std::string getUrl() { return this->url; }
+			unsigned int getObject() { return this->object; }
+
+			void cancel()
+			{
+				if (this->webIO)
+				{
+					this->webIO->cancelDownload();
+				}
+			}
+
+		private:
+			std::string url;
+			std::string result;
+			unsigned int object;
+			std::thread workerThread;
+			Utils::WebIO* webIO;
+
+			bool done;
+			bool success;
+			bool notifyRequired;
+			size_t totalSize;
+			size_t currentSize;
+
+			void handler()
+			{
+				this->destroyWebIO();
+
+				this->webIO = new Utils::WebIO("zw3");
+				this->webIO->setProgressCallback(std::bind(&ScriptDownload::updateProgress, this, std::placeholders::_1, std::placeholders::_2));
+
+				this->result = this->webIO->get(this->url, &this->success);
+
+				this->destroyWebIO();
+				this->done = true;
+			}
+
+			void destroyWebIO()
+			{
+				if (this->webIO)
+				{
+					delete this->webIO;
+					this->webIO = nullptr;
+				}
+			}
+		};
+
+		class ScriptPost
+		{
+		public:
+			ScriptPost(const std::string& _url, const std::string& _postData, unsigned int _object)
+				: url(_url), postData(_postData), object(_object), webIO(nullptr), done(false), success(false)
+			{
+				Game::AddRefToObject(this->object);
+			}
+
+			~ScriptPost()
+			{
+				if (this->object)
+				{
+					Game::RemoveRefToObject(this->object);
+					this->object = 0;
+				}
+
+				if (this->workerThread.joinable())
+				{
+					this->workerThread.join();
+				}
+
+				this->destroyWebIO();
+			}
+
+			void startWorking()
+			{
+				if (!this->isWorking())
+				{
+					this->workerThread = std::thread(&ScriptPost::handler, this);
+				}
+			}
+
+			bool isWorking()
+			{
+				return this->workerThread.joinable();
+			}
+
+			void notifyProgress() {}
+
+			void notifyDone()
+			{
+				if (!this->done || !Game::Scr_IsSystemActive())
+					return;
+
+				Game::Scr_AddString(this->result.data());
+				Game::Scr_AddInt(this->success);
+				Game::Scr_NotifyId(this->object, Game::SL_GetString("done", 0), 2);
+			}
+
+			bool isDone() { return this->done; }
+
+		private:
+			std::string url;
+			std::string postData;
+			std::string result;
+			unsigned int object;
+			std::thread workerThread;
+			Utils::WebIO* webIO;
+
+			bool done;
+			bool success;
+
+			void handler()
+			{
+				this->destroyWebIO();
+
+				this->webIO = new Utils::WebIO("zw3");
+
+				this->result = this->webIO->post(this->url, this->postData, &this->success);
+
+				this->destroyWebIO();
+				this->done = true;
+			}
+
+			void destroyWebIO()
+			{
+				if (this->webIO)
+				{
+					delete this->webIO;
+					this->webIO = nullptr;
+				}
+			}
+		};
+
 		static ClientDownload CLDownload;
+		static std::vector<std::shared_ptr<ScriptDownload>> ScriptDownloads;
+		static std::vector<std::shared_ptr<ScriptPost>> ScriptPosts;
 		static std::thread ServerThread;
 		static volatile bool Terminate;
 		static bool ServerRunning;

@@ -1,5 +1,4 @@
 #include <Utils/InfoString.hpp>
-
 #include "Party.hpp"
 #include "Auth.hpp"
 #include "Download.hpp"
@@ -12,9 +11,7 @@
 #include "TextRenderer.hpp"
 #include "Voice.hpp"
 #include "Events.hpp"
-
 #include <version.hpp>
-#include <winsock2.h>
 
 #define CL_MOD_LOADING
 
@@ -54,8 +51,14 @@ namespace Components
 	Dvar::Var Party::ServerVersion;
 
 	std::map<uint64_t, Components::Network::Address> Party::g_xuidToPublicAddressMap;
+	static int s_lastTotalPlayers = -1;
+	static int s_lastRealPlayers = -1;
+	static std::string s_lastHostName = "";
+	static bool s_wasHostingLastFrame = false;
+	static std::array<int, 4> s_assigned_character_ids = { -1, -1, -1, -1 };
+	const int MAX_PARTY_SLOTS = 4;
 
-	uint64_t GetLocalPlayerXUID() {
+	uint64_t Party::GetLocalPlayerXUID() {
 		return Steam::SteamUser()->GetSteamID().bits;
 	}
 
@@ -88,7 +91,7 @@ namespace Components
 		Container.downloadOnly = downloadOnly;
 
 		Utils::InfoString clientRequestInfo;
-		clientRequestInfo.set("challenge", Container.challenge);
+		clientRequestInfo.set("challenge", Container.challenge.c_str());
 		clientRequestInfo.set("gamename", "IW4");
 		clientRequestInfo.set("protocol", std::to_string(PROTOCOL));
 		clientRequestInfo.set("version", REVISION_STR);
@@ -226,9 +229,10 @@ namespace Components
 		{
 			return;
 		}
+
 		int maxPartyMembers = (*Game::party_maxplayers)->current.integer;
 		if (maxPartyMembers <= 0) {
-			maxPartyMembers = 4;
+			maxPartyMembers = MAX_PARTY_SLOTS;
 		}
 
 		int memberCount = Game::PartyHost_CountMembers(Game::g_lobbyData);
@@ -245,6 +249,11 @@ namespace Components
 		int perkLocationsVal = Dvar::Var("ui_perklocations").get<int>();
 		int thirdPersonVal = Dvar::Var("thirdPerson").get<int>();
 		int addBotsVal = Dvar::Var("addBots").get<int>();
+		int partyPrivacyVal = Dvar::Var("partyPrivacy").get<int>();
+		std::string character1Val = Dvar::Var("character_1").get<std::string>();
+		std::string character2Val = Dvar::Var("character_2").get<std::string>();
+		std::string character3Val = Dvar::Var("character_3").get<std::string>();
+		std::string character4Val = Dvar::Var("character_4").get<std::string>();
 
 		info.set("zombiemode", std::to_string(zombieModeVal));
 		info.set("ui_hitmarker", std::to_string(hitmarkersVal));
@@ -253,13 +262,28 @@ namespace Components
 		info.set("ui_perklocations", std::to_string(perkLocationsVal));
 		info.set("thirdPerson", std::to_string(thirdPersonVal));
 		info.set("addBots", std::to_string(addBotsVal));
+		info.set("partyPrivacy", std::to_string(partyPrivacyVal));
+		info.set("character_1", character1Val);
+		info.set("character_2", character2Val);
+		info.set("character_3", character3Val);
+		info.set("character_4", character4Val);
+
+		int totalPlayers = Dvar::Var("party_currentPlayers").get<int>();
+		int realPlayers = Dvar::Var("party_realPlayers").get<int>();
+		info.set("party_currentPlayers", std::to_string(totalPlayers));
+		info.set("party_realPlayers", std::to_string(realPlayers));
+
+		info.set("character_1_player", Dvar::Var("character_1_player").get<std::string>());
+		info.set("character_2_player", Dvar::Var("character_2_player").get<std::string>());
+		info.set("character_3_player", Dvar::Var("character_3_player").get<std::string>());
+		info.set("character_4_player", Dvar::Var("character_4_player").get<std::string>());
 
 		const std::string builtDvarString = info.build();
 		int totalSent = 0;
 
 		for (int i = 0; i < maxPartyMembers; ++i)
 		{
-			if (i >= 18) {
+			if (i >= MAX_PARTY_SLOTS) {
 				break;
 			}
 
@@ -299,6 +323,120 @@ namespace Components
 		}
 	}
 
+	const char* GetCharacterNameFromId(int id)
+	{
+		switch (id)
+		{
+		case 0: return "Richtofen";
+		case 1: return "Dempsey";
+		case 2:	return "Nikolai";
+		case 3:	return "Takeo";
+		default: return "None";
+		}
+	}
+	int GetCharacterIdFromName(const char* name)
+	{
+		if (strcmp(name, "Richtofen") == 0) return 0;
+		if (strcmp(name, "Dempsey") == 0) return 1;
+		if (strcmp(name, "Nikolai") == 0) return 2;
+		if (strcmp(name, "Takeo") == 0) return 3;
+		return -1;
+	}
+
+	void Party::RandomizeCharactersForClients() {
+		if (!Game::g_lobbyData) {
+			return;
+		}
+
+		int realPlayers = Dvar::Var("party_realPlayers").get<int>();
+		int botsToAdd = Dvar::Var("addBots").get<int>();
+		int totalPlayers = realPlayers + botsToAdd;
+
+		std::vector<int> allCharacterIds = { 0, 1, 2, 3 };
+		std::vector<int> availableCharacterIds;
+		std::vector<int> reservedCharacterIds;
+
+		for (int i = 0; i < realPlayers; ++i) {
+			std::string charDvarName = Utils::String::VA("character_%d", i + 1);
+			std::string currentPlayer = Dvar::Var(Utils::String::VA("character_%d_player", i + 1)).get<std::string>();
+			std::string currentCharacter = Dvar::Var(charDvarName).get<std::string>();
+			std::string realPlayerGamertag = Game::g_lobbyData->partyMembers[i].gamertag;
+
+			if (Game::g_lobbyData->partyMembers[i].status != 0 && !currentCharacter.empty() && currentCharacter != "None" && currentPlayer == realPlayerGamertag) {
+				int characterId = GetCharacterIdFromName(currentCharacter.c_str());
+				if (characterId != -1) {
+					reservedCharacterIds.push_back(characterId);
+				}
+			}
+		}
+
+		for (int id : allCharacterIds) {
+			bool isReserved = false;
+			for (int reservedId : reservedCharacterIds) {
+				if (id == reservedId) {
+					isReserved = true;
+					break;
+				}
+			}
+			if (!isReserved) {
+				availableCharacterIds.push_back(id);
+			}
+		}
+
+		unsigned seed = std::chrono::system_clock::now().time_since_epoch().count();
+		std::shuffle(availableCharacterIds.begin(), availableCharacterIds.end(), std::default_random_engine(seed));
+
+		int availableIndex = 0;
+		for (int i = 0; i < MAX_PARTY_SLOTS; ++i) {
+			std::string charDvarName = Utils::String::VA("character_%d", i + 1);
+			std::string playerDvarName = Utils::String::VA("character_%d_player", i + 1);
+
+			if (i < realPlayers) {
+				std::string currentCharacter = Dvar::Var(charDvarName).get<std::string>();
+				std::string realPlayerGamertag = Game::g_lobbyData->partyMembers[i].gamertag;
+				Dvar::Var(playerDvarName).set(realPlayerGamertag.c_str());
+
+				if (currentCharacter.empty() || currentCharacter == "None") {
+					if (availableIndex < availableCharacterIds.size()) {
+						const char* newCharacterName = GetCharacterNameFromId(availableCharacterIds[availableIndex++]);
+						Dvar::Var(charDvarName).set(newCharacterName);
+					}
+					else {
+						Dvar::Var(charDvarName).set("None");
+					}
+				}
+			}
+			else if (i < totalPlayers) {
+				if (availableIndex < availableCharacterIds.size()) {
+					const char* newCharacterName = GetCharacterNameFromId(availableCharacterIds[availableIndex++]);
+					std::string botName = Utils::String::VA("[BOT] %s", newCharacterName);
+					Dvar::Var(playerDvarName).set(botName.c_str());
+					Dvar::Var(charDvarName).set(newCharacterName);
+				}
+				else {
+					Dvar::Var(playerDvarName).set("None");
+					Dvar::Var(charDvarName).set("None");
+				}
+			}
+			else {
+				Dvar::Var(playerDvarName).set("None");
+				Dvar::Var(charDvarName).set("None");
+			}
+		}
+	}
+
+	std::string Party::GetPlayerName(int slot_index)
+	{
+		if (Game::g_lobbyData && slot_index >= 0 && slot_index < MAX_PARTY_SLOTS) {
+			auto& member = Game::g_lobbyData->partyMembers[slot_index];
+			if (member.status != 0) {
+				return std::string(member.gamertag);
+			}
+		}
+
+		return "None";
+	}
+
 	__declspec(naked) void PartyMigrate_HandlePacket()
 	{
 		__asm
@@ -318,6 +456,16 @@ namespace Components
 		Game::RMesg_SendMessages();
 	}
 
+	bool Party::IsServerBrowserOpen()
+	{
+		auto* menu = Game::Menus_FindByName(Game::uiContext, "pc_join_unranked");
+		if (!menu)
+		{
+			return false;
+		}
+		return Game::Menu_IsVisible(Game::uiContext, menu);
+	}
+
 	Party::Party()
 	{
 		if (ZoneBuilder::IsEnabled())
@@ -328,12 +476,21 @@ namespace Components
 		Events::OnDvarInit([]
 			{
 				ServerVersion = Dvar::Register<const char*>("sv_version", "", Game::DVAR_SERVERINFO | Game::DVAR_INIT, "Server version");
+				Dvar::Register<const char*>("character_1", "", Game::DVAR_CODINFO | Game::DVAR_INIT, "Character assigned to player 1");
+				Dvar::Register<const char*>("character_2", "", Game::DVAR_CODINFO | Game::DVAR_INIT, "Character assigned to player 2");
+				Dvar::Register<const char*>("character_3", "", Game::DVAR_CODINFO | Game::DVAR_INIT, "Character assigned to player 3");
+				Dvar::Register<const char*>("character_4", "", Game::DVAR_CODINFO | Game::DVAR_INIT, "Character assigned to player 4");
+				Dvar::Register<const char*>("character_1_player", "None", Game::DVAR_CODINFO | Game::DVAR_INIT, "Player name assigned to slot 1");
+				Dvar::Register<const char*>("character_2_player", "None", Game::DVAR_CODINFO | Game::DVAR_INIT, "Player name assigned to slot 2");
+				Dvar::Register<const char*>("character_3_player", "None", Game::DVAR_CODINFO | Game::DVAR_INIT, "Player name assigned to slot 3");
+				Dvar::Register<const char*>("character_4_player", "None", Game::DVAR_CODINFO | Game::DVAR_INIT, "Player name assigned to slot 4");
+				Dvar::Register<int>("party_currentPlayers", 0, 0, 4, Game::DVAR_CODINFO | Game::DVAR_INIT, "Total current players in the party");
+				Dvar::Register<int>("party_realPlayers", 0, 0, 4, Game::DVAR_CODINFO | Game::DVAR_INIT, "Current real players in the party");
 			});
 
 		PartyEnable = Dvar::Register<bool>("party_enable", Dedicated::IsEnabled(), Game::DVAR_NONE, "Enable party system");
 		Dvar::Register<bool>("xblive_privatematch", true, Game::DVAR_INIT, "private match");
 
-		// Register ZW3 game settings
 		static const char* zombieModeValues[] = { "Normal", "Classic", "Hardcore", nullptr };
 		Game::Dvar_RegisterEnum("zombiemode", zombieModeValues, 0, Game::DVAR_CODINFO, "Change the selected zombie mode");
 		Dvar::Register<int>("ui_hitmarker", 1, 0, 1, Game::DVAR_CODINFO, "Toggle hitmarkers");
@@ -342,6 +499,8 @@ namespace Components
 		Dvar::Register<int>("ui_perklocations", 0, 0, 1, Game::DVAR_CODINFO, "Toggle perk locations");
 		Dvar::Register<int>("thirdPerson", 0, 0, 1, Game::DVAR_CODINFO, "Toggle third person");
 		Dvar::Register<int>("addBots", 0, 0, 3, Game::DVAR_CODINFO, "Change the amount of bots");
+		static const char* partyPrivacyValues[] = { "Public", "Private", nullptr };
+		Game::Dvar_RegisterEnum("partyPrivacy", partyPrivacyValues, 0, Game::DVAR_CODINFO, "Toggle party privacy");
 
 		// Kill the party migrate handler - it's not necessary and has apparently been used in the past for trickery?
 		Utils::Hook(0x46AB70, PartyMigrate_HandlePacket, HOOK_JUMP).install()->quick();
@@ -554,21 +713,19 @@ namespace Components
 					effectiveClientCount = Game::PartyHost_CountMembers(Game::g_lobbyData);
 				}
 
-
 				hostResponseInfo.set("clients", std::to_string(effectiveClientCount));
 				hostResponseInfo.set("bots", std::to_string(botCount));
 				hostResponseInfo.set("sv_maxclients", std::to_string(maxClientCount));
-
 				hostResponseInfo.set("protocol", std::to_string(PROTOCOL));
 				hostResponseInfo.set("version", REVISION_STR);
 				hostResponseInfo.set("checksum", std::to_string(Game::Sys_Milliseconds()));
 				hostResponseInfo.set("mapname", Dvar::Var("mapname").get<std::string>());
-				hostResponseInfo.set("isPrivate", *Game::g_password ? "1" : "0");
-				hostResponseInfo.set("hc", (Dvar::Var("g_hardcore").get<bool>() ? "1" : "0"));
+				hostResponseInfo.set("isPrivate", *Game::g_password ? "1"s : "0"s);
+				hostResponseInfo.set("hc", (Dvar::Var("g_hardcore").get<bool>() ? "1"s : "0"s));
 				hostResponseInfo.set("securityLevel", std::to_string(securityLevel));
-				hostResponseInfo.set("sv_running", (Dedicated::IsRunning() ? "1" : "0"));
-				hostResponseInfo.set("aimAssist", (Gamepad::sv_allowAimAssist.get<bool>() ? "1" : "0"));
-				hostResponseInfo.set("voiceChat", (Voice::SV_VoiceEnabled() ? "1" : "0"));
+				hostResponseInfo.set("sv_running", (Dedicated::IsRunning() ? "1"s : "0"s));
+				hostResponseInfo.set("aimAssist", (Gamepad::sv_allowAimAssist.get<bool>() ? "1"s : "0"s));
+				hostResponseInfo.set("voiceChat", (Voice::SV_VoiceEnabled() ? "1"s : "0"s));
 				hostResponseInfo.set("zombiemode", std::to_string(Dvar::Var("zombiemode").get<int>()));
 				hostResponseInfo.set("ui_zombiecounter", std::to_string(Dvar::Var("ui_zombiecounter").get<int>()));
 				hostResponseInfo.set("ui_hitmarker", std::to_string(Dvar::Var("ui_hitmarker").get<int>()));
@@ -576,13 +733,16 @@ namespace Components
 				hostResponseInfo.set("ui_perklocations", std::to_string(Dvar::Var("ui_perklocations").get<int>()));
 				hostResponseInfo.set("thirdPerson", std::to_string(Dvar::Var("thirdPerson").get<int>()));
 				hostResponseInfo.set("addBots", std::to_string(Dvar::Var("addBots").get<int>()));
+				hostResponseInfo.set("partyPrivacy", std::to_string(Dvar::Var("partyPrivacy").get<int>()));
+				hostResponseInfo.set("character_1", Dvar::Var("character_1").get<std::string>());
+				hostResponseInfo.set("character_2", Dvar::Var("character_2").get<std::string>());
+				hostResponseInfo.set("character_3", Dvar::Var("character_3").get<std::string>());
+				hostResponseInfo.set("character_4", Dvar::Var("character_4").get<std::string>());
 
-				// Ensure mapname is set
 				if (hostResponseInfo.get("mapname").empty() || IsInLobby())
 				{
 					hostResponseInfo.set("mapname", Dvar::Var("ui_mapname").get<const char*>());
 				}
-
 				if (Maps::GetUserMap()->isValid())
 				{
 					hostResponseInfo.set("usermaphash", Utils::String::VA("%i", Maps::GetUserMap()->getHash()));
@@ -591,28 +751,23 @@ namespace Components
 				{
 					hostResponseInfo.set("usermaphash", Utils::String::VA("%i", Maps::GetUsermapHash(hostResponseInfo.get("mapname"))));
 				}
-
 				if (Dedicated::IsEnabled())
 				{
 					hostResponseInfo.set("sv_motd", Dedicated::SVMOTD.get<std::string>());
 				}
-
-				// Set matchtype
 				bool partyHost = Dvar::Var("party_host").get<bool>();
-				if (partyHost) // Party hosting
+				if (partyHost)
 				{
 					if (PartyEnable.get<bool>())
 					{
-						// Public party
 						hostResponseInfo.set("matchtype", std::to_string(JoinContainer::MatchType::PARTY_LOBBY));
 					}
 					else
 					{
-						// Private party
 						hostResponseInfo.set("matchtype", std::to_string(JoinContainer::MatchType::PRIVATE_PARTY));
 					}
 				}
-				else if (Dvar::Var("sv_running").get<bool>()) // Match hosting
+				else if (Dvar::Var("sv_running").get<bool>())
 				{
 					hostResponseInfo.set("matchtype", std::to_string(JoinContainer::MatchType::DEDICATED_MATCH));
 				}
@@ -639,34 +794,68 @@ namespace Components
 						Container.valid = false;
 						Container.info = info;
 
+						Container.matchType = static_cast<JoinContainer::MatchType>(std::strtol(info.get("matchtype").data(), nullptr, 10));
+						if (!Dedicated::IsEnabled() && !Dedicated::IsRunning() && Container.matchType == JoinContainer::MatchType::PRIVATE_PARTY)
+						{
+							std::string party_privacy = info.get("partyPrivacy");
+							std::string client_count = info.get("clients");
+							if (party_privacy == "1" || party_privacy == "Private")
+							{
+								ConnectError("The lobby you are trying to join has been set to Private.");
+								return;
+							}
+							else if (std::stoi(client_count) >= MAX_PARTY_SLOTS)
+							{
+								ConnectError("The lobby you are trying to join is full.");
+								return;
+							}
+							else
+							{
+								Container.info.set("isPrivate", "0"s);
+								PlaylistContinue();
+							}
+						}
+
 						uint64_t hostXuid = 0;
 						hostXuid = std::stoull(info.get("xuid"), nullptr, 16);
 
-						const auto& iZombieMode = info.get("zombiemode");
-						const auto& iZombieCounter = info.get("ui_zombiecounter");
-						const auto& iHitmarkers = info.get("ui_hitmarker");
-						const auto& iDamageValues = info.get("ui_showdamage");
-						const auto& iPerkLocations = info.get("ui_perklocations");
-						const auto& iThirdPerson = info.get("thirdPerson");
-						const auto& iAddBots = info.get("addBots");
+						Dvar::Var("zombiemode").set(static_cast<int>(std::strtol(info.get("zombiemode").data(), nullptr, 10)));
+						Dvar::Var("ui_zombiecounter").set(static_cast<int>(std::strtol(info.get("ui_zombiecounter").data(), nullptr, 10)));
+						Dvar::Var("ui_hitmarker").set(static_cast<int>(std::strtol(info.get("ui_hitmarker").data(), nullptr, 10)));
+						Dvar::Var("ui_showdamage").set(static_cast<int>(std::strtol(info.get("ui_showdamage").data(), nullptr, 10)));
+						Dvar::Var("ui_perklocations").set(static_cast<int>(std::strtol(info.get("ui_perklocations").data(), nullptr, 10)));
+						Dvar::Var("thirdPerson").set(static_cast<int>(std::strtol(info.get("thirdPerson").data(), nullptr, 10)));
+						Dvar::Var("addBots").set(static_cast<int>(std::strtol(info.get("addBots").data(), nullptr, 10)));
+						Dvar::Var("partyPrivacy").set(static_cast<int>(std::strtol(info.get("partyPrivacy").data(), nullptr, 10)));
 
-						int zombieMode = std::strtol(iZombieMode.data(), nullptr, 10);
-						int zombieCounter = std::strtol(iZombieCounter.data(), nullptr, 10);
-						int hitmarkers = std::strtol(iHitmarkers.data(), nullptr, 10);
-						int damageValues = std::strtol(iDamageValues.data(), nullptr, 10);
-						int perkLocations = std::strtol(iPerkLocations.data(), nullptr, 10);
-						int thirdPerson = std::strtol(iThirdPerson.data(), nullptr, 10);
-						int addBots = std::strtol(iAddBots.data(), nullptr, 10);
+						int new_party_currentPlayers = static_cast<int>(std::strtol(info.get("party_currentPlayers").data(), nullptr, 10));
+						int new_party_realPlayers = static_cast<int>(std::strtol(info.get("party_realPlayers").data(), nullptr, 10));
+						Dvar::Var("party_currentPlayers").set(new_party_currentPlayers);
+						Dvar::Var("party_realPlayers").set(new_party_realPlayers);
 
-						Dvar::Var("zombiemode").set(zombieMode);
-						Dvar::Var("ui_zombiecounter").set(zombieCounter);
-						Dvar::Var("ui_hitmarker").set(hitmarkers);
-						Dvar::Var("ui_showdamage").set(damageValues);
-						Dvar::Var("ui_perklocations").set(perkLocations);
-						Dvar::Var("thirdPerson").set(thirdPerson);
-						Dvar::Var("addBots").set(addBots);
+						for (int i = 1; i <= MAX_PARTY_SLOTS; ++i)
+						{
+							std::string charDvarName = Utils::String::VA("character_%d", i);
+							std::string playerDvarName = Utils::String::VA("character_%d_player", i);
 
-						Container.matchType = static_cast<JoinContainer::MatchType>(std::strtol(info.get("matchtype").data(), nullptr, 10));
+							std::string charValue = info.get(charDvarName);
+							if (!charValue.empty())
+							{
+								Dvar::Var(charDvarName).set(charValue.c_str());
+							}
+							else {
+								Dvar::Var(charDvarName).set("None");
+							}
+
+							std::string playerValue = info.get(playerDvarName);
+							if (!playerValue.empty()) {
+								Dvar::Var(playerDvarName).set(playerValue.c_str());
+							}
+							else {
+								Dvar::Var(playerDvarName).set("None");
+							}
+						}
+
 						auto securityLevel = std::strtoul(info.get("securityLevel").data(), nullptr, 10);
 						bool isUsermap = !info.get("usermaphash").empty();
 						auto usermapHash = std::strtoul(info.get("usermaphash").data(), nullptr, 10);
@@ -685,7 +874,15 @@ namespace Components
 							Download::SV_wwwBaseUrl.set("");
 						}
 
-						std::string receivedChallenge = info.get("challenge");
+						std::string receivedChallenge;
+						if (IsServerBrowserOpen())
+						{
+							receivedChallenge = Container.challenge;
+						}
+						else
+						{
+							receivedChallenge = info.get("challenge");
+						}
 
 						if (receivedChallenge != Container.challenge)
 						{
@@ -815,23 +1012,18 @@ namespace Components
 					{
 						int oldValue = Dvar::Var(dvarName).get<int>();
 						int newValue = oldValue;
-
 						const std::string& receivedValueStr = info.get(infoKey);
-
-						if (!receivedValueStr.empty())
+						char* endptr;
+						long convertedValue = std::strtol(receivedValueStr.c_str(), &endptr, 10);
+						if (receivedValueStr.c_str() != endptr)
 						{
-							newValue = std::stoi(receivedValueStr);
+							newValue = static_cast<int>(convertedValue);
 						}
-
-						if (Dvar::Var(dvarName).get<int>() != newValue) {
-							Dvar::Var(dvarName).set(newValue);
-						}
-
+						Dvar::Var(dvarName).set(newValue);
 						int currentValue = Dvar::Var(dvarName).get<int>();
 						if (currentValue != newValue) {
 							return false;
 						}
-
 						return true;
 					};
 
@@ -844,39 +1036,158 @@ namespace Components
 				allDvarsSuccessfullySet &= parseAndSetDvar("ui_perklocations", "ui_perklocations");
 				allDvarsSuccessfullySet &= parseAndSetDvar("thirdPerson", "thirdPerson");
 				allDvarsSuccessfullySet &= parseAndSetDvar("addBots", "addBots");
+				allDvarsSuccessfullySet &= parseAndSetDvar("partyPrivacy", "partyPrivacy");
+				int new_party_currentPlayers = static_cast<int>(std::strtol(info.get("party_currentPlayers").data(), nullptr, 10));
+				int new_party_realPlayers = static_cast<int>(std::strtol(info.get("party_realPlayers").data(), nullptr, 10));
+				Dvar::Var("party_currentPlayers").set(new_party_currentPlayers);
+				Dvar::Var("party_realPlayers").set(new_party_realPlayers);
+				for (int i = 1; i <= MAX_PARTY_SLOTS; ++i)
+				{
+					std::string charDvarName = Utils::String::VA("character_%d", i);
+					std::string playerDvarName = Utils::String::VA("character_%d_player", i);
+
+					std::string charValue = info.get(charDvarName);
+					if (!charValue.empty())
+					{
+						Dvar::Var(charDvarName).set(charValue.c_str());
+					}
+					else {
+						Dvar::Var(charDvarName).set("None");
+					}
+
+					std::string playerValue = info.get(playerDvarName);
+					if (!playerValue.empty()) {
+						Dvar::Var(playerDvarName).set(playerValue.c_str());
+					}
+					else {
+						Dvar::Var(playerDvarName).set("None");
+					}
+				}
 			});
 
 		if (!Dedicated::IsEnabled())
 		{
-			static int lastValues[7] = { -1, -1, -1, -1, -1, -1, -1 };
+			static int s_lastDvarValues[8] = { -1, -1, -1, -1, -1, -1, -1, -1 };
+			static int s_lastTotalPlayers = 0;
+			static int s_lastRealPlayers = 0;
+			static std::string s_lastHostName = "";
+			static bool s_wasHostingLastFrame = false;
 
 			Scheduler::Loop([]()
 				{
-					int current[7] = {
+					bool needsBroadcast = false;
+					static bool needsUpdatePartystate = false;
+					static int s_lastRealPlayers = 0;
+					static int s_lastBotsToAdd = 0;
+
+					int currentDvarValues[8] = {
 						Dvar::Var("zombiemode").get<int>(),
 						Dvar::Var("ui_hitmarker").get<int>(),
 						Dvar::Var("ui_showdamage").get<int>(),
 						Dvar::Var("ui_zombiecounter").get<int>(),
 						Dvar::Var("ui_perklocations").get<int>(),
 						Dvar::Var("thirdPerson").get<int>(),
-						Dvar::Var("addBots").get<int>()
+						Dvar::Var("addBots").get<int>(),
+						Dvar::Var("partyPrivacy").get<int>()
 					};
 
-					bool changed = false;
-					for (int i = 0; i < 7; i++)
+					for (int i = 0; i < 8; i++)
 					{
-						if (current[i] != lastValues[i])
+						if (currentDvarValues[i] != s_lastDvarValues[i])
 						{
-							lastValues[i] = current[i];
-							changed = true;
+							s_lastDvarValues[i] = currentDvarValues[i];
+							needsBroadcast = true;
 						}
 					}
 
-					if (changed)
+					bool isCurrentlyHosting = Dvar::Var("party_host").get<bool>();
+
+					if (isCurrentlyHosting) {
+						std::vector<std::string> participants;
+						if (Game::g_lobbyData) {
+							for (int i = 0; i < MAX_PARTY_SLOTS; ++i) {
+								if (Game::g_lobbyData->partyMembers[i].status != 0 && Game::g_lobbyData->partyMembers[i].gamertag && Game::g_lobbyData->partyMembers[i].gamertag[0] != '\0') {
+									participants.push_back(Game::g_lobbyData->partyMembers[i].gamertag);
+								}
+							}
+						}
+
+						int realPlayers = participants.size();
+						int botsToAdd = Dvar::Var("addBots").get<int>();
+						int totalPlayers = realPlayers + std::min(botsToAdd, MAX_PARTY_SLOTS - realPlayers);
+
+						bool dvarChanged = false;
+
+						for (int i = 0; i < MAX_PARTY_SLOTS; ++i) {
+							std::string nameDvarName = Utils::String::VA("character_%d_player", i + 1);
+							if (i < participants.size()) {
+								if (Dvar::Var(nameDvarName).get<std::string>() != participants[i]) {
+									Dvar::Var(nameDvarName).set(participants[i].c_str());
+									dvarChanged = true;
+								}
+							}
+							else if (Dvar::Var(nameDvarName).get<std::string>().find("[BOT]") == std::string::npos && Dvar::Var(nameDvarName).get<std::string>() != "None") {
+								Dvar::Var(nameDvarName).set("None");
+								dvarChanged = true;
+							}
+						}
+
+						if (Dvar::Var("party_realPlayers").get<int>() != realPlayers) {
+							Dvar::Var("party_realPlayers").set(realPlayers);
+							dvarChanged = true;
+						}
+						if (Dvar::Var("party_currentPlayers").get<int>() != totalPlayers) {
+							Dvar::Var("party_currentPlayers").set(totalPlayers);
+							dvarChanged = true;
+						}
+
+						if (s_lastRealPlayers != realPlayers || s_lastBotsToAdd != botsToAdd) {
+							RandomizeCharactersForClients();
+							needsBroadcast = true;
+							needsUpdatePartystate = true;
+						}
+						s_lastRealPlayers = realPlayers;
+						s_lastBotsToAdd = botsToAdd;
+
+						if (dvarChanged) {
+							needsBroadcast = true;
+							needsUpdatePartystate = true;
+						}
+
+						s_lastTotalPlayers = Dvar::Var("party_currentPlayers").get<int>();
+					}
+					else if (!isCurrentlyHosting && s_wasHostingLastFrame) {
+						Dvar::Var("party_currentPlayers").set(0);
+						Dvar::Var("party_realPlayers").set(0);
+						Dvar::Var("addBots").set(0);
+						RandomizeCharactersForClients();
+						for (int i = 0; i < MAX_PARTY_SLOTS; ++i) {
+							Dvar::Var(Utils::String::VA("character_%d_player", i + 1)).set("None");
+						}
+						needsBroadcast = true;
+						needsUpdatePartystate = true;
+					}
+
+					s_lastRealPlayers = Dvar::Var("party_realPlayers").get<int>();
+					std::string currentHost = isCurrentlyHosting ? Dvar::Var("name").get<std::string>() : Dvar::Var("party_hostname").get<std::string>();
+					Dvar::Var("party_currentHost").set(currentHost.c_str());
+					s_lastHostName = currentHost;
+					s_wasHostingLastFrame = isCurrentlyHosting;
+
+					if (isCurrentlyHosting && !s_wasHostingLastFrame) {
+						needsBroadcast = true;
+					}
+
+					if (needsBroadcast)
 					{
 						BroadcastDvarUpdate();
 					}
-				}, Scheduler::Pipeline::MAIN);
+
+					if (needsUpdatePartystate) {
+						Command::Execute("xupdatepartystate");
+						needsUpdatePartystate = false;
+					}
+				}, Scheduler::Pipeline::MAIN, 5ms);
 		}
 	}
 }

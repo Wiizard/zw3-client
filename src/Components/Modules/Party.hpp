@@ -31,6 +31,12 @@ namespace Components
 		static void BroadcastDvarUpdate();
 		static std::map<uint64_t, Network::Address> g_xuidToPublicAddressMap;
 
+		static uint64_t GetLocalPlayerXUID();
+
+		// ZW3 - Character management
+		static void RandomizeCharactersForClients();
+		static std::string GetPlayerName(int slot_index);
+
 	private:
 		static std::map<std::uint64_t, Network::Address> LobbyMap;
 
@@ -40,5 +46,7 @@ namespace Components
 		static SteamID GenerateLobbyId();
 
 		static DWORD UIDvarIntStub(char* dvar);
+
+		static bool IsServerBrowserOpen();
 	};
 }

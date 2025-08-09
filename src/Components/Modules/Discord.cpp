@@ -180,10 +180,14 @@ namespace Components
 		if (row != -1) {
 			const auto* value = Game::StringTable_GetColumnValueForRow(table, row, 1);
 			const auto* localize = Game::DB_FindXAssetHeader(Game::ASSET_TYPE_LOCALIZE_ENTRY, value).localize;
-			DiscordPresence.details = Utils::String::Format("Playing Zombies on {1}", localize ? localize->value : "Zombies", map);
+			const bool isPrivate = Dvar::Var("partyPrivacy").get<int>() == 1;
+			const char* privacySuffix = isPrivate ? " (Private)" : " (Public)";
+			DiscordPresence.details = Utils::String::Format("Playing Zombies on {1} {2}", localize ? localize->value : "Zombies", map, privacySuffix);
 		}
 		else {
-			DiscordPresence.details = Utils::String::Format("Playing Zombies on {}", map);
+			const bool isPrivate = Dvar::Var("partyPrivacy").get<int>() == 1;
+			const char* privacySuffix = isPrivate ? " (Private)" : " (Public)";
+			DiscordPresence.details = Utils::String::Format("Playing Zombies on {} {}", map, privacySuffix);
 		}
 
 		const bool isHosting = Dvar::Var("party_host").get<bool>();

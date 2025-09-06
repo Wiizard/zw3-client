@@ -97,7 +97,7 @@ namespace Components
 
 	Branding::Branding()
 	{
-		RegisterBrandingDvars();
+		//RegisterBrandingDvars();
 
 		// UI version string
 		Utils::Hook::Set<const char*>(0x43F73B, "");

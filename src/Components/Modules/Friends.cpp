@@ -194,7 +194,7 @@ namespace Components
 		{
 			std::lock_guard<std::recursive_mutex> _(Friends::Mutex);
 
-			const auto modId = *reinterpret_cast<const unsigned int*>("Zombie Warfare 3") | 0x80000000;
+			const auto modId = *reinterpret_cast<const unsigned int*>("IW4x") | 0x80000000;
 
 			// Split up the list
 			for (const auto& entry : Friends::FriendsList)
@@ -557,9 +557,9 @@ namespace Components
 
 		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled()) return;
 
-		Friends::UIStreamFriendly = Dvar::Register<bool>("ui_streamFriendly", false, Game::DVAR_ARCHIVE, "Stream friendly UI");
-		Friends::CLAnonymous = Dvar::Register<bool>("cl_anonymous", false, Game::DVAR_ARCHIVE, "Enable invisible mode for Steam");
-		Friends::CLNotifyFriendState = Dvar::Register<bool>("cl_notifyFriendState", true, Game::DVAR_ARCHIVE, "Update friends about current game status");
+		//Friends::UIStreamFriendly = Dvar::Register<bool>("ui_streamFriendly", false, Game::DVAR_ARCHIVE, "Stream friendly UI");
+		//Friends::CLAnonymous = Dvar::Register<bool>("cl_anonymous", false, Game::DVAR_ARCHIVE, "Enable invisible mode for Steam");
+		//Friends::CLNotifyFriendState = Dvar::Register<bool>("cl_notifyFriendState", true, Game::DVAR_ARCHIVE, "Update friends about current game status");
 
 		// Hook Live_ShowFriendsList
 		Utils::Hook(0x4D6C70, []()

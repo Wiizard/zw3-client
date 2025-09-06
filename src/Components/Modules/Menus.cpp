@@ -1674,6 +1674,8 @@ namespace Components
 		Add("ui_mp/stats_mod_warning.menu");
 		Add("ui_mp/theater_menu.menu");
 		Add("ui_mp/connect.menu");
+		Add("ui_mp/popup_partyconnect.menu");
+		Add("ui_mp/popup_partyconnect_warning.menu");
 	}
 
 	void Menus::preDestroy()

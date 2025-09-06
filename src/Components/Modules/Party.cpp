@@ -327,11 +327,11 @@ namespace Components
 	{
 		switch (id)
 		{
-			case 0: return "Richtofen";
-			case 1: return "Dempsey";
-			case 2:	return "Nikolai";
-			case 3:	return "Takeo";
-			default: return "None";
+		case 0: return "Richtofen";
+		case 1: return "Dempsey";
+		case 2:	return "Nikolai";
+		case 3:	return "Takeo";
+		default: return "None";
 		}
 	}
 	int GetCharacterIdFromName(const char* name)
@@ -621,6 +621,21 @@ namespace Components
 				Connect(Container.target);
 			});
 
+		UIScript::Add("JoinParty", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+			{
+				auto* ip_dvar = Game::Dvar_FindVar("partyconnect_ip");
+				auto* port_dvar = Game::Dvar_FindVar("partyconnect_port");
+
+				if (ip_dvar && ip_dvar->current.string && strlen(ip_dvar->current.string) > 0 &&
+					port_dvar && port_dvar->current.string && strlen(port_dvar->current.string) > 0)
+				{
+					std::string address = ip_dvar->current.string;
+					address += ":";
+					address += port_dvar->current.string;
+					Party::Connect(address);
+				}
+			});
+
 		if (!Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled())
 		{
 			Scheduler::Loop([]
@@ -650,18 +665,26 @@ namespace Components
 			{
 				Utils::InfoString clientInfo(data);
 
-				std::string receivedChallenge = clientInfo.get("challenge");
+				std::string receivedChallenge;
 
-				uint64_t clientXuid = 0;
-				clientXuid = std::stoull(clientInfo.get("xuid"), nullptr, 16);
-
-				if (clientXuid != 0)
+				if (!Dedicated::IsEnabled() && !Dedicated::IsRunning() && !IsServerBrowserOpen())
 				{
-					Party::g_xuidToPublicAddressMap[clientXuid] = address;
+					receivedChallenge = clientInfo.get("challenge");
+					uint64_t clientXuid = 0;
+					clientXuid = std::stoull(clientInfo.get("xuid"), nullptr, 16);
 
-					Game::netIP_t clientIpUnion = address.getIP();
-					struct in_addr temp_addr;
-					temp_addr.s_addr = clientIpUnion.full;
+					if (clientXuid != 0)
+					{
+						Party::g_xuidToPublicAddressMap[clientXuid] = address;
+
+						Game::netIP_t clientIpUnion = address.getIP();
+						struct in_addr temp_addr;
+						temp_addr.s_addr = clientIpUnion.full;
+					}
+				}
+				else
+				{
+					receivedChallenge = Utils::ParseChallenge(data);
 				}
 
 				Utils::InfoString hostResponseInfo;

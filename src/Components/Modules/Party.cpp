@@ -667,7 +667,7 @@ namespace Components
 
 				std::string receivedChallenge;
 
-				if (!Dedicated::IsEnabled() && !Dedicated::IsRunning() && !IsServerBrowserOpen())
+				if (!Dedicated::IsEnabled() && !Dedicated::IsRunning())
 				{
 					receivedChallenge = clientInfo.get("challenge");
 					uint64_t clientXuid = 0;
@@ -734,7 +734,10 @@ namespace Components
 				hostResponseInfo.set("version", REVISION_STR);
 				hostResponseInfo.set("checksum", std::to_string(Game::Sys_Milliseconds()));
 				hostResponseInfo.set("mapname", Dvar::Var("mapname").get<std::string>());
-				hostResponseInfo.set("isPrivate", *Game::g_password ? "1"s : "0"s);
+				if (Container.matchType == JoinContainer::MatchType::DEDICATED_MATCH)
+				{
+					hostResponseInfo.set("isPrivate", *Game::g_password ? "1"s : "0"s);
+				}
 				hostResponseInfo.set("hc", (Dvar::Var("g_hardcore").get<bool>() ? "1"s : "0"s));
 				hostResponseInfo.set("securityLevel", std::to_string(securityLevel));
 				hostResponseInfo.set("sv_running", (Dedicated::IsRunning() ? "1"s : "0"s));
@@ -889,11 +892,12 @@ namespace Components
 						}
 
 						std::string receivedChallenge;
-						if (IsServerBrowserOpen())
+						if (Container.matchType == JoinContainer::MatchType::DEDICATED_MATCH
+							|| Container.matchType == JoinContainer::MatchType::PARTY_LOBBY)
 						{
 							receivedChallenge = Container.challenge;
 						}
-						else
+						else if (Container.matchType == JoinContainer::MatchType::PRIVATE_PARTY)
 						{
 							receivedChallenge = info.get("challenge");
 						}

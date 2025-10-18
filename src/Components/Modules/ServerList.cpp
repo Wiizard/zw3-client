@@ -624,7 +624,13 @@ namespace Components
 			const auto zombiemode = info.get("zombiemode");
 			if (!zombiemode.empty())
 			{
-				server.gametype = zombiemode;
+				std::map<std::string, std::string> zGametype =
+				{
+					{"0", "Normal"},
+					{"1", "Classic"},
+					{"2", "Hardcore"}
+				};
+				server.gametype = zGametype[zombiemode];
 			}
 			else
 			{

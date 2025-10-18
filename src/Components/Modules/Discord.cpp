@@ -177,17 +177,22 @@ namespace Components
 		Game::StringTable_GetAsset_FastFile("mp/gameTypesTable.csv", &table);
 		const auto row = Game::StringTable_LookupRowNumForValue(table, 0, (*Game::ui_gametype)->current.string);
 
+		const int zModeVal = Dvar::Var("zombiemode").get<int>();
+		static const char* zModeNames[]  = {"Normal", "Classic", "Hardcore"};
+		const int zModeCount = sizeof(zModeNames) / sizeof(zModeNames[0]);
+		const char* zMode = (zModeVal >= 0 && zModeVal < zModeCount) ? zModeNames[zModeVal] : "Normal";
+
 		if (row != -1) {
 			const auto* value = Game::StringTable_GetColumnValueForRow(table, row, 1);
 			const auto* localize = Game::DB_FindXAssetHeader(Game::ASSET_TYPE_LOCALIZE_ENTRY, value).localize;
 			const bool isPrivate = Dvar::Var("partyPrivacy").get<int>() == 1;
 			const char* privacySuffix = isPrivate ? " (Private)" : " (Public)";
-			DiscordPresence.details = Utils::String::Format("Playing Zombies on {1} {2}", localize ? localize->value : "Zombies", map, privacySuffix);
+			DiscordPresence.details = Utils::String::Format("{1} on {2}{3}", localize ? localize->value : "Zombies", zMode, map, privacySuffix);
 		}
 		else {
 			const bool isPrivate = Dvar::Var("partyPrivacy").get<int>() == 1;
 			const char* privacySuffix = isPrivate ? " (Private)" : " (Public)";
-			DiscordPresence.details = Utils::String::Format("Playing Zombies on {} {}", map, privacySuffix);
+			DiscordPresence.details = Utils::String::Format("{} on {}{}", zMode, map, privacySuffix);
 		}
 
 		const bool isHosting = Dvar::Var("party_host").get<bool>();

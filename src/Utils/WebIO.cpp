@@ -277,7 +277,7 @@ namespace Utils
 		params params = headers;
 		if (!params.contains("Content-Type"))
 		{
-			params["Content-Type"] = "application/x-www-form-urlencoded";
+			params["Content-Type"] = "application/json";
 		}
 
 		std::string finalHeaders;
@@ -290,7 +290,7 @@ namespace Utils
 			finalHeaders.append("\r\n");
 		}
 
-		if (HttpSendRequestA(this->hFile_, finalHeaders.data(), finalHeaders.size(), const_cast<char*>(body.data()), body.size() + 1) == FALSE)
+		if (HttpSendRequestA(this->hFile_, finalHeaders.data(), finalHeaders.size(), const_cast<char*>(body.data()), body.size()) == FALSE)
 		{
 			return {};
 		}

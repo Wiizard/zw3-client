@@ -80,9 +80,13 @@ namespace Components
 	{
 		Discord_RunCallbacks();
 
+		auto oldTimestamp = DiscordPresence.startTimestamp;
 		ZeroMemory(&DiscordPresence, sizeof(DiscordPresence));
 		DiscordPresence.instance = 1;
 		DiscordPresence.largeImageKey = "https://i.imghippo.com/files/iAOF6351ypo.png";
+
+		if(oldTimestamp != 0)
+			DiscordPresence.startTimestamp = oldTimestamp;
 
 		if (!Game::CL_IsCgameInitialized())
 		{
@@ -249,11 +253,6 @@ namespace Components
 
 			DiscordPresence.partySize = Game::cgArray[0].snap ? Game::cgArray[0].snap->numClients : 1;
 			DiscordPresence.partyMax = Party::GetMaxClients();
-		}
-
-		if (!DiscordPresence.startTimestamp)
-		{
-			DiscordPresence.startTimestamp = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 		}
 
 		Discord_UpdatePresence(&DiscordPresence);

@@ -229,7 +229,15 @@ namespace Components
 		{
 			if (params->size() > 1)
 			{
-				Utils::OpenUrl(params->get(1));
+				std::string url = params->get(1);
+				Utils::String::Trim(url);
+
+				if(!url.empty() && url.find("http://") != 0 && url.find("https://") != 0)
+				{
+					url = "http://" + url;
+				}
+
+				Utils::OpenUrl(url);
 			}
 		});
 

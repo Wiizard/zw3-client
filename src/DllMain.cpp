@@ -44,7 +44,7 @@ BOOL APIENTRY DllMain(HINSTANCE /*hinstDLL*/, DWORD fdwReason, LPVOID lpvReserve
 			MessageBoxA(nullptr,
 			            "Failed to load game binary.\n"
 			            "You did not install the iw4x-rawfiles!\n"
-			            "Please use the Zombie Warfare 3 Launcher to run the game. For support, please visit https://zw3.fwgclan.eu",
+			            "Please use the Zombie Warfare 3 Launcher to run the game. For support, please visit https://zw3.eu",
 			            "ERROR",
 			            MB_ICONERROR
 			);

@@ -117,7 +117,7 @@ namespace Components
 
 		UIScript::Add("visitWebsite", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 		{
-			Utils::OpenUrl("https://zw3.fwgclan.eu");
+			Utils::OpenUrl("https://zw3.eu");
 		});
 
 		Localization::Set("MPUI_CHANGELOG_TEXT", "Loading...");

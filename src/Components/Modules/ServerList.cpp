@@ -386,7 +386,7 @@ namespace Components
 
 			Toast::Show("cardicon_redhand", "Fetching Servers", "This may take some time. Please wait...", 3000);
 
-			const auto url = std::format("http://master.fwgclan.eu/v1/servers/zw3?protocol={}", PROTOCOL);
+			const auto url = std::format("http://master.zw3.eu/v1/servers/zw3?protocol={}", PROTOCOL);
 			const auto reply = Utils::WebIO("zw3", url).setTimeout(5000)->get();
 			if (reply.empty())
 			{
@@ -1029,7 +1029,7 @@ namespace Components
 			});
 
 		// Set default masterServerName + port and save it
-		Utils::Hook::Set<const char*>(0x60AD92, "master.fwgclan.eu");
+		Utils::Hook::Set<const char*>(0x60AD92, "master.zw3.eu");
 		Utils::Hook::Set<std::uint8_t>(0x60AD90, Game::DVAR_NONE); // masterServerName
 		Utils::Hook::Set<std::uint8_t>(0x60ADC6, Game::DVAR_NONE); // masterPort
 

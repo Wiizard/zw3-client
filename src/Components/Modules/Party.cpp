@@ -11,6 +11,7 @@
 #include "TextRenderer.hpp"
 #include "Voice.hpp"
 #include "Events.hpp"
+#include "Toast.hpp"
 #include <version.hpp>
 
 #define CL_MOD_LOADING
@@ -635,6 +636,105 @@ namespace Components
 					Party::Connect(address);
 				}
 			});
+
+		UIScript::Add("LoadSave", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+			{
+                std::string guidVar = Utils::String::VA("%llX", Steam::SteamUser()->GetSteamID().bits);
+				std::string guid = guidVar.c_str();
+
+				std::string path = (*Game::fs_basepath)->current.string + "\\userraw\\scriptdata\\autosave_"s + guid;
+				std::replace(path.begin(), path.end(), ' ', '/');
+
+				std::ifstream f(path);
+				if (!f.is_open())
+				{
+					return;
+				}
+
+				{
+					struct _stat64 st {};
+					if (_stat64(path.c_str(), &st) == 0)
+					{
+						tm t{};
+						localtime_s(&t, &st.st_mtime);
+
+						char formatted[128];
+						strftime(formatted, sizeof(formatted), "%d %b %Y  %H:%M", &t);
+
+						if (!Game::Dvar_FindVar("autosave_date"))
+							Game::Dvar_RegisterString("autosave_date", "", 0, "");
+
+						Game::Dvar_SetString(Game::Dvar_FindVar("autosave_date"), formatted);
+					}
+					else
+					{
+						return;
+					}
+				}
+
+				std::string data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+				f.close();
+
+				std::unordered_map<std::string, std::string> parsed;
+				size_t start = 0;
+
+				while (true)
+				{
+					size_t s = data.find(';', start);
+					if (s == std::string::npos) break;
+					std::string t = data.substr(start, s - start);
+					start = s + 1;
+
+					size_t c = t.find(':');
+					if (c == std::string::npos) continue;
+
+					std::string k = t.substr(0, c);
+					std::string v = t.substr(c + 1);
+
+					auto trim = [](std::string& x)
+						{
+							while (!x.empty() && strchr(" \n\r\t", x.back())) x.pop_back();
+							while (!x.empty() && strchr(" \n\r\t", x.front())) x.erase(x.begin());
+						};
+
+					trim(k); trim(v);
+					parsed[k] = v;
+				}
+
+				if (!parsed.count("map"))
+				{
+					return;
+				}
+
+				for (const auto& p : parsed)
+				{
+					std::string dvarName = "autosave_" + p.first;
+
+					auto var = Game::Dvar_FindVar(dvarName.c_str());
+					if (!var)
+					{
+						var = Game::Dvar_RegisterString(dvarName.c_str(), "", 0, "");
+					}
+
+					Game::Dvar_SetString(var, p.second.c_str());
+				}
+
+				Command::Execute("openmenu popup_autosave");
+			});
+
+		UIScript::Add("LoadSaveAccepted", [](const UIScript::Token&, const Game::uiInfo_s*)
+			{
+				auto* map = Game::Dvar_FindVar("autosave_map");
+
+				if (!map || !map->current.string || !map->current.string[0])
+				{
+					return;
+				}
+
+				std::string cmd = "map "s + map->current.string;
+				Command::Execute(cmd.c_str());
+			});
+
 
 		if (!Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled())
 		{

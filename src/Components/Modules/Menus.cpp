@@ -1676,6 +1676,7 @@ namespace Components
 		Add("ui_mp/connect.menu");
 		Add("ui_mp/popup_partyconnect.menu");
 		Add("ui_mp/popup_partyconnect_warning.menu");
+		Add("ui_mp/popup_autosave.menu");
 	}
 
 	void Menus::preDestroy()

@@ -11,7 +11,6 @@
 #include "TextRenderer.hpp"
 #include "Voice.hpp"
 #include "Events.hpp"
-#include "Toast.hpp"
 #include <version.hpp>
 
 #define CL_MOD_LOADING

@@ -457,6 +457,36 @@ namespace Components
 		return Game::Menu_IsVisible(Game::uiContext, menu);
 	}
 
+	std::string getCharMap() {
+		return "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_ ";
+	}
+	std::string decryptString(const std::string& encryptedText, int shiftKey) {
+		std::string map = getCharMap();
+		std::string decrypted = "";
+		int mapSize = static_cast<int>(map.size());
+
+		for (size_t i = 0; i < encryptedText.size(); i++) {
+			char currentChar = encryptedText[i];
+
+			size_t index = map.find(currentChar);
+
+			if (index != std::string::npos) {
+				int newIndex = (static_cast<int>(index) - shiftKey);
+
+				while (newIndex < 0) {
+					newIndex += mapSize;
+				}
+				newIndex %= mapSize;
+
+				decrypted += map[newIndex];
+			}
+			else {
+				decrypted += currentChar;
+			}
+		}
+		return decrypted;
+	}
+
 	Party::Party()
 	{
 		if (ZoneBuilder::IsEnabled())
@@ -671,8 +701,12 @@ namespace Components
 					}
 				}
 
-				std::string data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+				std::string fdata((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 				f.close();
+
+				std::string read = fdata;
+				int key = 16;
+				std::string data = decryptString(read, key);
 
 				std::unordered_map<std::string, std::string> parsed;
 				size_t start = 0;
@@ -733,7 +767,6 @@ namespace Components
 				std::string cmd = "map "s + map->current.string;
 				Command::Execute(cmd.c_str());
 			});
-
 
 		if (!Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled())
 		{

@@ -668,11 +668,10 @@ namespace Components
 
 		UIScript::Add("LoadSave", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 			{
-                std::string guidVar = Utils::String::VA("%llX", Steam::SteamUser()->GetSteamID().bits);
-				std::string guid = guidVar.c_str();
+				std::string guid = Utils::String::VA("%016llX", Steam::SteamUser()->GetSteamID().bits);
+				std::transform(guid.begin(), guid.end(), guid.begin(), ::tolower);
 
 				std::string path = (*Game::fs_basepath)->current.string + "\\userraw\\scriptdata\\autosave_"s + guid;
-				std::replace(path.begin(), path.end(), ' ', '/');
 
 				std::ifstream f(path);
 				if (!f.is_open())
@@ -691,7 +690,9 @@ namespace Components
 						strftime(formatted, sizeof(formatted), "%d %b %Y  %H:%M", &t);
 
 						if (!Game::Dvar_FindVar("autosave_date"))
+						{
 							Game::Dvar_RegisterString("autosave_date", "", 0, "");
+						}
 
 						Game::Dvar_SetString(Game::Dvar_FindVar("autosave_date"), formatted);
 					}
@@ -706,6 +707,7 @@ namespace Components
 
 				std::string read = fdata;
 				int key = 16;
+
 				std::string data = decryptString(read, key);
 
 				std::unordered_map<std::string, std::string> parsed;
@@ -715,6 +717,7 @@ namespace Components
 				{
 					size_t s = data.find(';', start);
 					if (s == std::string::npos) break;
+
 					std::string t = data.substr(start, s - start);
 					start = s + 1;
 
@@ -730,7 +733,9 @@ namespace Components
 							while (!x.empty() && strchr(" \n\r\t", x.front())) x.erase(x.begin());
 						};
 
-					trim(k); trim(v);
+					trim(k);
+					trim(v);
+
 					parsed[k] = v;
 				}
 
@@ -754,6 +759,7 @@ namespace Components
 
 				Command::Execute("openmenu popup_autosave");
 			});
+
 
 		UIScript::Add("LoadSaveAccepted", [](const UIScript::Token&, const Game::uiInfo_s*)
 			{

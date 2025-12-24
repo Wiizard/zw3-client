@@ -36,6 +36,7 @@ namespace Components
 	{
 		ZeroMemory(&DiscordPresence, sizeof(DiscordPresence));
 		DiscordPresence.instance = 1;
+		Logger::Print("Discord: Ready\n");
 		Discord_UpdatePresence(&DiscordPresence);
 	}
 
@@ -47,6 +48,7 @@ namespace Components
 
 	static void JoinRequest(const DiscordUser* request)
 	{
+		Logger::Print("Discord: Join request from {} ({})\n", request->username, request->userId);
 		Discord_Respond(request->userId, DISCORD_REPLY_IGNORE);
 	}
 
@@ -102,12 +104,8 @@ namespace Components
 		else
 			activityContext = "other";
 
-		if (activityContext != lastActivityContext)
-		{
+		if (!discordSessionStart)
 			discordSessionStart = std::time(nullptr);
-			lastActivityContext = activityContext;
-			privateMatchNonce = 0;
-		}
 
 		DiscordRichPresence newPresence{};
 		newPresence.instance = 1;
@@ -181,14 +179,12 @@ namespace Components
 			const char* zMode = (zModeVal >= 0 && zModeVal < 3) ? zModeNames[zModeVal] : "Normal";
 
 			details = Utils::String::Format("{} on {}", zMode, map);
+
 			if (isHosting)
 			{
 				const bool isPrivate = Dvar::Var("partyPrivacy").get<int>() == 1;
 				details += isPrivate ? " (Private)" : " (Public)";
-			}
 
-			if (isHosting)
-			{
 				int totalPlayers = Dvar::Var("party_currentPlayers").get<int>();
 				int realPlayers = Dvar::Var("party_realPlayers").get<int>();
 				int numBots = totalPlayers - realPlayers;
@@ -238,7 +234,7 @@ namespace Components
 
 		int64_t now = std::time(nullptr);
 		if (details != lastDetails || state != lastState || partyId != lastPartyId || joinSecret != lastJoinSecret
-			|| partySize != lastPartySize || partyMax != lastPartyMax || now - lastUpdateTime >= 7)
+			|| partySize != lastPartySize || partyMax != lastPartyMax || now - lastUpdateTime >= 1)
 		{
 			DiscordPresence = newPresence;
 			Discord_UpdatePresence(&DiscordPresence);

@@ -13,6 +13,7 @@
 
 #include "GSC/Script.hpp"
 #include "GSC/ScriptExtension.hpp"
+#include "ZW3Auth.hpp"
 
 #define MG_OVERRIDE_LOG_FN
 
@@ -977,6 +978,12 @@ namespace Components
 
 		GSC::Script::AddFunction("HttpPost", []
 			{
+				if (!ZW3Auth::IsAuthenticated())
+				{
+					Game::Scr_Error("HttpPost requires authentication.");
+					return;
+				}
+
 				const char* url = Game::Scr_GetString(0);
 				const char* body = Game::Scr_GetString(1);
 

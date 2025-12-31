@@ -1,11 +1,11 @@
 #include <Shlwapi.h>
 
 #include "WebIO.hpp"
+#include "Leaderboard.hpp"
 
 namespace Utils
 {
 	WebIO::WebIO() : WebIO("WebIO") {}
-
 	WebIO::WebIO(const std::string& useragent, const std::string& url) : WebIO(useragent)
 	{
 		this->setURL(url);
@@ -185,15 +185,10 @@ namespace Utils
 		return this->post(body, success);
 	}
 
-	std::string WebIO::post(const std::string& url, const params& params, bool* success)
+	std::string WebIO::post(const std::string& url, const std::string& body, const params& headers, bool* success)
 	{
 		this->setURL(url);
-		return this->post(params, success);
-	}
-
-	std::string WebIO::post(const params& params, bool* success)
-	{
-		return this->post(this->buildPostBody(params), success);
+		return this->post(body, headers, success);
 	}
 
 	std::string WebIO::post(const std::string& body, bool* success)
@@ -202,16 +197,32 @@ namespace Utils
 		return this->execute("POST", body, params, success);
 	}
 
+	std::string WebIO::post(const std::string& body, const params& headers, bool* success)
+	{
+		return this->execute("POST", body, headers, success);
+	}
+
 	std::string WebIO::get(const std::string& url, bool* success)
 	{
 		this->setURL(url);
 		return this->get(success);
 	}
 
+	std::string WebIO::get(const std::string& url, const params& headers, bool* success)
+	{
+		this->setURL(url);
+		return this->get(headers, success);
+	}
+
 	std::string WebIO::get(bool* success)
 	{
 		const params params;
 		return this->execute("GET", "", params, success);
+	}
+
+	std::string WebIO::get(const params& headers, bool* success)
+	{
+		return this->execute("GET", "", headers, success);
 	}
 
 	bool WebIO::openConnection()
@@ -278,6 +289,7 @@ namespace Utils
 		if (!params.contains("Content-Type"))
 		{
 			params["Content-Type"] = "application/json";
+			params["Authorization"] = "Bearer " + std::string(Utils::Leaderboard::GetApiKey());
 		}
 
 		std::string finalHeaders;

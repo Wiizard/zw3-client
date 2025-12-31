@@ -30,13 +30,15 @@ namespace Utils
 		std::string postFile(const std::string& url, const std::string& data, const std::string& fieldName, const std::string& fileName);
 		std::string postFile(const std::string& data, std::string fieldName, std::string fileName);
 
-		std::string post(const std::string& url, const params& params, bool* success = nullptr);
 		std::string post(const std::string& url, const std::string& body, bool* success = nullptr);
-		std::string post(const params& params, bool* success = nullptr);
+		std::string post(const std::string& url, const std::string& body, const params& headers, bool* success = nullptr);
 		std::string post(const std::string& body, bool* success = nullptr);
+		std::string post(const std::string& body, const params& headers, bool* success = nullptr);
 
 		std::string get(const std::string& url, bool* success = nullptr);
+		std::string get(const std::string& url, const params& headers, bool* success = nullptr);
 		std::string get(bool* success = nullptr);
+		std::string get(const params& headers, bool* success = nullptr);
 
 		WebIO* setTimeout(DWORD msec);
 

@@ -23,13 +23,13 @@
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <CharacterSet>NotSet</CharacterSet>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <CharacterSet>NotSet</CharacterSet>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -268,6 +268,7 @@ cd c:/Git/zw3-client</Command>
     <ClInclude Include="..\src\Components\Modules\Window.hpp" />
     <ClInclude Include="..\src\Components\Modules\ZoneBuilder.hpp" />
     <ClInclude Include="..\src\Components\Modules\Zones.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ZW3Auth.hpp" />
     <ClInclude Include="..\src\Game\BothGames.hpp" />
     <ClInclude Include="..\src\Game\Client.hpp" />
     <ClInclude Include="..\src\Game\Common.hpp" />
@@ -313,6 +314,7 @@ cd c:/Git/zw3-client</Command>
     <ClInclude Include="..\src\Utils\IO.hpp" />
     <ClInclude Include="..\src\Utils\InfoString.hpp" />
     <ClInclude Include="..\src\Utils\JSON.hpp" />
+    <ClInclude Include="..\src\Utils\Leaderboard.hpp" />
     <ClInclude Include="..\src\Utils\Library.hpp" />
     <ClInclude Include="..\src\Utils\Maths.hpp" />
     <ClInclude Include="..\src\Utils\Memory.hpp" />
@@ -458,6 +460,7 @@ cd c:/Git/zw3-client</Command>
     <ClCompile Include="..\src\Components\Modules\Window.cpp" />
     <ClCompile Include="..\src\Components\Modules\ZoneBuilder.cpp" />
     <ClCompile Include="..\src\Components\Modules\Zones.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ZW3Auth.cpp" />
     <ClCompile Include="..\src\DllMain.cpp" />
     <ClCompile Include="..\src\Game\BothGames.cpp" />
     <ClCompile Include="..\src\Game\Client.cpp" />
@@ -512,6 +515,7 @@ cd c:/Git/zw3-client</Command>
     </ClCompile>
     <ClCompile Include="..\src\Utils\InfoString.cpp" />
     <ClCompile Include="..\src\Utils\JSON.cpp" />
+    <ClCompile Include="..\src\Utils\Leaderboard.cpp" />
     <ClCompile Include="..\src\Utils\Library.cpp" />
     <ClCompile Include="..\src\Utils\Maths.cpp" />
     <ClCompile Include="..\src\Utils\Memory.cpp" />

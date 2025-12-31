@@ -8,10 +8,14 @@ namespace Components
 		class UserMapContainer
 		{
 		public:
+			struct IwdSearchPath {
+				Game::searchpath_s path{};
+				bool wasFreed = false;
+			};
 			UserMapContainer() : wasFreed(false), hash(0) {}
 			UserMapContainer(const std::string& _mapname) : wasFreed(false), mapname(_mapname)
 			{
-				ZeroMemory(&this->searchPath, sizeof(this->searchPath));
+				//ZeroMemory(&this->searchPath, sizeof(this->searchPath));
 				this->hash = Maps::GetUsermapHash(this->mapname);
 				Maps::ForceRefreshArenas();
 			}
@@ -35,7 +39,7 @@ namespace Components
 				}
 			}
 
-			void loadIwd();
+			void loadIwd(bool includeExtras = true);
 			void freeIwd();
 
 			void reloadIwd();
@@ -46,7 +50,8 @@ namespace Components
 			bool wasFreed;
 			unsigned int hash;
 			std::string mapname;
-			Game::searchpath_s searchPath;
+			//Game::searchpath_s searchPath;
+			std::deque<IwdSearchPath> searchPaths;
 		};
 
 		Maps();
@@ -71,6 +76,8 @@ namespace Components
 		static const std::vector<std::string>& GetCustomMaps();
 
 		static std::unordered_map<std::string, std::string> ParseCustomMapArena(const std::string& singleMapArena);
+		static void PrepareUsermap(const char* mapname);
+		static void PrepareUsermapPreview(const char* mapname);
 
 	private:
 		class DLC
@@ -118,7 +125,7 @@ namespace Components
 		static void AddDlc(DLC dlc);
 		static void UpdateDlcStatus();
 
-		static void PrepareUsermap(const char* mapname);
+		//static void PrepareUsermap(const char* mapname);
 		static void SpawnServerStub();
 		static void LoadMapLoadscreenStub();
 

@@ -31,27 +31,69 @@ namespace Components
 		return &Maps::UserMap;
 	}
 
-	void Maps::UserMapContainer::loadIwd()
+	void Maps::UserMapContainer::loadIwd(bool includeExtras)
 	{
-		if (this->isValid() && !this->searchPath.iwd)
+		if (this->isValid() && this->searchPaths.empty())
 		{
-			auto iwdName = std::format("{}.iwd", this->mapname);
-			auto path = std::format("{}\\usermaps\\{}\\{}", (*Game::fs_basepath)->current.string, this->mapname, iwdName);
+			std::filesystem::path basePath = (*Game::fs_basepath)->current.string;
+			basePath /= "usermaps";
+			basePath /= this->mapname;
 
-			if (Utils::IO::FileExists(path))
+			if (!std::filesystem::exists(basePath))
 			{
-				this->searchPath.iwd = Game::FS_IsShippedIWD(path.data(), iwdName.data());
+				return;
+			}
 
-				if (this->searchPath.iwd)
+			const auto primaryIwd = std::format("{}.iwd", this->mapname);
+			std::vector<std::string> iwdFiles;
+			if (Utils::IO::FileExists((basePath / primaryIwd).string()))
+			{
+				iwdFiles.push_back(primaryIwd);
+			}
+
+			std::vector<std::string> extraIwds;
+			if (includeExtras)
+			{
+				const auto entries = Utils::IO::ListFiles(basePath);
+				for (const auto& entry : entries)
 				{
-					this->searchPath.bLocalized = false;
-					this->searchPath.ignore = 0;
-					this->searchPath.ignorePureCheck = 0;
-					this->searchPath.language = 0;
-					this->searchPath.dir = nullptr;
-					this->searchPath.next = *Game::fs_searchpaths;
-					*Game::fs_searchpaths = &this->searchPath;
+					if (!entry.is_regular_file())
+					{
+						continue;
+					}
+
+					const auto filename = entry.path().filename().string();
+					if (Utils::String::EndsWith(filename, ".iwd") && filename != primaryIwd)
+					{
+						extraIwds.push_back(filename);
+					}
 				}
+			}
+
+			std::sort(extraIwds.begin(), extraIwds.end());
+			iwdFiles.insert(iwdFiles.end(), extraIwds.begin(), extraIwds.end());
+
+			for (auto it = iwdFiles.rbegin(); it != iwdFiles.rend(); ++it)
+			{
+				const auto& iwdName = *it;
+				const auto path = (basePath / iwdName).string();
+				auto* iwd = Game::FS_IsShippedIWD(path.data(), iwdName.data());
+				if (!iwd)
+				{
+					continue;
+				}
+
+				this->searchPaths.emplace_back();
+				auto& entry = this->searchPaths.back();
+				entry.wasFreed = false;
+				entry.path.iwd = iwd;
+				entry.path.bLocalized = false;
+				entry.path.ignore = 0;
+				entry.path.ignorePureCheck = 0;
+				entry.path.language = 0;
+				entry.path.dir = nullptr;
+				entry.path.next = *Game::fs_searchpaths;
+				*Game::fs_searchpaths = &entry.path;
 			}
 		}
 	}
@@ -61,42 +103,59 @@ namespace Components
 		if (this->isValid() && this->wasFreed)
 		{
 			this->wasFreed = false;
-			this->searchPath.iwd = nullptr;
+			//this->searchPath.iwd = nullptr;
+			this->freeIwd();
 			this->loadIwd();
 		}
 	}
 
 	void Maps::UserMapContainer::handlePackfile(void* packfile)
 	{
-		if (this->isValid() && this->searchPath.iwd == packfile)
+		if (this->isValid() /* && this->searchPath.iwd == packfile*/)
 		{
-			this->wasFreed = true;
+			//this->wasFreed = true;
+			for (auto& entry : this->searchPaths)
+			{
+				if (entry.path.iwd == packfile)
+				{
+					entry.wasFreed = true;
+					this->wasFreed = true;
+					return;
+				}
+			}
 		}
 	}
 
 	void Maps::UserMapContainer::freeIwd()
 	{
-		if (this->isValid() && this->searchPath.iwd && !this->wasFreed)
+		if (this->isValid() && !this->searchPaths.empty())
 		{
-			this->wasFreed = true;
-
-			// Unchain our searchpath
-			for (auto** pathPtr = Game::fs_searchpaths; *pathPtr; pathPtr = &(*pathPtr)->next)
+			for (auto& entry : this->searchPaths)
 			{
-				if (*pathPtr == &this->searchPath)
+				// Unchain our searchpath
+				for (auto** pathPtr = Game::fs_searchpaths; *pathPtr; pathPtr = &(*pathPtr)->next)
 				{
-					*pathPtr = (*pathPtr)->next;
-					break;
+					if (*pathPtr == &entry.path)
+					{
+						*pathPtr = entry.path.next;
+						break;
+					}
 				}
+
+				if (entry.path.iwd && !entry.wasFreed)
+				{
+					Game::unzClose(entry.path.iwd->handle);
+
+					// Use game's free function
+					Utils::Hook::Call<void(void*)>(0x6B5CF2)(entry.path.iwd->buildBuffer);
+					Utils::Hook::Call<void(void*)>(0x6B5CF2)(entry.path.iwd);
+				}
+
+				ZeroMemory(&entry.path, sizeof(entry.path));
 			}
 
-			Game::unzClose(this->searchPath.iwd->handle);
-
-			// Use game's free function
-			Utils::Hook::Call<void(void*)>(0x6B5CF2)(this->searchPath.iwd->buildBuffer);
-			Utils::Hook::Call<void(void*)>(0x6B5CF2)(this->searchPath.iwd);
-
-			ZeroMemory(&this->searchPath, sizeof(this->searchPath));
+			this->searchPaths.clear();
+			this->wasFreed = false;
 		}
 	}
 
@@ -439,6 +498,12 @@ namespace Components
 
 	void Maps::PrepareUsermap(const char* mapname)
 	{
+		if (Maps::UserMap.isValid() && Maps::UserMap.getName() == mapname)
+		{
+			Maps::UserMap.reloadIwd();
+			return;
+		}
+
 		if (Maps::UserMap.isValid())
 		{
 			Maps::UserMap.freeIwd();
@@ -448,11 +513,31 @@ namespace Components
 		if (Maps::IsUserMap(mapname))
 		{
 			Maps::UserMap = Maps::UserMapContainer(mapname);
-			Maps::UserMap.loadIwd();
+			Maps::UserMap.loadIwd(true);
 		}
 		else
 		{
 			Maps::UserMap.clear();
+		}
+	}
+
+	void Maps::PrepareUsermapPreview(const char* mapname)
+	{
+		if (Maps::UserMap.isValid() && Maps::UserMap.getName() == mapname)
+		{
+			return;
+		}
+
+		if (Maps::UserMap.isValid())
+		{
+			Maps::UserMap.freeIwd();
+			Maps::UserMap.clear();
+		}
+
+		if (Maps::IsUserMap(mapname))
+		{
+			Maps::UserMap = Maps::UserMapContainer(mapname);
+			Maps::UserMap.loadIwd(false);
 		}
 	}
 

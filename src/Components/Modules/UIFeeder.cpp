@@ -2,6 +2,9 @@
 #include "Events.hpp"
 #include "UIFeeder.hpp"
 
+#include "Scheduler.hpp"
+#include <chrono>
+
 namespace Components
 {
 	UIFeeder::Container UIFeeder::Current;
@@ -307,7 +310,8 @@ namespace Components
 
 		if (index < maps.size())
 		{
-			std::string mapName = maps[index];
+			const auto& usermapName = maps[index];
+			std::string mapName = usermapName;
 
 			std::string longName = mapName;
 			std::string description = "(Missing arena file!)";
@@ -334,8 +338,8 @@ namespace Components
 				}
 			}
 
-			UIMapName.set(Localization::Get(mapName.data()));
 			UIMapLong.set(Localization::Get(longName.data()));
+			UIMapName.set(Localization::Get(longName.empty() ? mapName.data() : longName.data()));
 			UIMapDesc.set(Localization::Get(description.data()));
 		}
 	}
@@ -358,7 +362,10 @@ namespace Components
 
 		if (GetMapCount() > 0)
 		{
-			SelectMap(0);
+			Scheduler::Once([]()
+				{
+					SelectMap(0);
+				}, Scheduler::Pipeline::MAIN, std::chrono::milliseconds{ 250 });
 		}
 	}
 

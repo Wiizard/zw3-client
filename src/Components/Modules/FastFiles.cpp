@@ -150,6 +150,35 @@ namespace Components
 			data.push_back({ "mod", 1, 0 });
 		}
 
+		const auto basepath = (*Game::fs_basepath)->current.string;
+		const auto zw3Patch = std::format("{}\\zw3\\zw3.ff", basepath);
+		if (Utils::IO::FileExists(zw3Patch))
+		{
+			data.push_back({ "zw3", 1, 0 });
+		}
+		else
+		{
+			MessageBoxA(nullptr,
+				Utils::String::Format(
+					"Missing 'zw3.ff':\n{}\n\nPlease run the Zombie Warfare 3 Launcher to verify game files or place it inside the zw3 folder.",
+					zw3Patch.c_str()),
+				"Error",
+				MB_OK | MB_ICONERROR);
+			std::exit(EXIT_FAILURE);
+		}
+
+		const auto zw3Common = std::format("{}\\zw3\\zw3_common.ff", basepath);
+		if (!Utils::IO::FileExists(zw3Common))
+		{
+			MessageBoxA(nullptr,
+				Utils::String::Format(
+					"Missing 'zw3_common.ff':\n{}\n\nPlease run the Zombie Warfare 3 Launcher to verify game files or place it inside the zw3 folder.",
+					zw3Common.c_str()),
+				"Error",
+				MB_OK | MB_ICONERROR);
+			std::exit(EXIT_FAILURE);
+		}
+
 		return FastFiles::LoadDLCUIZones(data.data(), data.size(), sync);
 	}
 
@@ -643,6 +672,7 @@ namespace Components
 		// Add custom zone paths
 		FastFiles::AddZonePath("zone\\patch\\");
 		FastFiles::AddZonePath("zone\\dlc\\");
+		FastFiles::AddZonePath("zw3\\");
 
 		if (!Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled())
 		{

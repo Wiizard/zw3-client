@@ -263,6 +263,34 @@ namespace Components
 		}
 
 		RegisterFolder("userraw");
+
+		const auto basepath = (*Game::fs_basepath)->current.string;
+		if (basepath && basepath[0] != '\0')
+		{
+			std::error_code ec;
+			const auto zw3Dir = std::filesystem::path(basepath) / "zw3";
+			const auto zw3Iwd = zw3Dir / "zw3.iwd";
+			if (!std::filesystem::exists(zw3Dir, ec))
+			{
+				MessageBoxA(nullptr,
+					Utils::String::Format("Missing 'zw3' folder:\n{}\n\nPlease run the Zombie Warfare 3 Launcher to verify game files.", zw3Dir.string().c_str()),
+					"Error",
+					MB_OK | MB_ICONERROR);
+				std::exit(EXIT_FAILURE);
+			}
+			else if (!std::filesystem::exists(zw3Iwd, ec))
+			{
+				MessageBoxA(nullptr,
+					Utils::String::Format("Missing 'zw3.iwd':\n{}\n\nPlease run the Zombie Warfare 3 Launcher to verify game files or place it inside the zw3 folder.", zw3Iwd.string().c_str()),
+					"Error",
+					MB_OK | MB_ICONERROR);
+				std::exit(EXIT_FAILURE);
+			}
+			else
+			{
+				RegisterFolder("zw3");
+			}
+		}
 	}
 
 	__declspec(naked) void FileSystem::StartupStub()

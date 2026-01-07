@@ -43,7 +43,7 @@ namespace Components
 			"localized_code_post_gfx_mp",
 			"ui_mp",
 			"localized_ui_mp",
-			"common_mp",
+			"zw3_common",
 			"localized_common_mp",
 			"patch_mp"
 		};

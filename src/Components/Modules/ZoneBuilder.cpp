@@ -750,7 +750,7 @@ namespace Components
 
 		if (type >= 0 && type < Game::XAssetType::ASSET_TYPE_COUNT)
 		{
-			int zoneIndex = Game::DB_GetZoneIndex("common_mp");
+			int zoneIndex = Game::DB_GetZoneIndex("zw3_common");
 
 			if (zoneIndex > 0)
 			{
@@ -910,7 +910,7 @@ namespace Components
 		{ "localized_code_pre_gfx_mp", Game::DB_ZONE_CODE_LOC, 0 },
 		{ "code_post_gfx_mp", Game::DB_ZONE_CODE, 0 },
 		{ "localized_code_post_gfx_mp", Game::DB_ZONE_CODE_LOC, 0 },
-		{ "common_mp", Game::DB_ZONE_COMMON, 0 },
+		{ "zw3_common", Game::DB_ZONE_COMMON, 0 },
 		{ "localized_common_mp", Game::DB_ZONE_COMMON_LOC, 0 },
 		{ "ui_mp", Game::DB_ZONE_GAME, 0 },
 		{ "localized_ui_mp", Game::DB_ZONE_GAME, 0 }

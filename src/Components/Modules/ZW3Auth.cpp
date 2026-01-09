@@ -65,7 +65,7 @@ namespace Components
 	void ZW3Auth::Initialize()
 	{
 		RegisterDvars();
-		RegisterCommands();
+		//RegisterCommands();
 		RegisterScripts();
 	}
 
@@ -384,6 +384,11 @@ namespace Components
 
 		Scheduler::Once([]()
 			{
+				SetDiscordLock(true, "Waiting for Discord authorization...");
+			}, Scheduler::Pipeline::MAIN);
+
+		Scheduler::Once([]()
+			{
 				const auto startUrl = BuildUrl(kDefaultDiscordStartPath)
 					+ BuildQuery({ {"mode", "launcher"}, {"device_guid", GetDeviceGuid()} });
 				std::optional<std::string> fallbackState;
@@ -545,9 +550,9 @@ namespace Components
 
 							if (*error == "access_denied" || *error == "cancelled" || *error == "expired_token")
 							{
-								Toast::Show(kAuthToastImage, "Authentication", "Discord authorization cancelled.", 3500);
 								std::lock_guard<std::mutex> lock(StateMutex);
 								DiscordFlow = {};
+								SetDiscordLock(false, "Discord authorization cancelled.");
 								return;
 							}
 
@@ -613,7 +618,15 @@ namespace Components
 
 						if (!AccessToken.empty())
 						{
-							Toast::Show(kAuthToastImage, "Authentication", "Discord connected.", 3500);
+							if (const auto accountLabel = GetString(document, "account_label"))
+							{
+								if (!accountLabel->empty())
+								{
+									Command::Execute(Utils::String::VA("name \"%s\"", accountLabel->c_str()), false);
+								}
+							}
+
+							SetDiscordLock(false, "Discord connected.");
 						}
 
 						std::lock_guard<std::mutex> lock(StateMutex);
@@ -747,6 +760,24 @@ namespace Components
 		std::string result = guid;
 		std::transform(result.begin(), result.end(), result.begin(), ::tolower);
 		return result;
+	}
+
+	void ZW3Auth::SetDiscordLock(const bool enabled, const char* message)
+	{
+		static bool lockActive = false;
+
+		if (enabled == lockActive)
+		{
+			return;
+		}
+
+		lockActive = enabled;
+		Game::Key_SetCatcher(0, enabled ? Game::KEYCATCH_UI : 0);
+
+		if (message && *message)
+		{
+			Game::ShowMessageBox(message, "Discord");
+		}
 	}
 
 	std::optional<std::string> ZW3Auth::GetString(const rapidjson::Document& document, const char* member)

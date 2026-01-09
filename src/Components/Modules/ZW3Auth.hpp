@@ -10,7 +10,6 @@ namespace Components
 		ZW3Auth();
 
 		static bool IsAuthenticated();
-		static bool IsGuest();
 		static std::string GetAccessToken();
 		static std::string GetTokenType();
 		static std::string GetAuthHeader();
@@ -38,12 +37,14 @@ namespace Components
 		static void OpenDiscordUrl();
 		static void Logout();
 		static void PlayAsGuest();
+		static bool IsGuest();
 
 		static std::string BuildUrl(const std::string& path);
 		static std::string BuildJson(const std::vector<std::pair<std::string, std::string>>& values);
 		static std::string UrlEncode(const std::string& input);
 		static std::string BuildQuery(const std::vector<std::pair<std::string, std::string>>& values);
 		static std::string GetDeviceGuid();
+		static void SetDiscordLock(bool enabled, const char* message = nullptr);
 		static std::optional<std::string> GetString(const rapidjson::Document& document, const char* member);
 		static std::optional<int> GetInt(const rapidjson::Document& document, const char* member);
 

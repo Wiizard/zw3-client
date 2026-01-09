@@ -113,7 +113,6 @@ newaction {
 		local branchName = getBranchName()
 
 		print("Detected branch: " .. branchName)
-
 		-- get old version number from version.hpp if any
 		local oldVersion = "(none)"
 		local oldVersionHeader = io.open(wks.location .. "/src/version.h", "r")
@@ -197,11 +196,12 @@ workspace "iw4x"
 	filter {}
 
 	filter "configurations:Release"
-		optimize "Size"
-		buildoptions {"/GL"}
+		optimize "Speed"
+		vectorextensions "SSE2"
+		buildoptions {"/GL", "/O2", "/Oi", "/Ot", "/Ob2"}
 		linkoptions {"/IGNORE:4702", "/LTCG"}
 		defines {"NDEBUG"}
-		flags {"FatalCompileWarnings", "FatalLinkWarnings"}
+		flags {"FatalCompileWarnings", "FatalLinkWarnings", "LinkTimeOptimization"}
 		rtti ("Off")
 	filter {}
 

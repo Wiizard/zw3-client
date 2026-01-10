@@ -24,11 +24,15 @@ namespace Components
 			: total_(totalSteps > 0 ? totalSteps : 1)
 		{
 			EnsureClass();
-			constexpr int width = 520;
-			constexpr int height = 160;
+			constexpr int width = 560;
+			constexpr int height = 260;
 			const auto posX = (GetSystemMetrics(SM_CXSCREEN) - width) / 2;
 			const auto posY = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
-			hwnd_ = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_COMPOSITED, kClassName, L"Running cleanup (please wait)...",
+			INITCOMMONCONTROLSEX icc{};
+			icc.dwSize = sizeof(icc);
+			icc.dwICC = ICC_PROGRESS_CLASS;
+			InitCommonControlsEx(&icc);
+			hwnd_ = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_COMPOSITED, kClassName, L"Running cleanup (Please wait)…",
 				WS_OVERLAPPED | WS_CAPTION,
 				posX, posY, width, height,
 				nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
@@ -37,51 +41,44 @@ namespace Components
 			{
 				SendMessageW(hwnd_, WM_SETICON, ICON_SMALL, 0);
 				SendMessageW(hwnd_, WM_SETICON, ICON_BIG, 0);
-				label_ = CreateWindowExW(0, L"STATIC", L"Completed:",
+				label_ = CreateWindowExW(0, L"STATIC", L"Checking files:",
 					WS_CHILD | WS_VISIBLE,
-					20, 16, 480, 18,
+					20, 16, 520, 18,
 					hwnd_, nullptr, GetModuleHandleW(nullptr), nullptr);
-				progressValue_ = CreateWindowExW(0, L"STATIC", L"0%",
+				detailsValue_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT",
+					L"",
+					WS_CHILD | WS_VISIBLE | ES_READONLY | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL,
+					20, 38, 520, 140,
+					hwnd_, nullptr, GetModuleHandleW(nullptr), nullptr);
+				progressBar_ = CreateWindowExW(0, PROGRESS_CLASSW, nullptr,
 					WS_CHILD | WS_VISIBLE,
-					20, 34, 480, 18,
+					20, 188, 420, 18,
 					hwnd_, nullptr, GetModuleHandleW(nullptr), nullptr);
-				detailsLabel_ = CreateWindowExW(0, L"STATIC",
-					L"Current file:",
+				SendMessageW(progressBar_, PBM_SETSTATE, PBST_NORMAL, 0);
+				SendMessageW(progressBar_, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
+				SendMessageW(progressBar_, PBM_SETPOS, 0, 0);
+				progressValue_ = CreateWindowExW(0, L"STATIC", L"0% (0/0)",
 					WS_CHILD | WS_VISIBLE,
-					20, 58, 480, 18,
-					hwnd_, nullptr, GetModuleHandleW(nullptr), nullptr);
-				detailsValue_ = CreateWindowExW(0, L"STATIC",
-					L"(initializing)",
-					WS_CHILD | WS_VISIBLE | SS_PATHELLIPSIS,
-					20, 76, 480, 20,
+					450, 188, 90, 18,
 					hwnd_, nullptr, GetModuleHandleW(nullptr), nullptr);
 				ApplyFont(label_);
 				ApplyFont(progressValue_);
-				ApplyFont(detailsLabel_);
+				ApplyFont(progressBar_);
 				ApplyFont(detailsValue_);
 				ShowWindow(hwnd_, SW_SHOW);
 				UpdateWindow(hwnd_);
 			}
 		}
 
-		void Update(const std::wstring& currentFile)
+		void Update(const std::wstring& currentFile, int percent, int index, int totalFiles)
 		{
-			if (!hwnd_ || !label_ || !progressValue_ || !detailsLabel_ || !detailsValue_)
+			if (!hwnd_ || !label_ || !progressValue_ || !progressBar_ || !detailsValue_)
 			{
 				return;
 			}
 
-			const auto percent = (current_ * 100) / total_;
-			const auto now = GetTickCount();
-			if (percent == lastPercent_ && currentFile == lastFile_ && (now - lastUpdateTick_) < 40)
-			{
-				PumpMessages();
-				return;
-			}
-
-			++current_;
-			const auto nextPercent = (current_ * 100) / total_;
-			std::wstring percentText = std::to_wstring(nextPercent) + L"%";
+			std::wstring percentText = std::to_wstring(percent) + L"% (" + std::to_wstring(index)
+				+ L"/" + std::to_wstring(totalFiles) + L")";
 			if (percentText == lastLabel_ && currentFile == lastFile_)
 			{
 				PumpMessages();
@@ -90,10 +87,39 @@ namespace Components
 
 			lastLabel_ = percentText;
 			lastFile_ = currentFile;
-			lastPercent_ = nextPercent;
-			lastUpdateTick_ = now;
+			lastPercent_ = percent;
 			SetWindowTextW(progressValue_, percentText.c_str());
-			SetWindowTextW(detailsValue_, currentFile.c_str());
+			SendMessageW(progressBar_, PBM_SETPOS, percent, 0);
+			const auto line = currentFile + L"\r\n";
+			const auto length = GetWindowTextLengthW(detailsValue_);
+			const auto nextLength = length + static_cast<int>(line.size());
+			constexpr int kMaxLength = 8192;
+			if (nextLength > kMaxLength)
+			{
+				SendMessageW(detailsValue_, EM_SETSEL, 0, length);
+				SendMessageW(detailsValue_, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>(L""));
+				SendMessageW(detailsValue_, EM_SETSEL, 0, 0);
+			}
+
+			SendMessageW(detailsValue_, EM_SETSEL, static_cast<WPARAM>(-1), static_cast<LPARAM>(-1));
+			SendMessageW(detailsValue_, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>(line.c_str()));
+			SendMessageW(detailsValue_, EM_LINESCROLL, 0, 0x7FFFFFFF);
+			SendMessageW(detailsValue_, EM_SCROLLCARET, 0, 0);
+			PumpMessages();
+			Sleep(30);
+		}
+
+		void SetComplete(int totalFiles)
+		{
+			if (!hwnd_ || !progressValue_)
+			{
+				return;
+			}
+
+			std::wstring percentText = L"100% (" + std::to_wstring(totalFiles) + L"/"
+				+ std::to_wstring(totalFiles) + L")";
+			SetWindowTextW(progressValue_, percentText.c_str());
+			SendMessageW(progressBar_, PBM_SETPOS, 100, 0);
 			PumpMessages();
 		}
 
@@ -105,7 +131,7 @@ namespace Components
 				hwnd_ = nullptr;
 				label_ = nullptr;
 				progressValue_ = nullptr;
-				detailsLabel_ = nullptr;
+				progressBar_ = nullptr;
 				detailsValue_ = nullptr;
 			}
 		}
@@ -180,12 +206,10 @@ namespace Components
 		HWND hwnd_ = nullptr;
 		HWND label_ = nullptr;
 		HWND progressValue_ = nullptr;
-		HWND detailsLabel_ = nullptr;
+		HWND progressBar_ = nullptr;
 		HWND detailsValue_ = nullptr;
-		int current_ = 0;
 		int total_ = 1;
 		int lastPercent_ = -1;
-		DWORD lastUpdateTick_ = 0;
 		std::wstring lastLabel_;
 		std::wstring lastFile_;
 	};
@@ -300,9 +324,17 @@ namespace Components
 				CleanupProgressDialog progress(static_cast<int>(allFiles.size()));
 				int deletedCount = 0;
 				int skippedCount = 0;
+				const int totalFiles = static_cast<int>(allFiles.size());
+				int index = 0;
 				for (const auto& path : allFiles)
 				{
-					progress.Update(path.wstring());
+					++index;
+					const auto percent = totalFiles > 0 ? (index * 100) / totalFiles : 100;
+					if (index == 1 || index == totalFiles || index % 25 == 0)
+					{
+						progress.Update(path.wstring(), percent, index, totalFiles);
+						Sleep(1);
+					}
 
 					std::error_code ec;
 					if (!std::filesystem::exists(path, ec))

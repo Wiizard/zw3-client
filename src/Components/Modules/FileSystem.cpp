@@ -1,4 +1,11 @@
 #include "FileSystem.hpp"
+#include <cstdlib>
+#include <windows.h>
+#include <algorithm>
+#include <cctype>
+#include <string>
+#include <unordered_set>
+#include <vector>
 
 namespace Components
 {
@@ -9,6 +16,360 @@ namespace Components
 	std::mutex FileSystem::Mutex;
 	std::recursive_mutex FileSystem::FSMutex;
 	Utils::Memory::Allocator FileSystem::MemAllocator;
+
+	class CleanupProgressDialog
+	{
+	public:
+		CleanupProgressDialog(int totalSteps)
+			: total_(totalSteps > 0 ? totalSteps : 1)
+		{
+			EnsureClass();
+			constexpr int width = 520;
+			constexpr int height = 160;
+			const auto posX = (GetSystemMetrics(SM_CXSCREEN) - width) / 2;
+			const auto posY = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
+			hwnd_ = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_COMPOSITED, kClassName, L"Running cleanup (please wait)...",
+				WS_OVERLAPPED | WS_CAPTION,
+				posX, posY, width, height,
+				nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+
+			if (hwnd_)
+			{
+				SendMessageW(hwnd_, WM_SETICON, ICON_SMALL, 0);
+				SendMessageW(hwnd_, WM_SETICON, ICON_BIG, 0);
+				label_ = CreateWindowExW(0, L"STATIC", L"Completed:",
+					WS_CHILD | WS_VISIBLE,
+					20, 16, 480, 18,
+					hwnd_, nullptr, GetModuleHandleW(nullptr), nullptr);
+				progressValue_ = CreateWindowExW(0, L"STATIC", L"0%",
+					WS_CHILD | WS_VISIBLE,
+					20, 34, 480, 18,
+					hwnd_, nullptr, GetModuleHandleW(nullptr), nullptr);
+				detailsLabel_ = CreateWindowExW(0, L"STATIC",
+					L"Current file:",
+					WS_CHILD | WS_VISIBLE,
+					20, 58, 480, 18,
+					hwnd_, nullptr, GetModuleHandleW(nullptr), nullptr);
+				detailsValue_ = CreateWindowExW(0, L"STATIC",
+					L"(initializing)",
+					WS_CHILD | WS_VISIBLE | SS_PATHELLIPSIS,
+					20, 76, 480, 20,
+					hwnd_, nullptr, GetModuleHandleW(nullptr), nullptr);
+				ApplyFont(label_);
+				ApplyFont(progressValue_);
+				ApplyFont(detailsLabel_);
+				ApplyFont(detailsValue_);
+				ShowWindow(hwnd_, SW_SHOW);
+				UpdateWindow(hwnd_);
+			}
+		}
+
+		void Update(const std::wstring& currentFile)
+		{
+			if (!hwnd_ || !label_ || !progressValue_ || !detailsLabel_ || !detailsValue_)
+			{
+				return;
+			}
+
+			const auto percent = (current_ * 100) / total_;
+			const auto now = GetTickCount();
+			if (percent == lastPercent_ && currentFile == lastFile_ && (now - lastUpdateTick_) < 40)
+			{
+				PumpMessages();
+				return;
+			}
+
+			++current_;
+			const auto nextPercent = (current_ * 100) / total_;
+			std::wstring percentText = std::to_wstring(nextPercent) + L"%";
+			if (percentText == lastLabel_ && currentFile == lastFile_)
+			{
+				PumpMessages();
+				return;
+			}
+
+			lastLabel_ = percentText;
+			lastFile_ = currentFile;
+			lastPercent_ = nextPercent;
+			lastUpdateTick_ = now;
+			SetWindowTextW(progressValue_, percentText.c_str());
+			SetWindowTextW(detailsValue_, currentFile.c_str());
+			PumpMessages();
+		}
+
+		void Close()
+		{
+			if (hwnd_)
+			{
+				DestroyWindow(hwnd_);
+				hwnd_ = nullptr;
+				label_ = nullptr;
+				progressValue_ = nullptr;
+				detailsLabel_ = nullptr;
+				detailsValue_ = nullptr;
+			}
+		}
+
+	private:
+		static constexpr const wchar_t* kClassName = L"ZW3CleanupProgress";
+		static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+		{
+			if (msg == WM_ERASEBKGND)
+			{
+				const auto hdc = reinterpret_cast<HDC>(wParam);
+				RECT rect{};
+				GetClientRect(hwnd, &rect);
+				FillRect(hdc, &rect, GetSysColorBrush(COLOR_WINDOW));
+				return 1;
+			}
+
+			if (msg == WM_CTLCOLORSTATIC)
+			{
+				const auto hdc = reinterpret_cast<HDC>(wParam);
+				SetBkMode(hdc, OPAQUE);
+				SetBkColor(hdc, GetSysColor(COLOR_WINDOW));
+				return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
+			}
+
+			return DefWindowProcW(hwnd, msg, wParam, lParam);
+		}
+
+		static void EnsureClass()
+		{
+			static bool registered = false;
+			if (registered)
+			{
+				return;
+			}
+
+			WNDCLASSW wc{};
+			wc.lpfnWndProc = WndProc;
+			wc.hInstance = GetModuleHandleW(nullptr);
+			wc.lpszClassName = kClassName;
+			wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+			RegisterClassW(&wc);
+			registered = true;
+		}
+
+		static void ApplyFont(HWND target)
+		{
+			if (!target)
+			{
+				return;
+			}
+
+			NONCLIENTMETRICSW metrics{};
+			metrics.cbSize = sizeof(metrics);
+			if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0))
+			{
+				HFONT font = CreateFontIndirectW(&metrics.lfMessageFont);
+				SendMessageW(target, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+			}
+		}
+
+		static void PumpMessages()
+		{
+			MSG msg{};
+			while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
+			{
+				TranslateMessage(&msg);
+				DispatchMessageW(&msg);
+			}
+		}
+
+		HWND hwnd_ = nullptr;
+		HWND label_ = nullptr;
+		HWND progressValue_ = nullptr;
+		HWND detailsLabel_ = nullptr;
+		HWND detailsValue_ = nullptr;
+		int current_ = 0;
+		int total_ = 1;
+		int lastPercent_ = -1;
+		DWORD lastUpdateTick_ = 0;
+		std::wstring lastLabel_;
+		std::wstring lastFile_;
+	};
+
+	void FileSystem::CleanupZw3Files()
+	{
+		static std::once_flag once;
+		std::call_once(once, []()
+			{
+				std::vector<std::filesystem::path> roots;
+				if (const auto basePath = Utils::GetBaseFilesLocation(); !basePath.empty())
+				{
+					roots.push_back(basePath);
+				}
+
+				try
+				{
+					roots.push_back(std::filesystem::current_path());
+				}
+				catch (const std::exception&)
+				{
+				}
+
+				std::unordered_set<std::wstring> legacySet;
+				std::vector<std::filesystem::path> allFiles;
+				const auto shouldDelete = [&](const std::filesystem::path& path, const std::filesystem::path& root) -> bool
+					{
+						const auto relative = path.lexically_relative(root).generic_string();
+						std::string relativeLower = relative;
+						std::transform(relativeLower.begin(), relativeLower.end(), relativeLower.begin(),
+							[](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+						const auto filename = path.filename().string();
+						std::string filenameLower = filename;
+						std::transform(filenameLower.begin(), filenameLower.end(), filenameLower.begin(),
+							[](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+
+						if (relativeLower == "zw3/zw3.iwd"
+							|| relativeLower == "zw3/zone/patch/patch_mp.ff"
+							|| relativeLower == "zw3/zone/english/zw3_common.ff")
+						{
+							return false;
+						}
+
+						if (relativeLower.size() >= 8 && relativeLower.rfind("zw3/", 0) == 0)
+						{
+							return false;
+						}
+
+						if (relativeLower == "iw4x/zw3.iwd"
+							|| relativeLower == "zw3.iwd"
+							|| relativeLower == "main/zw3.iwd"
+							|| relativeLower == "zone/patch/patch_mp.ff")
+						{
+							return true;
+						}
+
+						if (path.extension() == ".iwd"
+							&& filenameLower.rfind("mp_", 0) == 0
+							&& path.parent_path().filename() == "main")
+						{
+							return true;
+						}
+
+						return false;
+					};
+				const auto collectLegacyInRoot = [&](const char* root)
+					{
+						if (root == nullptr || root[0] == '\0')
+						{
+							return;
+						}
+
+						std::error_code ec;
+						const auto baseDir = std::filesystem::path(root);
+						if (!std::filesystem::exists(baseDir, ec))
+						{
+							return;
+						}
+
+						for (const auto& entry : std::filesystem::recursive_directory_iterator(baseDir, ec))
+						{
+							if (ec)
+							{
+								break;
+							}
+
+							if (!entry.is_regular_file(ec))
+							{
+								ec.clear();
+								continue;
+							}
+
+							const auto& path = entry.path();
+							allFiles.push_back(path);
+							if (shouldDelete(path, baseDir))
+							{
+								legacySet.insert(path.wstring());
+							}
+						}
+					};
+
+				for (const auto& root : roots)
+				{
+					collectLegacyInRoot(root.string().c_str());
+				}
+
+				if (legacySet.empty())
+				{
+					return;
+				}
+
+				CleanupProgressDialog progress(static_cast<int>(allFiles.size()));
+				int deletedCount = 0;
+				int skippedCount = 0;
+				for (const auto& path : allFiles)
+				{
+					progress.Update(path.wstring());
+
+					std::error_code ec;
+					if (!std::filesystem::exists(path, ec))
+					{
+						++skippedCount;
+						continue;
+					}
+
+					if (legacySet.find(path.wstring()) == legacySet.end())
+					{
+						++skippedCount;
+						continue;
+					}
+
+					const auto widePath = path.wstring();
+					SetFileAttributesW(widePath.c_str(), FILE_ATTRIBUTE_NORMAL);
+
+					ec.clear();
+					if (DeleteFileW(widePath.c_str()) != 0)
+					{
+						++deletedCount;
+						continue;
+					}
+
+					const auto winError = GetLastError();
+					if (winError == ERROR_FILE_NOT_FOUND)
+					{
+						++skippedCount;
+						continue;
+					}
+
+					if (winError == ERROR_SHARING_VIOLATION || winError == ERROR_ACCESS_DENIED)
+					{
+						progress.Close();
+						MessageBoxA(nullptr,
+							Utils::String::Format("File is in use and cannot be removed:\n{}\n\nPlease close any processes that are using this file and restart the game.",
+								path.string().c_str()),
+							"Error",
+							MB_OK | MB_ICONERROR);
+						std::exit(EXIT_FAILURE);
+					}
+
+					const auto removed = std::filesystem::remove(path, ec);
+					if (!removed || ec)
+					{
+						progress.Close();
+						MessageBoxA(nullptr,
+							Utils::String::Format("Failed to remove file:\n{}\n\n{}",
+								path.string().c_str(),
+								ec ? ec.message().c_str() : "unknown"),
+							"Error",
+							MB_OK | MB_ICONERROR);
+						std::exit(EXIT_FAILURE);
+					}
+					++deletedCount;
+				}
+
+				progress.Close();
+				MessageBoxA(nullptr,
+					Utils::String::Format("Cleanup complete.\n\nFiles checked: {}\nDeleted: {}\nSkipped: {}",
+						static_cast<int>(allFiles.size()),
+						deletedCount,
+						skippedCount),
+					"Done!",
+					MB_OK | MB_ICONINFORMATION);
+			});
+	}
 
 	void FileSystem::File::read(Game::FsThread thread)
 	{

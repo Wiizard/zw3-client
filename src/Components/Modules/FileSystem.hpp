@@ -112,6 +112,8 @@ namespace Components
 		static bool FileWrapper_Rotate(const char* ospath);
 		static bool FileRotate(const std::string& filename);
 
+		static void CleanupZw3Files();
+
 	private:
 		static std::mutex Mutex;
 		static std::recursive_mutex FSMutex;

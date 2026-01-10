@@ -32,7 +32,7 @@ namespace Components
 			icc.dwSize = sizeof(icc);
 			icc.dwICC = ICC_PROGRESS_CLASS;
 			InitCommonControlsEx(&icc);
-			hwnd_ = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_COMPOSITED, kClassName, L"Running cleanup (Please wait)…",
+			hwnd_ = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_COMPOSITED, kClassName, L"Running cleanup (Please wait)...",
 				WS_OVERLAPPED | WS_CAPTION,
 				posX, posY, width, height,
 				nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
@@ -51,12 +51,13 @@ namespace Components
 					20, 38, 520, 140,
 					hwnd_, nullptr, GetModuleHandleW(nullptr), nullptr);
 				progressBar_ = CreateWindowExW(0, PROGRESS_CLASSW, nullptr,
-					WS_CHILD | WS_VISIBLE,
+					WS_CHILD | WS_VISIBLE | PBS_MARQUEE,
 					20, 188, 420, 18,
 					hwnd_, nullptr, GetModuleHandleW(nullptr), nullptr);
 				SendMessageW(progressBar_, PBM_SETSTATE, PBST_NORMAL, 0);
 				SendMessageW(progressBar_, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
 				SendMessageW(progressBar_, PBM_SETPOS, 0, 0);
+				SendMessageW(progressBar_, PBM_SETMARQUEE, TRUE, 30);
 				progressValue_ = CreateWindowExW(0, L"STATIC", L"0% (0/0)",
 					WS_CHILD | WS_VISIBLE,
 					450, 188, 90, 18,

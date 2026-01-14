@@ -3,6 +3,7 @@
 #include "QuickPatch.hpp"
 #include "TextRenderer.hpp"
 #include "Toast.hpp"
+#include "Gamepad.hpp"
 
 namespace Components
 {
@@ -687,9 +688,21 @@ namespace Components
 		Utils::Hook::Nop(0x4EBF1A, 5);
 #endif
 
-		if (Flags::HasFlag("nointro"))
+		/*if (Flags::HasFlag("nointro"))
 		{
 			Utils::Hook::Set<BYTE>(0x60BECF, 0xEB);
+		}*/
+
+		if (auto* intro = Game::Dvar_FindVar("intro"))
+		{
+			Game::Dvar_SetBool(intro, true);
+			intro->flags |= Game::DVAR_ROM;
 		}
+
+		Gamepad::SetIntroInputBlocked(true);
+		Scheduler::OnGameInitialized([]()
+			{
+				Gamepad::SetIntroInputBlocked(false);
+			}, Scheduler::Pipeline::MAIN, 8s);
 	}
 }

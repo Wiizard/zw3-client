@@ -151,21 +151,6 @@ namespace Components
 		}
 
 		const auto basepath = (*Game::fs_basepath)->current.string;
-		const auto zw3Patch = std::format("{}\\zw3\\zw3.ff", basepath);
-		if (Utils::IO::FileExists(zw3Patch))
-		{
-			data.push_back({ "zw3", 1, 0 });
-		}
-		else
-		{
-			MessageBoxA(nullptr,
-				Utils::String::Format(
-					"Missing 'zw3.ff':\n{}\n\nPlease run the Zombie Warfare 3 Launcher to verify game files or place it inside the zw3 folder.",
-					zw3Patch.c_str()),
-				"Error",
-				MB_OK | MB_ICONERROR);
-			std::exit(EXIT_FAILURE);
-		}
 
 		const auto zw3Common = std::format("{}\\zw3\\zw3_common.ff", basepath);
 		if (!Utils::IO::FileExists(zw3Common))
@@ -179,7 +164,41 @@ namespace Components
 			std::exit(EXIT_FAILURE);
 		}
 
-		return FastFiles::LoadDLCUIZones(data.data(), data.size(), sync);
+		const auto zw3Patch = std::format("{}\\zw3\\zw3.ff", basepath);
+		FastFiles::LoadDLCUIZones(data.data(), data.size(), sync);
+		if (Utils::IO::FileExists(zw3Patch))
+		{
+			//data.push_back({ "zw3", 1, 0 });
+
+			const auto* intro = Game::Dvar_FindVar("intro");
+			const auto introEnabled = intro ? intro->current.enabled : true;
+			if (introEnabled)
+			{
+				Scheduler::OnGameInitialized([]()
+					{
+						Game::XZoneInfo info{ "zw3", 1, 0 };
+						Game::DB_LoadXAssets(&info, 1, false);
+					}, Scheduler::Pipeline::MAIN, 750ms);
+			}
+			else
+			{
+				Game::XZoneInfo info{ "zw3", 1, 0 };
+				Game::DB_LoadXAssets(&info, 1, false);
+			}
+		}
+		else
+		{
+			MessageBoxA(nullptr,
+				Utils::String::Format(
+					"Missing 'zw3.ff':\n{}\n\nPlease run the Zombie Warfare 3 Launcher to verify game files or place it inside the zw3 folder.",
+					zw3Patch.c_str()),
+				"Error",
+				MB_OK | MB_ICONERROR);
+			std::exit(EXIT_FAILURE);
+		}
+
+		//return FastFiles::LoadDLCUIZones(data.data(), data.size(), sync);
+		return;
 	}
 
 	// This has to be called every time the cgame is reinitialized

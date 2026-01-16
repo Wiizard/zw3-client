@@ -683,6 +683,7 @@ namespace Components
 			else
 			{
 				RegisterFolder("zw3");
+				RegisterFolder("zw3\\data");
 			}
 		}
 	}

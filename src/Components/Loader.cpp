@@ -178,7 +178,7 @@ namespace Components
 		Register(new StringTable());
 		Register(new StructuredData());
 		Register(new TextRenderer());
-		Register(new Theatre());
+		//Register(new Theatre());
 		Register(new Threading());
 		Register(new Toast());
 		Register(new UIFeeder());

@@ -347,10 +347,10 @@ namespace Components
 		Utils::Hook::Set<const char*>(0x4D378B, "ZW3Host");
 
 		// console logo
-		Utils::Hook::Set<const char*>(0x428A66, BASEGAME "/images/logo.bmp");
+		Utils::Hook::Set<const char*>(0x428A66, "zw3/data/images/logo.bmp");
 
 		// splash logo
-		Utils::Hook::Set<const char*>(0x475F9E, BASEGAME "/images/splash.bmp");
+		Utils::Hook::Set<const char*>(0x475F9E, "zw3/data/images/splash.bmp");
 
 		// Numerical ping (cg_scoreboardPingText 1)
 		Utils::Hook::Set<BYTE>(0x45888E, 1);
@@ -421,8 +421,8 @@ namespace Components
 		// intro stuff
 		Utils::Hook::Nop(0x60BEE9, 5); // Don't show legals
 		Utils::Hook::Nop(0x60BEF6, 5); // Don't reset the intro dvar
-		Utils::Hook::Set<const char*>(0x60BED2, "cinematic IW_logo\n");
-		Utils::Hook::Set<const char*>(0x51C2A4, "%s\\" BASEGAME "\\video\\%s.bik");
+		Utils::Hook::Set<const char*>(0x60BED2, "cinematic zw3\n");
+		Utils::Hook::Set<const char*>(0x51C2A4, "zw3\\data\\video\\zw3.bik");
 		Utils::Hook::Set<DWORD>(0x51C2C2, 0x78A0AC);
 
 		// Redirect logs

@@ -64,9 +64,9 @@ namespace Components
 
 	void ZW3Auth::Initialize()
 	{
-		RegisterDvars();
+		//RegisterDvars();
 		//RegisterCommands();
-		RegisterScripts();
+		//RegisterScripts();
 	}
 
 	void ZW3Auth::RegisterCommands()
@@ -810,7 +810,7 @@ namespace
 {
 	const auto zw3AuthRegistration = []()
 		{
-			Components::Loader::Register(new Components::ZW3Auth());
+			//Components::Loader::Register(new Components::ZW3Auth());
 			return 0;
 		}();
 }

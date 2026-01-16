@@ -978,12 +978,6 @@ namespace Components
 
 		GSC::Script::AddFunction("HttpPost", []
 			{
-				if (!ZW3Auth::IsAuthenticated())
-				{
-					Game::Scr_Error("HttpPost requires authentication.");
-					return;
-				}
-
 				const char* url = Game::Scr_GetString(0);
 				const char* body = Game::Scr_GetString(1);
 

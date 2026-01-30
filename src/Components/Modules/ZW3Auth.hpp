@@ -2,6 +2,11 @@
 
 #include "rapidjson/document.h"
 
+#include <mutex>
+#include <optional>
+#include <string>
+#include <vector>
+
 namespace Components
 {
 	class ZW3Auth : public Component
@@ -9,60 +14,50 @@ namespace Components
 	public:
 		ZW3Auth();
 
-		static bool IsAuthenticated();
+		void preDestroy() override;
+
+		static bool IsLinked();
 		static std::string GetAccessToken();
 		static std::string GetTokenType();
 		static std::string GetAuthHeader();
 
 	private:
-		struct DiscordFlowState
+		struct FriendEntry
 		{
-			bool active = false;
-			std::string state;
-			std::string url;
-			int intervalSeconds = 5;
-			std::chrono::steady_clock::time_point nextPoll;
-			std::chrono::steady_clock::time_point expiresAt;
+			std::string userId;
+			std::string username;
+			std::string status;
+			std::string activity;
 		};
 
 		static void Initialize();
-		static void RegisterCommands();
-		static void RegisterScripts();
 		static void RegisterDvars();
-		static void StartLogin();
-		static void StartRegister();
-		static void StartActivation();
-		static void StartDiscord();
-		static void PollDiscord();
-		static void OpenDiscordUrl();
-		static void Logout();
-		static void PlayAsGuest();
-		static bool IsGuest();
+		static void PollLinkStatus();
+
+		static void RefreshFriends();
+		static void DumpFriends();
+
+		static void InitializeSdk();
+		static void ShutdownSdk();
 
 		static std::string BuildUrl(const std::string& path);
-		static std::string BuildJson(const std::vector<std::pair<std::string, std::string>>& values);
 		static std::string UrlEncode(const std::string& input);
 		static std::string BuildQuery(const std::vector<std::pair<std::string, std::string>>& values);
 		static std::string GetDeviceGuid();
-		static void SetDiscordLock(bool enabled, const char* message = nullptr);
 		static std::optional<std::string> GetString(const rapidjson::Document& document, const char* member);
-		static std::optional<int> GetInt(const rapidjson::Document& document, const char* member);
 
 		static std::mutex StateMutex;
-		static DiscordFlowState DiscordFlow;
+		static bool Linked;
+		static std::string LinkedAccountLabel;
 
-		static Dvar::Var Username;
-		static Dvar::Var Password;
-		static Dvar::Var RegisterUsername;
-		static Dvar::Var RegisterEmail;
-		static Dvar::Var RegisterPassword;
-		static Dvar::Var ActivationCode;
+		static std::mutex FriendsMutex;
+		static std::vector<FriendEntry> Friends;
+
+		static Dvar::Var LinkedDvar;
+		static Dvar::Var LinkedAccountDvar;
 
 		static std::string AccessToken;
-		static std::string RefreshToken;
 		static std::string TokenType;
-		static std::string DiscordTicket;
-		static std::string DiscordUrl;
-		static bool GuestMode;
+		static bool SdkReady;
 	};
 }

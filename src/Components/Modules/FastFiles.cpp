@@ -140,6 +140,16 @@ namespace Components
 		std::vector<Game::XZoneInfo> data;
 		Utils::Merge(&data, zoneInfo, zoneCount);
 
+		/*data.erase(std::remove_if(data.begin(), data.end(), [](const Game::XZoneInfo& info)
+			{
+				if (!info.name)
+				{
+					return false;
+				}
+
+				return _stricmp(info.name, "common_mp") == 0;
+			}), data.end());*/
+
 		if (FastFiles::Exists("iw4x_patch_mp"))
 		{
 			data.push_back({ "iw4x_patch_mp", 1, 0 });
@@ -152,7 +162,7 @@ namespace Components
 
 		const auto basepath = (*Game::fs_basepath)->current.string;
 
-		const auto zw3Common = std::format("{}\\zw3\\zw3_common.ff", basepath);
+		/*const auto zw3Common = std::format("{}\\zw3\\zw3_common.ff", basepath);
 		if (!Utils::IO::FileExists(zw3Common))
 		{
 			MessageBoxA(nullptr,
@@ -163,9 +173,39 @@ namespace Components
 				MB_OK | MB_ICONERROR);
 			std::exit(EXIT_FAILURE);
 		}
+		else
+		{*/
+			//data.push_back({ "zw3_common", 1, 0 });
+			/*Scheduler::OnGameInitialized([]()
+				{
+					Game::XZoneInfo info{ "zw3_common", 1, 0 };
+					Game::DB_LoadXAssets(&info, 1, false);
+				}, Scheduler::Pipeline::MAIN, 750ms);*/
+		//}
+
+		/*const auto zw3Localized = std::format("{}\\zw3\\zw3_localized.ff", basepath);
+		if (!Utils::IO::FileExists(zw3Localized))
+		{
+			MessageBoxA(nullptr,
+				Utils::String::Format(
+					"Missing 'zw3_localized.ff':\n{}\n\nPlease run the Zombie Warfare 3 Launcher to verify game files or place it inside the zw3 folder.",
+					zw3Localized.c_str()),
+				"Error",
+				MB_OK | MB_ICONERROR);
+			std::exit(EXIT_FAILURE);
+		}
+		else
+		{
+			//data.push_back({ "zw3_localized", 1, 0 });
+			Scheduler::OnGameInitialized([]()
+				{
+					Game::XZoneInfo info{ "zw3_localized", 1, 0 };
+					Game::DB_LoadXAssets(&info, 1, false);
+				}, Scheduler::Pipeline::MAIN, 750ms);
+		}*/
 
 		const auto zw3Patch = std::format("{}\\zw3\\zw3.ff", basepath);
-		FastFiles::LoadDLCUIZones(data.data(), data.size(), sync);
+		//FastFiles::LoadDLCUIZones(data.data(), data.size(), sync);
 		if (Utils::IO::FileExists(zw3Patch))
 		{
 			//data.push_back({ "zw3", 1, 0 });
@@ -197,8 +237,7 @@ namespace Components
 			std::exit(EXIT_FAILURE);
 		}
 
-		//return FastFiles::LoadDLCUIZones(data.data(), data.size(), sync);
-		return;
+		return FastFiles::LoadDLCUIZones(data.data(), data.size(), sync);
 	}
 
 	// This has to be called every time the cgame is reinitialized
@@ -495,6 +534,20 @@ namespace Components
 	{
 		FastFiles::CurrentZone = 0;
 		FastFiles::MaxZones = zoneCount;
+
+		/*for (unsigned int i = 0; i < zoneCount; ++i)
+		{
+			const auto* zoneName = zoneInfo[i].name;
+			if (zoneName && zoneName[0])
+			{
+				if (zoneName == "common_mp") return;
+
+				const auto* basepath = (*Game::fs_basepath)->current.string;
+				const std::string location = GetZoneLocation(zoneName);
+				const std::string fullPath = std::format("{}\\{}{}.ff", basepath, location, zoneName);
+				Logger::Print("[FASTFILES] Loading {} from {}\n", zoneName, fullPath);
+			}
+		}*/
 
 		Utils::Hook::Call<void(Game::XZoneInfo*, unsigned int)>(0x5BBAC0)(zoneInfo, zoneCount);
 	}

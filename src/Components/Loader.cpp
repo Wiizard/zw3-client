@@ -122,11 +122,11 @@ namespace Components
 		Register(new Bots());
 		Register(new Branding());
 		Register(new Bullet());
-		Register(new CardTitles());
+		//Register(new CardTitles());
 		Register(new Ceg());
 		Register(new Changelog());
 		Register(new Chat());
-		Register(new ClanTags());
+		//Register(new ClanTags());
 		Register(new ClientCommand());
 		Register(new ConnectProtocol());
 		Register(new Console());
@@ -140,7 +140,7 @@ namespace Components
 		Register(new Events());
 		Register(new FastFiles());
 		Register(new FileSystem());
-		Register(new Friends());
+		//Register(new Friends());
 		Register(new Gamepad());
 		Register(new Rumble());
 		Register(new Huffman());
@@ -182,7 +182,7 @@ namespace Components
 		Register(new Threading());
 		Register(new Toast());
 		Register(new UIFeeder());
-		Register(new Updater());
+		//Register(new Updater());
 		Register(new VisionFile());
 		Register(new Voice());
 		Register(new Vote());

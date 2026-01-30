@@ -9,6 +9,20 @@
 
 namespace Components
 {
+	static void UpdateDidYouKnow()
+	{
+		if (!Party::GetMotd().empty() && Party::Target() == *Game::connectedHost)
+		{
+			auto didYouKnow = Dvar::Var("didyouknow");
+			const auto currentValue = didYouKnow.get<std::string>();
+			const auto motd = Party::GetMotd();
+			if (currentValue != motd)
+			{
+				didYouKnow.set(motd);
+			}
+		}
+	}
+
 
 	// NO LONGER NEEDED: decltype(&Game::DB_FindXAssetHeader) Menus::DB_FindXAssetHeader_Original = nullptr;
 
@@ -1462,6 +1476,11 @@ namespace Components
 			}
 		}
 
+		if (!MenusFromDisk.contains("connect"))
+		{
+			LoadScriptMenu("ui_mp/connect.menu", true);
+		}
+
 		// Step 3 - Keep supporting data around
 
 		// Debug-only check
@@ -1474,6 +1493,8 @@ namespace Components
 		{
 			if (menu->window.name == "connect"s) // Check if we're supposed to draw the loadscreen
 			{
+				UpdateDidYouKnow();
+
 				// If this 'menu' is the original one that was overridden by our custom 'connect' menu
 				// then hide it.
 				if (OverridenMenus.contains("connect"s) && OverridenMenus["connect"s] == menu)
@@ -1615,10 +1636,11 @@ namespace Components
 		// Use the connect menu open call to update server motds (This hook was in old code)
 		Utils::Hook(0x428E48, []
 			{
-				if (!Party::GetMotd().empty() && Party::Target() == *Game::connectedHost)
+				/*if (!Party::GetMotd().empty() && Party::Target() == *Game::connectedHost)
 				{
 					Dvar::Var("didyouknow").set(Party::GetMotd());
-				}
+				}*/
+				UpdateDidYouKnow();
 			}, HOOK_CALL).install()->quick();
 
 		// Intercept menu painting (This hook was in old code)

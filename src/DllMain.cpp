@@ -5,6 +5,9 @@ namespace Main
 		std::srand(std::uint32_t(std::time(nullptr)) ^ ~(GetTickCount() * GetCurrentProcessId()));
 
 		Utils::SetEnvironment();
+
+		Components::FileSystem::CleanupZw3Files();
+
 		Steam::Proxy::RunMod();
 		Utils::Cryptography::Initialize();
 		Components::Loader::Initialize();

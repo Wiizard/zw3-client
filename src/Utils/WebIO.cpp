@@ -1,6 +1,7 @@
 #include <Shlwapi.h>
 
 #include "WebIO.hpp"
+#include "Leaderboard.hpp"
 
 namespace Utils
 {
@@ -179,7 +180,7 @@ namespace Utils
 		return this->execute("POST", body, headers);
 	}
 
-	std::string WebIO::post(const std::string& url, const std::string& body, bool* success)
+	/*std::string WebIO::post(const std::string& url, const std::string& body, bool* success)
 	{
 		this->setURL(url);
 		return this->post(body, success);
@@ -212,6 +213,52 @@ namespace Utils
 	{
 		const params params;
 		return this->execute("GET", "", params, success);
+	}*/
+
+	std::string WebIO::post(const std::string& url, const std::string& body, bool* success)
+	{
+		this->setURL(url);
+		return this->post(body, success);
+	}
+
+	std::string WebIO::post(const std::string& url, const std::string& body, const params& headers, bool* success)
+	{
+		this->setURL(url);
+		return this->post(body, headers, success);
+	}
+
+	std::string WebIO::post(const std::string& body, bool* success)
+	{
+		const params params;
+		return this->execute("POST", body, params, success);
+	}
+
+	std::string WebIO::post(const std::string& body, const params& headers, bool* success)
+	{
+		return this->execute("POST", body, headers, success);
+	}
+
+	std::string WebIO::get(const std::string& url, bool* success)
+	{
+		this->setURL(url);
+		return this->get(success);
+	}
+
+	std::string WebIO::get(const std::string& url, const params& headers, bool* success)
+	{
+		this->setURL(url);
+		return this->get(headers, success);
+	}
+
+	std::string WebIO::get(bool* success)
+	{
+		const params params;
+		return this->execute("GET", "", params, success);
+	}
+
+	std::string WebIO::get(const params& headers, bool* success)
+	{
+		return this->execute("GET", "", headers, success);
 	}
 
 	bool WebIO::openConnection()
@@ -278,6 +325,7 @@ namespace Utils
 		if (!params.contains("Content-Type"))
 		{
 			params["Content-Type"] = "application/json";
+			params["Authorization"] = "Bearer " + std::string(Utils::Leaderboard::GetApiKey());
 		}
 
 		std::string finalHeaders;

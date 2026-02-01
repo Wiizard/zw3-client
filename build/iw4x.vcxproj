@@ -309,6 +309,7 @@ cd C:/Users/Pascal/Development/zw3-client</Command>
     <ClInclude Include="..\src\Utils\IO.hpp" />
     <ClInclude Include="..\src\Utils\InfoString.hpp" />
     <ClInclude Include="..\src\Utils\JSON.hpp" />
+    <ClInclude Include="..\src\Utils\Leaderboard.hpp" />
     <ClInclude Include="..\src\Utils\Library.hpp" />
     <ClInclude Include="..\src\Utils\Maths.hpp" />
     <ClInclude Include="..\src\Utils\Memory.hpp" />
@@ -508,6 +509,7 @@ cd C:/Users/Pascal/Development/zw3-client</Command>
     </ClCompile>
     <ClCompile Include="..\src\Utils\InfoString.cpp" />
     <ClCompile Include="..\src\Utils\JSON.cpp" />
+    <ClCompile Include="..\src\Utils\Leaderboard.cpp" />
     <ClCompile Include="..\src\Utils\Library.cpp" />
     <ClCompile Include="..\src\Utils\Maths.cpp" />
     <ClCompile Include="..\src\Utils\Memory.cpp" />

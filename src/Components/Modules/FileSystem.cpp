@@ -259,13 +259,13 @@ namespace Components
 							return false;
 						}
 
-						if (relativeLower == "iw4x/zw3.iwd"
+						/*if (relativeLower == "iw4x/zw3.iwd"
 							|| relativeLower == "zw3.iwd"
 							|| relativeLower == "main/zw3.iwd"
 							|| relativeLower == "zone/patch/patch_mp.ff")
 						{
 							return true;
-						}
+						}*/
 
 						if (path.extension() == ".iwd"
 							&& filenameLower.rfind("mp_", 0) == 0
@@ -661,7 +661,7 @@ namespace Components
 		const auto basepath = (*Game::fs_basepath)->current.string;
 		if (basepath && basepath[0] != '\0')
 		{
-			std::error_code ec;
+			/*std::error_code ec;
 			const auto zw3Dir = std::filesystem::path(basepath) / "zw3";
 			const auto zw3Iwd = zw3Dir / "zw3.iwd";
 			if (!std::filesystem::exists(zw3Dir, ec))
@@ -684,7 +684,9 @@ namespace Components
 			{
 				RegisterFolder("zw3");
 				RegisterFolder("zw3\\data");
-			}
+			}*/
+			RegisterFolder("zw3");
+			RegisterFolder("zw3\\data");
 		}
 	}
 

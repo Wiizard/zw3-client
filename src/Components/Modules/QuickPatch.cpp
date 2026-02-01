@@ -637,7 +637,7 @@ namespace Components
 					Game::DB_LoadXAssets(&info, 1, true);
 				}
 
-				// unload the fastfiles so we don't run out of memory or asset pools
+				// unload the fastfiles so we don't run oSut of memory or asset pools
 				if (count % 5)
 				{
 					Game::XZoneInfo info;

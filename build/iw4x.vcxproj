@@ -182,6 +182,7 @@ cd C:/Users/Pascal/Development/zw3-client</Command>
     <ClInclude Include="..\src\Components\Modules\Console.hpp" />
     <ClInclude Include="..\src\Components\Modules\D3D9Ex.hpp" />
     <ClInclude Include="..\src\Components\Modules\Debug.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Debug\Debugger.hpp" />
     <ClInclude Include="..\src\Components\Modules\Dedicated.hpp" />
     <ClInclude Include="..\src\Components\Modules\Discord.hpp" />
     <ClInclude Include="..\src\Components\Modules\Discovery.hpp" />
@@ -375,6 +376,7 @@ cd C:/Users/Pascal/Development/zw3-client</Command>
     <ClCompile Include="..\src\Components\Modules\Console.cpp" />
     <ClCompile Include="..\src\Components\Modules\D3D9Ex.cpp" />
     <ClCompile Include="..\src\Components\Modules\Debug.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Debug\Debugger.cpp" />
     <ClCompile Include="..\src\Components\Modules\Dedicated.cpp" />
     <ClCompile Include="..\src\Components\Modules\Discord.cpp" />
     <ClCompile Include="..\src\Components\Modules\Discovery.cpp" />

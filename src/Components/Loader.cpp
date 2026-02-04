@@ -194,6 +194,8 @@ namespace Components
 
 		Register(new BotLib::lPrecomp());
 
+		Register(new Debugger::DebugSetup());
+
 		Pregame = false;
 
 		// Make sure preDestroy is called when the game shuts down

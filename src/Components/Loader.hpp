@@ -80,3 +80,5 @@ namespace Components
 #include "Modules/Rumble.hpp"
 
 #include "Modules/GSC/GSC.hpp"
+
+#include "Modules/Debug/Debugger.hpp"

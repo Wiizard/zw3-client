@@ -43,6 +43,8 @@ namespace Components
 
 		static bool IsGamePadInUse();
 
+		static void SetIntroInputBlocked(bool blocked);
+
 	private:
 		enum TriggerRole
 		{
@@ -200,5 +202,7 @@ namespace Components
 		static void GetTriggerFeedbackForEquipment(const Game::playerState_s* playerState, bool primary, GamepadControls::GamepadAPI::TriggerFeedback& feedback);
 
 		static void UpdateForceFeedback(GamepadControls::Controller& api);
+
+		static std::atomic_bool IntroInputBlocked;
 	};
 }

@@ -43,41 +43,39 @@ namespace Components::Debugger
 
 	void ExpelMpAnims()
 	{
-		if (mpAnimCommitComplete)
+		if (!Game::level || !Game::level->initializing)
 			return;
 
-		constexpr int CS_MP_ANIM_START = 4042;
-		constexpr int CS_MP_ANIM_MAX = 63;
+		constexpr int CS_START = 4042;
+		constexpr int CS_MAX = 63;
 
-		int count = 0;
-
-		if (Game::Dvar_FindVar("mpanim_debug")->current.enabled)
-		{
-			Game::Com_Printf(0, "[mpanim] committing %zu cached mp anims\n", cachedMpAnims.size());
-		}
+		int used = 0;
 
 		for (const auto& anim : cachedMpAnims)
 		{
-			if (count >= CS_MP_ANIM_MAX)
+			if (used >= CS_MAX)
 			{
-				Game::Com_Printf(0, "[mpanim] WARNING: mp anim limit reached (%d), remaining anims skipped\n", CS_MP_ANIM_MAX);
+				Game::Com_Printf(15,
+					"[mpanim] WARNING: hit hard limit (%d), skipping '%s'\n",
+					CS_MAX, anim.c_str());
 				break;
 			}
 
-			G_FindConfigstringIndex(anim.c_str(), CS_MP_ANIM_START, CS_MP_ANIM_MAX, 1, "mp anim");
+			G_FindConfigstringIndex(
+				anim.c_str(),
+				CS_START,
+				CS_MAX,
+				1,
+				"mp anim"
+			);
 
-			if (Game::Dvar_FindVar("mpanim_debug")->current.enabled)
-			{
-				Game::Com_Printf(0, "[mpanim] committed[%d]: %s\n", count, anim.c_str());
-			}
-
-			++count;
+			++used;
 		}
 
-		cachedMpAnims.clear();
-		mpAnimCommitComplete = true;
+		Game::Com_Printf(15,
+			"[mpanim] committed %d mp anims\n", used);
 
-		Game::Com_Printf(0, "[mpanim] commit complete (%d anims registered)\n", count);
+		cachedMpAnims.clear();
 	}
 
 	int __cdecl GScr_PrecacheMpAnim_Hook()
@@ -117,7 +115,7 @@ namespace Components::Debugger
 		mpanim_debug = Game::Dvar_RegisterBool("mpanim_debug", true, Game::DVAR_NONE, "Enable debug output for PrecacheMpAnim override");
 
 		// Raise Limits
-		Utils::Hook(0x5F8380,GScr_PrecacheMpAnim_Hook,HOOK_JUMP).install()->quick();
+		Utils::Hook(0x5F8380, GScr_PrecacheMpAnim_Hook, HOOK_JUMP).install()->quick();
 		// Clear Old Cached Anims
 		ExpelMpAnims();
 

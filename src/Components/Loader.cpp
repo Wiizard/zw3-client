@@ -194,7 +194,7 @@ namespace Components
 
 		Register(new BotLib::lPrecomp());
 
-		Register(new Debugger::DebugSetup());
+		//Register(new Debugger::DebugSetup());
 
 		Pregame = false;
 

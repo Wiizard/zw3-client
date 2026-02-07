@@ -620,10 +620,10 @@ namespace Components
 		Com_Printf(Game::CON_CHANNEL_PARSERSCRIPT, "DEBUG: Starting Asset Pool Reallocation with safe values...\n");
 
 		Game::ReallocateAssetPool(Game::ASSET_TYPE_GAMEWORLD_SP, 1);
-		/*Game::ReallocateAssetPool(Game::ASSET_TYPE_IMAGE, ZoneBuilder::IsEnabled() ? 14336 : 7168);
-		Com_Printf(Game::CON_CHANNEL_PARSERSCRIPT, "DEBUG: Image Pool allocated (Size: %d).\n", ZoneBuilder::IsEnabled() ? 14336 : 7168);*/
-		Game::ReallocateAssetPool(Game::ASSET_TYPE_IMAGE, ZoneBuilder::IsEnabled() ? 10240 : 5120);
-		Com_Printf(Game::CON_CHANNEL_PARSERSCRIPT, "DEBUG: Image Pool allocated (Size: %d).\n", ZoneBuilder::IsEnabled() ? 10240 : 5120);
+		Game::ReallocateAssetPool(Game::ASSET_TYPE_IMAGE, ZoneBuilder::IsEnabled() ? 14336 : 7168);
+		Com_Printf(Game::CON_CHANNEL_PARSERSCRIPT, "DEBUG: Image Pool allocated (Size: %d).\n", ZoneBuilder::IsEnabled() ? 14336 : 7168);
+		/*Game::ReallocateAssetPool(Game::ASSET_TYPE_IMAGE, ZoneBuilder::IsEnabled() ? 10240 : 5120);
+		Com_Printf(Game::CON_CHANNEL_PARSERSCRIPT, "DEBUG: Image Pool allocated (Size: %d).\n", ZoneBuilder::IsEnabled() ? 10240 : 5120);*/
 
 		Game::ReallocateAssetPool(Game::ASSET_TYPE_LOADED_SOUND, 5400);
 		Game::ReallocateAssetPool(Game::ASSET_TYPE_FX, 2400);

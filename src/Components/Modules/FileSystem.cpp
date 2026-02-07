@@ -356,7 +356,7 @@ namespace Components
 
 				progress.Close();
 				MessageBoxA(nullptr,
-					Utils::String::Format("Cleanup complete.\n\nFiles checked: {}\nDeleted: {}\nSkipped: {}",
+					Utils::String::Format("Onetime ZW3 old files cleanup completed successfully.\n\nFiles checked: {}\nDeleted: {}\nSkipped: {}",
 						static_cast<int>(allFiles.size()),
 						deletedCount,
 						skippedCount),

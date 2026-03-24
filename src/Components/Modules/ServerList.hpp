@@ -28,13 +28,14 @@ namespace Components
 			bool svRunning;
 			bool aimassist;
 			bool voice;
+			std::time_t lastSeen;
 		};
 
 		ServerList();
 
 		void preDestroy() override;
 
-		static void Refresh([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
+		static void Refresh();
 		static void RefreshVisibleList([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
 		static void RefreshVisibleListInternal([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info, bool refresh = false);
 		static void UpdateVisibleList([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
@@ -62,6 +63,7 @@ namespace Components
 		static Dvar::Var UIServerSelectedMap;
 		static Dvar::Var NETServerQueryLimit;
 		static Dvar::Var NETServerFrames;
+		static Dvar::Var NETServerDeadTimeout;
 
 	private:
 		enum class Column : int
@@ -80,7 +82,8 @@ namespace Components
 			Count
 		};
 
-		static constexpr auto* FavouriteFile = "players/favourites.json";
+		static constexpr auto* FavouriteFile = "zw3/players/favourites.json";
+		static constexpr auto* ServerCacheFile = "zw3/players/server_cache.json";
 
 #pragma pack(push, 1)
 		union MasterEntry
@@ -115,13 +118,13 @@ namespace Components
 				int sendTime;
 				std::string challenge;
 				Network::Address target;
+				int sourceList;
 			};
 
-			bool awatingList;
+			bool awaitingList;
 			int awaitTime;
-
-			int sentCount;
-			int sendCount;
+			bool needsInitialRefresh;
+			bool loadingCache;
 
 			Network::Address host;
 			std::vector<ServerContainer> servers;
@@ -144,8 +147,12 @@ namespace Components
 		static void StoreFavourite(const std::string& server);
 		static void RemoveFavourite(const std::string& server);
 
-		static ServerInfo* GetServer(unsigned int index);
+		static void LoadServerCache();
+		static void SaveServerCache();
+		static void RemoveDeadServers();
+		static void HeartbeatServers();
 
+		static ServerInfo* GetServer(unsigned int index);
 		static bool CompareVersion(const std::string& version1, const std::string& version2);
 		static bool IsServerDuplicate(const std::vector<ServerInfo>* list, const ServerInfo& server);
 

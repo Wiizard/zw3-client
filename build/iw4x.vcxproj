@@ -322,6 +322,7 @@
     <ClInclude Include="$(ProjectDir)..\src\Utils\Time.hpp" />
     <ClInclude Include="$(ProjectDir)..\src\Utils\Utils.hpp" />
     <ClInclude Include="$(ProjectDir)..\src\Utils\WebIO.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Sound.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="$(ProjectDir)..\src\Components\Loader.cpp" />
@@ -525,6 +526,7 @@
     <ClCompile Include="$(ProjectDir)..\src\Utils\Time.cpp" />
     <ClCompile Include="$(ProjectDir)..\src\Utils\Utils.cpp" />
     <ClCompile Include="$(ProjectDir)..\src\Utils\WebIO.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Sound.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="$(ProjectDir)..\src\Resource.rc" />

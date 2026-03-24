@@ -1633,6 +1633,44 @@ namespace Components
 		// make Com_Error and similar go back to main_text instead of menu_xboxlive.
 		Utils::Hook::SetString(0x6FC790, "main_text");
 
+		Components::Scheduler::Loop([]()
+			{
+				static auto lastConnState = Game::connstate_t::CA_DISCONNECTED;
+				const auto connState = *reinterpret_cast<Game::connstate_t*>(0xB2C540);
+
+				const bool isNewConnection = lastConnState < Game::connstate_t::CA_CONNECTING
+					&& connState >= Game::connstate_t::CA_CONNECTING;
+				const bool isMapRestart = lastConnState >= Game::connstate_t::CA_ACTIVE
+					&& connState < Game::connstate_t::CA_ACTIVE
+					&& connState > Game::connstate_t::CA_DISCONNECTED;
+
+				if (isNewConnection || isMapRestart)
+				{
+					const Game::StringTable* table = nullptr;
+					Game::StringTable_GetAsset_FastFile("mp/didyouknow.csv", &table);
+					if (table && table->rowCount > 0)
+					{
+						static std::mt19937 rng(std::random_device{}());
+						std::uniform_int_distribution<int> dist(0, table->rowCount - 1);
+						const auto* tip = Game::StringTable_GetColumnValueForRow(table, dist(rng), 0);
+						if (tip && *tip)
+						{
+							Dvar::Var("didyouknow").set(tip);
+						}
+					}
+				}
+
+				if (connState >= Game::connstate_t::CA_CONNECTING)
+				{
+					if (!Party::GetMotd().empty() && Party::Target() == *Game::connectedHost)
+					{
+						Dvar::Var("didyouknow").set(Party::GetMotd());
+					}
+				}
+
+				lastConnState = connState;
+			}, Components::Scheduler::Pipeline::MAIN);
+
 		Command::Add("openmenu", [](const Command::Params* params)
 			{
 				if (params->size() != 2)

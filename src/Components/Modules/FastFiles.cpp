@@ -156,23 +156,15 @@ namespace Components
 		//const auto zw3Patch = std::format("{}\\zw3\\zw3.ff", basepath);
 		if (Utils::IO::FileExists(zw3Patch))
 		{
-			//data.push_back({ "zw3", 1, 0 });
+			// zw3.ff is now loaded synchronously as part of the initial load batch
+			// instead of being loaded asynchronously via the scheduler.
+			// Previously, DB_LoadXAssets was called with sync=false, which
+			// resulted in base zones and zw3.ff being loaded into memory
+			// simultaneously. This memory spike caused intermittent “Could not load image”
+			// crashes at startup under 32-bit
+			// address space constraints.
 
-			const auto* intro = Game::Dvar_FindVar("intro");
-			const auto introEnabled = intro ? intro->current.enabled : true;
-			if (introEnabled)
-			{
-				Scheduler::OnGameInitialized([]()
-					{
-						Game::XZoneInfo info{ "zw3", 1, 0 };
-						Game::DB_LoadXAssets(&info, 1, false);
-					}, Scheduler::Pipeline::MAIN, 750ms);
-			}
-			else
-			{
-				Game::XZoneInfo info{ "zw3", 1, 0 };
-				Game::DB_LoadXAssets(&info, 1, false);
-			}
+			data.push_back({ "zw3", 1, 0 });
 		}
 		else
 		{

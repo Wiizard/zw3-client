@@ -244,6 +244,12 @@ namespace Components
 		// Debug material comparison
 		Utils::Hook::Set<void*>(0x523894, Materials::MaterialComparePrint);
 
+		// Diese NOPs deaktivieren die Com_Error(ERR_FATAL, "Could not load image ...") Aufrufe
+		// im nativen Engine-Code (0x51F5AC und 0x51F4C4). Ohne sie crasht das Spiel beim Start,
+		// wenn ein Bild unter Speicherdruck nicht geladen werden kann. Die Engine faellt dann
+		// automatisch auf das eingebaute Default-Asset zurueck, anstatt abzustuerzen.
+		// Zuvor waren diese NOPs nur im DEBUG-Build aktiv – das war der eigentliche Grund fuer
+		// die intermittierenden "Could not load image" Abstuerze im Release-Build.
 #ifdef DEBUG
 		if (Flags::HasFlag("dump"))
 		{
@@ -253,10 +259,13 @@ namespace Components
 		}
 		else
 		{
-			// Ignore missing images
 			Utils::Hook::Nop(0x51F5AC, 5);
 			Utils::Hook::Nop(0x51F4C4, 5);
 		}
+#else
+		// Fehlende Images im Release-Build nicht als fatalen Fehler behandeln
+		Utils::Hook::Nop(0x51F5AC, 5);
+		Utils::Hook::Nop(0x51F4C4, 5);
 #endif
 
 		Renderer::OnDeviceRecoveryBegin([]()

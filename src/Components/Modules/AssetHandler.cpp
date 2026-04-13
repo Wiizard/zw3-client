@@ -499,6 +499,19 @@ namespace Components
 	void AssetHandler::MissingAssetError(int severity, const char* format, const char* type, const char* name)
 	{
 		if (Dedicated::IsEnabled() && Game::DB_GetXAssetNameType(type) == Game::ASSET_TYPE_TECHNIQUE_SET) return;
+
+		// Downgrade image and material errors to warnings instead of letting
+		// the engine treat them as fatal. Under memory pressure (32-bit
+		// address space), some assets may transiently fail to load. The
+		// engine will fall back to its built-in default asset for these
+		// types, so we can safely continue instead of crashing.
+		const auto assetType = Game::DB_GetXAssetNameType(type);
+		if (assetType == Game::ASSET_TYPE_IMAGE || assetType == Game::ASSET_TYPE_MATERIAL)
+		{
+			Logger::Warning(Game::CON_CHANNEL_GFX, "^3WARNING: Missing {} \"{}\". Using default asset.\n", type, name);
+			return;
+		}
+
 		Utils::Hook::Call<void(int, const char*, const char*, const char*)>(0x4F8C70)(severity, format, type, name); // Print error
 	}
 

@@ -73,7 +73,7 @@ BEGIN
             VALUE "LegalCopyright", "Copyright 2025 The Zombie Warfare Team. All rights reserved."
             VALUE "OriginalFilename", "zw3.dll"
             VALUE "ProductName", "Zombie Warfare 3"
-            VALUE "ProductVersion", "1.0.0"
+            VALUE "ProductVersion", "3.0.2"
         END
     END
     BLOCK "VarFileInfo"

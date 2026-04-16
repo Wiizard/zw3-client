@@ -1,7 +1,7 @@
 #include "Gamepad.hpp"
 #include "RawMouse.hpp"
 #include "Window.hpp"
-#include <atomic>and 
+#include <atomic>
 
 namespace Components
 {

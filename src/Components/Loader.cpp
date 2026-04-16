@@ -33,6 +33,8 @@
 #include "Modules/MapDump.hpp"
 #include "Modules/MapRotation.hpp"
 #include "Modules/Materials.hpp"
+#include "Modules/MemoryGuard.hpp"
+#include "Modules/MemoryTuning.hpp"
 #include "Modules/ModList.hpp"
 #include "Modules/ModelCache.hpp"
 #include "Modules/ModelSurfs.hpp"
@@ -109,6 +111,8 @@ namespace Components
 		Register(new Command());
 		Register(new Dvar());
 		Register(new Exception()); // Install our exception handler as early as possible to get better debug dumps from startup crashes
+		Register(new MemoryGuard()); // Hook Sys_OutOfMemError early so startup OOMs are captured
+		Register(new MemoryTuning()); // Must run before engine registers r_picmip_* dvars
 		Register(new IPCPipe());
 		Register(new Network());
 		Register(new Logger());

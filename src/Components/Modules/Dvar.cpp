@@ -320,10 +320,10 @@ namespace Components
 
 	void Dvar::DvarSetFromStringByName_Stub(const char* dvarName, const char* value)
 	{
-		if (dvarName && std::strcmp(dvarName, "intro") == 0)
+		/*if (dvarName && std::strcmp(dvarName, "intro") == 0)
 		{
 			value = "1";
-		}
+		}*/
 
 		if (IsSettingDvarsDisabled())
 		{
@@ -358,11 +358,11 @@ namespace Components
 #ifdef _DEBUG
 		dvar->flags &= ~Game::DVAR_CHEAT;
 #endif
-		if (dvar && dvar->name && std::strcmp(dvar->name, "intro") == 0)
+		/*if (dvar && dvar->name && std::strcmp(dvar->name, "intro") == 0)
 		{
 			Game::Dvar_SetBool(dvar, true);
 			dvar->flags |= Game::DVAR_ROM;
-		}
+		}*/
 	}
 
 	__declspec(naked) void Dvar::Dvar_RegisterVariant_Stub()

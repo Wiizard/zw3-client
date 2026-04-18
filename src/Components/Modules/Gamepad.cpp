@@ -217,7 +217,7 @@ namespace Components
 	Dvar::Var Gamepad::aim_lockon_pitch_strength;
 	Dvar::Var Gamepad::aim_lockon_strength;
 
-	std::atomic_bool Gamepad::IntroInputBlocked = false;
+	//std::atomic_bool Gamepad::IntroInputBlocked = false;
 
 	Gamepad::GamePadGlobals::GamePadGlobals()
 		: axes{},
@@ -1801,10 +1801,10 @@ namespace Components
 		gamePads[localClientNum].inUse = false;
 		gpad_in_use.setRaw(false);
 
-		if (IntroInputBlocked.load(std::memory_order_relaxed))
+		/*if (IntroInputBlocked.load(std::memory_order_relaxed))
 		{
 			return;
-		}
+		}*/
 
 		// Call original function
 		Utils::Hook::Call<void(int, int, int, unsigned)>(0x4F6480)(localClientNum, key, down, time);
@@ -1826,10 +1826,10 @@ namespace Components
 
 	int Gamepad::CL_MouseEvent_Hk(const int x, const int y, const int dx, const int dy)
 	{
-		if (IntroInputBlocked.load(std::memory_order_relaxed))
+		/*if (IntroInputBlocked.load(std::memory_order_relaxed))
 		{
 			return 0;
-		}
+		}*/
 
 		OnMouseMove(x, y, dx, dy);
 
@@ -1837,10 +1837,10 @@ namespace Components
 		return Utils::Hook::Call<int(int, int, int, int)>(0x4D7C50)(x, y, dx, dy);
 	}
 
-	void Gamepad::SetIntroInputBlocked(bool blocked)
+	/*void Gamepad::SetIntroInputBlocked(bool blocked)
 	{
 		IntroInputBlocked.store(blocked, std::memory_order_relaxed);
-	}
+	}*/
 
 	bool Gamepad::UI_RefreshViewport_Hk()
 	{

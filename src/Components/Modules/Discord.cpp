@@ -42,6 +42,8 @@ namespace Components
 
 	static void JoinGame(const char* joinSecret)
 	{
+		Logger::Print("Discord: Attempting to join match via invite. Secret: {}\n", joinSecret);
+
 		const char* connect_cmd = Utils::String::VA("connect %s\n", joinSecret);
 		Game::Cbuf_AddText(0, connect_cmd);
 	}
@@ -103,6 +105,12 @@ namespace Components
 			activityContext = "main_menu";
 		else
 			activityContext = "other";
+
+		if (activityContext != lastActivityContext)
+		{
+			discordSessionStart = std::time(nullptr);
+			lastActivityContext = activityContext;
+		}
 
 		if (!discordSessionStart)
 			discordSessionStart = std::time(nullptr);
@@ -202,7 +210,7 @@ namespace Components
 
 				const char* publicIp = Discord::GetHostDiscordInviteIP();
 				if (std::strcmp(publicIp, "0.0.0.0") != 0)
-					joinSecret = Utils::String::VA("%s", publicIp);
+					joinSecret = Utils::String::VA("%s:28960", publicIp);
 
 				partySize = realPlayers;
 				partyMax = 4;

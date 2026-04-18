@@ -692,21 +692,21 @@ namespace Components
 		Utils::Hook::Nop(0x4EBF1A, 5);
 #endif
 
-		/*if (Flags::HasFlag("nointro"))
+		if (Flags::HasFlag("nointro"))
 		{
 			Utils::Hook::Set<BYTE>(0x60BECF, 0xEB);
-		}*/
+		}
 
-		if (auto* intro = Game::Dvar_FindVar("intro"))
+		/*if (auto* intro = Game::Dvar_FindVar("intro"))
 		{
 			Game::Dvar_SetBool(intro, true);
 			intro->flags |= Game::DVAR_ROM;
-		}
+		}*/
 
-		Gamepad::SetIntroInputBlocked(true);
-		Scheduler::OnGameInitialized([]()
+		//Gamepad::SetIntroInputBlocked(true);
+		/*Scheduler::OnGameInitialized([]()
 			{
 				Gamepad::SetIntroInputBlocked(false);
-			}, Scheduler::Pipeline::MAIN, 8s);
+			}, Scheduler::Pipeline::MAIN, 8s);*/
 	}
 }

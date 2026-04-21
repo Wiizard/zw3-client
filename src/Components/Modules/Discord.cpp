@@ -1,4 +1,5 @@
 #include "Discord.hpp"
+#include "DiscordSocialSDK.hpp"
 #include "Party.hpp"
 #include "TextRenderer.hpp"
 
@@ -10,6 +11,7 @@ namespace Components
 	static DiscordRichPresence DiscordPresence;
 
 	bool Discord::Initialized_;
+	Discord::Backend Discord::ActiveBackend_ = Discord::Backend::RPC;
 
 	static unsigned int privateMatchNonce = 0;
 	static int64_t discordSessionStart = 0;
@@ -59,6 +61,66 @@ namespace Components
 		Logger::Print(Game::CON_CHANNEL_ERROR, "Discord: Error ({}): {}\n", errorCode, message);
 	}
 
+	static bool IsSocialSdkAvailable()
+	{
+#if defined(HAS_DISCORD_SOCIAL_SDK) && HAS_DISCORD_SOCIAL_SDK
+		return true;
+#else
+		return false;
+#endif
+	}
+
+	static void SocialSdkRunCallbacks();
+	static void SocialSdkUpdatePresence(const DiscordRichPresence& presence);
+	static bool SocialSdkInitialize();
+	static void SocialSdkShutdown();
+
+	static const uint64_t DiscordApplicationId = 1047291181404528660ULL;
+
+	static void SocialSdkRunCallbacks()
+	{
+		DiscordSocialSDK::Pump();
+	}
+
+	static void SocialSdkUpdatePresence(const DiscordRichPresence& presence)
+	{
+		DiscordSocialSDK::PresenceData data{};
+		if (presence.details) data.Details = presence.details;
+		if (presence.state) data.State = presence.state;
+		if (presence.partyId) data.PartyId = presence.partyId;
+		if (presence.joinSecret) data.JoinSecret = presence.joinSecret;
+		data.StartTimestamp = presence.startTimestamp;
+		data.PartySize = presence.partySize;
+		data.PartyMax = presence.partyMax;
+
+		DiscordSocialSDK::UpdatePresence(data);
+	}
+
+	static bool SocialSdkInitialize()
+	{
+		if (!IsSocialSdkAvailable())
+		{
+			Logger::Print(Game::CON_CHANNEL_WARN, "Discord: Social SDK requested, but SDK is not linked. Falling back to discord-rpc.\n");
+			return false;
+		}
+
+		if (!DiscordSocialSDK::Initialize(DiscordApplicationId, [](const char* joinSecret)
+		{
+			JoinGame(joinSecret);
+		}))
+		{
+			Logger::Print(Game::CON_CHANNEL_WARN, "Discord: Social SDK initialization failed. Falling back to discord-rpc.\n");
+			return false;
+		}
+
+		return true;
+	}
+
+	static void SocialSdkShutdown()
+	{
+		DiscordSocialSDK::Shutdown();
+	}
+
 	static void FetchPublicIPAsync()
 	{
 		Utils::WebIO webio("zw3-get-host-ip");
@@ -83,7 +145,14 @@ namespace Components
 
 	void Discord::UpdateDiscord()
 	{
-		Discord_RunCallbacks();
+		if (Discord::ActiveBackend_ == Discord::Backend::RPC)
+		{
+			Discord_RunCallbacks();
+		}
+		else
+		{
+			SocialSdkRunCallbacks();
+		}
 
 		bool isInGame = Game::CL_IsCgameInitialized();
 		bool isPrivateLobby = Discord::IsPrivateMatchOpen();
@@ -245,7 +314,14 @@ namespace Components
 			|| partySize != lastPartySize || partyMax != lastPartyMax || now - lastUpdateTime >= 1)
 		{
 			DiscordPresence = newPresence;
-			Discord_UpdatePresence(&DiscordPresence);
+			if (Discord::ActiveBackend_ == Discord::Backend::RPC)
+			{
+				Discord_UpdatePresence(&DiscordPresence);
+			}
+			else
+			{
+				SocialSdkUpdatePresence(DiscordPresence);
+			}
 
 			lastDetails = details;
 			lastState = state;
@@ -289,19 +365,75 @@ namespace Components
 		return menu && Game::Menu_IsVisible(Game::uiContext, menu);
 	}
 
+	Discord::Backend Discord::ResolvePreferredBackend()
+	{
+		const auto backend = Dvar::Var("discord_backend").get<std::string>();
+		if (_stricmp(backend.data(), "social") == 0)
+		{
+			return Discord::Backend::SocialSDK;
+		}
+
+		return Discord::Backend::RPC;
+	}
+
+	bool Discord::InitializeBackend(const Backend backend)
+	{
+		Discord::ActiveBackend_ = backend;
+
+		if (backend == Discord::Backend::SocialSDK)
+		{
+			if (!SocialSdkInitialize())
+			{
+				Discord::ActiveBackend_ = Discord::Backend::RPC;
+			}
+		}
+
+		if (Discord::ActiveBackend_ == Discord::Backend::RPC)
+		{
+			DiscordEventHandlers handlers{};
+			handlers.ready = Ready;
+			handlers.errored = Errored;
+			handlers.disconnected = Errored;
+			handlers.joinGame = JoinGame;
+			handlers.joinRequest = JoinRequest;
+
+			Discord_Initialize("1047291181404528660", &handlers, 1, nullptr);
+			Logger::Print("Discord: Initialized backend {}\n", Discord::GetActiveBackendName());
+			return true;
+		}
+
+		Logger::Print("Discord: Initialized backend {}\n", Discord::GetActiveBackendName());
+		return true;
+	}
+
+	void Discord::ShutdownBackend()
+	{
+		if (Discord::ActiveBackend_ == Discord::Backend::RPC)
+		{
+			Discord_Shutdown();
+		}
+		else
+		{
+			SocialSdkShutdown();
+		}
+	}
+
+	const char* Discord::GetActiveBackendName()
+	{
+		return (Discord::ActiveBackend_ == Discord::Backend::SocialSDK) ? "social" : "rpc";
+	}
+
 	Discord::Discord()
 	{
 		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled())
 			return;
 
-		DiscordEventHandlers handlers{};
-		handlers.ready = Ready;
-		handlers.errored = Errored;
-		handlers.disconnected = Errored;
-		handlers.joinGame = JoinGame;
-		handlers.joinRequest = JoinRequest;
+		Dvar::Register<const char*>("discord_backend", "rpc", Game::DVAR_ARCHIVE, "Discord backend: rpc or social");
 
-		Discord_Initialize("1047291181404528660", &handlers, 1, nullptr);
+		if (!Discord::InitializeBackend(Discord::ResolvePreferredBackend()))
+		{
+			return;
+		}
 
 		Scheduler::Once(UpdateDiscord, Scheduler::Pipeline::MAIN);
 		Scheduler::Loop(UpdateDiscord, Scheduler::Pipeline::MAIN, 1s);
@@ -314,6 +446,6 @@ namespace Components
 		if (!Initialized_)
 			return;
 
-		Discord_Shutdown();
+		Discord::ShutdownBackend();
 	}
 }

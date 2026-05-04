@@ -49,7 +49,7 @@ namespace Components
 		{
 			push eax
 			mov eax, PlayerDuckedSpeedScale
-			fld dword ptr [eax + 0x10] // dvar_t.current.value
+			fld dword ptr[eax + 0x10] // dvar_t.current.value
 			pop eax
 
 			// Game's code
@@ -64,7 +64,7 @@ namespace Components
 		{
 			push eax
 			mov eax, PlayerProneSpeedScale
-			fld dword ptr [eax + 0x10] // dvar_t.current.value
+			fld dword ptr[eax + 0x10] // dvar_t.current.value
 			pop eax
 
 			// Game's code
@@ -78,9 +78,9 @@ namespace Components
 		__asm
 		{
 			mov eax, CGNoclipScaler
-			fld dword ptr [eax + 0x10] // dvar_t.current.value
-			fmul dword ptr [esp + 0xC]
-			fstp dword ptr [esp + 0xC]
+			fld dword ptr[eax + 0x10] // dvar_t.current.value
+			fmul dword ptr[esp + 0xC]
+			fstp dword ptr[esp + 0xC]
 
 			push 0x56F43A
 			ret
@@ -92,9 +92,9 @@ namespace Components
 		__asm
 		{
 			mov eax, CGUfoScaler
-			fld dword ptr [eax + 0x10] // dvar_t.current.value
-			fmul dword ptr [esp + 0xC]
-			fstp dword ptr [esp + 0xC]
+			fld dword ptr[eax + 0x10] // dvar_t.current.value
+			fmul dword ptr[esp + 0xC]
+			fstp dword ptr[esp + 0xC]
 
 			push 0x56F44D
 			ret
@@ -106,9 +106,9 @@ namespace Components
 		__asm
 		{
 			mov eax, PlayerSpectateSpeedScale
-			fld dword ptr [eax + 0x10] // dvar_t.current.value
-			fmul dword ptr [esp + 0xC]
-			fstp dword ptr [esp + 0xC]
+			fld dword ptr[eax + 0x10] // dvar_t.current.value
+			fmul dword ptr[esp + 0xC]
+			fstp dword ptr[esp + 0xC]
 
 			push 0x56F462
 			ret
@@ -123,7 +123,7 @@ namespace Components
 			push eax
 
 			mov eax, BGBounces
-			mov eax, dword ptr [eax + 0x10]
+			mov eax, dword ptr[eax + 0x10]
 			test eax, eax
 
 			pop eax
@@ -134,7 +134,7 @@ namespace Components
 			push eax
 
 			mov eax, BGBouncesAllAngles
-			mov eax, dword ptr [eax + 0x10]
+			mov eax, dword ptr[eax + 0x10]
 			cmp eax, 2
 
 			pop eax
@@ -146,15 +146,15 @@ namespace Components
 			ret
 
 			// Bounce
-		regularBounce:
+			regularBounce :
 			push 0x4B1B34
-			ret
+				ret
 
-		noBounce:
+				noBounce :
 			// Original game code
-			cmp dword ptr [esp + 0x24], 0
-			push 0x4B1B32
-			ret
+			cmp dword ptr[esp + 0x24], 0
+				push 0x4B1B32
+				ret
 		}
 	}
 
@@ -175,7 +175,7 @@ namespace Components
 		{
 			push eax
 			mov eax, BGBouncesAllAngles
-			mov eax, dword ptr [eax + 0x10]
+			mov eax, dword ptr[eax + 0x10]
 			test eax, eax
 			pop eax
 
@@ -185,11 +185,11 @@ namespace Components
 			push 0x417B6F
 			ret
 
-		noBounce:
+			noBounce :
 			fstp ST(0)
-			pop esi
-			add esp, 0x10
-			ret
+				pop esi
+				add esp, 0x10
+				ret
 		}
 	}
 
@@ -247,19 +247,19 @@ namespace Components
 		{
 			push eax
 			mov eax, BGBunnyHopAuto
-			cmp byte ptr [eax + 0x10], 1
+			cmp byte ptr[eax + 0x10], 1
 			pop eax
 
 			je autoHop
 
 			// Game's code
-			test dword ptr [ebp + 0x30], CMD_BUTTON_UP
+			test dword ptr[ebp + 0x30], CMD_BUTTON_UP
 			push 0x4E9890
 			ret
 
-		autoHop:
+			autoHop :
 			push 0x4E989F
-			ret
+				ret
 		}
 	}
 
@@ -303,10 +303,10 @@ namespace Components
 	void PlayerMovement::PM_CheckLadderMove_Stub(Game::pmove_s* pm, Game::pml_t* pml)
 	{
 		const auto should_fix_ladders = (
-			BGDisableBarrierClips && 
-			BGDisableBarrierClips->current.enabled && 
+			BGDisableBarrierClips &&
+			BGDisableBarrierClips->current.enabled &&
 			pm != nullptr
-		);
+			);
 
 		if (should_fix_ladders)
 		{
@@ -314,7 +314,6 @@ namespace Components
 		}
 
 		if (checkLadderMoveOriginal)
-			checkLadderMoveOriginal(pm, pml);
 
 		if (should_fix_ladders && (pm->ps->pm_flags & Game::PMF_LADDER) == 0)
 		{
@@ -329,80 +328,6 @@ namespace Components
 		if (!BGOmnimovement || !BGOmnimovement->current.enabled)
 			return forwardSpeed;
 		return std::max(std::abs(forwardSpeed), std::abs(rightSpeed));
-	}
-
-	// Stock PM_WalkMove behavior: rightmove *= player_sprintStrafeSpeedScale while sprinting
-	void PlayerMovement::ApplyStockSprintStrafeScale(Game::pmove_s* pm)
-	{
-		if (!pm || !pm->ps)
-		{
-			return;
-		}
-
-		if ((pm->ps->pm_flags & Game::PMF_SPRINTING) == 0)
-		{
-			return;
-		}
-
-		const auto* dvar = *player_sprintStrafeSpeedScale;
-		if (!dvar)
-		{
-			return;
-		}
-
-		float scaled = static_cast<float>(pm->cmd.rightmove) * dvar->current.value;
-		pm->cmd.rightmove = static_cast<char>(std::clamp(scaled, -127.0f, 127.0f));
-	}
-
-	// Allow the sprint bit to be written to cmd.buttons when the back key is
-	// held. Stock CL_KeyMove skips the sprint-bit update whenever the back
-	// kbutton's active flag is set, which is what prevents sprint from
-	// starting backward even after our PM_UpdateSprint hooks pass.
-	__declspec(naked) void PlayerMovement::CL_KeyMove_SprintBit_Stub()
-	{
-		__asm
-		{
-			// Check the value of BGOmnimovement
-			push eax
-			mov eax, BGOmnimovement
-			test eax, eax
-			jz doStock
-			cmp byte ptr [eax + 0x10], 0
-			jz doStock
-			pop eax
-
-			// Bypass the back-active check, fall through to the sprint kbutton block
-			push 0x5A6061
-			ret
-
-		doStock:
-			pop eax
-
-			// Original: cmp byte ptr [esi+4Ch], 0; jnz loc_5A6084
-			cmp byte ptr [esi + 0x4C], 0
-			jnz stockSkip
-
-			push 0x5A6061
-			ret
-
-		stockSkip:
-			push 0x5A6084
-			ret
-		}
-	}
-
-	// Omnimovement
-
-	int PlayerMovement::ComputeHorizontalIntent(int forwardSpeed, int rightSpeed)
-	{
-		if (!BGOmnimovement || !BGOmnimovement->current.enabled)
-		{
-			return forwardSpeed;
-		}
-
-		const auto f = forwardSpeed < 0 ? -forwardSpeed : forwardSpeed;
-		const auto r = rightSpeed < 0 ? -rightSpeed : rightSpeed;
-		return f > r ? f : r;
 	}
 
 	// Stock PM_WalkMove behavior: rightmove *= player_sprintStrafeSpeedScale while sprinting
@@ -775,9 +700,9 @@ namespace Components
 				ret
 
 				stockSkip :
-				// Tail-jump to 0x5738E2, which runs "fstp st(1); fstp st" to pop
-				// the two FPU leftovers before falling into loc_5738E6.
-				push 0x5738E2
+			// Tail-jump to 0x5738E2, which runs "fstp st(1); fstp st" to pop
+			// the two FPU leftovers before falling into loc_5738E6.
+			push 0x5738E2
 				ret
 		}
 	}
@@ -903,7 +828,7 @@ namespace Components
 			false, Game::DVAR_CODINFO, "Disable player collision with out of bound barriers");
 
 		BGOmnimovement = Game::Dvar_RegisterBool("bg_omnimovement",
-			true, Game::DVAR_CODINFO,
+			false, Game::DVAR_CODINFO,
 			"Toggle omnidirectional sprint (sprint in any direction)");
 
 		BGDive = Game::Dvar_RegisterBool("bg_dive",
@@ -924,26 +849,26 @@ namespace Components
 		AssertOffset(Game::usercmd_s, rightmove, 0x1B);
 
 		Events::OnDvarInit([]
-		{
-			static const char* bg_bouncesValues[] =
 			{
-				"disabled",
-				"enabled",
-				"double",
-				nullptr,
-			};
+				static const char* bg_bouncesValues[] =
+				{
+					"disabled",
+					"enabled",
+					"double",
+					nullptr,
+				};
 
-			static const char* bg_bouncesAllAnglesValues[] =
-			{
-				"disabled",
-				"simple",
-				"all surfaces",
-				nullptr,
-			};
+				static const char* bg_bouncesAllAnglesValues[] =
+				{
+					"disabled",
+					"simple",
+					"all surfaces",
+					nullptr,
+				};
 
-			BGBounces = Game::Dvar_RegisterEnum("bg_bounces", bg_bouncesValues, DISABLED, Game::DVAR_CODINFO, "Bounce glitch settings");
-			BGBouncesAllAngles = Game::Dvar_RegisterEnum("bg_bouncesAllAngles", bg_bouncesAllAnglesValues, DISABLED, Game::DVAR_CODINFO, "Force bounce from all angles");
-		});
+				BGBounces = Game::Dvar_RegisterEnum("bg_bounces", bg_bouncesValues, DISABLED, Game::DVAR_CODINFO, "Bounce glitch settings");
+				BGBouncesAllAngles = Game::Dvar_RegisterEnum("bg_bouncesAllAngles", bg_bouncesAllAnglesValues, DISABLED, Game::DVAR_CODINFO, "Force bounce from all angles");
+			});
 
 		// Hook Dvar_RegisterFloat. Only thing that's changed is that the 0x80 flag is not used
 		Utils::Hook(0x448990, Dvar_RegisterSpectateSpeedScale, HOOK_CALL).install()->quick();
@@ -978,25 +903,6 @@ namespace Components
 		Utils::Hook(0x4E9889, Jump_Check_Stub, HOOK_JUMP).install()->quick();
 
 		// Disable player collision with out of bound barriers
-		{
-			constexpr DWORD PmoveSingleCallSite = 0x4CFF5C;
-			constexpr DWORD CheckLadderMoveCallSite = 0x574AF4;
-
-			if (!pmoveSingleOriginal)
-			{
-				const auto rel = *reinterpret_cast<std::int32_t*>(PmoveSingleCallSite + 1);
-				pmoveSingleOriginal = reinterpret_cast<PMoveSingle_t>(
-					PmoveSingleCallSite + 5 + rel);
-			}
-
-			if (!checkLadderMoveOriginal)
-			{
-				const auto rel = *reinterpret_cast<std::int32_t*>(CheckLadderMoveCallSite + 1);
-				checkLadderMoveOriginal = reinterpret_cast<PM_CheckLadderMove_t>(
-					CheckLadderMoveCallSite + 5 + rel);
-			}
-		}
-
 		Utils::Hook(0x4CFF5C, PmoveSingle_Stub, HOOK_CALL).install()->quick(); 			// single PmoveSingle call inside Pmove
 		Utils::Hook(0x574AF4, PM_CheckLadderMove_Stub, HOOK_CALL).install()->quick(); 	// single PM_CheckLadderMove call inside PmoveSingle
 

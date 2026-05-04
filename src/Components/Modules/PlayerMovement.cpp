@@ -391,6 +391,80 @@ namespace Components
 		}
 	}
 
+	// Omnimovement
+
+	int PlayerMovement::ComputeHorizontalIntent(int forwardSpeed, int rightSpeed)
+	{
+		if (!BGOmnimovement || !BGOmnimovement->current.enabled)
+		{
+			return forwardSpeed;
+		}
+
+		const auto f = forwardSpeed < 0 ? -forwardSpeed : forwardSpeed;
+		const auto r = rightSpeed < 0 ? -rightSpeed : rightSpeed;
+		return f > r ? f : r;
+	}
+
+	// Stock PM_WalkMove behavior: rightmove *= player_sprintStrafeSpeedScale while sprinting
+	void PlayerMovement::ApplyStockSprintStrafeScale(Game::pmove_s* pm)
+	{
+		if (!pm || !pm->ps)
+		{
+			return;
+		}
+
+		if ((pm->ps->pm_flags & Game::PMF_SPRINTING) == 0)
+		{
+			return;
+		}
+
+		const auto* dvar = *player_sprintStrafeSpeedScale;
+		if (!dvar)
+		{
+			return;
+		}
+
+		float scaled = static_cast<float>(pm->cmd.rightmove) * dvar->current.value;
+		pm->cmd.rightmove = static_cast<char>(std::clamp(scaled, -127.0f, 127.0f));
+	}
+
+	// Allow the sprint bit to be written to cmd.buttons when the back key is
+	// held. Stock CL_KeyMove skips the sprint-bit update whenever the back
+	// kbutton's active flag is set, which is what prevents sprint from
+	// starting backward even after our PM_UpdateSprint hooks pass.
+	__declspec(naked) void PlayerMovement::CL_KeyMove_SprintBit_Stub()
+	{
+		__asm
+		{
+			// Check the value of BGOmnimovement
+			push eax
+			mov eax, BGOmnimovement
+			test eax, eax
+			jz doStock
+			cmp byte ptr[eax + 0x10], 0
+			jz doStock
+			pop eax
+
+			// Bypass the back-active check, fall through to the sprint kbutton block
+			push 0x5A6061
+			ret
+
+			doStock :
+			pop eax
+
+				// Original: cmp byte ptr [esi+4Ch], 0; jnz loc_5A6084
+				cmp byte ptr[esi + 0x4C], 0
+				jnz stockSkip
+
+				push 0x5A6061
+				ret
+
+				stockSkip :
+			push 0x5A6084
+				ret
+		}
+	}
+
 	// Replace the sprint-start gate's forwardmove argument with max(|forwardmove|, |rightmove|)
 	__declspec(naked) void PlayerMovement::PM_SprintStartInterferingButtons_Stub()
 	{
@@ -402,7 +476,7 @@ namespace Components
 			push edx
 
 			// ComputeHorizontalIntent(forwardmove, rightmove)
-			movsx eax, byte ptr [ebp + 0x1F]
+			movsx eax, byte ptr[ebp + 0x1F]
 			push eax
 			push esi
 			call ComputeHorizontalIntent
@@ -432,7 +506,7 @@ namespace Components
 			push ecx
 
 			// ComputeHorizontalIntent(forwardmove, rightmove)
-			movsx eax, byte ptr [ebp + 0x1F]
+			movsx eax, byte ptr[ebp + 0x1F]
 			push eax
 			push edx
 			call ComputeHorizontalIntent
@@ -461,7 +535,7 @@ namespace Components
 			mov eax, BGOmnimovement
 			test eax, eax
 			jz doStock
-			cmp byte ptr [eax + 0x10], 0
+			cmp byte ptr[eax + 0x10], 0
 			jz doStock
 			pop eax
 
@@ -469,22 +543,22 @@ namespace Components
 			push 0x573289
 			ret
 
-		doStock:
+			doStock :
 			pop eax
 
-			// Apply the original rightmove scaling
-			push eax
-			push ecx
-			push edx
-			push edi
-			call ApplyStockSprintStrafeScale
-			add esp, 4
-			pop edx
-			pop ecx
-			pop eax
+				// Apply the original rightmove scaling
+				push eax
+				push ecx
+				push edx
+				push edi
+				call ApplyStockSprintStrafeScale
+				add esp, 4
+				pop edx
+				pop ecx
+				pop eax
 
-			push 0x573289
-			ret
+				push 0x573289
+				ret
 		}
 	}
 
@@ -498,7 +572,7 @@ namespace Components
 			mov edx, BGOmnimovement
 			test edx, edx
 			jz stockClamp
-			cmp byte ptr [edx + 0x10], 0
+			cmp byte ptr[edx + 0x10], 0
 			jz stockClamp
 			pop edx
 
@@ -512,26 +586,26 @@ namespace Components
 			and eax, 254
 			add eax, -127
 			mov ecx, eax
-		doneWide:
+			doneWide :
 			push 0x443421
-			ret
+				ret
 
-		stockClamp:
+				stockClamp :
 			pop edx
 
-			// Original clamp: +/-90
-			cmp eax, 90
-			jle doneStock
-			xor eax, eax
-			test ecx, ecx
-			setle al
-			sub eax, 1
-			and eax, 180
-			add eax, -90
-			mov ecx, eax
-		doneStock:
+				// Original clamp: +/-90
+				cmp eax, 90
+				jle doneStock
+				xor eax, eax
+				test ecx, ecx
+				setle al
+				sub eax, 1
+				and eax, 180
+				add eax, -90
+				mov ecx, eax
+				doneStock :
 			push 0x443421
-			ret
+				ret
 		}
 	}
 
@@ -545,7 +619,7 @@ namespace Components
 			mov edx, BGOmnimovement
 			test edx, edx
 			jz stockClamp
-			cmp byte ptr [edx + 0x10], 0
+			cmp byte ptr[edx + 0x10], 0
 			jz stockClamp
 			pop edx
 
@@ -559,26 +633,26 @@ namespace Components
 			and eax, 254
 			add eax, -127
 			mov ecx, eax
-		doneWide:
+			doneWide :
 			push 0x4435C3
-			ret
+				ret
 
-		stockClamp:
+				stockClamp :
 			pop edx
 
-			// Original clamp: +/-90
-			cmp eax, 90
-			jle doneStock
-			xor eax, eax
-			test ecx, ecx
-			setle al
-			sub eax, 1
-			and eax, 180
-			add eax, -90
-			mov ecx, eax
-		doneStock:
+				// Original clamp: +/-90
+				cmp eax, 90
+				jle doneStock
+				xor eax, eax
+				test ecx, ecx
+				setle al
+				sub eax, 1
+				and eax, 180
+				add eax, -90
+				mov ecx, eax
+				doneStock :
 			push 0x4435C3
-			ret
+				ret
 		}
 	}
 
@@ -592,12 +666,12 @@ namespace Components
 			mov eax, BGOmnimovement
 			test eax, eax
 			jz doStock
-			cmp byte ptr [eax + 0x10], 0
+			cmp byte ptr[eax + 0x10], 0
 			jz doStock
 
 			// Only override while PMF_SPRINTING is set
 			mov eax, [esi]
-			test dword ptr [eax + 0xC], 0x4000
+			test dword ptr[eax + 0xC], 0x4000
 			jz doStock
 			pop eax
 
@@ -606,20 +680,20 @@ namespace Components
 			push 0
 			push 0
 			push 7
-			push dword ptr [eax + 0x104]
+			push dword ptr[eax + 0x104]
 			mov eax, BG_SetConditionValueAddr
 			call eax
 			add esp, 0x10
 			ret
 
-		doStock:
+			doStock :
 			pop eax
 
-			// Original function body
-			sub esp, 0xC
-			movsx eax, byte ptr [esi + 0x1F]
-			push 0x571617
-			ret
+				// Original function body
+				sub esp, 0xC
+				movsx eax, byte ptr[esi + 0x1F]
+				push 0x571617
+				ret
 		}
 	}
 
@@ -633,7 +707,7 @@ namespace Components
 			mov eax, BGDive
 			test eax, eax
 			jz doStock
-			cmp byte ptr [eax + 0x10], 0
+			cmp byte ptr[eax + 0x10], 0
 			jz doStock
 			pop eax
 
@@ -641,21 +715,21 @@ namespace Components
 			push 0x56D7C5
 			ret
 
-		doStock:
+			doStock :
 			pop eax
 
-			// Original perk check
-			test dword ptr [esi + 0x428], 0x100000
-			jnz perkPresent
+				// Original perk check
+				test dword ptr[esi + 0x428], 0x100000
+				jnz perkPresent
 
-			// Original fail: no perk, return false
-			xor al, al
-			add esp, 0x6C
-			ret
+				// Original fail: no perk, return false
+				xor al, al
+				add esp, 0x6C
+				ret
 
-		perkPresent:
+				perkPresent :
 			push 0x56D7C5
-			ret
+				ret
 		}
 	}
 
@@ -669,7 +743,7 @@ namespace Components
 			mov eax, BGOmnimovement
 			test eax, eax
 			jz doStock
-			cmp byte ptr [eax + 0x10], 0
+			cmp byte ptr[eax + 0x10], 0
 			jz doStock
 
 			// Only skip while sprinting; walking backward keeps the penalty
@@ -682,29 +756,29 @@ namespace Components
 			push 0x5738E2
 			ret
 
-		doStock:
+			doStock :
 			pop eax
 
-			// Skip if forwardmove >= 0
-			test al, al
-			jge stockSkip
+				// Skip if forwardmove >= 0
+				test al, al
+				jge stockSkip
 
-			// FPU entry: ST0 = 0.5, ST1 = 1.0 (leftovers from the strafe blend
-			// at 0x573881..0x573890). Reproduce: v9 *= (backScale + 1) * 0.5.
-			mov eax, dword ptr ds:[0x7ADC44]
-			fld dword ptr [eax + 0x10]  // push backScale; FPU: backScale, 0.5, 1.0
-			faddp st(2), st             // ST(2) += backScale; FPU: 0.5, 1+backScale
-			fmulp st(1), st             // multiply; FPU: (1+backScale)*0.5
-			fmul dword ptr [esp]        // FPU: v9 * (1+backScale) * 0.5
-			fstp dword ptr [esp]        // store, pop; FPU: empty
-			push 0x5738E6
-			ret
+				// FPU entry: ST0 = 0.5, ST1 = 1.0 (leftovers from the strafe blend
+				// at 0x573881..0x573890). Reproduce: v9 *= (backScale + 1) * 0.5.
+				mov eax, dword ptr ds : [0x7ADC44]
+				fld dword ptr[eax + 0x10]  // push backScale; FPU: backScale, 0.5, 1.0
+				faddp st(2), st             // ST(2) += backScale; FPU: 0.5, 1+backScale
+				fmulp st(1), st             // multiply; FPU: (1+backScale)*0.5
+				fmul dword ptr[esp]        // FPU: v9 * (1+backScale) * 0.5
+				fstp dword ptr[esp]        // store, pop; FPU: empty
+				push 0x5738E6
+				ret
 
-		stockSkip:
-			// Tail-jump to 0x5738E2, which runs "fstp st(1); fstp st" to pop
-			// the two FPU leftovers before falling into loc_5738E6.
-			push 0x5738E2
-			ret
+				stockSkip :
+				// Tail-jump to 0x5738E2, which runs "fstp st(1); fstp st" to pop
+				// the two FPU leftovers before falling into loc_5738E6.
+				push 0x5738E2
+				ret
 		}
 	}
 
@@ -718,7 +792,7 @@ namespace Components
 			mov eax, BGOmnimovement
 			test eax, eax
 			jz doStock
-			cmp byte ptr [eax + 0x10], 0
+			cmp byte ptr[eax + 0x10], 0
 			jz doStock
 
 			// Only skip while sprinting; walking backward keeps the penalty
@@ -731,24 +805,24 @@ namespace Components
 			push 0x5738E6
 			ret
 
-		doStock:
+			doStock :
 			pop eax
 
-			// Skip if forwardmove >= 0
-			test al, al
-			jge stockSkip
+				// Skip if forwardmove >= 0
+				test al, al
+				jge stockSkip
 
-			// Original: v9 *= player_backSpeedScale
-			mov edx, dword ptr ds:[0x7ADC44]
-			fld dword ptr [edx + 0x10]
-			fmul dword ptr [esp]
-			fstp dword ptr [esp]
-			push 0x5738E6
-			ret
+				// Original: v9 *= player_backSpeedScale
+				mov edx, dword ptr ds : [0x7ADC44]
+				fld dword ptr[edx + 0x10]
+				fmul dword ptr[esp]
+				fstp dword ptr[esp]
+				push 0x5738E6
+				ret
 
-		stockSkip:
+				stockSkip :
 			push 0x5738E6
-			ret
+				ret
 		}
 	}
 
@@ -762,7 +836,7 @@ namespace Components
 			mov eax, BGOmnimovementDive
 			test eax, eax
 			jz doStock
-			cmp byte ptr [eax + 0x10], 0
+			cmp byte ptr[eax + 0x10], 0
 			jz doStock
 			pop eax
 
@@ -770,17 +844,17 @@ namespace Components
 			push 0x56D81C
 			ret
 
-		doStock:
+			doStock :
 			pop eax
 
-			// Original: fmul 0.3, then round-trip through single precision
-			fmul dword ptr ds:[0x71FE18]
-			sub esp, 4
-			fstp dword ptr [esp]
-			fld dword ptr [esp]
-			add esp, 4
-			push 0x56D81C
-			ret
+				// Original: fmul 0.3, then round-trip through single precision
+				fmul dword ptr ds : [0x71FE18]
+				sub esp, 4
+				fstp dword ptr[esp]
+				fld dword ptr[esp]
+				add esp, 4
+				push 0x56D81C
+				ret
 		}
 	}
 

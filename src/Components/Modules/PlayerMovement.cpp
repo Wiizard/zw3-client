@@ -828,7 +828,7 @@ namespace Components
 			false, Game::DVAR_CODINFO, "Disable player collision with out of bound barriers");
 
 		BGOmnimovement = Game::Dvar_RegisterBool("bg_omnimovement",
-			false, Game::DVAR_CODINFO,
+			true, Game::DVAR_CODINFO,
 			"Toggle omnidirectional sprint (sprint in any direction)");
 
 		BGDive = Game::Dvar_RegisterBool("bg_dive",
@@ -903,6 +903,25 @@ namespace Components
 		Utils::Hook(0x4E9889, Jump_Check_Stub, HOOK_JUMP).install()->quick();
 
 		// Disable player collision with out of bound barriers
+		{
+			constexpr DWORD PmoveSingleCallSite = 0x4CFF5C;
+			constexpr DWORD CheckLadderMoveCallSite = 0x574AF4;
+
+			if (!pmoveSingleOriginal)
+			{
+				const auto rel = *reinterpret_cast<std::int32_t*>(PmoveSingleCallSite + 1);
+				pmoveSingleOriginal = reinterpret_cast<PMoveSingle_t>(
+					PmoveSingleCallSite + 5 + rel);
+			}
+
+			if (!checkLadderMoveOriginal)
+			{
+				const auto rel = *reinterpret_cast<std::int32_t*>(CheckLadderMoveCallSite + 1);
+				checkLadderMoveOriginal = reinterpret_cast<PM_CheckLadderMove_t>(
+					CheckLadderMoveCallSite + 5 + rel);
+			}
+		}
+
 		Utils::Hook(0x4CFF5C, PmoveSingle_Stub, HOOK_CALL).install()->quick(); 			// single PmoveSingle call inside Pmove
 		Utils::Hook(0x574AF4, PM_CheckLadderMove_Stub, HOOK_CALL).install()->quick(); 	// single PM_CheckLadderMove call inside PmoveSingle
 

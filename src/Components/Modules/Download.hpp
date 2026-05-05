@@ -149,7 +149,7 @@ namespace Components
 					{
 						Game::Scr_AddInt(static_cast<int>(this->totalSize));
 						Game::Scr_AddInt(static_cast<int>(this->currentSize));
-						Game::Scr_NotifyId(this->getObject(), Game::SL_GetString("progress", 0), 2);
+						Game::Scr_NotifyId(this->getObject(), static_cast<unsigned short>(Game::SL_GetString("progress", 0)), 2);
 					}
 				}
 			}
@@ -169,7 +169,7 @@ namespace Components
 				{
 					Game::Scr_AddString(this->result.data()); // No binary data supported yet
 					Game::Scr_AddInt(this->success);
-					Game::Scr_NotifyId(this->getObject(), Game::SL_GetString("done", 0), 2);
+					Game::Scr_NotifyId(this->getObject(), static_cast<unsigned short>(Game::SL_GetString("done", 0)), 2);
 				}
 			}
 
@@ -269,7 +269,7 @@ namespace Components
 
 				Game::Scr_AddString(this->result.data());
 				Game::Scr_AddInt(this->success);
-				Game::Scr_NotifyId(this->object, Game::SL_GetString("done", 0), 2);
+				Game::Scr_NotifyId(this->object, static_cast<unsigned short>(Game::SL_GetString("done", 0)), 2);
 			}
 
 			bool isDone() { return this->done; }

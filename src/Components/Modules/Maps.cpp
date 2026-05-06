@@ -1,6 +1,7 @@
 
 #include "ArenaLength.hpp"
 #include "FastFiles.hpp"
+#include "MemoryGuard.hpp"
 #include "RawFiles.hpp"
 #include "StartupMessages.hpp"
 #include "Theatre.hpp"
@@ -133,6 +134,12 @@ namespace Components
 			Maps::UserMap.freeIwd();
 			Maps::UserMap.clear();
 		}
+
+		// Safe housekeeping between maps: defragment the CRT heap and trim
+		// the working set. Does NOT unload any zone (zw3.ff, iw4x_*, localized
+		// etc. are untouched) — just compacts already-freed memory so the next
+		// map has larger contiguous VA blocks to work with.
+		MemoryGuard::OnMapUnloaded();
 	}
 
 	void Maps::LoadMapZones(Game::XZoneInfo* zoneInfo, unsigned int zoneCount, int sync)

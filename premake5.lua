@@ -192,6 +192,15 @@ workspace "iw4x"
 
 	flags {"NoIncrementalLink", "NoMinimalRebuild", "MultiProcessorCompile", "No64BitChecks"}
 
+	-- Disable warnings that originate from the Windows SDK / third-party
+	-- headers or that flag purely stylistic issues, so they don't turn
+	-- into fatal errors under FatalCompileWarnings. Must live before
+	-- filters so it applies to both Debug and Release.
+	-- C28251: inconsistent SAL annotations for NTSTATUS in hidsdi.h
+	-- C4456:  declaration hides previous local declaration
+	-- C4459:  declaration hides global declaration
+	disablewarnings {"28251", "4456", "4459"}
+
 	filter "platforms:Win*"
 		defines {"_WINDOWS", "WIN32"}
 	filter {}
@@ -213,6 +222,7 @@ workspace "iw4x"
 	project "iw4x"
 		kind "SharedLib"
 		language "C++"
+		targetname "zw3"
 		files {
 			"./src/**.rc",
 			"./src/**.hpp",

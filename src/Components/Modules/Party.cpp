@@ -375,7 +375,7 @@ namespace Components
 			}
 		}
 
-		unsigned seed = std::chrono::system_clock::now().time_since_epoch().count();
+		unsigned seed = static_cast<unsigned>(std::chrono::system_clock::now().time_since_epoch().count());
 		std::shuffle(availableCharacterIds.begin(), availableCharacterIds.end(), std::default_random_engine(seed));
 
 		int availableIndex = 0;
@@ -386,7 +386,7 @@ namespace Components
 			std::string currentCharacter = Dvar::Var(charDvarName).get<std::string>();
 
 			if (currentCharacter.empty() || currentCharacter == "None" || GetCharacterIdFromName(currentCharacter.c_str()) == -1) {
-				if (availableIndex < availableCharacterIds.size()) {
+				if (static_cast<std::size_t>(availableIndex) < availableCharacterIds.size()) {
 					const char* newCharacterName = GetCharacterNameFromId(availableCharacterIds[availableIndex++]);
 					Dvar::Var(charDvarName).set(newCharacterName);
 				}
@@ -839,7 +839,7 @@ namespace Components
 				auto effectiveClientCount = 0;
 				auto maxClientCount = *Game::svs_clientCount;
 				const auto securityLevel = Dvar::Var("sv_securityLevel").get<int>();
-				const auto* password = *Game::g_password ? (*Game::g_password)->current.string : "";
+				[[maybe_unused]] const auto* password = *Game::g_password ? (*Game::g_password)->current.string : "";
 				if (maxClientCount)
 				{
 					for (int i = 0; i < maxClientCount; ++i)
@@ -1161,7 +1161,7 @@ namespace Components
 				Friends::UpdateServer(address, info.get("hostname"), info.get("mapname"));
 			});
 
-		Network::OnClientPacket("dvarUpdate", [](const Network::Address& address, const std::string& data)
+		Network::OnClientPacket("dvarUpdate", [](const Network::Address& /*address*/, const std::string& data)
 			{
 				Utils::InfoString info(data);
 
@@ -1277,7 +1277,7 @@ namespace Components
 
 						for (int i = 0; i < MAX_PARTY_SLOTS; ++i) {
 							std::string nameDvarName = Utils::String::VA("character_%d_player", i + 1);
-							if (i < participants.size()) {
+							if (static_cast<std::size_t>(i) < participants.size()) {
 								if (Dvar::Var(nameDvarName).get<std::string>() != participants[i]) {
 									Dvar::Var(nameDvarName).set(participants[i].c_str());
 									dvarChanged = true;

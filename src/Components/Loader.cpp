@@ -73,6 +73,8 @@
 
 #include "Modules/BotLib/lPrecomp.hpp"
 
+#include <Utils/Leaderboard.hpp>
+
 namespace Components
 {
 	bool Loader::Pregame = true;
@@ -197,6 +199,8 @@ namespace Components
 		Register(new BotLib::lPrecomp());
 
 		//Register(new Debugger::DebugSetup());
+
+		Register(new Leaderboard());
 
 		Pregame = false;
 

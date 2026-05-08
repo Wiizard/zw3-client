@@ -4,7 +4,7 @@
 #include "rapidjson/document.h"
 #include "version.h"
 
-#define NEWS_MOTD_DEFAULT "Welcome to Zombie Warfare 3!"
+#define NEWS_MOTD_DEFAULT "Welcome to Call of Duty: Zombie Warfare 3!"
 
 /*
   MOTD, Changelog and popup messages are fetched as JSON using Cache::GetFile.

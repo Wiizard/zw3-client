@@ -67,6 +67,11 @@ namespace Utils
 		void* getAddress();
 		void quick();
 
+		template <typename T> T* get_original() const
+		{
+			return reinterpret_cast<T*>(this->original);
+		}
+
 		template <typename T> static std::function<T> Call(DWORD function)
 		{
 			return std::function<T>(reinterpret_cast<T*>(function));

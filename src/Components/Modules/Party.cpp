@@ -668,10 +668,12 @@ namespace Components
 
 		UIScript::Add("LoadSave", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 			{
-				/*std::string guid = Utils::String::VA("%016llX", Steam::SteamUser()->GetSteamID().bits);
-				std::transform(guid.begin(), guid.end(), guid.begin(), ::tolower);
+				// We don't want to show the autosave popup if we're not the host
+				if (!Dvar::Var("party_host").get<bool>())
+				{
+					return;
+				}
 
-				std::string path = (*Game::fs_basepath)->current.string + "\\userraw\\scriptdata\\autosave_"s + guid;*/
 				std::string path = (*Game::fs_basepath)->current.string + "\\userraw\\scriptdata\\autosave"s;
 
 				std::ifstream f(path);

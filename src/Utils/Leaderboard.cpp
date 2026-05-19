@@ -14,12 +14,17 @@
 namespace Components
 {
 	std::vector<Leaderboard::Entry> Leaderboard::Entries;
-	Dvar::Var Leaderboard::UILeaderboardStatus;
-	Dvar::Var Leaderboard::UILeaderboardFirst;
 	Dvar::Var Leaderboard::UILeaderboardMap;
 	Dvar::Var Leaderboard::UILeaderboardPage;
-	int Leaderboard::CurrentPage = DefaultPage;
+	Dvar::Var Leaderboard::UILeaderboardLoadingIndicator;
+	int Leaderboard::CurrentOffset = 0;
+	int Leaderboard::NextOffset = -1;
+int Leaderboard::TotalItems = -1;
 	bool Leaderboard::HasNextPage = false;
+	bool Leaderboard::Loading = false;
+	unsigned int Leaderboard::RequestSerial = 0;
+	int Leaderboard::LoadingFrame = 0;
+	std::string Leaderboard::CurrentMap;
 
 	const char* Leaderboard::GetApiKey()
 	{
@@ -38,7 +43,7 @@ namespace Components
 
 	static int GetJsonInt(const rapidjson::Value& object, const char* key, int fallback = 0)
 	{
-		if (!object.HasMember(key)) return fallback;
+		if (!object.HasMember(key) || object[key].IsNull()) return fallback;
 		if (object[key].IsInt()) return object[key].GetInt();
 		if (object[key].IsNumber()) return static_cast<int>(object[key].GetDouble());
 		return fallback;
@@ -46,7 +51,7 @@ namespace Components
 
 	static float GetJsonFloat(const rapidjson::Value& object, const char* key, float fallback = 0.0f)
 	{
-		if (!object.HasMember(key)) return fallback;
+		if (!object.HasMember(key) || object[key].IsNull()) return fallback;
 		if (object[key].IsNumber()) return static_cast<float>(object[key].GetDouble());
 		return fallback;
 	}
@@ -66,31 +71,23 @@ namespace Components
 		return Utils::String::VA("%02i:%02i", minutes, secs);
 	}
 
-	static std::string NormalizePlayerName(std::string player)
-	{
-		Utils::String::Trim(player);
-		std::transform(player.begin(), player.end(), player.begin(), [](const unsigned char c)
-			{
-				return static_cast<char>(std::tolower(c));
-			});
-
-		return player;
-	}
-
-	bool Leaderboard::IsBetterEntry(const Entry& candidate, const Entry& current)
-	{
-		if (candidate.round != current.round) return candidate.round > current.round;
-		if (candidate.score != current.score) return candidate.score > current.score;
-		if (candidate.kills != current.kills) return candidate.kills > current.kills;
-		if (candidate.downs != current.downs) return candidate.downs < current.downs;
-		if (candidate.revives != current.revives) return candidate.revives > current.revives;
-		if (candidate.exfiltrated != current.exfiltrated) return candidate.exfiltrated > current.exfiltrated;
-		return candidate.time < current.time;
-	}
-
 	void Leaderboard::UpdatePageDvar()
 	{
-		UILeaderboardPage.set(Utils::String::VA("Page %i%s", CurrentPage, HasNextPage ? "" : " (last)"));
+		const auto page = (CurrentOffset / DefaultLimit) + 1;
+		if (TotalItems >= 0)
+		{
+			const auto totalPages = std::max(1, (TotalItems + DefaultLimit - 1) / DefaultLimit);
+			UILeaderboardPage.set(Utils::String::VA("Page %i of %i", page, totalPages));
+			return;
+		}
+
+		if (!HasNextPage)
+		{
+			UILeaderboardPage.set(Utils::String::VA("Page %i of %i", page, page));
+			return;
+		}
+
+		UILeaderboardPage.set(Utils::String::VA("Page %i", page));
 	}
 
 	std::string Leaderboard::GetCurrentMapName()
@@ -138,115 +135,146 @@ namespace Components
 		return encoded;
 	}
 
-	void Leaderboard::Refresh([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+	void Leaderboard::UpdateLoadingStatus()
 	{
-		Entries.clear();
-		UpdatePageDvar();
+		if (!Loading)
+		{
+			return;
+		}
 
+		constexpr const char* spinner[] = { "|", "/", "-", "\\" };
+		constexpr const char* dots[] = { ".", "..", "..." };
+		UILeaderboardLoadingIndicator.set(Utils::String::VA("%s Loading%s",
+			spinner[LoadingFrame % std::size(spinner)],
+			dots[LoadingFrame % std::size(dots)]));
+		LoadingFrame++;
+	}
+
+	void Leaderboard::StartRefresh(int offset)
+	{
 		const auto mapName = GetCurrentMapName();
 		UILeaderboardMap.set(mapName.empty() ? "Unknown" : mapName);
 
 		if (mapName.empty())
 		{
-			UILeaderboardStatus.set("^1Could not detect current map.");
-			UILeaderboardFirst.set("The mapname, sv_mapname, and ui_mapname dvars are empty.");
-			Toast::Show("cardicon_redhand", "^1Stats", "Could not detect the current map for stats lookup.", 5000);
-			return;
-		}
-
-		UILeaderboardStatus.set(Utils::String::VA("Loading stats for %s, page %i...", mapName.data(), CurrentPage));
-		UILeaderboardFirst.set("Waiting for stats API response...");
-
-		const auto url = std::format(
-			"https://stats.zw3.eu/matches/data?page={}&per_page={}&period={}&map={}",
-			CurrentPage,
-			DefaultPerPage,
-			DefaultPeriod,
-			UrlEncode(mapName));
-
-		Utils::WebIO::params headers;
-		headers["Content-Type"] = "application/json";
-		const auto reply = Utils::WebIO("zw3-map-stats", url).setTimeout(5000)->get(headers);
-
-		if (reply.empty())
-		{
-			UILeaderboardStatus.set("^1Could not load stats.");
-			UILeaderboardFirst.set(Utils::String::VA("No HTTP response for map %s, page %i.", mapName.data(), CurrentPage));
-			Toast::Show("cardicon_redhand", "^1Stats", "Could not get a response from the stats API.", 5000);
-			return;
-		}
-
-		ParseResponse(reply, mapName);
-	}
-
-	void Leaderboard::RefreshFirstPage([[maybe_unused]] const UIScript::Token& token, const Game::uiInfo_s* info)
-	{
-		CurrentPage = DefaultPage;
-		Refresh(token, info);
-	}
-
-	void Leaderboard::PreviousPage([[maybe_unused]] const UIScript::Token& token, const Game::uiInfo_s* info)
-	{
-		if (CurrentPage <= DefaultPage)
-		{
-			UILeaderboardStatus.set("^3Already on the first stats page.");
+			++RequestSerial;
+			Entries.clear();
+			Loading = false;
+			HasNextPage = false;
+			NextOffset = -1;
+			UILeaderboardLoadingIndicator.set("No map");
 			UpdatePageDvar();
+			Toast::Show("cardicon_redhand", "^1Leaderboard", "Could not detect the current map for leaderboard lookup.", 5000);
 			return;
 		}
 
-		--CurrentPage;
-		Refresh(token, info);
+		CurrentMap = mapName;
+		CurrentOffset = std::max(0, offset);
+		const auto requestId = ++RequestSerial;
+		Entries.clear();
+		HasNextPage = false;
+		NextOffset = -1;
+		UpdatePageDvar();
+
+		Loading = true;
+		LoadingFrame = 0;
+		UpdateLoadingStatus();
+
+		const auto url = CurrentOffset > 0
+			? std::format("https://stats.zw3.eu/leaderboard/best-rounds?limit={}&map={}&offset={}", DefaultLimit, UrlEncode(mapName), CurrentOffset)
+			: std::format("https://stats.zw3.eu/leaderboard/best-rounds?limit={}&map={}", DefaultLimit, UrlEncode(mapName));
+
+		Scheduler::Once([requestId, url]
+			{
+				Utils::WebIO::params headers;
+				headers["Content-Type"] = "application/json";
+				const auto reply = Utils::WebIO("zw3-best-rounds", url).setTimeout(5000)->get(headers);
+
+				Scheduler::Once([requestId, reply]
+					{
+						if (requestId != RequestSerial)
+						{
+							return;
+						}
+
+						Loading = false;
+						UILeaderboardLoadingIndicator.set("");
+
+						if (reply.empty())
+						{
+							UILeaderboardLoadingIndicator.set("Load failed");
+							Toast::Show("cardicon_redhand", "^1Leaderboard", "Could not get a response from the stats API.", 5000);
+							return;
+						}
+
+						ParseResponse(reply);
+					}, Scheduler::Pipeline::MAIN);
+			}, Scheduler::Pipeline::ASYNC);
 	}
 
-	void Leaderboard::NextPage([[maybe_unused]] const UIScript::Token& token, const Game::uiInfo_s* info)
+	void Leaderboard::Refresh([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+	{
+		StartRefresh(CurrentOffset);
+	}
+
+	void Leaderboard::RefreshFirstPage([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+	{
+		const auto mapName = GetCurrentMapName();
+		StartRefresh(mapName == CurrentMap ? CurrentOffset : 0);
+	}
+
+	void Leaderboard::PreviousPage([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+	{
+		StartRefresh(std::max(0, CurrentOffset - DefaultLimit));
+	}
+
+	void Leaderboard::NextPage([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 	{
 		if (!HasNextPage)
 		{
-			UILeaderboardStatus.set("^3No next stats page loaded by the API.");
 			UpdatePageDvar();
 			return;
 		}
 
-		++CurrentPage;
-		Refresh(token, info);
+		StartRefresh(NextOffset);
 	}
 
-	void Leaderboard::ParseResponse(const std::string& response, const std::string& mapName)
+	void Leaderboard::ParseResponse(const std::string& response)
 	{
 		Entries.clear();
 		HasNextPage = false;
+		NextOffset = -1;
+		Loading = false;
+		UILeaderboardLoadingIndicator.set("");
 
 		rapidjson::Document doc{};
 		doc.Parse(response);
 
-		if (doc.HasParseError())
+		if (doc.HasParseError() || !doc.IsObject())
 		{
-			UILeaderboardStatus.set("^1Stats response parse error.");
-			UILeaderboardFirst.set("The stats API returned invalid JSON.");
-			UpdatePageDvar();
-			return;
-		}
-
-		if (!doc.IsObject())
-		{
-			UILeaderboardStatus.set("^1Invalid stats response format.");
-			UILeaderboardFirst.set("Expected a JSON object from /matches/data.");
+			UILeaderboardLoadingIndicator.set("Parse error");
 			UpdatePageDvar();
 			return;
 		}
 
 		if (!doc.HasMember("items") || !doc["items"].IsArray())
 		{
-			UILeaderboardStatus.set("^1Stats response has no items.");
-			UILeaderboardFirst.set("JSON has no items array.");
+			UILeaderboardLoadingIndicator.set("No entries");
+			TotalItems = 0;
 			UpdatePageDvar();
 			return;
 		}
 
-		const auto& items = doc["items"];
-		HasNextPage = items.Size() >= static_cast<rapidjson::SizeType>(DefaultPerPage);
+		// Try to read total items if provided by the API
+		TotalItems = GetJsonInt(doc, "total", -1);
+		if (TotalItems < 0) TotalItems = GetJsonInt(doc, "total_items", -1);
+		if (TotalItems < 0) TotalItems = GetJsonInt(doc, "total_count", -1);
 
-		std::unordered_map<std::string, Entry> bestEntries;
+		NextOffset = GetJsonInt(doc, "next_offset", -1);
+		HasNextPage = NextOffset >= 0;
+
+		const auto& items = doc["items"];
+		Entries.reserve(items.Size());
 
 		for (const auto& item : items.GetArray())
 		{
@@ -257,9 +285,9 @@ namespace Components
 
 			Entry entry{};
 			entry.guid = GetJsonString(item, "guid");
-			entry.player = GetJsonString(item, "name", GetJsonString(item, "player", "Unknown"));
-			entry.map = GetJsonString(item, "map", mapName.data());
-			entry.round = GetJsonInt(item, "round");
+			entry.player = GetJsonString(item, "player", GetJsonString(item, "name", "Unknown"));
+			entry.map = GetJsonString(item, "map", "Unknown");
+			entry.round = GetJsonInt(item, "round", GetJsonInt(item, "metric_value"));
 			entry.zombiemode = GetJsonString(item, "zombiemode");
 			entry.players = GetJsonInt(item, "players");
 			entry.playerRank = GetJsonString(item, "rank");
@@ -270,55 +298,20 @@ namespace Components
 			entry.exfiltrated = GetJsonInt(item, "exfiltrated");
 			entry.time = GetJsonFloat(item, "time");
 			entry.version = GetJsonString(item, "version");
-			entry.uploadedAt = GetJsonString(item, "uploaded_at", GetJsonString(item, "uploadedAt"));
-			entry.id = GetJsonInt(item, "id");
+			entry.uploadedAt = GetJsonString(item, "uploadedAt", GetJsonString(item, "uploaded_at"));
 
 			if (entry.player.empty()) entry.player = "Unknown";
-			if (entry.map.empty()) entry.map = mapName;
+			if (entry.map.empty()) entry.map = "Unknown";
 
-			const auto normalizedName = NormalizePlayerName(entry.player);
-			auto duplicate = bestEntries.find(normalizedName);
-			if (duplicate == bestEntries.end() || IsBetterEntry(entry, duplicate->second))
-			{
-				bestEntries[normalizedName] = entry;
-			}
+			Entries.push_back(entry);
 		}
-
-		Entries.reserve(bestEntries.size());
-		for (auto& entry : bestEntries)
-		{
-			Entries.push_back(std::move(entry.second));
-		}
-
-		std::sort(Entries.begin(), Entries.end(), [](const Entry& a, const Entry& b)
-			{
-				return IsBetterEntry(a, b);
-			});
-
-		UpdatePageDvar();
 
 		if (Entries.empty())
 		{
-			UILeaderboardStatus.set(Utils::String::VA("^3No stats found for %s on page %i.", mapName.data(), CurrentPage));
-			UILeaderboardFirst.set("Try refreshing after players have uploaded stats for this map.");
+			UILeaderboardLoadingIndicator.set("No entries");
 		}
-		else
-		{
-			const auto& first = Entries[0];
-			const std::string firstTime = FormatSeconds(first.time);
-			const auto removedDuplicates = static_cast<unsigned int>(items.Size() - Entries.size());
-			UILeaderboardStatus.set(Utils::String::VA("^2Loaded %u unique players for %s, page %i. Removed %u duplicate rows.",
-				static_cast<unsigned int>(Entries.size()),
-				mapName.data(),
-				CurrentPage,
-				removedDuplicates));
-			UILeaderboardFirst.set(Utils::String::VA("Best: %s | Round %i | Score %i | Kills %i | Time %s",
-				first.player.data(),
-				first.round,
-				first.score,
-				first.kills,
-				firstTime.data()));
-		}
+
+		UpdatePageDvar();
 	}
 
 	unsigned int Leaderboard::GetEntryCount()
@@ -335,9 +328,7 @@ namespace Components
 			case 0:
 				return "--";
 			case 1:
-				return "No stats loaded";
-			case 3:
-				return UILeaderboardStatus.get<const char*>();
+				return Loading ? "Loading leaderboard" : "No leaderboard entries";
 			default:
 				return "";
 			}
@@ -353,24 +344,22 @@ namespace Components
 		switch (column)
 		{
 		case 0:
-			return entry.player.data();
+			return Utils::String::VA("#%u", static_cast<unsigned int>(CurrentOffset + index + 1));
 		case 1:
-			return Utils::String::VA("%i", entry.round);
+			return entry.player.data();
 		case 2:
-			return entry.zombiemode.data();
+			return Utils::String::VA("%i", entry.round);
 		case 3:
-			return Utils::String::VA("%i", entry.players);
+			return entry.map.data();
 		case 4:
-			return Utils::String::VA("%i", entry.score);
+			return Utils::String::VA("%i", entry.players);
 		case 5:
-			return Utils::String::VA("%i", entry.kills);
+			return Utils::String::VA("%i", entry.score);
 		case 6:
-			return Utils::String::VA("%i", entry.downs);
+			return Utils::String::VA("%i", entry.kills);
 		case 7:
-			return Utils::String::VA("%i", entry.revives);
+			return Utils::String::VA("%i", entry.downs);
 		case 8:
-			return Utils::String::VA("%i", entry.exfiltrated);
-		case 9:
 			return FormatSeconds(entry.time);
 		default:
 			return "";
@@ -388,10 +377,9 @@ namespace Components
 
 		Events::OnDvarInit([]
 			{
-				UILeaderboardStatus = Dvar::Register<const char*>("ui_leaderboard_status", "", Game::DVAR_NONE, "Current status for the map stats menu.");
-				UILeaderboardFirst = Dvar::Register<const char*>("ui_leaderboard_first", "", Game::DVAR_NONE, "Debug line for the first returned map stats row.");
-				UILeaderboardMap = Dvar::Register<const char*>("ui_leaderboard_map", "", Game::DVAR_NONE, "Current map used by the map stats menu.");
-				UILeaderboardPage = Dvar::Register<const char*>("ui_leaderboard_page", "Page 1", Game::DVAR_NONE, "Current page used by the map stats menu.");
+				UILeaderboardMap = Dvar::Register<const char*>("ui_leaderboard_map", "", Game::DVAR_NONE, "Current map used by the best rounds leaderboard.");
+				UILeaderboardPage = Dvar::Register<const char*>("ui_leaderboard_page", "Page 1", Game::DVAR_NONE, "Current page used by the best rounds leaderboard.");
+				UILeaderboardLoadingIndicator = Dvar::Register<const char*>("ui_leaderboard_loading_indicator", "", Game::DVAR_NONE, "Animated loading indicator for the best rounds leaderboard.");
 			});
 
 		UIFeeder::Add(FeederId, Leaderboard::GetEntryCount, Leaderboard::GetEntryText, Leaderboard::SelectEntry);
@@ -399,6 +387,8 @@ namespace Components
 		UIScript::Add("RefreshLeaderboardPage", Leaderboard::Refresh);
 		UIScript::Add("PreviousLeaderboardPage", Leaderboard::PreviousPage);
 		UIScript::Add("NextLeaderboardPage", Leaderboard::NextPage);
+
+		Scheduler::Loop(Leaderboard::UpdateLoadingStatus, Scheduler::Pipeline::MAIN, 250ms);
 	}
 
 	Leaderboard::~Leaderboard()

@@ -27,31 +27,34 @@ namespace Components
 			float time = 0.0f;
 			std::string version;
 			std::string uploadedAt;
-			int id = 0;
 		};
 
 		static constexpr float FeederId = 70.0f;
-		static constexpr int DefaultPage = 1;
-		static constexpr int DefaultPerPage = 50;
-		static constexpr int DefaultPeriod = 30;
+		static constexpr int DefaultLimit = 25;
 
 		static std::vector<Entry> Entries;
-		static Dvar::Var UILeaderboardStatus;
-		static Dvar::Var UILeaderboardFirst;
 		static Dvar::Var UILeaderboardMap;
 		static Dvar::Var UILeaderboardPage;
-		static int CurrentPage;
+		static Dvar::Var UILeaderboardLoadingIndicator;
+		static int CurrentOffset;
+		static int NextOffset;
+		static int TotalItems;
 		static bool HasNextPage;
+		static bool Loading;
+		static unsigned int RequestSerial;
+		static int LoadingFrame;
+		static std::string CurrentMap;
 
-		static bool IsBetterEntry(const Entry& candidate, const Entry& current);
 		static void UpdatePageDvar();
 		static std::string GetCurrentMapName();
 		static std::string UrlEncode(const std::string& value);
+		static void StartRefresh(int offset);
+		static void UpdateLoadingStatus();
 		static void Refresh([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
-		static void RefreshFirstPage([[maybe_unused]] const UIScript::Token& token, const Game::uiInfo_s* info);
-		static void PreviousPage([[maybe_unused]] const UIScript::Token& token, const Game::uiInfo_s* info);
-		static void NextPage([[maybe_unused]] const UIScript::Token& token, const Game::uiInfo_s* info);
-		static void ParseResponse(const std::string& response, const std::string& mapName);
+		static void RefreshFirstPage([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
+		static void PreviousPage([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
+		static void NextPage([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
+		static void ParseResponse(const std::string& response);
 
 		static unsigned int GetEntryCount();
 		static const char* GetEntryText(unsigned int index, int column);

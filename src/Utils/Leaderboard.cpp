@@ -214,11 +214,15 @@ namespace Components
 	void Leaderboard::RefreshFirstPage([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 	{
 		const auto mapName = GetCurrentMapName();
-		StartRefresh(mapName == CurrentMap ? CurrentOffset : 0);
+		if (CurrentOffset != 0 || Entries.empty() || mapName != CurrentMap)
+		{
+			StartRefresh(0);
+		}
 	}
 
 	void Leaderboard::PreviousPage([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 	{
+		if (CurrentOffset <= 0) return;
 		StartRefresh(std::max(0, CurrentOffset - DefaultLimit));
 	}
 

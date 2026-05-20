@@ -325,7 +325,7 @@ namespace Utils
 		if (!params.contains("Content-Type"))
 		{
 			params["Content-Type"] = "application/json";
-			params["Authorization"] = "Bearer " + std::string(Utils::Leaderboard::GetApiKey());
+			params["Authorization"] = "Bearer " + std::string(Components::Leaderboard::GetApiKey());
 		}
 
 		std::string finalHeaders;

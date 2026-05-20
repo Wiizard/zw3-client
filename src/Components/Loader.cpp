@@ -72,8 +72,12 @@
 #include "Modules/Weapon.hpp"
 #include "Modules/Window.hpp"
 #include "Modules/Sound.hpp"
+#include "Modules/SPLoadscreens.hpp"
+
 
 #include "Modules/BotLib/lPrecomp.hpp"
+
+#include <Utils/Leaderboard.hpp>
 
 namespace Components
 {
@@ -107,10 +111,13 @@ namespace Components
 		// High priority
 		Register(new Singleton());
 
+		FileSystem::CleanupZw3Files();
+
 		Register(new Auth());
 		Register(new Command());
 		Register(new Dvar());
 		Register(new Exception()); // Install our exception handler as early as possible to get better debug dumps from startup crashes
+
 		Register(new MemoryGuard()); // Hook Sys_OutOfMemError early so startup OOMs are captured
 		Register(new MemoryTuning()); // Must run before engine registers r_picmip_* dvars
 		Register(new IPCPipe());
@@ -179,6 +186,7 @@ namespace Components
 		Register(new Session());
 		Register(new SlowMotion());
 		Register(new Sound());
+		Register(new SPLoadscreens());
 		Register(new StartupMessages());
 		Register(new Stats());
 		Register(new StringTable());
@@ -201,6 +209,8 @@ namespace Components
 		Register(new BotLib::lPrecomp());
 
 		//Register(new Debugger::DebugSetup());
+
+		Register(new Leaderboard());
 
 		Pregame = false;
 

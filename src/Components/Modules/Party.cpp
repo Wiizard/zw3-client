@@ -668,97 +668,124 @@ namespace Components
 
 		UIScript::Add("LoadSave", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 			{
-				/*std::string guid = Utils::String::VA("%016llX", Steam::SteamUser()->GetSteamID().bits);
-				std::transform(guid.begin(), guid.end(), guid.begin(), ::tolower);
-
-				std::string path = (*Game::fs_basepath)->current.string + "\\userraw\\scriptdata\\autosave_"s + guid;*/
-				std::string path = (*Game::fs_basepath)->current.string + "\\userraw\\scriptdata\\autosave"s;
-
-				std::ifstream f(path);
-				if (!f.is_open())
+				// The autosave popup should only be shown when party_host is true. If the
+				// dvar hasn't been set yet, we poll for a short time to allow the menu to
+				// initialize it.
+				auto doLoadSave = []()
 				{
-					return;
-				}
+					std::string path = (*Game::fs_basepath)->current.string + "\\userraw\\scriptdata\\autosave"s;
 
-				{
-					struct _stat64 st {};
-					if (_stat64(path.c_str(), &st) == 0)
-					{
-						tm t{};
-						localtime_s(&t, &st.st_mtime);
-
-						char formatted[128];
-						strftime(formatted, sizeof(formatted), "%d %b %Y  %H:%M", &t);
-
-						if (!Game::Dvar_FindVar("autosave_date"))
-						{
-							Game::Dvar_RegisterString("autosave_date", "", 0, "");
-						}
-
-						Game::Dvar_SetString(Game::Dvar_FindVar("autosave_date"), formatted);
-					}
-					else
+					std::ifstream f(path);
+					if (!f.is_open())
 					{
 						return;
 					}
-				}
 
-				std::string fdata((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-				f.close();
+					{
+						struct _stat64 st {};
+						if (_stat64(path.c_str(), &st) == 0)
+						{
+							tm t{};
+							localtime_s(&t, &st.st_mtime);
 
-				std::string read = fdata;
-				int key = 16;
+							char formatted[128];
+							strftime(formatted, sizeof(formatted), "%d %b %Y  %H:%M", &t);
 
-				std::string data = decryptString(read, key);
+							if (!Game::Dvar_FindVar("autosave_date"))
+							{
+								Game::Dvar_RegisterString("autosave_date", "", 0, "");
+							}
 
-				std::unordered_map<std::string, std::string> parsed;
-				size_t start = 0;
+							Game::Dvar_SetString(Game::Dvar_FindVar("autosave_date"), formatted);
+						}
+						else
+						{
+							return;
+						}
+					}
 
-				while (true)
-				{
-					size_t s = data.find(';', start);
-					if (s == std::string::npos) break;
+					std::string fdata((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+					f.close();
 
-					std::string t = data.substr(start, s - start);
-					start = s + 1;
+					std::string read = fdata;
+					int key = 16;
 
-					size_t c = t.find(':');
-					if (c == std::string::npos) continue;
+					std::string data = decryptString(read, key);
 
-					std::string k = t.substr(0, c);
-					std::string v = t.substr(c + 1);
+					std::unordered_map<std::string, std::string> parsed;
+					size_t start = 0;
 
-					auto trim = [](std::string& x)
+					while (true)
+					{
+						size_t s = data.find(';', start);
+						if (s == std::string::npos) break;
+
+						std::string t = data.substr(start, s - start);
+						start = s + 1;
+
+						size_t c = t.find(':');
+						if (c == std::string::npos) continue;
+
+						std::string k = t.substr(0, c);
+						std::string v = t.substr(c + 1);
+
+						auto trim = [](std::string& x)
 						{
 							while (!x.empty() && strchr(" \n\r\t", x.back())) x.pop_back();
 							while (!x.empty() && strchr(" \n\r\t", x.front())) x.erase(x.begin());
 						};
 
-					trim(k);
-					trim(v);
+						trim(k);
+						trim(v);
 
-					parsed[k] = v;
-				}
-
-				if (!parsed.count("map"))
-				{
-					return;
-				}
-
-				for (const auto& p : parsed)
-				{
-					std::string dvarName = "autosave_" + p.first;
-
-					auto var = Game::Dvar_FindVar(dvarName.c_str());
-					if (!var)
-					{
-						var = Game::Dvar_RegisterString(dvarName.c_str(), "", 0, "");
+						parsed[k] = v;
 					}
 
-					Game::Dvar_SetString(var, p.second.c_str());
-				}
+					if (!parsed.count("map"))
+					{
+						return;
+					}
 
-				Command::Execute("openmenu popup_autosave");
+					for (const auto& p : parsed)
+					{
+						std::string dvarName = "autosave_" + p.first;
+
+						auto var = Game::Dvar_FindVar(dvarName.c_str());
+						if (!var)
+						{
+							var = Game::Dvar_RegisterString(dvarName.c_str(), "", 0, "");
+						}
+
+						Game::Dvar_SetString(var, p.second.c_str());
+					}
+
+					Command::Execute("openmenu popup_autosave");
+				};
+
+				// If party_host is already true, run immediately. Otherwise poll for it for up to 2s.
+				auto* partyHostVarNow = Game::Dvar_FindVar("party_host");
+				if (partyHostVarNow && Dvar::Var("party_host").get<bool>())
+				{
+					doLoadSave();
+				}
+				else
+				{
+					const auto startMs = Game::Sys_Milliseconds();
+					Scheduler::Schedule([startMs, doLoadSave]() mutable -> bool
+					{
+						auto* ph = Game::Dvar_FindVar("party_host");
+						if (ph && Dvar::Var("party_host").get<bool>())
+						{
+							doLoadSave();
+							return true;
+						}
+						if ((Game::Sys_Milliseconds() - startMs) > 2000)
+						{
+							return true;
+						}
+						return false;
+					}, Scheduler::Pipeline::MAIN, 50ms);
+				}
 			});
 
 

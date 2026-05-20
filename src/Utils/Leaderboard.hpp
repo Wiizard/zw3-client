@@ -30,12 +30,13 @@ namespace Components
 		};
 
 		static constexpr float FeederId = 70.0f;
-		static constexpr int DefaultLimit = 25;
+		static constexpr int DefaultLimit = 15;
 
 		static std::vector<Entry> Entries;
 		static Dvar::Var UILeaderboardMap;
 		static Dvar::Var UILeaderboardPage;
 		static Dvar::Var UILeaderboardLoadingIndicator;
+		static Dvar::Var UILeaderboardPlayerStatus;
 		static int CurrentOffset;
 		static int NextOffset;
 		static int TotalItems;
@@ -44,8 +45,11 @@ namespace Components
 		static unsigned int RequestSerial;
 		static int LoadingFrame;
 		static std::string CurrentMap;
+		static int LastKnownRank;
+		static bool IsSearching;
 
 		static void UpdatePageDvar();
+		static void UpdateLocalPlayerStatus();
 		static std::string GetCurrentMapName();
 		static std::string UrlEncode(const std::string& value);
 		static void StartRefresh(int offset);
@@ -54,6 +58,7 @@ namespace Components
 		static void RefreshFirstPage([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
 		static void PreviousPage([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
 		static void NextPage([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
+		static void FetchRankBackground(int offset);
 		static void ParseResponse(const std::string& response);
 
 		static unsigned int GetEntryCount();

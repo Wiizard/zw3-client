@@ -10,21 +10,23 @@
 #include "Leaderboard.hpp"
 
 #include <rapidjson/document.h>
+#include <Components/Modules/Party.hpp>
 
 namespace Components
 {
 	std::vector<Leaderboard::Entry> Leaderboard::Entries;
 	Dvar::Var Leaderboard::UILeaderboardMap;
 	Dvar::Var Leaderboard::UILeaderboardPage;
-	Dvar::Var Leaderboard::UILeaderboardLoadingIndicator;
+	Dvar::Var Leaderboard::UILeaderboardPlayerStatus;
 	int Leaderboard::CurrentOffset = 0;
 	int Leaderboard::NextOffset = -1;
-int Leaderboard::TotalItems = -1;
+	int Leaderboard::TotalItems = -1;
 	bool Leaderboard::HasNextPage = false;
 	bool Leaderboard::Loading = false;
 	unsigned int Leaderboard::RequestSerial = 0;
-	int Leaderboard::LoadingFrame = 0;
 	std::string Leaderboard::CurrentMap;
+	int Leaderboard::LastKnownRank = 0;
+	bool Leaderboard::IsSearching = false;
 
 	const char* Leaderboard::GetApiKey()
 	{
@@ -61,14 +63,22 @@ int Leaderboard::TotalItems = -1;
 		const auto total = std::max(0, static_cast<int>(seconds));
 		const auto hours = total / 3600;
 		const auto minutes = (total % 3600) / 60;
-		const auto secs = total % 60;
+
+		static char timeBuffers[16][32];
+		static size_t currentBufferIndex = 0;
+		char* targetBuffer = timeBuffers[currentBufferIndex];
+		currentBufferIndex = (currentBufferIndex + 1) % 16;
 
 		if (hours > 0)
 		{
-			return Utils::String::VA("%02i:%02i:%02i", hours, minutes, secs);
+			std::snprintf(targetBuffer, 32, "%ih %im", hours, minutes);
+		}
+		else
+		{
+			std::snprintf(targetBuffer, 32, "%im", minutes);
 		}
 
-		return Utils::String::VA("%02i:%02i", minutes, secs);
+		return targetBuffer;
 	}
 
 	void Leaderboard::UpdatePageDvar()
@@ -135,21 +145,6 @@ int Leaderboard::TotalItems = -1;
 		return encoded;
 	}
 
-	void Leaderboard::UpdateLoadingStatus()
-	{
-		if (!Loading)
-		{
-			return;
-		}
-
-		constexpr const char* spinner[] = { "|", "/", "-", "\\" };
-		constexpr const char* dots[] = { ".", "..", "..." };
-		UILeaderboardLoadingIndicator.set(Utils::String::VA("%s Loading%s",
-			spinner[LoadingFrame % std::size(spinner)],
-			dots[LoadingFrame % std::size(dots)]));
-		LoadingFrame++;
-	}
-
 	void Leaderboard::StartRefresh(int offset)
 	{
 		const auto mapName = GetCurrentMapName();
@@ -162,23 +157,24 @@ int Leaderboard::TotalItems = -1;
 			Loading = false;
 			HasNextPage = false;
 			NextOffset = -1;
-			UILeaderboardLoadingIndicator.set("No map");
 			UpdatePageDvar();
 			Toast::Show("cardicon_redhand", "^1Leaderboard", "Could not detect the current map for leaderboard lookup.", 5000);
 			return;
 		}
 
-		CurrentMap = mapName;
+		if (mapName != CurrentMap)
+		{
+			LastKnownRank = 0;
+			CurrentMap = mapName;
+		}
+
 		CurrentOffset = std::max(0, offset);
 		const auto requestId = ++RequestSerial;
-		Entries.clear();
 		HasNextPage = false;
 		NextOffset = -1;
 		UpdatePageDvar();
 
 		Loading = true;
-		LoadingFrame = 0;
-		UpdateLoadingStatus();
 
 		const auto url = CurrentOffset > 0
 			? std::format("https://stats.zw3.eu/leaderboard/best-rounds?limit={}&map={}&offset={}", DefaultLimit, UrlEncode(mapName), CurrentOffset)
@@ -198,11 +194,9 @@ int Leaderboard::TotalItems = -1;
 						}
 
 						Loading = false;
-						UILeaderboardLoadingIndicator.set("");
 
 						if (reply.empty())
 						{
-							UILeaderboardLoadingIndicator.set("Load failed");
 							Toast::Show("cardicon_redhand", "^1Leaderboard", "Could not get a response from the stats API.", 5000);
 							return;
 						}
@@ -245,27 +239,23 @@ int Leaderboard::TotalItems = -1;
 		HasNextPage = false;
 		NextOffset = -1;
 		Loading = false;
-		UILeaderboardLoadingIndicator.set("");
 
 		rapidjson::Document doc{};
 		doc.Parse(response);
 
 		if (doc.HasParseError() || !doc.IsObject())
 		{
-			UILeaderboardLoadingIndicator.set("Parse error");
 			UpdatePageDvar();
 			return;
 		}
 
 		if (!doc.HasMember("items") || !doc["items"].IsArray())
 		{
-			UILeaderboardLoadingIndicator.set("No entries");
 			TotalItems = 0;
 			UpdatePageDvar();
 			return;
 		}
 
-		// Try to read total items if provided by the API
 		TotalItems = GetJsonInt(doc, "total", -1);
 		if (TotalItems < 0) TotalItems = GetJsonInt(doc, "total_items", -1);
 		if (TotalItems < 0) TotalItems = GetJsonInt(doc, "total_count", -1);
@@ -306,12 +296,85 @@ int Leaderboard::TotalItems = -1;
 			Entries.push_back(entry);
 		}
 
-		if (Entries.empty())
+		UpdatePageDvar();
+		UpdateLocalPlayerStatus();
+
+		if (LastKnownRank == 0 && CurrentOffset == 0 && !IsSearching)
 		{
-			UILeaderboardLoadingIndicator.set("No entries");
+			FetchRankBackground(0);
+		}
+	}
+
+	void Leaderboard::FetchRankBackground(int offset)
+	{
+		if (CurrentMap.empty())
+		{
+			CurrentMap = GetCurrentMapName();
 		}
 
-		UpdatePageDvar();
+		if (CurrentMap.empty()) return;
+
+		if (offset == 0) {
+			IsSearching = true;
+		}
+
+		const auto url = std::format("https://stats.zw3.eu/leaderboard/best-rounds?limit={}&map={}&offset={}", DefaultLimit, UrlEncode(CurrentMap), offset);
+
+		Scheduler::Once([url, offset]
+			{
+				const auto reply = Utils::WebIO("zw3-rank-bg", url).get();
+				Scheduler::Once([reply, offset]
+					{
+						rapidjson::Document doc{};
+						doc.Parse(reply);
+						if (doc.HasParseError() || !doc.HasMember("items")) return;
+
+						const auto& items = doc["items"];
+						const auto localXuid = Party::GetLocalPlayerXUID();
+						const std::string localXuidHex = Utils::String::VA("%llX", static_cast<unsigned long long>(localXuid));
+
+						for (size_t i = 0; i < items.Size(); ++i)
+						{
+							const auto& item = items[i];
+							std::string guid = GetJsonString(item, "guid");
+
+							if (guid == localXuidHex)
+							{
+								LastKnownRank = offset + static_cast<int>(i) + 1;
+								IsSearching = false;
+								UpdateLocalPlayerStatus();
+								return;
+							}
+						}
+
+						int nextOffset = GetJsonInt(doc, "next_offset", -1);
+						if (nextOffset >= 0)
+						{
+							FetchRankBackground(nextOffset);
+						}
+						else
+						{
+							IsSearching = false;
+							UpdateLocalPlayerStatus();
+						}
+					}, Scheduler::Pipeline::MAIN);
+			}, Scheduler::Pipeline::ASYNC);
+	}
+
+	void Leaderboard::UpdateLocalPlayerStatus()
+	{
+		if (LastKnownRank > 0)
+		{
+			UILeaderboardPlayerStatus.set(Utils::String::VA("You are currently: ^3#%u", (unsigned int)LastKnownRank));
+		}
+		else if (!IsSearching)
+		{
+			UILeaderboardPlayerStatus.set("You are not on the leaderboard for this map yet.");
+		}
+		else
+		{
+			UILeaderboardPlayerStatus.set("");
+		}
 	}
 
 	unsigned int Leaderboard::GetEntryCount()
@@ -328,7 +391,7 @@ int Leaderboard::TotalItems = -1;
 			case 0:
 				return "--";
 			case 1:
-				return Loading ? "Loading leaderboard" : "No leaderboard entries";
+				return Loading ? "Loading leaderboard..." : "No leaderboard entries";
 			default:
 				return "";
 			}
@@ -346,21 +409,19 @@ int Leaderboard::TotalItems = -1;
 		case 0:
 			return Utils::String::VA("#%u", static_cast<unsigned int>(CurrentOffset + index + 1));
 		case 1:
-			return entry.player.data();
-		case 2:
 			return Utils::String::VA("%i", entry.round);
+		case 2:
+			return entry.player.data();
 		case 3:
-			return entry.map.data();
-		case 4:
-			return Utils::String::VA("%i", entry.players);
-		case 5:
 			return Utils::String::VA("%i", entry.score);
-		case 6:
+		case 4:
 			return Utils::String::VA("%i", entry.kills);
-		case 7:
+		case 5:
 			return Utils::String::VA("%i", entry.downs);
-		case 8:
+		case 6:
 			return FormatSeconds(entry.time);
+		case 7:
+			return Utils::String::VA("%i/4", entry.players);
 		default:
 			return "";
 		}
@@ -368,7 +429,6 @@ int Leaderboard::TotalItems = -1;
 
 	void Leaderboard::SelectEntry([[maybe_unused]] unsigned int index)
 	{
-		// Optional later: open player details for the selected stats row.
 	}
 
 	Leaderboard::Leaderboard()
@@ -379,20 +439,20 @@ int Leaderboard::TotalItems = -1;
 			{
 				UILeaderboardMap = Dvar::Register<const char*>("ui_leaderboard_map", "", Game::DVAR_NONE, "Current map used by the best rounds leaderboard.");
 				UILeaderboardPage = Dvar::Register<const char*>("ui_leaderboard_page", "Page 1", Game::DVAR_NONE, "Current page used by the best rounds leaderboard.");
-				UILeaderboardLoadingIndicator = Dvar::Register<const char*>("ui_leaderboard_loading_indicator", "", Game::DVAR_NONE, "Animated loading indicator for the best rounds leaderboard.");
+				UILeaderboardPlayerStatus = Dvar::Register<const char*>("ui_leaderboard_player_status", "", Game::DVAR_NONE, "Local player leaderboard status.");
+				UILeaderboardPlayerStatus.set("");
 			});
 
 		UIFeeder::Add(FeederId, Leaderboard::GetEntryCount, Leaderboard::GetEntryText, Leaderboard::SelectEntry);
 		UIScript::Add("RefreshLeaderboard", Leaderboard::RefreshFirstPage);
-		UIScript::Add("RefreshLeaderboardPage", Leaderboard::Refresh);
+		//UIScript::Add("RefreshLeaderboardPage", Leaderboard::Refresh);
 		UIScript::Add("PreviousLeaderboardPage", Leaderboard::PreviousPage);
 		UIScript::Add("NextLeaderboardPage", Leaderboard::NextPage);
-
-		Scheduler::Loop(Leaderboard::UpdateLoadingStatus, Scheduler::Pipeline::MAIN, 250ms);
 	}
 
 	Leaderboard::~Leaderboard()
 	{
+		LastKnownRank = 0;
 		Entries.clear();
 	}
 }

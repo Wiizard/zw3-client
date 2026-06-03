@@ -85,6 +85,8 @@ namespace Components {
 		// Passive hooks for materials
 		AssetHandler::OnFind(Game::ASSET_TYPE_MATERIAL, [getPreviewImage](Game::XAssetType type, const std::string& name) -> Game::XAssetHeader
 			{
+				static_cast<void>(type);
+
 				if (Utils::String::Contains(name, "loadscreen") || name == "loading_image")
 				{
 					Game::GfxImage* image = getPreviewImage(name);

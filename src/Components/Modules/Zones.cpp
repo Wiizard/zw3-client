@@ -1517,7 +1517,7 @@ namespace Components
 					// trees had issue with it
 					if (Zones::Version() == 446)
 					{
-						static std::unordered_map<std::uint16_t, std::uint16_t> mapped_constants = {
+						static std::unordered_map<int, int> mapped_constants = {
 							{ 33, 31 },
 							{ 34, 32 },
 							{ 36, 34 },
@@ -1538,12 +1538,12 @@ namespace Components
 						const auto itr = mapped_constants.find(arg->u.codeConst.index);
 						if (itr != mapped_constants.end())
 						{
-							arg->u.codeConst.index = itr->second;
+							arg->u.codeConst.index = static_cast<std::uint16_t>(itr->second);
 						}
 					}
 					else if (Zones::Version() == 461)
 					{
-						static std::unordered_map<std::uint16_t, std::uint16_t> mapped_constants =
+						static std::unordered_map<int, int> mapped_constants =
 						{
 							// mp_raid
 							{ 33, 31 },
@@ -1573,7 +1573,7 @@ namespace Components
 						const auto itr = mapped_constants.find(arg->u.codeConst.index);
 						if (itr != mapped_constants.end())
 						{
-							arg->u.codeConst.index = itr->second;
+							arg->u.codeConst.index = static_cast<std::uint16_t>(itr->second);
 						}
 						if (arg->u.codeConst.index == 257)
 						{
@@ -1607,7 +1607,7 @@ namespace Components
 					}
 					else if (Zones::Version() == 460 /*|| Zones::Version() == 446*/)		// 446 is no longer compatible, needs correct mappings
 					{
-						static std::unordered_map<std::uint16_t, std::uint16_t> mapped_constants = {
+						static std::unordered_map<int, int> mapped_constants = {
 							{ 22, 21 },
 							{ 33, 31 },
 							{ 34, 32 },
@@ -1646,7 +1646,7 @@ namespace Components
 						const auto itr = mapped_constants.find(arg->u.codeConst.index);
 						if (itr != mapped_constants.end())
 						{
-							arg->u.codeConst.index = itr->second;
+							arg->u.codeConst.index = static_cast<std::uint16_t>(itr->second);
 						}
 						else
 						{

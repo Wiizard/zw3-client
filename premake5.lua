@@ -183,7 +183,8 @@ workspace "iw4x"
 	architecture "x86"
 	platforms "Win32"
 
-	systemversion "latest"
+	systemversion "10.0.19041.0"
+	toolset "msc-v142"
 	symbols "On"
 	staticruntime "On"
 	editandcontinue "Off"
@@ -250,11 +251,9 @@ workspace "iw4x"
 		dependencies.imports()
 
         -- Pre-build
-        local cwd = os.getcwd()
         prebuildcommands {
-            "cd " .. _MAIN_SCRIPT_DIR,
+            "cd \"$(ProjectDir)..\\\"",
             "tools\\premake5 generate-buildinfo",
-            "cd " .. cwd,
         }
 
 		-- Post-build

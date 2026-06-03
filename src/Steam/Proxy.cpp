@@ -66,7 +66,7 @@ namespace Steam
 			}
 		}
 
-		return { nullptr, 0 };
+		return { nullptr, static_cast<std::uint16_t>(0) };
 	}
 
 	bool Interface::getMethodData(VInterface::VMethod method, std::string* name, uint16_t* params)

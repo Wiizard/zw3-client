@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -15,21 +15,20 @@
     <IgnoreWarnCompileDuplicatedFilename>true</IgnoreWarnCompileDuplicatedFilename>
     <Keyword>Win32Proj</Keyword>
     <RootNamespace>iw4x</RootNamespace>
-    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
-    <ProjectName>zw3</ProjectName>
+    <WindowsTargetPlatformVersion>10.0.19041.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <CharacterSet>NotSet</CharacterSet>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v142</PlatformToolset>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <CharacterSet>NotSet</CharacterSet>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v142</PlatformToolset>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -70,7 +69,6 @@
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <ExternalWarningLevel>Level3</ExternalWarningLevel>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>_WINDOWS;WIN32;DEBUG;_DEBUG;LTC_NO_FAST;LTC_NO_PROTOTYPES;LTC_NO_RSA_BLINDING;LTC_NO_FILE;ARGTYPE=4;LTM_DESC;__STDC_IEC_559__;MP_NO_DEV_URANDOM;RAPIDJSON_HAS_STDSTRING;ZLIB_CONST;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -108,7 +106,6 @@ tools\premake5 generate-buildinfo</Command>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <AdditionalOptions>/GL %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <ExternalWarningLevel>Level3</ExternalWarningLevel>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>_WINDOWS;WIN32;NDEBUG;LTC_NO_FAST;LTC_NO_PROTOTYPES;LTC_NO_RSA_BLINDING;LTC_NO_FILE;ARGTYPE=4;LTM_DESC;__STDC_IEC_559__;MP_NO_DEV_URANDOM;RAPIDJSON_HAS_STDSTRING;ZLIB_CONST;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -122,48 +119,6 @@ tools\premake5 generate-buildinfo</Command>
       <AdditionalLibraryDirectories>..\deps\dxsdk\Lib\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <ImportLibrary>bin\Win32\Release\zw3.lib</ImportLibrary>
       <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
-      <AdditionalOptions>/IGNORE:4702 /LTCG %(AdditionalOptions)</AdditionalOptions>
-    </Link>
-    <PreBuildEvent>
-      <Command>cd "$(ProjectDir)..\"
-tools\premake5 generate-buildinfo</Command>
-    </PreBuildEvent>
-  </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <ClCompile>
-      <PrecompiledHeader>Use</PrecompiledHeader>
-      <PrecompiledHeaderFile>STDInclude.hpp</PrecompiledHeaderFile>
-      <WarningLevel>Level4</WarningLevel>
-      <TreatWarningAsError>false</TreatWarningAsError>
-      <DisableSpecificWarnings>28251;4456;4459;%(DisableSpecificWarnings)</DisableSpecificWarnings>
-      <PreprocessorDefinitions>_WINDOWS;WIN32;NDEBUG;LTC_NO_FAST;LTC_NO_PROTOTYPES;LTC_NO_RSA_BLINDING;LTC_NO_FILE;ARGTYPE=4;LTM_DESC;__STDC_IEC_559__;MP_NO_DEV_URANDOM;RAPIDJSON_HAS_STDSTRING;ZLIB_CONST;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>src;..\src;..\lib\include;..\deps\discord-rpc\include;..\deps\dualsense-windows\VS19_Solution\DualSenseWindows\include;..\deps\dxsdk\Include;..\deps\extra\font;..\deps\GSL\include;..\deps\iw4-open-formats\include;..\deps\json\single_include\nlohmann;..\deps\libtomcrypt\src\headers;..\deps\libtommath;..\deps\zlib\contrib\minizip;..\deps\mongoose;..\deps\pdcurses;..\deps\protobuf\src;..\deps\rapidjson\include;..\deps\udis86;..\deps\udis86\libudis86;..\deps\extra\udis86;..\deps\extra\udis86\libudis86;..\deps\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <ForcedIncludeFiles>STDInclude.hpp</ForcedIncludeFiles>
-      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
-      <Optimization>MinSpace</Optimization>
-      <FunctionLevelLinking>true</FunctionLevelLinking>
-      <IntrinsicFunctions>true</IntrinsicFunctions>
-      <MinimalRebuild>false</MinimalRebuild>
-      <StringPooling>true</StringPooling>
-      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
-      <RuntimeTypeInfo>false</RuntimeTypeInfo>
-      <MultiProcessorCompilation>true</MultiProcessorCompilation>
-      <AdditionalOptions>/GL %(AdditionalOptions)</AdditionalOptions>
-      <LanguageStandard>stdcpp20</LanguageStandard>
-      <ExternalWarningLevel>Level3</ExternalWarningLevel>
-    </ClCompile>
-    <ResourceCompile>
-      <PreprocessorDefinitions>_WINDOWS;WIN32;NDEBUG;LTC_NO_FAST;LTC_NO_PROTOTYPES;LTC_NO_RSA_BLINDING;LTC_NO_FILE;ARGTYPE=4;LTM_DESC;__STDC_IEC_559__;MP_NO_DEV_URANDOM;RAPIDJSON_HAS_STDSTRING;ZLIB_CONST;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>src;..\src;..\lib\include;..\deps\discord-rpc\include;..\deps\dualsense-windows\VS19_Solution\DualSenseWindows\include;..\deps\dxsdk\Include;..\deps\extra\font;..\deps\GSL\include;..\deps\iw4-open-formats\include;..\deps\json\single_include\nlohmann;..\deps\libtomcrypt\src\headers;..\deps\libtommath;..\deps\zlib\contrib\minizip;..\deps\mongoose;..\deps\pdcurses;..\deps\protobuf\src;..\deps\rapidjson\include;..\deps\udis86;..\deps\udis86\libudis86;..\deps\extra\udis86;..\deps\extra\udis86\libudis86;..\deps\zlib;$(ProjectDir)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-    </ResourceCompile>
-    <Link>
-      <SubSystem>Windows</SubSystem>
-      <GenerateDebugInformation>true</GenerateDebugInformation>
-      <EnableCOMDATFolding>true</EnableCOMDATFolding>
-      <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalLibraryDirectories>..\deps\dxsdk\Lib\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <ImportLibrary>bin\Win32\Release\zw3.lib</ImportLibrary>
-      <TreatLinkerWarningAsErrors>false</TreatLinkerWarningAsErrors>
       <AdditionalOptions>/IGNORE:4702 /LTCG %(AdditionalOptions)</AdditionalOptions>
     </Link>
     <PreBuildEvent>
@@ -284,6 +239,7 @@ tools\premake5 generate-buildinfo</Command>
     <ClInclude Include="..\src\Components\Modules\RawMouse.hpp" />
     <ClInclude Include="..\src\Components\Modules\Renderer.hpp" />
     <ClInclude Include="..\src\Components\Modules\Rumble.hpp" />
+    <ClInclude Include="..\src\Components\Modules\SPLoadscreens.hpp" />
     <ClInclude Include="..\src\Components\Modules\Scheduler.hpp" />
     <ClInclude Include="..\src\Components\Modules\Security.hpp" />
     <ClInclude Include="..\src\Components\Modules\ServerCommands.hpp" />
@@ -310,7 +266,6 @@ tools\premake5 generate-buildinfo</Command>
     <ClInclude Include="..\src\Components\Modules\Weapon.hpp" />
     <ClInclude Include="..\src\Components\Modules\Window.hpp" />
     <ClInclude Include="..\src\Components\Modules\ZoneBuilder.hpp" />
-    <ClInclude Include="..\src\Components\Modules\SPLoadscreens.hpp" />
     <ClInclude Include="..\src\Components\Modules\Zones.hpp" />
     <ClInclude Include="..\src\Game\BothGames.hpp" />
     <ClInclude Include="..\src\Game\Client.hpp" />
@@ -480,6 +435,7 @@ tools\premake5 generate-buildinfo</Command>
     <ClCompile Include="..\src\Components\Modules\RawMouse.cpp" />
     <ClCompile Include="..\src\Components\Modules\Renderer.cpp" />
     <ClCompile Include="..\src\Components\Modules\Rumble.cpp" />
+    <ClCompile Include="..\src\Components\Modules\SPLoadscreens.cpp" />
     <ClCompile Include="..\src\Components\Modules\Scheduler.cpp" />
     <ClCompile Include="..\src\Components\Modules\Security.cpp" />
     <ClCompile Include="..\src\Components\Modules\ServerCommands.cpp" />
@@ -506,7 +462,6 @@ tools\premake5 generate-buildinfo</Command>
     <ClCompile Include="..\src\Components\Modules\Weapon.cpp" />
     <ClCompile Include="..\src\Components\Modules\Window.cpp" />
     <ClCompile Include="..\src\Components\Modules\ZoneBuilder.cpp" />
-    <ClCompile Include="..\src\Components\Modules\SPLoadscreens.cpp" />
     <ClCompile Include="..\src\Components\Modules\Zones.cpp" />
     <ClCompile Include="..\src\DllMain.cpp" />
     <ClCompile Include="..\src\Game\BothGames.cpp" />

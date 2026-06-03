@@ -11,7 +11,7 @@ namespace Components
 		static void OnCommand(std::int32_t cmd, const serverCommandHandler& callback);
 
 	private:
-		static std::unordered_map<std::int32_t, serverCommandHandler> Commands;
+		static std::unordered_map<std::int32_t, std::vector<serverCommandHandler>> Commands;
 
 		static bool OnServerCommand();
 		static void CG_DeployServerCommand_Stub();

@@ -35,6 +35,84 @@ namespace Components
 		}
 	}
 
+	Game::XModelSurfs* ModelSurfs::CloneAndScaleSurfaces(const Game::XModelSurfs* source, const std::string& name, const float scale)
+	{
+		if (!source || !source->surfs || source->numsurfs <= 0)
+		{
+			return nullptr;
+		}
+
+		auto* clone = Utils::Memory::GetAllocator()->allocate<Game::XModelSurfs>();
+		std::memcpy(clone, source, sizeof(Game::XModelSurfs));
+		clone->name = Utils::Memory::GetAllocator()->duplicateString(name);
+		clone->surfs = Utils::Memory::GetAllocator()->allocateArray<Game::XSurface>(source->numsurfs);
+		std::memcpy(clone->surfs, source->surfs, sizeof(Game::XSurface) * source->numsurfs);
+
+		for (auto surfaceIndex = 0; surfaceIndex < source->numsurfs; ++surfaceIndex)
+		{
+			const auto& sourceSurface = source->surfs[surfaceIndex];
+			auto& cloneSurface = clone->surfs[surfaceIndex];
+
+			cloneSurface.zoneHandle = -1;
+
+			if (sourceSurface.verts0 && sourceSurface.vertCount > 0)
+			{
+				cloneSurface.verts0 = Utils::Memory::GetAllocator()->allocateArray<Game::GfxPackedVertex>(sourceSurface.vertCount);
+			}
+
+			if (sourceSurface.triIndices && sourceSurface.triCount > 0)
+			{
+				const auto indexCount = sourceSurface.triCount * 3;
+				cloneSurface.triIndices = Utils::Memory::GetAllocator()->allocateArray<unsigned short>(indexCount);
+				std::memcpy(cloneSurface.triIndices, sourceSurface.triIndices, sizeof(unsigned short) * indexCount);
+			}
+		}
+
+		UpdateScaledSurfaces(clone, source, scale);
+		CreateBuffers(clone);
+		return clone;
+	}
+
+	void ModelSurfs::UpdateScaledSurfaces(Game::XModelSurfs* target, const Game::XModelSurfs* source, const float scale)
+	{
+		if (!target || !source || !target->surfs || !source->surfs)
+		{
+			return;
+		}
+
+		const auto surfaceCount = std::min(target->numsurfs, source->numsurfs);
+		for (auto surfaceIndex = 0; surfaceIndex < surfaceCount; ++surfaceIndex)
+		{
+			const auto& sourceSurface = source->surfs[surfaceIndex];
+			auto& targetSurface = target->surfs[surfaceIndex];
+
+			if (!sourceSurface.verts0 || !targetSurface.verts0 || sourceSurface.vertCount <= 0)
+			{
+				continue;
+			}
+
+			for (auto vertexIndex = 0; vertexIndex < sourceSurface.vertCount; ++vertexIndex)
+			{
+				targetSurface.verts0[vertexIndex] = sourceSurface.verts0[vertexIndex];
+				targetSurface.verts0[vertexIndex].xyz[0] *= scale;
+				targetSurface.verts0[vertexIndex].xyz[1] *= scale;
+				targetSurface.verts0[vertexIndex].xyz[2] *= scale;
+			}
+
+			if (const auto buffer = BufferMap.find(targetSurface.verts0); buffer != BufferMap.end() && buffer->second)
+			{
+				auto* vertexBuffer = static_cast<IDirect3DVertexBuffer9*>(buffer->second);
+				void* lockedBuffer = nullptr;
+				const auto bufferSize = sourceSurface.vertCount * sizeof(Game::GfxPackedVertex);
+				if (SUCCEEDED(vertexBuffer->Lock(0, bufferSize, &lockedBuffer, 0)) && lockedBuffer)
+				{
+					std::memcpy(lockedBuffer, targetSurface.verts0, bufferSize);
+					vertexBuffer->Unlock();
+				}
+			}
+		}
+	}
+
 	Game::XModelSurfs* ModelSurfs::LoadXModelSurfaces(const std::string& name)
 	{
 		Utils::Memory::Allocator allocator;

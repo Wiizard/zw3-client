@@ -25,7 +25,6 @@ namespace Components
 		static unsigned int SV_GetRumbleConfigStringConst(int index);
 		static void SV_SetRumbleConfigString(int index, const char* data);
 
-
 	private:
 		static void PatchConfigStrings();
 

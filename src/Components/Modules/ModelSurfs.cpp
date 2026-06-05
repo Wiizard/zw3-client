@@ -21,6 +21,11 @@ namespace Components
 		for (int i = 0; i < surfs->numsurfs; ++i)
 		{
 			Game::XSurface* surface = &surfs->surfs[i];
+			if (surface->deformed)
+			{
+				continue;
+			}
+
 			if (surface->zoneHandle == -1)
 			{
 				IDirect3DVertexBuffer9* vertexBuffer = nullptr;
@@ -42,10 +47,11 @@ namespace Components
 			return nullptr;
 		}
 
-		auto* clone = Utils::Memory::GetAllocator()->allocate<Game::XModelSurfs>();
+		auto* allocator = Utils::Memory::GetAllocator();
+		auto* clone = allocator->allocate<Game::XModelSurfs>();
 		std::memcpy(clone, source, sizeof(Game::XModelSurfs));
-		clone->name = Utils::Memory::GetAllocator()->duplicateString(name);
-		clone->surfs = Utils::Memory::GetAllocator()->allocateArray<Game::XSurface>(source->numsurfs);
+		clone->name = allocator->duplicateString(name);
+		clone->surfs = allocator->allocateArray<Game::XSurface>(source->numsurfs);
 		std::memcpy(clone->surfs, source->surfs, sizeof(Game::XSurface) * source->numsurfs);
 
 		for (auto surfaceIndex = 0; surfaceIndex < source->numsurfs; ++surfaceIndex)
@@ -53,17 +59,24 @@ namespace Components
 			const auto& sourceSurface = source->surfs[surfaceIndex];
 			auto& cloneSurface = clone->surfs[surfaceIndex];
 
-			cloneSurface.zoneHandle = -1;
-
 			if (sourceSurface.verts0 && sourceSurface.vertCount > 0)
 			{
-				cloneSurface.verts0 = Utils::Memory::GetAllocator()->allocateArray<Game::GfxPackedVertex>(sourceSurface.vertCount);
+				const auto vertexBufferSize = sourceSurface.vertCount * sizeof(Game::GfxPackedVertex);
+				cloneSurface.verts0 = static_cast<Game::GfxPackedVertex*>(Utils::Memory::AllocateAlign(vertexBufferSize, 16));
+				allocator->reference(cloneSurface.verts0, Utils::Memory::FreeAlign);
 			}
+
+			if (sourceSurface.deformed)
+			{
+				continue;
+			}
+
+			cloneSurface.zoneHandle = -1;
 
 			if (sourceSurface.triIndices && sourceSurface.triCount > 0)
 			{
 				const auto indexCount = sourceSurface.triCount * 3;
-				cloneSurface.triIndices = Utils::Memory::GetAllocator()->allocateArray<unsigned short>(indexCount);
+				cloneSurface.triIndices = allocator->allocateArray<unsigned short>(indexCount);
 				std::memcpy(cloneSurface.triIndices, sourceSurface.triIndices, sizeof(unsigned short) * indexCount);
 			}
 		}
@@ -97,6 +110,11 @@ namespace Components
 				targetSurface.verts0[vertexIndex].xyz[0] *= scale;
 				targetSurface.verts0[vertexIndex].xyz[1] *= scale;
 				targetSurface.verts0[vertexIndex].xyz[2] *= scale;
+			}
+
+			if (sourceSurface.deformed || targetSurface.deformed)
+			{
+				continue;
 			}
 
 			if (const auto buffer = BufferMap.find(targetSurface.verts0); buffer != BufferMap.end() && buffer->second)

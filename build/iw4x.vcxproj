@@ -312,6 +312,7 @@ tools\premake5 generate-buildinfo</Command>
     <ClInclude Include="..\src\Components\Modules\ZoneBuilder.hpp" />
     <ClInclude Include="..\src\Components\Modules\SPLoadscreens.hpp" />
     <ClInclude Include="..\src\Components\Modules\Zones.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ZW3Changelog.hpp" />
     <ClInclude Include="..\src\Game\BothGames.hpp" />
     <ClInclude Include="..\src\Game\Client.hpp" />
     <ClInclude Include="..\src\Game\Common.hpp" />
@@ -508,6 +509,7 @@ tools\premake5 generate-buildinfo</Command>
     <ClCompile Include="..\src\Components\Modules\ZoneBuilder.cpp" />
     <ClCompile Include="..\src\Components\Modules\SPLoadscreens.cpp" />
     <ClCompile Include="..\src\Components\Modules\Zones.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ZW3Changelog.cpp" />
     <ClCompile Include="..\src\DllMain.cpp" />
     <ClCompile Include="..\src\Game\BothGames.cpp" />
     <ClCompile Include="..\src\Game\Client.cpp" />

@@ -302,6 +302,8 @@ namespace Components
 
 	void PlayerMovement::PM_CheckLadderMove_Stub(Game::pmove_s* pm, Game::pml_t* pml)
 	{
+		static_cast<void>(pml);
+
 		const auto should_fix_ladders = (
 			BGDisableBarrierClips &&
 			BGDisableBarrierClips->current.enabled &&

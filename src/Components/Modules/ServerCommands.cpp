@@ -2,24 +2,30 @@
 
 namespace Components
 {
-	std::unordered_map<std::int32_t, ServerCommands::serverCommandHandler> ServerCommands::Commands;
+	std::unordered_map<std::int32_t, std::vector<ServerCommands::serverCommandHandler>> ServerCommands::Commands;
 
 	void ServerCommands::OnCommand(std::int32_t cmd, const serverCommandHandler& callback)
 	{
-		Commands.insert_or_assign(cmd, callback);
+		Commands[cmd].push_back(callback);
 	}
 
 	bool ServerCommands::OnServerCommand()
 	{
 		Command::ClientParams params;
 
-		for (const auto& [id, callback] : Commands)
+		for (const auto& [id, callbacks] : Commands)
 		{
 			if (params.size() >= 1)
 			{
 				if (params.get(0)[0] == id) // Compare ID of server command
 				{
-					return callback(&params);
+					for (const auto& callback : callbacks)
+					{
+						if (callback(&params))
+						{
+							return true;
+						}
+					}
 				}
 			}
 		}

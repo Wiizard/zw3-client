@@ -1605,9 +1605,9 @@ namespace Components
 			}, Components::Scheduler::Pipeline::MAIN);
 
 
-		// Increase HunkMemory for people with heavy-loaded menus
-		// Original is 0xA00000
-		Utils::Hook::Set<uint32_t>(0x420830 + 6, 0xB00000);
+		// Increase HunkMemory for people with heavy-loaded menus (e.g. ZW3)
+		// Original is 0xA00000 (10MB), old patch was 0xB00000 (11MB). Raised to 48MB to reduce OOMs.
+		Utils::Hook::Set<uint32_t>(0x420830 + 6, 0x3000000);
 
 		// Don't open connect menu twice - it gets stuck! (This was NOPed in old code, might need to match it)
 		// Utils::Hook::Nop(0x428E48, 5); // Original old code used NOP
@@ -1715,6 +1715,7 @@ namespace Components
 		Add("ui_mp/popup_partyconnect.menu");
 		Add("ui_mp/popup_partyconnect_warning.menu");
 		Add("ui_mp/popup_autosave.menu");
+		Add("ui_mp/zw3changelog.menu");
 	}
 
 	void Menus::preDestroy()

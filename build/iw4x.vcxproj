@@ -15,7 +15,8 @@
     <IgnoreWarnCompileDuplicatedFilename>true</IgnoreWarnCompileDuplicatedFilename>
     <Keyword>Win32Proj</Keyword>
     <RootNamespace>iw4x</RootNamespace>
-    <WindowsTargetPlatformVersion>10.0.19041.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ProjectName>zw3</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
@@ -28,7 +29,7 @@
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <CharacterSet>NotSet</CharacterSet>
-    <PlatformToolset>v142</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
@@ -267,6 +268,7 @@ tools\premake5 generate-buildinfo</Command>
     <ClInclude Include="..\src\Components\Modules\Window.hpp" />
     <ClInclude Include="..\src\Components\Modules\ZoneBuilder.hpp" />
     <ClInclude Include="..\src\Components\Modules\Zones.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ZW3Changelog.hpp" />
     <ClInclude Include="..\src\Game\BothGames.hpp" />
     <ClInclude Include="..\src\Game\Client.hpp" />
     <ClInclude Include="..\src\Game\Common.hpp" />
@@ -463,6 +465,7 @@ tools\premake5 generate-buildinfo</Command>
     <ClCompile Include="..\src\Components\Modules\Window.cpp" />
     <ClCompile Include="..\src\Components\Modules\ZoneBuilder.cpp" />
     <ClCompile Include="..\src\Components\Modules\Zones.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ZW3Changelog.cpp" />
     <ClCompile Include="..\src\DllMain.cpp" />
     <ClCompile Include="..\src\Game\BothGames.cpp" />
     <ClCompile Include="..\src\Game\Client.cpp" />

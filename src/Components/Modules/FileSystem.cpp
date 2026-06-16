@@ -305,15 +305,6 @@ namespace Components
 					std::wstring userrawScript = (root / L"userraw" / L"scriptdata").wstring();
 					std::wstring destScript = (root / L"zw3" / L"core" / L"scriptdata").wstring();
 
-					DWORD attrs = GetFileAttributesW(userrawScript.c_str());
-					if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
-					{
-						if (std::find(rawDirsToClean.begin(), rawDirsToClean.end(), userrawScript) == rawDirsToClean.end())
-						{
-							rawDirsToClean.push_back(userrawScript);
-						}
-					}
-
 					std::error_code internalEc;
 					if (!std::filesystem::exists(root, internalEc))
 					{
@@ -338,9 +329,18 @@ namespace Components
 							std::error_code fileCheckEc;
 							if (std::filesystem::is_regular_file(path, fileCheckEc))
 							{
-								std::wstring fileWStr = path.wstring();
-								std::wstring relPath = fileWStr.substr(userrawScript.length());
-								migrationFiles.push_back({ fileWStr, destScript + relPath });
+								std::string filename = path.filename().string();
+								std::string filenameLower = filename;
+								std::transform(filenameLower.begin(), filenameLower.end(), filenameLower.begin(),
+									[](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+
+								if (filenameLower.rfind("autosave", 0) == 0 ||
+									filenameLower.rfind("rank_", 0) == 0)
+								{
+									std::wstring fileWStr = path.wstring();
+									std::wstring relPath = fileWStr.substr(userrawScript.length());
+									migrationFiles.push_back({ fileWStr, destScript + relPath });
+								}
 							}
 							continue;
 						}
@@ -357,11 +357,6 @@ namespace Components
 							structuralDeleteSet.insert(path.wstring());
 						}
 					}
-				}
-
-				if (allDiscoveredFiles.empty() && migrationFiles.empty())
-				{
-					return;
 				}
 
 				if (migrationFiles.empty() && structuralDeleteSet.empty())
@@ -392,72 +387,18 @@ namespace Components
 						SetFileAttributesW(fileItem.srcPath.c_str(), FILE_ATTRIBUTE_NORMAL);
 						SetFileAttributesW(fileItem.destPath.c_str(), FILE_ATTRIBUTE_NORMAL);
 
-						if (!MoveFileExW(fileItem.srcPath.c_str(), fileItem.destPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED))
+						if (CopyFileW(fileItem.srcPath.c_str(), fileItem.destPath.c_str(), FALSE))
 						{
-							if (CopyFileW(fileItem.srcPath.c_str(), fileItem.destPath.c_str(), FALSE))
+							DeleteFileW(fileItem.srcPath.c_str());
+							++movedCount;
+						}
+						else
+						{
+							if (MoveFileExW(fileItem.srcPath.c_str(), fileItem.destPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED))
 							{
-								DeleteFileW(fileItem.srcPath.c_str());
+								++movedCount;
 							}
 						}
-						++movedCount;
-					}
-
-					if (!globalUserrawScript.empty() && std::find(rawDirsToClean.begin(), rawDirsToClean.end(), globalUserrawScript) == rawDirsToClean.end())
-					{
-						rawDirsToClean.push_back(globalUserrawScript);
-					}
-
-					std::vector<std::wstring> allDirsToWipe;
-					for (const auto& targetDirRoot : rawDirsToClean)
-					{
-						std::vector<std::wstring> cleanDirs;
-						cleanDirs.push_back(targetDirRoot);
-
-						while (!cleanDirs.empty())
-						{
-							std::wstring currentDir = cleanDirs.back();
-							cleanDirs.pop_back();
-							allDirsToWipe.push_back(currentDir);
-
-							std::wstring searchMask = currentDir + L"\\*";
-							WIN32_FIND_DATAW findData;
-							HANDLE hFind = FindFirstFileW(searchMask.c_str(), &findData);
-
-							if (hFind != INVALID_HANDLE_VALUE)
-							{
-								do
-								{
-									std::wstring name = findData.cFileName;
-									if (name == L"." || name == L"..")
-									{
-										continue;
-									}
-
-									std::wstring fullPath = currentDir + L"\\" + name;
-									if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-									{
-										cleanDirs.push_back(fullPath);
-									}
-									else
-									{
-										SetFileAttributesW(fullPath.c_str(), FILE_ATTRIBUTE_NORMAL);
-										DeleteFileW(fullPath.c_str());
-									}
-								} while (FindNextFileW(hFind, &findData));
-								FindClose(hFind);
-							}
-						}
-					}
-
-					std::sort(allDirsToWipe.begin(), allDirsToWipe.end(), [](const std::wstring& a, const std::wstring& b) {
-						return a.length() > b.length();
-						});
-					allDirsToWipe.erase(std::unique(allDirsToWipe.begin(), allDirsToWipe.end()), allDirsToWipe.end());
-
-					for (const auto& dirPath : allDirsToWipe)
-					{
-						SetFileAttributesW(dirPath.c_str(), FILE_ATTRIBUTE_NORMAL);
-						RemoveDirectoryW(dirPath.c_str());
 					}
 				}
 

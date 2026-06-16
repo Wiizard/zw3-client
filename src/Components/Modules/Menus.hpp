@@ -17,11 +17,8 @@ namespace Components
 
 		static bool IsMenuVisible(Game::UiContext* dc, Game::menuDef_t* menu);
 
-		static void RemoveMenuFromContext(Game::UiContext* dc, Game::menuDef_t* menuToRemove);
-
 		static Game::XAssetHeader MenuFindHook(Game::XAssetType type, const std::string& filename);
 		static Game::XAssetHeader MenuListFindHook(Game::XAssetType type, const std::string& filename);
-
 
 	private:
 		static std::unordered_map<std::string, Game::menuDef_t*> MenusFromDisk;
@@ -40,6 +37,10 @@ namespace Components
 		static Utils::Memory::Allocator Allocator;
 
 		static bool MenuAlreadyExists(const std::string& name);
+		static bool IsCustomMenuPath(const std::string& menu);
+		static bool IsCustomMenuFile(const std::string& filename);
+		static void EnsureCustomConnectMenu();
+		static bool LoadCustomConnectMenu();
 
 		static void FreeZAllocatedMemory(const void* ptr, bool fromTheGame = false);
 		static void FreeAllocatedString(const void* ptr, bool fromTheGame = false);

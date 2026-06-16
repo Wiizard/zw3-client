@@ -17,11 +17,8 @@ namespace Components
 
 		static bool IsMenuVisible(Game::UiContext* dc, Game::menuDef_t* menu);
 
-		static void RemoveMenuFromContext(Game::UiContext* dc, Game::menuDef_t* menuToRemove);
-
 		static Game::XAssetHeader MenuFindHook(Game::XAssetType type, const std::string& filename);
 		static Game::XAssetHeader MenuListFindHook(Game::XAssetType type, const std::string& filename);
-
 
 	private:
 		static std::unordered_map<std::string, Game::menuDef_t*> MenusFromDisk;

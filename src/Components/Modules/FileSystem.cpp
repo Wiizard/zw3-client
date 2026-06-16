@@ -1,4 +1,14 @@
 #include "FileSystem.hpp"
+#include <windows.h>
+#include <commctrl.h>
+#include <string>
+#include <vector>
+#include <unordered_set>
+#include <filesystem>
+#include <algorithm>
+#include <chrono>
+#pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "user32.lib")
 
 namespace Components
 {
@@ -10,7 +20,6 @@ namespace Components
 	std::recursive_mutex FileSystem::FSMutex;
 	Utils::Memory::Allocator FileSystem::MemAllocator;
 
-
 	class CleanupProgressDialog
 	{
 	public:
@@ -18,7 +27,7 @@ namespace Components
 			: total_(totalSteps > 0 ? totalSteps : 1)
 		{
 			EnsureClass();
-			constexpr int width = 520;
+			constexpr int width = 640; // Widened to cleanly fit right-aligned ETA layout
 			constexpr int height = 160;
 			const auto posX = (GetSystemMetrics(SM_CXSCREEN) - width) / 2;
 			const auto posY = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
@@ -31,30 +40,36 @@ namespace Components
 			{
 				SendMessageW(hwnd_, WM_SETICON, ICON_SMALL, 0);
 				SendMessageW(hwnd_, WM_SETICON, ICON_BIG, 0);
+
 				label_ = CreateWindowExW(0, L"STATIC", L"Completed:",
 					WS_CHILD | WS_VISIBLE,
-					20, 16, 480, 18,
+					20, 16, 600, 18,
 					hwnd_, nullptr, GetModuleHandleW(nullptr), nullptr);
-				progressValue_ = CreateWindowExW(0, L"STATIC", L"0%",
+
+				// Combined progress percentage + right-aligned ETA tracking string
+				progressValue_ = CreateWindowExW(0, L"STATIC", L"0% (Calculating...)",
 					WS_CHILD | WS_VISIBLE,
-					20, 34, 480, 18,
+					20, 34, 600, 18,
 					hwnd_, nullptr, GetModuleHandleW(nullptr), nullptr);
-				detailsLabel_ = CreateWindowExW(0, L"STATIC",
-					L"Current file:",
+
+				detailsLabel_ = CreateWindowExW(0, L"STATIC", L"Current file:",
 					WS_CHILD | WS_VISIBLE,
-					20, 58, 480, 18,
+					20, 58, 600, 18,
 					hwnd_, nullptr, GetModuleHandleW(nullptr), nullptr);
-				detailsValue_ = CreateWindowExW(0, L"STATIC",
-					L"(initializing)",
+
+				detailsValue_ = CreateWindowExW(0, L"STATIC", L"(initializing)",
 					WS_CHILD | WS_VISIBLE | SS_PATHELLIPSIS,
-					20, 76, 480, 20,
+					20, 76, 600, 20,
 					hwnd_, nullptr, GetModuleHandleW(nullptr), nullptr);
+
 				ApplyFont(label_);
 				ApplyFont(progressValue_);
 				ApplyFont(detailsLabel_);
 				ApplyFont(detailsValue_);
 				ShowWindow(hwnd_, SW_SHOW);
 				UpdateWindow(hwnd_);
+
+				startTime_ = std::chrono::steady_clock::now();
 			}
 		}
 
@@ -67,6 +82,8 @@ namespace Components
 
 			const auto percent = (current_ * 100) / total_;
 			const auto now = GetTickCount();
+
+			// Frame-rate throttle barrier matching your custom execution interval
 			if (percent == lastPercent_ && currentFile == lastFile_ && (now - lastUpdateTick_) < 40)
 			{
 				PumpMessages();
@@ -75,18 +92,37 @@ namespace Components
 
 			++current_;
 			const auto nextPercent = (current_ * 100) / total_;
-			std::wstring percentText = std::to_wstring(nextPercent) + L"%";
-			if (percentText == lastLabel_ && currentFile == lastFile_)
+
+			// Calculate the live operation ETA string
+			std::wstring etaStr = L"Calculating...";
+			auto currentTime = std::chrono::steady_clock::now();
+			auto elapsedDuration = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - startTime_).count();
+
+			if (current_ > 5 && elapsedDuration > 100)
+			{
+				double msPerItem = static_cast<double>(elapsedDuration) / current_;
+				long long remainingItems = total_ - current_;
+				long long etaMs = static_cast<long long>(msPerItem * remainingItems);
+				long long etaSecs = etaMs / 1000;
+
+				if (etaSecs < 1) etaStr = L"Less than a second left";
+				else if (etaSecs < 60) etaStr = std::to_wstring(etaSecs) + L"s left";
+				else etaStr = std::to_wstring(etaSecs / 60) + L"m " + std::to_wstring(etaSecs % 60) + L"s left";
+			}
+
+			std::wstring combinedProgressText = std::to_wstring(nextPercent) + L"% (" + etaStr + L")";
+			if (combinedProgressText == lastLabel_ && currentFile == lastFile_)
 			{
 				PumpMessages();
 				return;
 			}
 
-			lastLabel_ = percentText;
+			lastLabel_ = combinedProgressText;
 			lastFile_ = currentFile;
 			lastPercent_ = nextPercent;
 			lastUpdateTick_ = now;
-			SetWindowTextW(progressValue_, percentText.c_str());
+
+			SetWindowTextW(progressValue_, combinedProgressText.c_str());
 			SetWindowTextW(detailsValue_, currentFile.c_str());
 			PumpMessages();
 		}
@@ -182,6 +218,7 @@ namespace Components
 		DWORD lastUpdateTick_ = 0;
 		std::wstring lastLabel_;
 		std::wstring lastFile_;
+		std::chrono::steady_clock::time_point startTime_;
 	};
 
 	void FileSystem::CleanupZw3Files()
@@ -192,19 +229,34 @@ namespace Components
 				std::vector<std::filesystem::path> roots;
 				if (const auto basePath = Utils::GetBaseFilesLocation(); !basePath.empty())
 				{
-					roots.push_back(basePath);
+					roots.push_back(std::filesystem::path(basePath));
 				}
 
 				try
 				{
-					roots.push_back(std::filesystem::current_path());
+					auto curPath = std::filesystem::current_path();
+					if (roots.empty() || !std::filesystem::equivalent(roots.front(), curPath))
+					{
+						roots.push_back(curPath);
+					}
 				}
 				catch (const std::exception&)
 				{
 				}
 
-				std::unordered_set<std::wstring> legacySet;
-				std::vector<std::filesystem::path> allFiles;
+				std::error_code ec;
+				struct MigrationItem { std::wstring srcPath; std::wstring destPath; };
+				std::vector<MigrationItem> migrationFiles;
+				std::vector<std::filesystem::path> allDiscoveredFiles;
+				std::unordered_set<std::wstring> structuralDeleteSet;
+				std::vector<std::wstring> rawDirsToClean;
+				std::wstring globalUserrawScript;
+
+				if (const auto basePath = Utils::GetBaseFilesLocation(); !basePath.empty())
+				{
+					globalUserrawScript = (std::filesystem::path(basePath) / L"userraw" / L"scriptdata").wstring();
+				}
+
 				const auto shouldDelete = [&](const std::filesystem::path& path, const std::filesystem::path& root) -> bool
 					{
 						const auto relative = path.lexically_relative(root).generic_string();
@@ -216,22 +268,27 @@ namespace Components
 						std::transform(filenameLower.begin(), filenameLower.end(), filenameLower.begin(),
 							[](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
 
-						if (relativeLower == "zw3/zw3.iwd"
-							|| relativeLower == "zw3/zone/patch/patch_mp.ff"
-							|| relativeLower == "zw3/zone/english/zw3_common.ff")
-						{
-							return false;
-						}
-
-						if (relativeLower.size() >= 8 && relativeLower.rfind("zw3/", 0) == 0)
-						{
-							return false;
-						}
-
-						if (relativeLower == "iw4x/zw3.iwd"
-							|| relativeLower == "zw3.iwd"
+						if (relativeLower == "zw3.iwd"
+							|| relativeLower == "iw4x/zw3.iwd"
 							|| relativeLower == "main/zw3.iwd"
-							|| relativeLower == "zone/patch/patch_mp.ff")
+							|| relativeLower == "userraw/zw3.iwd"
+							|| relativeLower == "zone/patch/patch_mp.ff"
+							|| relativeLower == "zone/english/zw3_common.ff")
+						{
+							return true;
+						}
+
+						if (relativeLower == "zw3/zw3.iwd")
+						{
+							return true;
+						}
+
+						if (relativeLower.size() >= 4 && relativeLower.rfind("zw3/", 0) == 0)
+						{
+							return false;
+						}
+
+						if (relativeLower == "zone/patch_mp.ff")
 						{
 							return true;
 						}
@@ -245,76 +302,188 @@ namespace Components
 
 						return false;
 					};
-				const auto collectLegacyInRoot = [&](const char* root)
-					{
-						if (root == nullptr || root[0] == '\0')
-						{
-							return;
-						}
-
-						std::error_code ec;
-						const auto baseDir = std::filesystem::path(root);
-						if (!std::filesystem::exists(baseDir, ec))
-						{
-							return;
-						}
-
-						for (const auto& entry : std::filesystem::recursive_directory_iterator(baseDir, ec))
-						{
-							if (ec)
-							{
-								break;
-							}
-
-							if (!entry.is_regular_file(ec))
-							{
-								ec.clear();
-								continue;
-							}
-
-							const auto& path = entry.path();
-							allFiles.push_back(path);
-							if (shouldDelete(path, baseDir))
-							{
-								legacySet.insert(path.wstring());
-							}
-						}
-					};
 
 				for (const auto& root : roots)
 				{
-					collectLegacyInRoot(root.string().c_str());
+					std::wstring userrawScript = (root / L"userraw" / L"scriptdata").wstring();
+					std::wstring destScript = (root / L"zw3" / L"core" / L"scriptdata").wstring();
+
+					DWORD attrs = GetFileAttributesW(userrawScript.c_str());
+					if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
+					{
+						if (std::find(rawDirsToClean.begin(), rawDirsToClean.end(), userrawScript) == rawDirsToClean.end())
+						{
+							rawDirsToClean.push_back(userrawScript);
+						}
+					}
+
+					std::error_code internalEc;
+					if (!std::filesystem::exists(root, internalEc))
+					{
+						continue;
+					}
+
+					for (const auto& entry : std::filesystem::recursive_directory_iterator(root, internalEc))
+					{
+						if (internalEc)
+						{
+							break;
+						}
+
+						const auto& path = entry.path();
+						const auto relative = path.lexically_relative(root).generic_string();
+						std::string relativeLower = relative;
+						std::transform(relativeLower.begin(), relativeLower.end(), relativeLower.begin(),
+							[](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+
+						if (relativeLower.rfind("userraw/scriptdata", 0) == 0 || relativeLower.rfind("userraw\\scriptdata", 0) == 0)
+						{
+							std::error_code fileCheckEc;
+							if (std::filesystem::is_regular_file(path, fileCheckEc))
+							{
+								std::wstring fileWStr = path.wstring();
+								std::wstring relPath = fileWStr.substr(userrawScript.length());
+								migrationFiles.push_back({ fileWStr, destScript + relPath });
+							}
+							continue;
+						}
+
+						std::error_code fileCheckEc;
+						if (!std::filesystem::is_regular_file(path, fileCheckEc))
+						{
+							continue;
+						}
+
+						allDiscoveredFiles.push_back(path);
+						if (shouldDelete(path, root))
+						{
+							structuralDeleteSet.insert(path.wstring());
+						}
+					}
 				}
 
-				if (legacySet.empty())
+				if (allDiscoveredFiles.empty() && migrationFiles.empty())
 				{
 					return;
 				}
 
-				CleanupProgressDialog progress(static_cast<int>(allFiles.size()));
+				if (migrationFiles.empty() && structuralDeleteSet.empty())
+				{
+					return;
+				}
+
+				int totalTasks = static_cast<int>(allDiscoveredFiles.size() + migrationFiles.size());
+				CleanupProgressDialog progress(totalTasks);
+
 				int deletedCount = 0;
 				int skippedCount = 0;
-				for (const auto& path : allFiles)
-				{
-					progress.Update(path.wstring());
+				int movedCount = 0;
 
-					std::error_code ec;
+				if (!migrationFiles.empty())
+				{
+					for (const auto& fileItem : migrationFiles)
+					{
+						progress.Update(fileItem.srcPath);
+
+						size_t pos = fileItem.destPath.find_last_of(L"\\/");
+						if (pos != std::wstring::npos)
+						{
+							std::wstring targetDir = fileItem.destPath.substr(0, pos);
+							std::filesystem::create_directories(targetDir, ec);
+						}
+
+						SetFileAttributesW(fileItem.srcPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+						SetFileAttributesW(fileItem.destPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+
+						if (!MoveFileExW(fileItem.srcPath.c_str(), fileItem.destPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED))
+						{
+							if (CopyFileW(fileItem.srcPath.c_str(), fileItem.destPath.c_str(), FALSE))
+							{
+								DeleteFileW(fileItem.srcPath.c_str());
+							}
+						}
+						++movedCount;
+					}
+
+					if (!globalUserrawScript.empty() && std::find(rawDirsToClean.begin(), rawDirsToClean.end(), globalUserrawScript) == rawDirsToClean.end())
+					{
+						rawDirsToClean.push_back(globalUserrawScript);
+					}
+
+					std::vector<std::wstring> allDirsToWipe;
+					for (const auto& targetDirRoot : rawDirsToClean)
+					{
+						std::vector<std::wstring> cleanDirs;
+						cleanDirs.push_back(targetDirRoot);
+
+						while (!cleanDirs.empty())
+						{
+							std::wstring currentDir = cleanDirs.back();
+							cleanDirs.pop_back();
+							allDirsToWipe.push_back(currentDir);
+
+							std::wstring searchMask = currentDir + L"\\*";
+							WIN32_FIND_DATAW findData;
+							HANDLE hFind = FindFirstFileW(searchMask.c_str(), &findData);
+
+							if (hFind != INVALID_HANDLE_VALUE)
+							{
+								do
+								{
+									std::wstring name = findData.cFileName;
+									if (name == L"." || name == L"..")
+									{
+										continue;
+									}
+
+									std::wstring fullPath = currentDir + L"\\" + name;
+									if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+									{
+										cleanDirs.push_back(fullPath);
+									}
+									else
+									{
+										SetFileAttributesW(fullPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+										DeleteFileW(fullPath.c_str());
+									}
+								} while (FindNextFileW(hFind, &findData));
+								FindClose(hFind);
+							}
+						}
+					}
+
+					std::sort(allDirsToWipe.begin(), allDirsToWipe.end(), [](const std::wstring& a, const std::wstring& b) {
+						return a.length() > b.length();
+						});
+					allDirsToWipe.erase(std::unique(allDirsToWipe.begin(), allDirsToWipe.end()), allDirsToWipe.end());
+
+					for (const auto& dirPath : allDirsToWipe)
+					{
+						SetFileAttributesW(dirPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+						RemoveDirectoryW(dirPath.c_str());
+					}
+				}
+
+				for (const auto& path : allDiscoveredFiles)
+				{
+					const auto widePath = path.wstring();
+					progress.Update(widePath);
+
+					if (structuralDeleteSet.find(widePath) == structuralDeleteSet.end())
+					{
+						++skippedCount;
+						continue;
+					}
+
+					ec.clear();
 					if (!std::filesystem::exists(path, ec))
 					{
 						++skippedCount;
 						continue;
 					}
 
-					if (legacySet.find(path.wstring()) == legacySet.end())
-					{
-						++skippedCount;
-						continue;
-					}
-
-					const auto widePath = path.wstring();
 					SetFileAttributesW(widePath.c_str(), FILE_ATTRIBUTE_NORMAL);
 
-					ec.clear();
 					if (DeleteFileW(widePath.c_str()) != 0)
 					{
 						++deletedCount;
@@ -339,6 +508,7 @@ namespace Components
 						std::exit(EXIT_FAILURE);
 					}
 
+					ec.clear();
 					const auto removed = std::filesystem::remove(path, ec);
 					if (!removed || ec)
 					{
@@ -351,13 +521,15 @@ namespace Components
 							MB_OK | MB_ICONERROR);
 						std::exit(EXIT_FAILURE);
 					}
+
 					++deletedCount;
 				}
 
 				progress.Close();
 				MessageBoxA(nullptr,
-					Utils::String::Format("Onetime ZW3 old files cleanup completed successfully.\n\nFiles checked: {}\nDeleted: {}\nSkipped: {}",
-						static_cast<int>(allFiles.size()),
+					Utils::String::Format("Cleanup completed successfully.\n\nFiles checked: {}\nMoved: {}\nDeleted: {}\nSkipped: {}",
+						static_cast<int>(allDiscoveredFiles.size() + migrationFiles.size()),
+						movedCount,
 						deletedCount,
 						skippedCount),
 					"Done!",
@@ -449,7 +621,7 @@ namespace Components
 
 		this->seek(position, Game::FS_SEEK_SET);
 
-		return {buffer, static_cast<std::size_t>(this->size)};
+		return { buffer, static_cast<std::size_t>(this->size) };
 	}
 
 	bool FileSystem::FileReader::read(void* buffer, std::size_t _size) const noexcept
@@ -508,14 +680,14 @@ namespace Components
 		}
 
 		auto _0 = gsl::finally([&path]
-		{
-			CoTaskMemFree(path);
-		});
+			{
+				CoTaskMemFree(path);
+			});
 
 		return std::filesystem::path(path) / "iw4x";
 	}
 
-	std::vector<std::string> FileSystem::GetFileList(const std::string& path, const std::string& extension,  Game::FsListBehavior_e behaviour)
+	std::vector<std::string> FileSystem::GetFileList(const std::string& path, const std::string& extension, Game::FsListBehavior_e behaviour)
 	{
 		std::vector<std::string> fileList;
 
@@ -605,7 +777,7 @@ namespace Components
 		const std::string fs_basepath = (*Game::fs_basepath)->current.string;
 		const std::string fs_homepath = (*Game::fs_homepath)->current.string;
 
-		if (!fs_cdpath.empty())   Game::FS_AddLocalizedGameDirectory(fs_cdpath.data(),   folder);
+		if (!fs_cdpath.empty())   Game::FS_AddLocalizedGameDirectory(fs_cdpath.data(), folder);
 		if (!fs_basepath.empty()) Game::FS_AddLocalizedGameDirectory(fs_basepath.data(), folder);
 		if (!fs_homepath.empty()) Game::FS_AddLocalizedGameDirectory(fs_homepath.data(), folder);
 	}
@@ -636,6 +808,8 @@ namespace Components
 			{
 				RegisterFolder("zw3");
 				RegisterFolder("zw3\\data");
+				RegisterFolder("zw3\\core");
+				RegisterFolder("zw3\\core\\scriptdata");
 			}
 		}
 	}
@@ -751,7 +925,7 @@ namespace Components
 	Game::HunkUser* Hunk_UserCreate_Stub(int maxSize, const char* name, bool fixed, int type)
 	{
 		maxSize *= FILE_COUNT_MULTIPLIER;
-		return Utils::Hook::Call<Game::HunkUser*(int, const char*, bool, int)>(0x430E90)(maxSize, name, fixed, type);
+		return Utils::Hook::Call<Game::HunkUser * (int, const char*, bool, int)>(0x430E90)(maxSize, name, fixed, type);
 	}
 
 	bool FileSystem::FileWrapper_Rotate(const char* ospath)
@@ -887,7 +1061,7 @@ namespace Components
 		Utils::Hook(0x45A6A0, Hunk_UserCreate_Stub, HOOK_CALL).install()->quick();
 
 		// FS_ListFilteredFiles
-		Utils::Hook(0x4FCE82,  Hunk_UserCreate_Stub, HOOK_CALL).install()->quick();
+		Utils::Hook(0x4FCE82, Hunk_UserCreate_Stub, HOOK_CALL).install()->quick();
 		Utils::Hook::Set<std::uint32_t>(0x6427F0 + 2, NEW_MAX_FILES_LISTED);
 		Utils::Hook::Set<uint32_t>(0X4FCE8B + 1, (NEW_MAX_FILES_LISTED + FILE_COUNT_MULTIPLIER) * 4 + 4);
 

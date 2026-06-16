@@ -27,7 +27,7 @@ namespace Components
 			: total_(totalSteps > 0 ? totalSteps : 1)
 		{
 			EnsureClass();
-			constexpr int width = 640; // Widened to cleanly fit right-aligned ETA layout
+			constexpr int width = 640;
 			constexpr int height = 160;
 			const auto posX = (GetSystemMetrics(SM_CXSCREEN) - width) / 2;
 			const auto posY = (GetSystemMetrics(SM_CYSCREEN) - height) / 2;
@@ -46,7 +46,6 @@ namespace Components
 					20, 16, 600, 18,
 					hwnd_, nullptr, GetModuleHandleW(nullptr), nullptr);
 
-				// Combined progress percentage + right-aligned ETA tracking string
 				progressValue_ = CreateWindowExW(0, L"STATIC", L"0% (Calculating...)",
 					WS_CHILD | WS_VISIBLE,
 					20, 34, 600, 18,
@@ -83,7 +82,6 @@ namespace Components
 			const auto percent = (current_ * 100) / total_;
 			const auto now = GetTickCount();
 
-			// Frame-rate throttle barrier matching your custom execution interval
 			if (percent == lastPercent_ && currentFile == lastFile_ && (now - lastUpdateTick_) < 40)
 			{
 				PumpMessages();
@@ -93,7 +91,6 @@ namespace Components
 			++current_;
 			const auto nextPercent = (current_ * 100) / total_;
 
-			// Calculate the live operation ETA string
 			std::wstring etaStr = L"Calculating...";
 			auto currentTime = std::chrono::steady_clock::now();
 			auto elapsedDuration = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - startTime_).count();

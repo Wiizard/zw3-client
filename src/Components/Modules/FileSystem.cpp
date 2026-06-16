@@ -335,7 +335,8 @@ namespace Components
 									[](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
 
 								if (filenameLower.rfind("autosave", 0) == 0 ||
-									filenameLower.rfind("rank_", 0) == 0)
+									filenameLower.rfind("rank_", 0) == 0 ||
+									filenameLower.rfind("easteregg", 0) == 0)
 								{
 									std::wstring fileWStr = path.wstring();
 									std::wstring relPath = fileWStr.substr(userrawScript.length());

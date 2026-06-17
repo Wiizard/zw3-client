@@ -41,8 +41,6 @@ namespace Components
 	Game::ExpressionSupportingData* Menus::SupportingData;
 
 	Utils::Memory::Allocator Menus::Allocator;
-	bool Menus::ShuttingDown = false;
-	bool Menus::ReloadingMenus = false;
 
 	Game::KeywordHashEntry<Game::menuDef_t, 128, 3523>** menuParseKeywordHash;
 
@@ -324,6 +322,54 @@ namespace Components
 		return menus;
 	}
 
+	// Add the RemoveMenuFromContext helper function (same as previous iteration)
+	void Menus::RemoveMenuFromContext(Game::UiContext* dc, Game::menuDef_t* menuToRemove)
+	{
+		if (!dc || !menuToRemove) return;
+
+		// Search for the menu in the context's main menu array
+		for (int i = 0; i < dc->menuCount; ++i)
+		{
+			if (dc->Menus[i] == menuToRemove)
+			{
+				DebugPrint("Removing menu {} from UI context {:X} at index {}",
+					menuToRemove->window.name, (unsigned int)dc, i);
+
+				// Shift elements left to fill the gap
+				for (int j = i; j < dc->menuCount - 1; ++j)
+				{
+					dc->Menus[j] = dc->Menus[j + 1];
+				}
+
+				// Clear the last element and decrement count
+				dc->Menus[--dc->menuCount] = nullptr;
+				// Adjust loop counter as we removed an element and shifted
+				i--;
+			}
+		}
+
+		// Also check and remove from the menu stack if present
+		for (int i = 0; i < dc->openMenuCount; ++i)
+		{
+			if (dc->menuStack[i] == menuToRemove)
+			{
+				DebugPrint("Removing menu {} from UI context {:X} stack at index {}",
+					menuToRemove->window.name, (unsigned int)dc, i);
+
+				// Shift elements left to fill the gap
+				for (int j = i; j < dc->openMenuCount - 1; ++j)
+				{
+					dc->menuStack[j] = dc->menuStack[j + 1];
+				}
+
+				// Clear the last element and decrement count
+				dc->menuStack[--dc->openMenuCount] = nullptr;
+				// Adjust loop counter as we removed an element and shifted
+				i--;
+			}
+		}
+	}
+
 
 	bool Menus::MenuAlreadyExists(const std::string& name)
 	{
@@ -336,108 +382,6 @@ namespace Components
 		}
 
 		return false;
-	}
-
-	bool Menus::IsCustomMenuPath(const std::string& menu)
-	{
-		std::string normalized = menu;
-		Utils::String::Replace(normalized, "/", "\\");
-
-		for (auto customMenu : CustomIW4xMenus)
-		{
-			Utils::String::Replace(customMenu, "/", "\\");
-			if (!_stricmp(customMenu.data(), normalized.data()))
-			{
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	bool Menus::IsCustomMenuFile(const std::string& filename)
-	{
-		return IsCustomMenuPath(std::format("ui_mp\\{}", filename));
-	}
-
-	void Menus::EnsureCustomConnectMenu()
-	{
-		if (ShuttingDown || ReloadingMenus)
-		{
-			return;
-		}
-
-		const auto customConnect = MenusFromDisk.contains("connect") ? MenusFromDisk["connect"] : nullptr;
-		if (!customConnect)
-		{
-			return;
-		}
-
-		for (const auto context : Menus::GameUiContexts)
-		{
-			if (!context)
-			{
-				continue;
-			}
-
-			for (int i = 0; i < context->openMenuCount; ++i)
-			{
-				if (context->menuStack[i] && context->menuStack[i]->window.name == "connect"s && context->menuStack[i] != customConnect)
-				{
-					DebugPrint("Replacing late stock connect menu in stack ({:X} => {:X})",
-						(unsigned int)context->menuStack[i], (unsigned int)customConnect);
-					context->menuStack[i] = customConnect;
-				}
-			}
-
-			bool hasCustomConnect = false;
-			for (int i = 0; i < context->menuCount; ++i)
-			{
-				if (context->Menus[i] == customConnect)
-				{
-					hasCustomConnect = true;
-				}
-				else if (context->Menus[i] && context->Menus[i]->window.name == "connect"s)
-				{
-					DebugPrint("Replacing late stock connect menu in context ({:X} => {:X})",
-						(unsigned int)context->Menus[i], (unsigned int)customConnect);
-					context->Menus[i] = customConnect;
-					hasCustomConnect = true;
-				}
-			}
-
-			if (!hasCustomConnect && context == Game::uiContext && context->menuCount < ARRAYSIZE(context->Menus))
-			{
-				context->Menus[context->menuCount++] = customConnect;
-			}
-		}
-	}
-
-	bool Menus::LoadCustomConnectMenu()
-	{
-		static bool isLoading = false;
-		if (ShuttingDown || ReloadingMenus)
-		{
-			return false;
-		}
-
-		if (MenusFromDisk.contains("connect"))
-		{
-			EnsureCustomConnectMenu();
-			return true;
-		}
-
-		if (isLoading || !IsCustomMenuPath("ui_mp\\connect.menu"))
-		{
-			return false;
-		}
-
-		isLoading = true;
-		LoadScriptMenu("ui_mp\\connect.menu", true);
-		isLoading = false;
-
-		EnsureCustomConnectMenu();
-		return MenusFromDisk.contains("connect");
 	}
 
 	void Menus::LoadScriptMenu(const char* menu, bool allowNewMenus)
@@ -714,97 +658,57 @@ namespace Components
 	void Menus::PrepareToUnloadMenu(Game::menuDef_t* menu)
 	{
 		const std::string name = menu->window.name;
-		const auto overrideEntry = OverridenMenus.find(name);
-		const bool isRemoval = overrideEntry == OverridenMenus.end() || overrideEntry->second == nullptr;
-		Game::menuDef_t* replacement = isRemoval ? nullptr : overrideEntry->second;
+		Game::menuDef_t* originalMenu = nullptr;
+
+		// Check if this menu was an override we previously tracked
+		if (OverridenMenus.count(name)) {
+			originalMenu = OverridenMenus[name]; // This could be nullptr if it was an implicit override of an unknown pointer
+			DebugPrint("PrepareToUnloadMenu: Unloading menu '{}' ({:X}). Original was tracked as {:X}.", name, (unsigned int)menu, (unsigned int)originalMenu);
+		}
+		else {
+			// This case might happen if a menu was loaded and became an implicit override,
+			// but we didn't populate OverridenMenus with its original counterpart,
+			// or if it's a new menu being unloaded.
+			DebugPrint("PrepareToUnloadMenu: Unloading menu '{}' ({:X}). Not tracked as explicit override.", name, (unsigned int)menu);
+		}
 
 		for (size_t contextIndex = 0; contextIndex < ARRAYSIZE(Menus::GameUiContexts); contextIndex++)
 		{
 			const auto context = Menus::GameUiContexts[contextIndex];
-			if (!context)
+
+			// 1. Remove the menu we are unloading from all contexts and stacks
+			RemoveMenuFromContext(context, menu);
+
+			// 2. If this menu was an override, attempt to put the original back
+			// This is critical for game-referenced menus like 'connect'.
+			if (originalMenu)
 			{
-				continue;
-			}
-
-			for (int i = 0; i < context->openMenuCount; i++)
-			{
-				if (context->menuStack[i] && context->menuStack[i]->window.name == name)
-				{
-					DebugPrint("In stack - Restored menu {} ({:X} => {:X})", name,
-						(unsigned int)context->menuStack[i],
-						(unsigned int)replacement
-					);
-
-					if (isRemoval)
-					{
-						if (context->menuStack[i] == menu)
-						{
-							context->menuStack[i] = replacement;
-
-							for (int j = static_cast<int>(i); j < context->openMenuCount - 1; j++)
-							{
-								context->menuStack[j] = context->menuStack[j + 1];
-							}
-
-							context->openMenuCount--;
-							assert(context->openMenuCount >= 0);
-							context->menuStack[context->openMenuCount] = nullptr;
-							i--;
-						}
-						else
-						{
-							// The menu I could have overriden got loaded in the meantime - no need to delete them
-							// I'm simply going to remove myself
-						}
-					}
-					else
-					{
-						context->menuStack[i] = replacement;
+				bool foundExistingSpot = false;
+				// Check if original is already back (e.g., if another part of the game re-added it)
+				for (int i = 0; i < context->menuCount; ++i) {
+					if (context->Menus[i] == originalMenu) {
+						foundExistingSpot = true;
+						break;
 					}
 				}
-			}
-
-			for (int i = 0; i < context->menuCount; i++)
-			{
-				if (context->Menus[i] && context->Menus[i]->window.name == name)
-				{
-					DebugPrint("In context - Restored menu {} ({:X} => {:X})", name,
-						(unsigned int)context->Menus[i],
-						(unsigned int)replacement
-					);
-
-					if (isRemoval)
-					{
-						if (context->Menus[i] == menu)
-						{
-							context->Menus[i] = replacement;
-
-							for (size_t j = i; j < std::min(static_cast<size_t>(context->menuCount), ARRAYSIZE(context->Menus)) - 1; j++)
-							{
-								context->Menus[j] = context->Menus[j + 1];
-							}
-
-							context->menuCount--;
-							i--;
-							assert(context->menuCount >= 0);
-							context->Menus[context->menuCount] = nullptr;
-						}
-						else
-						{
-							// The menu I could have overriden got loaded in the meantime - no need to delete them
-							// I'm simply going to remove myself
-						}
+				if (!foundExistingSpot) {
+					// Attempt to add the original menu back to the context's main array
+					if (context->menuCount < ARRAYSIZE(context->Menus)) {
+						context->Menus[context->menuCount] = originalMenu;
+						context->menuCount++;
+						DebugPrint("PrepareToUnloadMenu: Restored original menu '{}' ({:X}) to UI context {:X}.", name, (unsigned int)originalMenu, (unsigned int)context);
 					}
-					else
-					{
-						context->Menus[i] = replacement;
+					else {
+						Components::Logger::Print(Game::CON_CHANNEL_UI, "PrepareToUnloadMenu: UI context menu array full for restoring original menu {}\n", name);
 					}
 				}
 			}
 		}
 
-		if (OverridenMenus.contains(name))
+		// Clear the override tracking after processing.
+		if (OverridenMenus.count(name))
 		{
+			DebugPrint("PrepareToUnloadMenu: Clearing override tracking for menu '{}'.", name);
 			OverridenMenus.erase(name);
 		}
 	}
@@ -812,84 +716,99 @@ namespace Components
 	void Menus::AfterLoadedMenuFromDisk(Game::menuDef_t* menu)
 	{
 		const std::string name = menu->window.name;
+		DebugPrint("AfterLoadedMenuFromDisk: Loaded menu '{}' at {:X}.", name, (unsigned int)menu);
 
-		DebugPrint("Loaded menu {} at {:X} from disk", name,
-			(unsigned int)menu
-		);
+		Game::menuDef_t* existingGameMenu = nullptr;
+		bool foundExistingInContext = false;
 
-		bool overrode = false;
-
+		// Check if a menu with the same name already exists in ANY of the game contexts.
+		// This identifies if our newly loaded menu is an override.
 		for (size_t contextIndex = 0; contextIndex < ARRAYSIZE(Menus::GameUiContexts); contextIndex++)
 		{
 			const auto context = Menus::GameUiContexts[contextIndex];
-			if (!context)
+			Game::menuDef_t* found = Game::Menus_FindByName(context, name.data());
+			if (found && found != menu) // Found an existing menu that is NOT our newly loaded one
 			{
-				continue;
-			}
-
-			for (int i = 0; i < context->openMenuCount; i++)
-			{
-				if (context->menuStack[i] && context->menuStack[i]->window.name == name)
-				{
-					if (OverridenMenus.contains(name))
-					{
-						assert(OverridenMenus[name] == context->menuStack[i]);
-					}
-					else
-					{
-						OverridenMenus[name] = context->menuStack[i];
-					}
-
-					context->menuStack[i] = MenusFromDisk[name];
-
-					DebugPrint("In stack - Overrode menu {} ({:X} => {:X})", name,
-						(unsigned int)OverridenMenus[name],
-						(unsigned int)MenusFromDisk[name]
-					);
-				}
-			}
-
-			for (int i = 0; i < context->menuCount; i++)
-			{
-				if (context->Menus[i] && context->Menus[i]->window.name == name)
-				{
-					if (OverridenMenus.contains(name))
-					{
-						assert(OverridenMenus[name] == context->Menus[i]);
-					}
-					else
-					{
-						OverridenMenus[name] = context->Menus[i];
-					}
-
-					context->Menus[i] = MenusFromDisk[name];
-
-					DebugPrint("In context - Overrode menu {} ({:X} => {:X})", name,
-						(unsigned int)OverridenMenus[name],
-						(unsigned int)MenusFromDisk[name]
-					);
-
-					overrode = true;
-				}
+				existingGameMenu = found;
+				foundExistingInContext = true;
+				DebugPrint("AfterLoadedMenuFromDisk: Found existing menu '{}' ({:X}) in context {:X}. This is an override.", name, (unsigned int)existingGameMenu, (unsigned int)context);
+				break; // Only need to find one existing instance to confirm it's an override
 			}
 		}
 
-		if (!overrode)
+		if (foundExistingInContext)
 		{
-			// A brand new menu! How fancy!
-			// We add it to the standard uiContext
-			OverridenMenus[name] = nullptr;
+			// This new menu is an override.
+			// 1. Store the original menu for later restoration if this custom menu is unloaded.
+			if (!OverridenMenus.count(name) || OverridenMenus[name] == nullptr) { // Only store if not already tracked or if previously tracked as nullptr
+				OverridenMenus[name] = existingGameMenu;
+				DebugPrint("AfterLoadedMenuFromDisk: Stored original menu '{}' ({:X}) for override by new menu ({:X}).", name, (unsigned int)existingGameMenu, (unsigned int)menu);
+			}
 
+			// 2. Remove all instances of the original menu from ALL contexts and their stacks.
+			// This is crucial to prevent the original from lingering.
+			for (size_t contextIndex = 0; contextIndex < ARRAYSIZE(Menus::GameUiContexts); contextIndex++)
+			{
+				RemoveMenuFromContext(GameUiContexts[contextIndex], existingGameMenu);
+			}
+		}
+		else
+		{
+			// This is a brand new menu, not an override. Mark it as such.
+			// Ensure it's not present in OverridenMenus, or set to nullptr.
+			OverridenMenus[name] = nullptr;
+			DebugPrint("AfterLoadedMenuFromDisk: Menu '{}' ({:X}) is a new menu, not an override.", name, (unsigned int)menu);
+		}
+
+		// Now, add the newly loaded custom menu to the main UI context (Game::uiContext).
+		// This applies to both new menus and overrides.
+		bool menuAlreadyActiveInUiContext = false;
+		for (int i = 0; i < Game::uiContext->menuCount; ++i) {
+			if (Game::uiContext->Menus[i] == menu) { // Check if our new menu instance is already there
+				menuAlreadyActiveInUiContext = true;
+				break;
+			}
+		}
+
+		if (!menuAlreadyActiveInUiContext) {
 			if (Game::uiContext->menuCount < ARRAYSIZE(Game::uiContext->Menus))
 			{
-				Game::uiContext->Menus[Game::uiContext->menuCount] = MenusFromDisk[name];
+				Game::uiContext->Menus[Game::uiContext->menuCount] = menu;
 				Game::uiContext->menuCount++;
+				DebugPrint("AfterLoadedMenuFromDisk: Added menu '{}' ({:X}) to Game::uiContext->Menus[{}] (Total count: {}).",
+					name, (unsigned int)menu, Game::uiContext->menuCount - 1, Game::uiContext->menuCount);
 			}
-			else
-			{
-				Components::Logger::PrintError(Game::CON_CHANNEL_UI, "UI context menu array is full, could not add menu {}\n", name);
+			else {
+				Components::Logger::PrintError(Game::CON_CHANNEL_UI, "AfterLoadedMenuFromDisk: UI context menu array full for adding menu {}\n", name);
 			}
 		}
+		else {
+			DebugPrint("AfterLoadedMenuFromDisk: Menu '{}' ({:X}) already present in Game::uiContext->Menus, no re-addition.", name, (unsigned int)menu);
+		}
+
+		// Do NOT automatically add it to the menuStack here unless you're explicitly opening it.
+		// Opening a menu (e.g., via `open "menuName"`) is what typically pushes it to the stack.
+		// If you push it here and the game doesn't expect it, it can lead to stacking issues.
+		// The `Game::Menus_OpenByName` call usually handles pushing to the stack.
+		// The previous logic for `wasOverride && !menuAlreadyInStack` to add to stack is risky.
+		// Remove this block:
+		/*
+		bool menuAlreadyInStack = false;
+		for (int i = 0; i < Game::uiContext->openMenuCount; ++i) {
+			if (Game::uiContext->menuStack[i] == MenusFromDisk[name]) {
+				menuAlreadyInStack = true;
+				break;
+			}
+		}
+		if (wasOverride && !menuAlreadyInStack) {
+			if (Game::uiContext->openMenuCount < ARRAYSIZE(Game::uiContext->menuStack)) {
+				Game::uiContext->menuStack[Game::uiContext->openMenuCount] = MenusFromDisk[name];
+				Game::uiContext->openMenuCount++;
+				DebugPrint("Added menu {} ({:X}) to Game::uiContext->menuStack[{}] (Total count: {})",
+					name, (unsigned int)MenusFromDisk[name], Game::uiContext->openMenuCount - 1, Game::uiContext->openMenuCount);
+			}
+		}
+		*/
 	}
 
 	void Menus::Add(const std::string& menu)
@@ -1408,12 +1327,7 @@ namespace Components
 		if (MenusFromDisk.contains(menuName)) {
 			const auto menu = MenusFromDisk[menuName];
 			PrepareToUnloadMenu(menu);
-
-			// Menu trees contain game-owned and allocator-owned nested pointers that are
-			// still referenced by UI/cgame paths during disconnect and shutdown. Trying
-			// to deep-free them here can hang or corrupt those paths, so mirror the
-			// component shutdown policy and intentionally leak disk-loaded menus for the
-			// process lifetime after detaching them from all contexts.
+			FreeMenuOnly(menu);
 			MenusFromDisk.erase(menuName);
 		}
 	}
@@ -1469,8 +1383,6 @@ namespace Components
 		DebugPrint("Reloading disk menus...");
 
 		// Step 1: unload everything
-		ReloadingMenus = true;
-
 		const auto listsFromDisk = MenuListsFromDisk;
 		for (const auto& menuList : listsFromDisk)
 		{
@@ -1481,6 +1393,7 @@ namespace Components
 		const auto menusFromDisk = MenusFromDisk;
 		for (const auto& element : menusFromDisk)
 		{
+			// IMPORTANT: Call UnloadMenuFromDisk which now uses RemoveMenuFromContext
 			UnloadMenuFromDisk(element.first);
 		}
 
@@ -1506,24 +1419,15 @@ namespace Components
 			OverridenMenus.clear();
 		}
 
-		ReloadingMenus = false;
-
-		// Step 2: Load connect first so stock connect is never shown during level startup.
-		LoadCustomConnectMenu();
-
-		// Step 3: Load everything else
+		// Step 2: Load everything
 		{
 			const auto menus = FileSystem::GetFileList("ui_mp", "menu", Game::FS_LIST_ALL);
 
 			// Load standalone menus
 			for (const auto& filename : menus)
 			{
-				if (IsCustomMenuFile(filename))
-				{
-					continue;
-				}
-
 				const std::string fullPath = std::format("ui_mp\\{}", filename);
+
 				LoadScriptMenu(fullPath.c_str(), allowStrayMenus);
 			}
 
@@ -1554,19 +1458,11 @@ namespace Components
 			// "code.txt" for IW4x
 			for (const auto& menuName : CustomIW4xMenus)
 			{
-				auto normalizedMenuName = menuName;
-				Utils::String::Replace(normalizedMenuName, "/", "\\");
-				if (!_stricmp(normalizedMenuName.data(), "ui_mp\\connect.menu"))
-				{
-					continue;
-				}
-
 				LoadScriptMenu(menuName.c_str(), true);
 			}
 		}
 
-		// Step 4 - Keep supporting data around
-		EnsureCustomConnectMenu();
+		// Step 3 - Keep supporting data around
 
 		// Debug-only check
 		CheckMenus();
@@ -1574,11 +1470,6 @@ namespace Components
 
 	bool Menus::IsMenuVisible(Game::UiContext* dc, Game::menuDef_t* menu)
 	{
-		if (!ShuttingDown && !ReloadingMenus)
-		{
-			EnsureCustomConnectMenu();
-		}
-
 		if (menu && menu->window.name)
 		{
 			if (menu->window.name == "connect"s) // Check if we're supposed to draw the loadscreen
@@ -1702,7 +1593,9 @@ namespace Components
 		Components::Events::OnCGameInit(ReloadDiskMenus_OnCGameStart);
 		Components::Events::AfterUIInit(ReloadDiskMenus_OnUIInitialization);
 
-		// Keep disk-loaded menu overrides visible to direct asset lookups, including connect.menu.
+		// --- HOOK ASSET HANDLER ---
+		// These hooks were present in your OLD working code.
+		// They are the key to intercepting asset lookup calls via AssetHandler.
 		AssetHandler::OnFind(Game::ASSET_TYPE_MENU, MenuFindHook);
 		AssetHandler::OnFind(Game::ASSET_TYPE_MENULIST, MenuListFindHook);
 
@@ -1728,24 +1621,14 @@ namespace Components
 				}
 			}, HOOK_CALL).install()->quick();
 
-		// Intercept menu painting so a loaded custom connect menu wins over the stock one.
+		// Intercept menu painting (This hook was in old code)
 		Utils::Hook(0x4FFBDF, IsMenuVisible, HOOK_CALL).install()->quick();
-		Components::Scheduler::Schedule([]
-			{
-				if (ShuttingDown)
-				{
-					return true;
-				}
-
-				EnsureCustomConnectMenu();
-				return false;
-			}, Components::Scheduler::Pipeline::MAIN);
 
 		// disable the 2 new tokens in ItemParse_rect (Fix by NTA. Probably because he didn't want to update the menus)
 		Utils::Hook::Set<std::uint8_t>(0x640693, 0xEB);
 
-		// don't load ASSET_TYPE_MENU assets for every menu (might cause patch menus to fail).
-		Utils::Hook::Nop(0x453406, 5);
+		// don't load ASSET_TYPE_MENU assets for every menu (might cause patch menus to fail) (This NOP was in old code)
+		Utils::Hook::Nop(0x453406, 5); // Re-added this NOP
 
 		// make Com_Error and similar go back to main_text instead of menu_xboxlive.
 		Utils::Hook::SetString(0x6FC790, "main_text");
@@ -1815,7 +1698,7 @@ namespace Components
 		// The "reloadmenus" command from the old code is removed here as the new system's ReloadDiskMenus() handles it differently.
 		// Command::Add("reloadmenus", []() { ... });
 
-		// Define custom menus here. ReloadDiskMenus() loads these alongside discovered disk menus.
+		// Define custom menus here (Keep this, as ReloadDiskMenus() still uses it)
 		Add("ui_mp/changelog.menu");
 		Add("ui_mp/iw4x_credits.menu");
 		Add("ui_mp/menu_first_launch.menu");
@@ -1842,30 +1725,31 @@ namespace Components
 
 	void Menus::preDestroy()
 	{
-		ShuttingDown = true;
-
 		// Let Windows handle the memory leaks for you!
 		// The old code had Menus::FreeEverything(); here.
 		// If the new system handles freeing globally, this might not be needed.
 	}
 }
 
-// Return disk-loaded menus to direct asset lookups, while falling back to stock assets when absent.
+// --- Implement AssetHandler hooks (from old Menus.cpp) ---
+// These will act as the new AssetHandler for menus, routing to your internal loaders.
 namespace Components
 {
 	Game::XAssetHeader Menus::MenuFindHook(Game::XAssetType /*type*/, const std::string& filename)
 	{
-		// Asset requests can arrive as "connect", "connect.menu", or with a ui_mp path.
+		// This hook needs to return YOUR loaded menu, if it exists in MenusFromDisk.
+		// Otherwise, it should call the original game function to find the asset.
+		// Since we don't have a direct "DB_FindXAssetHeader_Original" in this strategy,
+		// we rely on the game's default asset handler to load it if we don't have it.
+		// The ImenuDef_t::load function (which is part of the AssetHandler process)
+		// will handle loading from disk.
+
+		// Clean the name similar to DB_FindXAssetHeader_Hook logic in the previous attempt
 		std::string shortName = filename;
 		size_t lastSlash = shortName.find_last_of("/\\");
 		if (lastSlash != std::string::npos) shortName = shortName.substr(lastSlash + 1);
 		if (shortName.length() > 5 && shortName.substr(shortName.length() - 5) == ".menu") {
 			shortName = shortName.substr(0, shortName.length() - 5);
-		}
-
-		if (!_stricmp(shortName.data(), "connect"))
-		{
-			LoadCustomConnectMenu();
 		}
 
 		if (MenusFromDisk.contains(shortName))
@@ -1874,7 +1758,10 @@ namespace Components
 			return { MenusFromDisk[shortName] };
 		}
 
-		// Returning nullptr lets the original DB_FindXAssetHeader path handle stock menus.
+		// If not found in our custom map, let the game's default DB_FindXAssetHeader handle it.
+		// The AssetHandler::IAsset::load implementation (e.g., in ImenuDef_t.cpp)
+		// will be responsible for loading the actual game asset or calling our LoadMenuByName_Recursive.
+		// Returning a nullptr XAssetHeader might force the AssetHandler to call the IAsset::load method.
 		DebugPrint("MenuFindHook: Menu '{}' not found in custom list. Returning nullptr to trigger default AssetHandler load.", shortName);
 		return { nullptr };
 	}
@@ -1883,14 +1770,14 @@ namespace Components
 	{
 		(void)type;
 
-		// Return a disk-loaded menu list when one was registered under the requested name.
+		// This hook needs to return YOUR loaded menulist, if it exists.
 		if (MenuListsFromDisk.contains(filename))
 		{
 			DebugPrint("MenuListFindHook: Intercepted request for menulist '{}'. Returning custom menulist ({:X})", filename, (unsigned int)MenuListsFromDisk[filename]);
 			return { MenuListsFromDisk[filename] };
 		}
 
-		// Returning nullptr lets the original DB_FindXAssetHeader path handle stock menu lists.
+		// If not found in our custom map, let the game's default DB_FindXAssetHeader handle it.
 		DebugPrint("MenuListFindHook: Menulist '{}' not found in custom list. Returning nullptr to trigger default AssetHandler load.", filename);
 		return { nullptr };
 	}

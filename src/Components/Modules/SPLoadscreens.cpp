@@ -73,7 +73,9 @@ namespace Components {
 							bool isDefault = strstr(material->textureTable[i].u.image->name, "default") != nullptr;
 							bool isOldPreview = strstr(material->textureTable[i].u.image->name, "preview_") != nullptr &&
 								strstr(material->textureTable[i].u.image->name, image->name) == nullptr;
-							if (isDefault || (isOldPreview && isElementExplicit))
+							bool isOldLoadscreen = strstr(material->textureTable[i].u.image->name, "loadscreen_") != nullptr &&
+								strstr(material->textureTable[i].u.image->name, image->name) == nullptr;
+							if (isDefault || ((isOldPreview || isOldLoadscreen) && isElementExplicit))
 							{
 								material->textureTable[i].u.image = image;
 							}

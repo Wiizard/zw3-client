@@ -60,7 +60,7 @@ namespace Components
 	std::wstring Exception::GetErrorMessage(const std::string& error)
 	{
 		//const auto clientVersion = (*Game::shortversion)->current.string;
-		const std::string clientVersion = "3.1.0";
+		const std::string clientVersion = "4.0.0";
 		const auto osVersion = Utils::IsWineEnvironment() ? "Wine" : Utils::GetWindowsVersion();
 		const auto launchParams = Utils::String::Convert(Utils::GetLaunchParameters());
 

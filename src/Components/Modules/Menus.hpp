@@ -40,6 +40,7 @@ namespace Components
 		static Utils::Memory::Allocator Allocator;
 
 		static bool MenuAlreadyExists(const std::string& name);
+		static void AddMenuAlias(const std::string& source, const std::string& alias);
 
 		static void FreeZAllocatedMemory(const void* ptr, bool fromTheGame = false);
 		static void FreeAllocatedString(const void* ptr, bool fromTheGame = false);

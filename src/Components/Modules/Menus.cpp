@@ -384,6 +384,26 @@ namespace Components
 		return false;
 	}
 
+	void Menus::AddMenuAlias(const std::string& source, const std::string& alias)
+	{
+		if (MenuAlreadyExists(alias))
+		{
+			return;
+		}
+
+		auto* sourceMenu = Game::Menus_FindByName(Game::uiContext, source.data());
+		if (!sourceMenu || Game::uiContext->menuCount >= ARRAYSIZE(Game::uiContext->Menus))
+		{
+			return;
+		}
+
+		auto* aliasMenu = Allocator.allocate<Game::menuDef_t>();
+		std::memcpy(aliasMenu, sourceMenu, sizeof(Game::menuDef_t));
+		aliasMenu->window.name = Allocator.duplicateString(alias);
+
+		Game::uiContext->Menus[Game::uiContext->menuCount++] = aliasMenu;
+	}
+
 	void Menus::LoadScriptMenu(const char* menu, bool allowNewMenus)
 	{
 		auto menus = LoadMenuByName_Recursive(menu);
@@ -1463,6 +1483,8 @@ namespace Components
 		}
 
 		// Step 3 - Keep supporting data around
+		AddMenuAlias("main_text", "menu_xboxlive_lobbyended");
+		AddMenuAlias("main_text", "menu_xboxlive_partyended");
 
 		// Debug-only check
 		CheckMenus();
@@ -1686,6 +1708,11 @@ namespace Components
 				}
 
 				const char* menuName = params->get(1);
+				if (!Game::Menus_FindByName(Game::uiContext, menuName) && !_strnicmp(menuName, "menu_xboxlive_", 13))
+				{
+					Logger::Print("Menu {} is unavailable, falling back to main_text\n", menuName);
+					menuName = "main_text";
+				}
 
 				Game::Menus_OpenByName(Game::uiContext, menuName);
 			});

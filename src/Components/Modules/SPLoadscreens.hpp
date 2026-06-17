@@ -7,5 +7,9 @@ namespace Components
 	public:
 		SPLoadscreens();
 		~SPLoadscreens();
+
+	private:
+		static void(*OriginalMapCommand)();
+		static void InstallMapCommandHook();
 	};
 }

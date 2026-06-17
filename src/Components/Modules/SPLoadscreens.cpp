@@ -1,12 +1,44 @@
 #include "SPLoadscreens.hpp"
+#include "Command.hpp"
 #include "AssetHandler.hpp"
 #include "FileSystem.hpp"
 #include "Materials.hpp"
 #include "STDInclude.hpp"
 
 namespace Components {
+	void(*SPLoadscreens::OriginalMapCommand)() = nullptr;
+
+	void SPLoadscreens::InstallMapCommandHook()
+	{
+		Scheduler::Schedule([]
+			{
+				auto* mapCommand = Command::Find("map");
+				if (!mapCommand || !mapCommand->function)
+				{
+					return false;
+				}
+
+				OriginalMapCommand = mapCommand->function;
+				Command::Add("map", [](const Command::Params* params)
+					{
+						if (params->size() > 1 && *Game::ui_mapname && !Utils::String::StartsWith(params->get(1), "mp_"))
+						{
+							Game::Dvar_SetString(*Game::ui_mapname, params->get(1));
+						}
+
+						if (OriginalMapCommand)
+						{
+							OriginalMapCommand();
+						}
+					});
+
+				return true;
+			}, Scheduler::Pipeline::MAIN);
+	}
+
 	SPLoadscreens::SPLoadscreens()
 	{
+		InstallMapCommandHook();
 		auto getPreviewImage = [](const std::string& materialName) -> Game::GfxImage*
 			{
 				std::string mapname = "";

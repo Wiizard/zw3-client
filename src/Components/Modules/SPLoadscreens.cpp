@@ -1,5 +1,6 @@
 #include "SPLoadscreens.hpp"
 #include "Command.hpp"
+#include "Events.hpp"
 #include "AssetHandler.hpp"
 #include "FileSystem.hpp"
 #include "Materials.hpp"
@@ -7,10 +8,28 @@
 
 namespace Components {
 	void(*SPLoadscreens::OriginalMapCommand)() = nullptr;
+	void(*SPLoadscreens::OriginalDisconnectCommand)() = nullptr;
 
 	namespace
 	{
 		std::string LoadingMap;
+		bool ShuttingDown = false;
+
+		Game::connstate_t GetConnectionState()
+		{
+			return *reinterpret_cast<Game::connstate_t*>(0xB2C540);
+		}
+
+		bool ShouldPatchLoadscreenUi()
+		{
+			if (ShuttingDown)
+			{
+				return false;
+			}
+
+			const auto connState = GetConnectionState();
+			return connState >= Game::connstate_t::CA_CONNECTING && connState < Game::connstate_t::CA_ACTIVE;
+		}
 
 		void StorePreviewMaterial(const std::string& name, Game::GfxImage* image)
 		{
@@ -115,8 +134,13 @@ namespace Components {
 			}
 		}
 
-		void PatchConnectMenu(Game::GfxImage* image)
+		void PatchConnectMenu(Game::GfxImage* image, bool force = false)
 		{
+			if (!force && !ShouldPatchLoadscreenUi())
+			{
+				return;
+			}
+
 			Game::menuDef_t* connectMenu = Game::Menus_FindByName(Game::uiContext, "connect");
 			if (!connectMenu)
 			{
@@ -166,6 +190,7 @@ namespace Components {
 			return;
 		}
 
+		ShuttingDown = false;
 		LoadingMap = mapname;
 		if (*Game::ui_mapname)
 		{
@@ -181,7 +206,7 @@ namespace Components {
 		StorePreviewMaterial("loading_image", image);
 		StorePreviewMaterial("level_loadscreen", image);
 		StorePreviewMaterial("loadscreen_" + mapname, image);
-		PatchConnectMenu(image);
+		PatchConnectMenu(image, true);
 	}
 
 	void SPLoadscreens::InstallMapCommandHook()
@@ -212,9 +237,40 @@ namespace Components {
 			}, Scheduler::Pipeline::MAIN);
 	}
 
+	void SPLoadscreens::InstallDisconnectCommandHook()
+	{
+		Scheduler::Schedule([]
+			{
+				auto* disconnectCommand = Command::Find("disconnect");
+				if (!disconnectCommand || !disconnectCommand->function)
+				{
+					return false;
+				}
+
+				OriginalDisconnectCommand = disconnectCommand->function;
+				Command::Add("disconnect", []([[maybe_unused]] const Command::Params* params)
+					{
+						ShuttingDown = true;
+						LoadingMap.clear();
+
+						if (OriginalDisconnectCommand)
+						{
+							OriginalDisconnectCommand();
+						}
+					});
+
+				return true;
+			}, Scheduler::Pipeline::MAIN);
+	}
+
 	SPLoadscreens::SPLoadscreens()
 	{
 		InstallMapCommandHook();
+		InstallDisconnectCommandHook();
+		Events::OnCLDisconnected([]([[maybe_unused]] bool wasConnected)
+			{
+				LoadingMap.clear();
+			});
 		auto getPreviewImage = [](const std::string& materialName) -> Game::GfxImage*
 			{
 				return GetPreviewImageForMap(GetTargetMapName(materialName));
@@ -265,6 +321,19 @@ namespace Components {
 				static Game::menuDef_t* lastPatchedMenu = nullptr;
 				static Game::GfxImage* lastPatchedImage = nullptr;
 
+				const auto connState = GetConnectionState();
+				if (connState == Game::connstate_t::CA_ACTIVE || connState == Game::connstate_t::CA_DISCONNECTED)
+				{
+					LoadingMap.clear();
+				}
+
+				if (!ShouldPatchLoadscreenUi())
+				{
+					lastPatchedMenu = nullptr;
+					lastPatchedImage = nullptr;
+					return;
+				}
+
 				Game::menuDef_t* connectMenu = Game::Menus_FindByName(Game::uiContext, "connect");
 				if (connectMenu)
 				{
@@ -277,6 +346,12 @@ namespace Components {
 					}
 				}
 			}, Scheduler::Pipeline::MAIN);
+	}
+
+	void SPLoadscreens::preDestroy()
+	{
+		ShuttingDown = true;
+		LoadingMap.clear();
 	}
 
 	SPLoadscreens::~SPLoadscreens() {}

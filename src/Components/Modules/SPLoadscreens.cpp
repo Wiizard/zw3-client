@@ -64,6 +64,11 @@ namespace Components {
 				if (!material) return;
 
 				Game::GfxImage* image = getPreviewImage(name);
+				if (!image && material->info.name)
+				{
+					image = getPreviewImage(material->info.name);
+				}
+
 				if (image && !strstr(image->name, "default"))
 				{
 					for (int i = 0; i < material->textureCount; ++i)
@@ -147,6 +152,12 @@ namespace Components {
 							else
 							{
 								isExplicitTarget = true;
+							}
+
+							if (!isExplicitTarget && item->window.background && item->window.background->info.name)
+							{
+								isExplicitTarget = Utils::String::Contains(item->window.background->info.name, "loadscreen") ||
+									Utils::String::Contains(item->window.background->info.name, "preview");
 							}
 
 							patchMaterial(item->window.background, item->window.name ? item->window.name : "level_loadscreen", isExplicitTarget);

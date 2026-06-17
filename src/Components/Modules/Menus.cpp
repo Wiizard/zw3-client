@@ -1408,7 +1408,12 @@ namespace Components
 		if (MenusFromDisk.contains(menuName)) {
 			const auto menu = MenusFromDisk[menuName];
 			PrepareToUnloadMenu(menu);
-			FreeMenuOnly(menu);
+
+			// Menu trees contain game-owned and allocator-owned nested pointers that are
+			// still referenced by UI/cgame paths during disconnect and shutdown. Trying
+			// to deep-free them here can hang or corrupt those paths, so mirror the
+			// component shutdown policy and intentionally leak disk-loaded menus for the
+			// process lifetime after detaching them from all contexts.
 			MenusFromDisk.erase(menuName);
 		}
 	}

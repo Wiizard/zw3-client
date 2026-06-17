@@ -119,8 +119,9 @@ namespace Components {
 							const auto* currentName = material->textureTable[i].u.image->name ? material->textureTable[i].u.image->name : "";
 							const bool isDefault = strstr(currentName, "default") != nullptr;
 							const bool isOldPreview = strstr(currentName, "preview_") != nullptr && strstr(currentName, image->name) == nullptr;
+							const bool isOldLoadscreen = strstr(currentName, "loadscreen_") != nullptr && strstr(currentName, image->name) == nullptr;
 
-							if (isDefault || (isOldPreview && isElementExplicit))
+							if (isDefault || ((isOldPreview || isOldLoadscreen) && isElementExplicit))
 							{
 								material->textureTable[i].u.image = image;
 							}

@@ -4,6 +4,7 @@
 #include "MemoryGuard.hpp"
 #include "RawFiles.hpp"
 #include "StartupMessages.hpp"
+#include "SPLoadscreens.hpp"
 #include "Theatre.hpp"
 
 namespace Components
@@ -446,6 +447,8 @@ namespace Components
 
 	void Maps::PrepareUsermap(const char* mapname)
 	{
+		SPLoadscreens::SetLoadingMap(mapname ? mapname : "");
+
 		// Handle the redundant call scenario first.
 		//
 		// It appears that this function is called a second time during fastfile

@@ -8,6 +8,8 @@ namespace Components
 		SPLoadscreens();
 		~SPLoadscreens();
 
+		static void PreloadMapPreview(const std::string& mapname);
+
 	private:
 		static void(*OriginalMapCommand)();
 		static void InstallMapCommandHook();

@@ -4,6 +4,7 @@
 #include "MemoryGuard.hpp"
 #include "RawFiles.hpp"
 #include "StartupMessages.hpp"
+#include "SPLoadscreens.hpp"
 #include "Theatre.hpp"
 
 namespace Components
@@ -449,6 +450,7 @@ namespace Components
 		if (mapname && *Game::ui_mapname && !Utils::String::StartsWith(mapname, "mp_"))
 		{
 			Game::Dvar_SetString(*Game::ui_mapname, mapname);
+			SPLoadscreens::PreloadMapPreview(mapname);
 		}
 
 		// Handle the redundant call scenario first.

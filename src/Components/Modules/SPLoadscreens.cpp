@@ -8,6 +8,71 @@
 namespace Components {
 	void(*SPLoadscreens::OriginalMapCommand)() = nullptr;
 
+	namespace
+	{
+		void StorePreviewMaterial(const std::string& name, Game::GfxImage* image)
+		{
+			if (!image || strstr(image->name, "default"))
+			{
+				return;
+			}
+
+			Game::XAssetHeader existing = AssetHandler::FindTemporaryAsset(Game::ASSET_TYPE_MATERIAL, name.data());
+			if (existing.material && existing.material->textureCount > 0 && existing.material->textureTable && existing.material->textureTable[0].u.image == image)
+			{
+				return;
+			}
+
+			AssetHandler::StoreTemporaryAsset(Game::ASSET_TYPE_MATERIAL, { Materials::Create(name, image) });
+		}
+
+		Game::GfxImage* GetPreviewImageForMap(const std::string& mapname)
+		{
+			if (mapname.empty()) return nullptr;
+
+			// If the map name starts with "mp_", we skip it entirely
+			if (Utils::String::StartsWith(mapname, "mp_"))
+			{
+				return nullptr;
+			}
+
+			std::vector<std::string> variants = { "preview_" + mapname };
+
+			// Handle potential underscores
+			if (mapname.find('_') != std::string::npos)
+			{
+				std::string simpleName = mapname;
+				Utils::String::Replace(simpleName, "_", "");
+				variants.push_back("preview_" + simpleName);
+			}
+
+			for (const auto& variant : variants)
+			{
+				if (FileSystem::File(std::format("images/{}.iwi", variant)).exists())
+				{
+					Game::XAssetHeader imageHeader = Game::DB_FindXAssetHeader(Game::ASSET_TYPE_IMAGE, variant.data());
+					if (!imageHeader.image || strstr(imageHeader.image->name, "default"))
+					{
+						imageHeader.image = Materials::CreateImage(variant, 0, 0, 0, 0, D3DFMT_UNKNOWN);
+						AssetHandler::StoreTemporaryAsset(Game::ASSET_TYPE_IMAGE, imageHeader);
+					}
+
+					return imageHeader.image;
+				}
+			}
+
+			return nullptr;
+		}
+	}
+
+	void SPLoadscreens::PreloadMapPreview(const std::string& mapname)
+	{
+		Game::GfxImage* image = GetPreviewImageForMap(mapname);
+		StorePreviewMaterial("loading_image", image);
+		StorePreviewMaterial("level_loadscreen", image);
+		StorePreviewMaterial("loadscreen_" + mapname, image);
+	}
+
 	void SPLoadscreens::InstallMapCommandHook()
 	{
 		Scheduler::Schedule([]
@@ -24,6 +89,7 @@ namespace Components {
 						if (params->size() > 1 && *Game::ui_mapname && !Utils::String::StartsWith(params->get(1), "mp_"))
 						{
 							Game::Dvar_SetString(*Game::ui_mapname, params->get(1));
+							PreloadMapPreview(params->get(1));
 						}
 
 						if (OriginalMapCommand)
@@ -56,39 +122,7 @@ namespace Components {
 					}
 				}
 
-				if (mapname.empty()) return nullptr;
-
-				// If the map name starts with "mp_", we skip it entirely
-				if (Utils::String::StartsWith(mapname, "mp_"))
-				{
-					return nullptr;
-				}
-
-				std::vector<std::string> variants = { "preview_" + mapname };
-
-				// Handle potential underscores
-				if (mapname.find('_') != std::string::npos)
-				{
-					std::string simpleName = mapname;
-					Utils::String::Replace(simpleName, "_", "");
-					variants.push_back("preview_" + simpleName);
-				}
-
-				for (const auto& variant : variants)
-				{
-					if (FileSystem::File(std::format("images/{}.iwi", variant)).exists())
-					{
-						Game::XAssetHeader imageHeader = Game::DB_FindXAssetHeader(Game::ASSET_TYPE_IMAGE, variant.data());
-						if (!imageHeader.image || strstr(imageHeader.image->name, "default"))
-						{
-							imageHeader.image = Materials::CreateImage(variant, 0, 0, 0, 0, D3DFMT_UNKNOWN);
-							AssetHandler::StoreTemporaryAsset(Game::ASSET_TYPE_IMAGE, imageHeader);
-						}
-						return imageHeader.image;
-					}
-				}
-
-				return nullptr;
+				return GetPreviewImageForMap(mapname);
 			};
 
 		auto patchMaterial = [getPreviewImage](Game::Material* material, const std::string& name, bool isElementExplicit)

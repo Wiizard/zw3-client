@@ -1798,6 +1798,11 @@ namespace Components
 				}
 
 				const char* menuName = params->get(1);
+				if (!Game::Menus_FindByName(Game::uiContext, menuName) && !_strnicmp(menuName, "menu_xboxlive_", 13))
+				{
+					Logger::Print("Menu {} is unavailable, falling back to main_text\n", menuName);
+					menuName = "main_text";
+				}
 
 				Game::Menus_OpenByName(Game::uiContext, menuName);
 			});

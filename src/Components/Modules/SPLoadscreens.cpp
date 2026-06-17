@@ -1,5 +1,4 @@
 #include "SPLoadscreens.hpp"
-#include "Command.hpp"
 #include "AssetHandler.hpp"
 #include "FileSystem.hpp"
 #include "Materials.hpp"
@@ -7,50 +6,14 @@
 
 namespace Components {
 	std::string SPLoadscreens::LoadingMap;
-	void(*SPLoadscreens::OriginalMapCommand)() = nullptr;
 
 	void SPLoadscreens::SetLoadingMap(const std::string& mapname)
 	{
 		LoadingMap = mapname;
 	}
 
-	void SPLoadscreens::MapCommandStub()
-	{
-		Command::ClientParams params;
-		if (params.size() > 1)
-		{
-			SetLoadingMap(params.get(1));
-		}
-
-		if (OriginalMapCommand)
-		{
-			OriginalMapCommand();
-		}
-	}
-
-	void SPLoadscreens::InstallMapCommandHook()
-	{
-		Scheduler::Schedule([]
-			{
-				auto* mapCommand = Command::Find("map");
-				if (!mapCommand || !mapCommand->function)
-				{
-					return false;
-				}
-
-				if (mapCommand->function != MapCommandStub)
-				{
-					OriginalMapCommand = mapCommand->function;
-					mapCommand->function = MapCommandStub;
-				}
-
-				return true;
-			}, Scheduler::Pipeline::MAIN);
-	}
-
 	SPLoadscreens::SPLoadscreens()
 	{
-		InstallMapCommandHook();
 		auto getPreviewImage = [](const std::string& materialName) -> Game::GfxImage*
 			{
 				auto findPreviewForMap = [](const std::string& mapname) -> Game::GfxImage*

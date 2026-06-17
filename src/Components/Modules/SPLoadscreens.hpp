@@ -12,9 +12,5 @@ namespace Components
 
 	private:
 		static std::string LoadingMap;
-		static void(*OriginalMapCommand)();
-
-		static void MapCommandStub();
-		static void InstallMapCommandHook();
 	};
 }

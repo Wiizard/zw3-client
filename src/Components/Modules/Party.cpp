@@ -8,6 +8,7 @@
 #include "Node.hpp"
 #include "ServerList.hpp"
 #include "Stats.hpp"
+#include "Localization.hpp"
 #include "TextRenderer.hpp"
 #include "Voice.hpp"
 #include "Events.hpp"
@@ -507,6 +508,14 @@ namespace Components
 				Dvar::Register<const char*>("character_4_player", "None", Game::DVAR_CODINFO | Game::DVAR_INIT, "Player name assigned to slot 4");
 				Dvar::Register<int>("party_currentPlayers", 0, 0, 4, Game::DVAR_CODINFO | Game::DVAR_INIT, "Total current players in the party");
 				Dvar::Register<int>("party_realPlayers", 0, 0, 4, Game::DVAR_CODINFO | Game::DVAR_INIT, "Current real players in the party");
+				Dvar::Register<const char*>("autosave_map", "", Game::DVAR_INIT, "");
+				Dvar::Register<const char*>("autosave_round", "", Game::DVAR_INIT, "");
+				Dvar::Register<const char*>("autosave_zombiemode", "", Game::DVAR_INIT, "");
+				Dvar::Register<const char*>("autosave_kills", "", Game::DVAR_INIT, "");
+				Dvar::Register<const char*>("autosave_score", "", Game::DVAR_INIT, "");
+				Dvar::Register<const char*>("autosave_time", "", Game::DVAR_INIT, "");
+				Dvar::Register<const char*>("autosave_date", "", Game::DVAR_INIT, "");
+				Dvar::Register<const char*>("autosave_mapname_display", "", Game::DVAR_INIT, "");
 			});
 
 		PartyEnable = Dvar::Register<bool>("party_enable", Dedicated::IsEnabled(), Game::DVAR_NONE, "Enable party system");
@@ -672,97 +681,102 @@ namespace Components
 				// dvar hasn't been set yet, we poll for a short time to allow the menu to
 				// initialize it.
 				auto doLoadSave = []()
-				{
-					std::string path = (*Game::fs_basepath)->current.string + "\\userraw\\scriptdata\\autosave"s;
-
-					std::ifstream f(path);
-					if (!f.is_open())
 					{
-						return;
-					}
+						std::string path = (*Game::fs_basepath)->current.string + "\\zw3\\core\\scriptdata\\autosave"s;
 
-					{
-						struct _stat64 st {};
-						if (_stat64(path.c_str(), &st) == 0)
-						{
-							tm t{};
-							localtime_s(&t, &st.st_mtime);
-
-							char formatted[128];
-							strftime(formatted, sizeof(formatted), "%d %b %Y  %H:%M", &t);
-
-							if (!Game::Dvar_FindVar("autosave_date"))
-							{
-								Game::Dvar_RegisterString("autosave_date", "", 0, "");
-							}
-
-							Game::Dvar_SetString(Game::Dvar_FindVar("autosave_date"), formatted);
-						}
-						else
+						std::ifstream f(path);
+						if (!f.is_open())
 						{
 							return;
 						}
-					}
 
-					std::string fdata((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-					f.close();
-
-					std::string read = fdata;
-					int key = 16;
-
-					std::string data = decryptString(read, key);
-
-					std::unordered_map<std::string, std::string> parsed;
-					size_t start = 0;
-
-					while (true)
-					{
-						size_t s = data.find(';', start);
-						if (s == std::string::npos) break;
-
-						std::string t = data.substr(start, s - start);
-						start = s + 1;
-
-						size_t c = t.find(':');
-						if (c == std::string::npos) continue;
-
-						std::string k = t.substr(0, c);
-						std::string v = t.substr(c + 1);
-
-						auto trim = [](std::string& x)
 						{
-							while (!x.empty() && strchr(" \n\r\t", x.back())) x.pop_back();
-							while (!x.empty() && strchr(" \n\r\t", x.front())) x.erase(x.begin());
-						};
+							struct _stat64 st {};
+							if (_stat64(path.c_str(), &st) == 0)
+							{
+								tm t{};
+								localtime_s(&t, &st.st_mtime);
 
-						trim(k);
-						trim(v);
+								char formatted[128];
+								strftime(formatted, sizeof(formatted), "%d %b %Y  %H:%M", &t);
 
-						parsed[k] = v;
-					}
-
-					if (!parsed.count("map"))
-					{
-						return;
-					}
-
-					for (const auto& p : parsed)
-					{
-						std::string dvarName = "autosave_" + p.first;
-
-						auto var = Game::Dvar_FindVar(dvarName.c_str());
-						if (!var)
-						{
-							var = Game::Dvar_RegisterString(dvarName.c_str(), "", 0, "");
+								Game::Dvar_SetString(Game::Dvar_FindVar("autosave_date"), formatted);
+							}
+							else
+							{
+								return;
+							}
 						}
 
-						Game::Dvar_SetString(var, p.second.c_str());
-					}
+						std::string fdata((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+						f.close();
 
-					Command::Execute("openmenu popup_autosave");
-				};
+						std::string read = fdata;
+						int key = 16;
 
-				// If party_host is already true, run immediately. Otherwise poll for it for up to 2s.
+						std::string data = decryptString(read, key);
+
+						std::unordered_map<std::string, std::string> parsed;
+						size_t start = 0;
+
+						while (true)
+						{
+							size_t s = data.find(';', start);
+							if (s == std::string::npos) break;
+
+							std::string t = data.substr(start, s - start);
+							start = s + 1;
+
+							size_t c = t.find(':');
+							if (c == std::string::npos) continue;
+
+							std::string k = t.substr(0, c);
+							std::string v = t.substr(c + 1);
+
+							auto trim = [](std::string& x)
+								{
+									while (!x.empty() && strchr(" \n\r\t", x.back())) x.pop_back();
+									while (!x.empty() && strchr(" \n\r\t", x.front())) x.erase(x.begin());
+								};
+
+							trim(k);
+							trim(v);
+
+							parsed[k] = v;
+						}
+
+						if (!parsed.count("map"))
+						{
+							return;
+						}
+
+						for (const auto& p : parsed)
+						{
+							std::string dvarName = "autosave_" + p.first;
+
+							auto var = Game::Dvar_FindVar(dvarName.c_str());
+							if (!var)
+							{
+								var = Game::Dvar_RegisterString(dvarName.c_str(), "", Game::DVAR_INIT, "");
+							}
+
+							Game::Dvar_SetString(var, p.second.c_str());
+						}
+
+						{
+							const auto& rawMap = parsed.at("map");
+							const char* displayName = Game::UI_GetMapDisplayName(rawMap.c_str());
+							if (!displayName || !displayName[0] || displayName == rawMap)
+							{
+								displayName = Localization::LocalizeMapName(rawMap.c_str());
+							}
+
+							Game::Dvar_SetString(Game::Dvar_FindVar("autosave_mapname_display"), displayName);
+						}
+
+						Command::Execute("openmenu popup_autosave");
+					};
+
 				auto* partyHostVarNow = Game::Dvar_FindVar("party_host");
 				if (partyHostVarNow && Dvar::Var("party_host").get<bool>())
 				{
@@ -772,19 +786,19 @@ namespace Components
 				{
 					const auto startMs = Game::Sys_Milliseconds();
 					Scheduler::Schedule([startMs, doLoadSave]() mutable -> bool
-					{
-						auto* ph = Game::Dvar_FindVar("party_host");
-						if (ph && Dvar::Var("party_host").get<bool>())
 						{
-							doLoadSave();
-							return true;
-						}
-						if ((Game::Sys_Milliseconds() - startMs) > 2000)
-						{
-							return true;
-						}
-						return false;
-					}, Scheduler::Pipeline::MAIN, 50ms);
+							auto* ph = Game::Dvar_FindVar("party_host");
+							if (ph && Dvar::Var("party_host").get<bool>())
+							{
+								doLoadSave();
+								return true;
+							}
+							if ((Game::Sys_Milliseconds() - startMs) > 2000)
+							{
+								return true;
+							}
+							return false;
+						}, Scheduler::Pipeline::MAIN, 50ms);
 				}
 			});
 
@@ -1045,7 +1059,6 @@ namespace Components
 #ifdef CL_MOD_LOADING
 						std::string mod = (*Game::fs_gameDirVar)->current.string;
 #endif
-						// set fast server stuff here so its updated when we go to download stuff
 						if (info.get("wwwDownload") == "1"s)
 						{
 							Download::SV_wwwDownload.set(true);
@@ -1160,13 +1173,10 @@ namespace Components
 
 							case JoinContainer::MatchType::PARTY_LOBBY:
 							{
-								// Send playlist request
 								Container.requestTime = Game::Sys_Milliseconds();
 								Container.awaitingPlaylist = true;
 								Network::SendCommand(Container.target, "getplaylist", Dvar::Var("password").get<std::string>());
 
-								// This is not a safe method
-								// TODO: Fix actual error!
 								if (Game::CL_IsCgameInitialized())
 								{
 									Command::Execute("disconnect", true);

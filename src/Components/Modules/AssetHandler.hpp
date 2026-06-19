@@ -43,6 +43,8 @@ namespace Components
 
 		static void OffsetToAlias(Utils::Stream::Offset* offset);
 
+		static Game::XAssetHeader FindTemporaryAsset(Game::XAssetType type, const char* filename);
+
 	private:
 		static thread_local int BypassState;
 		static bool ShouldSearchTempAssets;
@@ -60,7 +62,6 @@ namespace Components
 		static void RegisterInterface(IAsset* iAsset);
 
 		static Game::XAssetHeader FindAsset(Game::XAssetType type, const char* filename);
-		static Game::XAssetHeader FindTemporaryAsset(Game::XAssetType type, const char* filename);
 		static bool IsAssetEligible(Game::XAssetType type, Game::XAssetHeader* asset);
 		static void FindAssetStub();
 		static void AddAssetStub();

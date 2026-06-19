@@ -257,7 +257,7 @@ namespace Components
 		}
 	}
 
-	void UIFeeder::Select(float feeder, unsigned int index)
+	void UIFeeder::Select(float feeder, unsigned int index, bool resetScroll)
 	{
 		if (Game::uiContext->openMenuCount > 0)
 		{
@@ -271,6 +271,12 @@ namespace Components
 					if (item && item->type == 6 && item->special == feeder)
 					{
 						item->cursorPos[0] = static_cast<int>(index);
+
+						if (resetScroll && item->typeData.listBox)
+						{
+							item->typeData.listBox->startPos[0] = 0;
+						}
+
 						break;
 					}
 				}

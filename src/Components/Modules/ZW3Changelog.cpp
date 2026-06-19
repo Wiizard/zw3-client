@@ -3,10 +3,11 @@
 #include "Changelog.hpp"
 #include "UIFeeder.hpp"
 #include <Utils/WebIO.hpp>
+#include "Events.hpp"
 
 namespace
 {
-	constexpr std::size_t MaxDetailLineChars = 105;
+	constexpr std::size_t MaxDetailLineChars = 100;
 
 	std::string ParseYamlValue(const std::string& line, const std::size_t prefixLength)
 	{
@@ -89,6 +90,7 @@ namespace
 			|| lower == "fixes"
 			|| lower == "removed"
 			|| lower == "security"
+			|| lower == "notice"
 			|| lower == "other";
 	}
 
@@ -113,7 +115,7 @@ namespace
 			return rawText;
 		}
 
-		return "- " + rawText;
+		return "  - " + rawText;
 	}
 
 	void AddWrappedLine(std::vector<std::string>& out, std::string line)
@@ -132,7 +134,7 @@ namespace
 			return;
 		}
 
-		const std::string continuationPrefix = StartsWith(line, "- ") ? "  " : "  ";
+		const std::string continuationPrefix = "  ";
 
 		auto remaining = line;
 		bool firstLine = true;
@@ -189,6 +191,8 @@ namespace Components
 	std::mutex ZW3Changelog::Mutex;
 	std::vector<ZW3Changelog::Entry> ZW3Changelog::Entries;
 	std::size_t ZW3Changelog::SelectedIndex = 0;
+	Dvar::Var ZW3Changelog::UIPatchTitle;
+	Dvar::Var ZW3Changelog::UIPatchDate;
 
 	std::vector<ZW3Changelog::Entry> ZW3Changelog::ParseYamlEntries(const std::string& yaml)
 	{
@@ -294,6 +298,10 @@ namespace Components
 					subLine = FormatNoteLine(subLine);
 					if (!subLine.empty())
 					{
+						if (IsCategoryLine(StripLeadingBulletPrefixes(subLine)) && !current.Lines.empty())
+						{
+							current.Lines.emplace_back("");
+						}
 						AddWrappedLine(current.Lines, subLine);
 					}
 					else
@@ -307,6 +315,10 @@ namespace Components
 				text = FormatNoteLine(text);
 				if (!text.empty())
 				{
+					if (IsCategoryLine(StripLeadingBulletPrefixes(text)) && !current.Lines.empty())
+					{
+						current.Lines.emplace_back("");
+					}
 					AddWrappedLine(current.Lines, text);
 				}
 			}
@@ -320,39 +332,114 @@ namespace Components
 	void ZW3Changelog::SetEntries(std::vector<Entry> entries)
 	{
 		std::lock_guard _(Mutex);
-
 		Entries = std::move(entries);
 		SelectedIndex = 0;
+
+		if (!Entries.empty())
+		{
+			UIPatchTitle.set(Entries[SelectedIndex].Title.c_str());
+			UIPatchDate.set(Entries[SelectedIndex].Date.c_str());
+		}
+		else
+		{
+			UIPatchTitle.set("");
+			UIPatchDate.set("");
+		}
+
+		UIFeeder::Select(63.0f, 0, true);
+		UIFeeder::Select(64.0f, 0, true);
 	}
 
 	unsigned int ZW3Changelog::GetVersionCount()
 	{
 		std::lock_guard _(Mutex);
+		if (Entries.empty())
+		{
+			return 0;
+		}
 
-		return static_cast<unsigned int>(Entries.size());
+		return static_cast<unsigned int>(Entries.size() + 1);
 	}
 
 	const char* ZW3Changelog::GetVersionText(unsigned int item, [[maybe_unused]] int column)
 	{
 		std::lock_guard _(Mutex);
-
-		if (item >= Entries.size())
+		if (Entries.empty())
 		{
 			return "";
 		}
 
-		const auto& entry = Entries[item];
+		if (item == 0)
+		{
+			return Utils::String::Format("{} (Latest)", Entries[0].Version);
+		}
+		if (item == 1)
+		{
+			return "--- Older Patches ---";
+		}
 
-		return Utils::String::Format("{}", entry.Version);
+		unsigned int realIndex = item - 1;
+		if (realIndex >= Entries.size())
+		{
+			return "";
+		}
+
+		return Utils::String::Format("{}", Entries[realIndex].Version);
 	}
 
 	void ZW3Changelog::SelectVersion(unsigned int index)
 	{
 		std::lock_guard _(Mutex);
-
-		if (index < Entries.size())
+		if (Entries.empty())
 		{
-			SelectedIndex = index;
+			return;
+		}
+
+		if (index == 0)
+		{
+			SelectedIndex = 0;
+			UIFeeder::Select(64.0f, 0, true);
+			UIPatchTitle.set(Entries[SelectedIndex].Title.c_str());
+			UIPatchDate.set(Entries[SelectedIndex].Date.c_str());
+			return;
+		}
+
+		if (index == 1)
+		{
+			if (SelectedIndex == 0)
+			{
+				if (Entries.size() > 1)
+				{
+					SelectedIndex = 1;
+					UIFeeder::Select(63.0f, 2, true);
+					UIFeeder::Select(64.0f, 0, true);
+				}
+				else
+				{
+					SelectedIndex = 0;
+					UIFeeder::Select(63.0f, 0, true);
+					UIFeeder::Select(64.0f, 0, true);
+				}
+			}
+			else
+			{
+				SelectedIndex = 0;
+				UIFeeder::Select(63.0f, 0, true);
+				UIFeeder::Select(64.0f, 0, true);
+			}
+
+			UIPatchTitle.set(Entries[SelectedIndex].Title.c_str());
+			UIPatchDate.set(Entries[SelectedIndex].Date.c_str());
+			return;
+		}
+
+		unsigned int realIndex = index - 1;
+		if (realIndex < Entries.size())
+		{
+			SelectedIndex = realIndex;
+			UIFeeder::Select(64.0f, 0, true);
+			UIPatchTitle.set(Entries[SelectedIndex].Title.c_str());
+			UIPatchDate.set(Entries[SelectedIndex].Date.c_str());
 		}
 	}
 
@@ -367,17 +454,12 @@ namespace Components
 
 		const auto& entry = Entries[SelectedIndex];
 
-		// Keep title behavior exactly as before: title is one normal detail line.
-		const auto titleExtra = entry.Title.empty() ? 0u : 1u;
-		const auto dateExtra = entry.Date.empty() ? 0u : 1u;
-		const auto metaExtra = titleExtra + dateExtra;
-
 		if (entry.Lines.empty())
 		{
-			return metaExtra + 1u;
+			return 1;
 		}
 
-		return metaExtra + static_cast<unsigned int>(entry.Lines.size());
+		return static_cast<unsigned int>(entry.Lines.size());
 	}
 
 	const char* ZW3Changelog::GetDetailText(unsigned int item, [[maybe_unused]] int column)
@@ -391,36 +473,27 @@ namespace Components
 
 		const auto& entry = Entries[SelectedIndex];
 
-		// Keep title behavior exactly as before: show the title as the first detail line.
-		if (!entry.Title.empty())
-		{
-			if (item == 0)
-			{
-				return Utils::String::Format("{}", entry.Title);
-			}
-
-			item -= 1;
-		}
-
-		// Date is only an extra detail line. Version/title display stays unchanged.
-		if (!entry.Date.empty())
-		{
-			if (item == 0)
-			{
-				return Utils::String::Format("Date: {}", entry.Date);
-			}
-
-			item -= 1;
-		}
-
 		if (entry.Lines.empty() && item == 0)
 		{
+			if (column != 0) return "";
 			return "No notes provided for this version.";
 		}
 
 		if (item < entry.Lines.size())
 		{
-			return Utils::String::Format("{}", entry.Lines[item]);
+			const std::string& line = entry.Lines[item];
+			
+			if (line.empty()) return "";
+
+			std::string cleanLine = line;
+			Utils::String::Trim(cleanLine);
+
+			if (IsCategoryLine(StripLeadingBulletPrefixes(cleanLine)))
+			{
+				return Utils::String::Format("^1{}", Utils::String::ToUpper(cleanLine));
+			}
+
+			return Utils::String::Format("             ^7{}", line);
 		}
 
 		return "";
@@ -453,6 +526,12 @@ namespace Components
 		{
 			return;
 		}
+
+		Events::OnDvarInit([]
+		{
+			UIPatchTitle = Dvar::Register<const char*>("zw3_changelog_patch_title", "", Game::DVAR_INIT, "Title of the selected patch");
+			UIPatchDate = Dvar::Register<const char*>("zw3_changelog_patch_date", "", Game::DVAR_INIT, "Date of the selected patch");
+		});
 
 		UIScript::Add("loadZW3Changelog", Fetch);
 

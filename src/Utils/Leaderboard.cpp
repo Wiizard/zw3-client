@@ -2,7 +2,9 @@
 
 #include <Components/Modules/Dvar.hpp>
 #include <Components/Modules/Events.hpp>
+#include <Components/Modules/Localization.hpp>
 #include <Components/Modules/Logger.hpp>
+#include <Components/Modules/Scheduler.hpp>
 #include <Components/Modules/Toast.hpp>
 #include <Components/Modules/UIFeeder.hpp>
 #include <Components/Modules/UIScript.hpp>
@@ -18,6 +20,7 @@ namespace Components
 	Dvar::Var Leaderboard::UILeaderboardMap;
 	Dvar::Var Leaderboard::UILeaderboardPage;
 	Dvar::Var Leaderboard::UILeaderboardPlayerStatus;
+	Dvar::Var Leaderboard::UIMapNameDisplay;
 	int Leaderboard::CurrentOffset = 0;
 	int Leaderboard::NextOffset = -1;
 	int Leaderboard::TotalItems = -1;
@@ -121,6 +124,19 @@ namespace Components
 		return {};
 	}
 
+	void Leaderboard::UpdateMapDisplayDvar(const std::string& rawMap)
+	{
+		if (!UIMapNameDisplay.get<Game::dvar_t*>()) return;
+
+		const char* displayName = Game::UI_GetMapDisplayName(rawMap.c_str());
+		if (!displayName || !displayName[0] || std::strcmp(displayName, rawMap.c_str()) == 0)
+		{
+			displayName = Localization::LocalizeMapName(rawMap.c_str());
+		}
+
+		UIMapNameDisplay.set(displayName);
+	}
+
 	std::string Leaderboard::UrlEncode(const std::string& value)
 	{
 		std::string encoded;
@@ -149,6 +165,11 @@ namespace Components
 	{
 		const auto mapName = GetCurrentMapName();
 		UILeaderboardMap.set(mapName.empty() ? "Unknown" : mapName);
+
+		if (!mapName.empty())
+		{
+			UpdateMapDisplayDvar(mapName);
+		}
 
 		if (mapName.empty())
 		{
@@ -441,11 +462,21 @@ namespace Components
 
 		Events::OnDvarInit([]
 			{
-				UILeaderboardMap = Dvar::Register<const char*>("ui_leaderboard_map", "", Game::DVAR_NONE, "Current map used by the best rounds leaderboard.");
-				UILeaderboardPage = Dvar::Register<const char*>("ui_leaderboard_page", "Page 1", Game::DVAR_NONE, "Current page used by the best rounds leaderboard.");
-				UILeaderboardPlayerStatus = Dvar::Register<const char*>("ui_leaderboard_player_status", "", Game::DVAR_NONE, "Local player leaderboard status.");
+				UILeaderboardMap = Dvar::Register<const char*>("zw3_leaderboard_map", "", Game::DVAR_INIT, "Current map used by the best rounds leaderboard.");
+				UILeaderboardPage = Dvar::Register<const char*>("zw3_leaderboard_page", "Page 1", Game::DVAR_INIT, "Current page used by the best rounds leaderboard.");
+				UILeaderboardPlayerStatus = Dvar::Register<const char*>("zw3_leaderboard_player_status", "", Game::DVAR_INIT, "Local player leaderboard status.");
 				UILeaderboardPlayerStatus.set("");
+				UIMapNameDisplay = Dvar::Register<const char*>("zw3_leaderboard_mapname_display", "", Game::DVAR_INIT, "Display name of the current map.");
 			});
+
+		Scheduler::Loop([]
+			{
+				static std::string lastRaw;
+				const auto raw = GetCurrentMapName();
+				if (raw.empty() || raw == lastRaw) return;
+				lastRaw = raw;
+				UpdateMapDisplayDvar(raw);
+			}, Scheduler::Pipeline::MAIN, 2s);
 
 		UIFeeder::Add(FeederId, Leaderboard::GetEntryCount, Leaderboard::GetEntryText, Leaderboard::SelectEntry);
 		UIScript::Add("RefreshLeaderboard", Leaderboard::RefreshFirstPage);

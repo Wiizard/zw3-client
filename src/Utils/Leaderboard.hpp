@@ -37,6 +37,7 @@ namespace Components
 		static Dvar::Var UILeaderboardPage;
 		static Dvar::Var UILeaderboardLoadingIndicator;
 		static Dvar::Var UILeaderboardPlayerStatus;
+		static Dvar::Var UIMapNameDisplay;
 		static int CurrentOffset;
 		static int NextOffset;
 		static int TotalItems;
@@ -50,6 +51,7 @@ namespace Components
 
 		static void UpdatePageDvar();
 		static void UpdateLocalPlayerStatus();
+		static void UpdateMapDisplayDvar(const std::string& rawMap);
 		static std::string GetCurrentMapName();
 		static std::string UrlEncode(const std::string& value);
 		static void StartRefresh(int offset);

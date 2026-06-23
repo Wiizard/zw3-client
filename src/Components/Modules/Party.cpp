@@ -13,6 +13,7 @@
 #include "Voice.hpp"
 #include "Events.hpp"
 #include <version.hpp>
+#include <unordered_set>
 
 #define CL_MOD_LOADING
 
@@ -677,9 +678,6 @@ namespace Components
 
 		UIScript::Add("LoadSave", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 			{
-				// The autosave popup should only be shown when party_host is true. If the
-				// dvar hasn't been set yet, we poll for a short time to allow the menu to
-				// initialize it.
 				auto doLoadSave = []()
 					{
 						std::string path = (*Game::fs_basepath)->current.string + "\\zw3\\core\\scriptdata\\autosave"s;
@@ -690,59 +688,331 @@ namespace Components
 							return;
 						}
 
+						auto ensureAutosaveDvar = [](const char* name, const char* value)
+							{
+								auto* var = Game::Dvar_FindVar(name);
+								if (!var)
+								{
+									var = Game::Dvar_RegisterString(name, "", Game::DVAR_INIT, "");
+								}
+
+								Game::Dvar_SetString(var, value ? value : "");
+							};
+
+						auto cleanDisplayText = [](std::string value) -> std::string
+							{
+								std::replace(value.begin(), value.end(), '9', ' ');
+								return value;
+							};
+
+						auto formatAutosaveTime = [](const std::string& value) -> std::string
+							{
+								int h = 0, m = 0, s = 0;
+
+								if (std::sscanf(value.c_str(), "%d:%d:%d", &h, &m, &s) == 3)
+								{
+									char buffer[16];
+									std::snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d", h, m, s);
+									return buffer;
+								}
+
+								return "00:00:00"s;
+							};
+
+						auto isRawWeaponUpgraded = [](const std::string& rawWeapon) -> bool
+							{
+								return rawWeapon.find("_upgraded_mp") != std::string::npos || rawWeapon.find("_upgrade_mp") != std::string::npos;
+							};
+
+						auto hasUpgradeAvailable = [](const std::string& rawWeapon) -> bool
+							{
+								static const std::unordered_set<std::string> upgradeableWeapons =
+								{
+									"t7_raygun_mp", "t7_rgmk2_mp", "thundergun_mp", "apothicon_mp",
+									"acidgat_mp", "blundergat_mp", "t5_spectre_mp", "t5_galil_mp",
+									"t5_mp5k_mp", "t5_ak74u_mp", "t5_python_mp", "t5_1911_mp",
+									"iw5_mp7_mp", "codo_ak104ss_mp", "codo_mg4ss_mp", "codo_mg4ss_alt_mp",
+									"jetgun_mp", "t7_dg2_mp", "t5_rottweil72_mp", "t5_mp40_mp",
+									"t4_bar_mp", "t5_commando_mp", "t4_thompson_mp", "bow_mp",
+									"paralyzer_mp", "raymachine_mp"
+								};
+
+								return upgradeableWeapons.find(rawWeapon) != upgradeableWeapons.end();
+							};
+
+						auto getUpgradeStatus = [&](const std::string& rawWeapon, const std::string& upgradeValue) -> std::string
+							{
+								if (isRawWeaponUpgraded(rawWeapon))
+								{
+									return "^2Yes"s;
+								}
+
+								if (!upgradeValue.empty() && upgradeValue != "none" && upgradeValue != "0")
+								{
+									return "^2Yes"s;
+								}
+
+								if (hasUpgradeAvailable(rawWeapon))
+								{
+									return "^3No"s;
+								}
+
+								return "^1Not Upgradable"s;
+							};
+
+						auto getUpgradeEffect = [](const std::string& value) -> std::string
+							{
+								if (value.empty() || value == "none" || value == "0")
+								{
+									return "None"s;
+								}
+
+								if (value == "flame")
+								{
+									return "^1Flame"s;
+								}
+
+								if (value == "turned")
+								{
+									return "^2Turned"s;
+								}
+
+								if (value == "lightning")
+								{
+									return "^5Lightning"s;
+								}
+
+								return value;
+							};
+
+						auto cleanWeaponName = [](std::string value) -> std::string
+							{
+								if (value.empty() || value == "none")
+								{
+									return "None"s;
+								}
+
+								static const std::unordered_map<std::string, std::string> weaponNames =
+								{
+									{ "t5_mp40_mp", "MP40" },
+									{ "t5_mp40_upgraded_mp", "The Afterburner" },
+									{ "t5_1911_mp", "M1911" },
+									{ "t5_1911_upgraded_mp", "Mustang" },
+									{ "t5_rottweil72_mp", "Olympia" },
+									{ "t5_rottweil72_upgraded_mp", "Hades" },
+									{ "t5_python_mp", "Python" },
+									{ "t5_python_upgraded_mp", "Cobra" },
+									{ "t5_galil_mp", "Galil" },
+									{ "t5_galil_upgraded_mp", "Lamentation" },
+									{ "t5_spectre_mp", "Spectre" },
+									{ "t5_spectre_upgraded_mp", "Phantom" },
+									{ "t5_mp5k_mp", "MP5K" },
+									{ "t5_mp5k_upgraded_mp", "MP115 Kollider" },
+									{ "t5_ak74u_mp", "AK74u" },
+									{ "t5_ak74u_upgraded_mp", "AK74fu2" },
+									{ "t5_commando_mp", "Commando" },
+									{ "t5_commando_upgraded_mp", "Predator" },
+
+									{ "t4_bar_mp", "BAR" },
+									{ "t4_bar_upgraded_mp", "The Widow Maker" },
+									{ "t4_thompson_mp", "Thompson" },
+									{ "t4_thompson_upgraded_mp", "Speakeasy" },
+
+									{ "iw5_mp7_mp", "MP7" },
+									{ "iw5_mp7_upgraded_mp", "MP8" },
+
+									{ "codo_ak104ss_mp", "CAR-T Lava" },
+									{ "codo_ak104ss_upgraded_mp", "Car-Z Magma" },
+									{ "codo_mg4ss_mp", "Gaia's Arm" },
+									{ "codo_mg4ss_alt_mp", "Gaia's Arm Sentrymode" },
+									{ "codo_mg4ss_upgraded_mp", "Kronos Arm" },
+									{ "codo_mg4ss_alt_upgraded_mp", "Kronos Arm Sentrymode" },
+
+									{ "t7_raygun_mp", "Ray Gun" },
+									{ "t7_raygun_upgraded_mp", "Porter's X2 Ray Gun" },
+									{ "t7_rgmk2_mp", "Ray Gun Mark 2" },
+									{ "t7_rgmk2_upgraded_mp", "Porter's Mark II Ray Gun" },
+									{ "t7_dg2_mp", "Wunderwaffe DG2" },
+									{ "t7_dg2_upgraded_mp", "DG-3 JZ" },
+
+									{ "thundergun_mp", "Thundergun" },
+									{ "thundergun_upgrade_mp", "Zeus Cannon" },
+									{ "thundergun_upgraded_mp", "Zeus Cannon" },
+
+									{ "paralyzer_mp", "Paralyzer" },
+									{ "paralyzer_upgraded_mp", "Petrifier" },
+
+									{ "apothicon_mp", "Apothicon Servant" },
+									{ "apothicon_upgraded_mp", "Estoom-oth" },
+
+									{ "blundergat_mp", "Blundergat" },
+									{ "blundergat_upgrade_mp", "The Sweeper" },
+									{ "blundergat_upgraded_mp", "The Sweeper" },
+									{ "acidgat_mp", "Acid Gat" },
+									{ "acidgat_upgraded_mp", "Vitriolic Withering" },
+
+									{ "jetgun_mp", "Thrustodyne Aeronautics Model 23" },
+									{ "jetgun_upgraded_mp", "Thrustodyne M23" },
+
+									{ "raymachine_mp", "Ray Machine" },
+									{ "raymachine_upgraded_mp", "Porter's Ray Machine" },
+
+									{ "bow_mp", "Bow" },
+									{ "bow_upgraded_mp", "Upgraded Bow" },
+									{ "skull_mp", "Skull of Nan Sapwe" },
+									{ "skull_upgraded_mp", "Upgraded Skull of Nan Sapwe" },
+
+									{ "c4_mp", "Monkey Bombs" },
+									{ "throwingknife_mp", "Tazer" },
+									{ "stabby_mp", "Knife" },
+									{ "stabby_miss_mp", "Knife" },
+									{ "deathhands_mp", "Death Hands" },
+									{ "revive_mp", "Revive" },
+									{ "paphands_mp", "Bare Hands" },
+									{ "stinger_mp", "Stinger" }
+								};
+
+								const auto found = weaponNames.find(value);
+								if (found != weaponNames.end())
+								{
+									return found->second;
+								}
+
+								static const std::unordered_map<std::string, std::string> baseWeaponNames =
+								{
+									{ "mp5k", "MP5K" }, { "uzi", "Mini-Uzi" }, { "p90", "P90" }, { "kriss", "Vector" }, { "ump45", "UMP45" },
+									{ "striker", "Striker" }, { "aa12", "AA-12" }, { "m1014", "M1014" }, { "spas12", "SPAS-12" }, { "ranger", "Ranger" }, { "model1887", "Model 1887" },
+									{ "ak47", "AK-47" }, { "m16", "M16A4" }, { "m4", "M4A1" }, { "fn2000", "F2000" }, { "masada", "ACR" }, { "famas", "FAMAS" }, { "fal", "FAL" }, { "scar", "SCAR-H" }, { "tavor", "TAR-21" }, { "peacekeeper", "Peacekeeper" },
+									{ "aug", "AUG HBAR" }, { "rpd", "RPD" }, { "sa80", "L86 LSW" }, { "mg4", "MG4" }, { "m240", "M240" },
+									{ "cheytac", "Intervention" }, { "m21", "M21 EBR" }, { "wa2000", "WA2000" }, { "barrett", "Barrett .50cal" }, { "dragunov", "Dragunov" }, { "m40a3", "M40A3" },
+									{ "usp", "USP .45" }, { "deserteagle", "Desert Eagle" }, { "coltanaconda", "Colt Anaconda" }, { "beretta", "M9" },
+									{ "rpg", "RPG-7" }, { "javelin", "Javelin" }, { "at4", "AT4" }, { "m79", "M79" },
+									{ "glock", "G18" }, { "tmp", "TMP" }, { "beretta393", "M93 Raffica" }, { "pp2000", "PP2000" }
+								};
+
+								static const std::unordered_map<std::string, std::string> attachmentNames =
+								{
+									{ "acog", "ACOG" }, { "reflex", "Reflex" }, { "eotech", "Holographic" },
+									{ "fmj", "FMJ" }, { "xmags", "Extended Mags" }, { "silencer", "Silencer" },
+									{ "akimbo", "Akimbo" }, { "rof", "Rapid Fire" }, { "grip", "Grip" },
+									{ "gl", "Grenade Launcher" }, { "shotgun", "Shotgun" }, { "heartbeat", "Heartbeat" },
+									{ "thermal", "Thermal" }, { "tactical", "Tactical Knife" }
+								};
+
+								auto baseNameOnly = value;
+								if (baseNameOnly.size() > 3 && baseNameOnly.substr(baseNameOnly.size() - 3) == "_mp")
+								{
+									baseNameOnly = baseNameOnly.substr(0, baseNameOnly.size() - 3);
+								}
+
+								std::vector<std::string> parts;
+								std::string current;
+
+								for (const auto ch : baseNameOnly)
+								{
+									if (ch == '_')
+									{
+										if (!current.empty())
+										{
+											parts.push_back(current);
+											current.clear();
+										}
+									}
+									else
+									{
+										current.push_back(ch);
+									}
+								}
+
+								if (!current.empty())
+								{
+									parts.push_back(current);
+								}
+
+								if (parts.empty())
+								{
+									return value;
+								}
+
+								const auto baseIt = baseWeaponNames.find(parts[0]);
+								std::string displayName = baseIt != baseWeaponNames.end() ? baseIt->second : parts[0];
+
+								std::string attachments;
+								for (size_t i = 1; i < parts.size(); ++i)
+								{
+									const auto attIt = attachmentNames.find(parts[i]);
+									if (attIt == attachmentNames.end())
+									{
+										continue;
+									}
+
+									if (!attachments.empty())
+									{
+										attachments += ", ";
+									}
+
+									attachments += attIt->second;
+								}
+
+								if (!attachments.empty())
+								{
+									return displayName + " (" + attachments + ")";
+								}
+
+								return displayName;
+							};
+
+						struct _stat64 st {};
+						if (_stat64(path.c_str(), &st) == 0)
 						{
-							struct _stat64 st {};
-							if (_stat64(path.c_str(), &st) == 0)
-							{
-								tm t{};
-								localtime_s(&t, &st.st_mtime);
+							tm t{};
+							localtime_s(&t, &st.st_mtime);
 
-								char formatted[128];
-								strftime(formatted, sizeof(formatted), "%d %b %Y  %H:%M", &t);
-
-								Game::Dvar_SetString(Game::Dvar_FindVar("autosave_date"), formatted);
-							}
-							else
-							{
-								return;
-							}
+							char formatted[128];
+							strftime(formatted, sizeof(formatted), "%d %b %Y  %H:%M", &t);
+							ensureAutosaveDvar("autosave_date", formatted);
+						}
+						else
+						{
+							ensureAutosaveDvar("autosave_date", "Unknown date");
 						}
 
 						std::string fdata((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 						f.close();
 
-						std::string read = fdata;
-						int key = 16;
-
-						std::string data = decryptString(read, key);
+						const int key = 16;
+						const std::string data = decryptString(fdata, key);
 
 						std::unordered_map<std::string, std::string> parsed;
 						size_t start = 0;
 
 						while (true)
 						{
-							size_t s = data.find(';', start);
+							const size_t s = data.find(';', start);
 							if (s == std::string::npos) break;
 
-							std::string t = data.substr(start, s - start);
+							std::string item = data.substr(start, s - start);
 							start = s + 1;
 
-							size_t c = t.find(':');
+							const size_t c = item.find(':');
 							if (c == std::string::npos) continue;
 
-							std::string k = t.substr(0, c);
-							std::string v = t.substr(c + 1);
+							std::string k = item.substr(0, c);
+							std::string v = item.substr(c + 1);
 
 							auto trim = [](std::string& x)
 								{
-									while (!x.empty() && strchr(" \n\r\t", x.back())) x.pop_back();
-									while (!x.empty() && strchr(" \n\r\t", x.front())) x.erase(x.begin());
+									while (!x.empty() && std::strchr(" \n\r\t", x.back())) x.pop_back();
+									while (!x.empty() && std::strchr(" \n\r\t", x.front())) x.erase(x.begin());
 								};
 
 							trim(k);
 							trim(v);
 
-							parsed[k] = v;
+							if (!k.empty())
+							{
+								parsed[k] = v;
+							}
 						}
 
 						if (!parsed.count("map"))
@@ -750,29 +1020,94 @@ namespace Components
 							return;
 						}
 
-						for (const auto& p : parsed)
-						{
-							std::string dvarName = "autosave_" + p.first;
-
-							auto var = Game::Dvar_FindVar(dvarName.c_str());
-							if (!var)
+						auto getParsed = [&](const char* keyName, const char* fallback = "") -> std::string
 							{
-								var = Game::Dvar_RegisterString(dvarName.c_str(), "", Game::DVAR_INIT, "");
-							}
+								const auto it = parsed.find(keyName);
+								if (it != parsed.end() && !it->second.empty())
+								{
+									return it->second;
+								}
 
-							Game::Dvar_SetString(var, p.second.c_str());
+								return fallback;
+							};
+
+						const auto roundDisplay = getParsed("round", "1");
+						const auto killsDisplay = getParsed("kills", "0");
+						const auto scoreDisplay = getParsed("score", "0");
+						const auto downsDisplay = getParsed("downs", "0");
+						const auto revivesDisplay = getParsed("revives", "0");
+						const auto exfiltratedDisplay = getParsed("exfiltrated", "0");
+						const auto zombieModeDisplay = cleanDisplayText(getParsed("zombiemode", "Normal"));
+						const auto timeDisplay = formatAutosaveTime(getParsed("time", "00:00:00"));
+
+						ensureAutosaveDvar("autosave_round", roundDisplay.c_str());
+						ensureAutosaveDvar("autosave_kills", killsDisplay.c_str());
+						ensureAutosaveDvar("autosave_score", scoreDisplay.c_str());
+						ensureAutosaveDvar("autosave_downs", downsDisplay.c_str());
+						ensureAutosaveDvar("autosave_revives", revivesDisplay.c_str());
+						ensureAutosaveDvar("autosave_exfiltrated", exfiltratedDisplay.c_str());
+						ensureAutosaveDvar("autosave_zombiemode", zombieModeDisplay.c_str());
+						ensureAutosaveDvar("autosave_time", timeDisplay.c_str());
+
+						const auto primaryRaw = getParsed("weapon(0)", "None");
+						const auto secondaryRaw = getParsed("weapon(1)", "None");
+
+						const auto primaryUpgradeRaw = getParsed("upgrade(0)", "none");
+						const auto secondaryUpgradeRaw = getParsed("upgrade(1)", "none");
+
+						const auto primaryWeaponDisplay = cleanWeaponName(primaryRaw);
+						const auto secondaryWeaponDisplay = cleanWeaponName(secondaryRaw);
+
+						const auto primaryUpgradeDisplay = getUpgradeStatus(primaryRaw, primaryUpgradeRaw);
+						const auto secondaryUpgradeDisplay = getUpgradeStatus(secondaryRaw, secondaryUpgradeRaw);
+
+						const auto primaryEffectDisplay = getUpgradeEffect(primaryUpgradeRaw);
+						const auto secondaryEffectDisplay = getUpgradeEffect(secondaryUpgradeRaw);
+
+						const auto primaryClipDisplay = getParsed("clip(0)", "0");
+						const auto primaryStockDisplay = getParsed("stock(0)", "0");
+						const auto secondaryClipDisplay = getParsed("clip(1)", "0");
+						const auto secondaryStockDisplay = getParsed("stock(1)", "0");
+
+						ensureAutosaveDvar("autosave_primary_weapon", primaryWeaponDisplay.c_str());
+						ensureAutosaveDvar("autosave_primary_clip", primaryClipDisplay.c_str());
+						ensureAutosaveDvar("autosave_primary_stock", primaryStockDisplay.c_str());
+						ensureAutosaveDvar("autosave_primary_upgrade", primaryUpgradeDisplay.c_str());
+						ensureAutosaveDvar("autosave_primary_effect", primaryEffectDisplay.c_str());
+
+						ensureAutosaveDvar("autosave_secondary_weapon", secondaryWeaponDisplay.c_str());
+						ensureAutosaveDvar("autosave_secondary_clip", secondaryClipDisplay.c_str());
+						ensureAutosaveDvar("autosave_secondary_stock", secondaryStockDisplay.c_str());
+						ensureAutosaveDvar("autosave_secondary_upgrade", secondaryUpgradeDisplay.c_str());
+						ensureAutosaveDvar("autosave_secondary_effect", secondaryEffectDisplay.c_str());
+
+						const auto quickReviveDisplay = getParsed("perks('Quick Revive')", "0");
+						const auto juggernogDisplay = getParsed("perks('Juggernog')", "0");
+						const auto speedColaDisplay = getParsed("perks('Speed Cola')", "0");
+						const auto doubleTapDisplay = getParsed("perks('Double Tap')", "0");
+						const auto staminUpDisplay = getParsed("perks('Stamin Up')", "0");
+						const auto deadshotDisplay = getParsed("perks('Deadshot Daiquiri')", "0");
+						const auto electricCherryDisplay = getParsed("perks('Electric Cherry')", "0");
+
+						ensureAutosaveDvar("autosave_has_quickrevive", quickReviveDisplay.c_str());
+						ensureAutosaveDvar("autosave_has_juggernog", juggernogDisplay.c_str());
+						ensureAutosaveDvar("autosave_has_speedcola", speedColaDisplay.c_str());
+						ensureAutosaveDvar("autosave_has_doubletap", doubleTapDisplay.c_str());
+						ensureAutosaveDvar("autosave_has_staminup", staminUpDisplay.c_str());
+						ensureAutosaveDvar("autosave_has_deadshot", deadshotDisplay.c_str());
+						ensureAutosaveDvar("autosave_has_electriccherry", electricCherryDisplay.c_str());
+
+						const auto rawMap = getParsed("map", "");
+						const char* displayName = Game::UI_GetMapDisplayName(rawMap.c_str());
+
+						if (!displayName || !displayName[0] || std::strcmp(displayName, rawMap.c_str()) == 0)
+						{
+							displayName = Localization::LocalizeMapName(rawMap.c_str());
 						}
 
-						{
-							const auto& rawMap = parsed.at("map");
-							const char* displayName = Game::UI_GetMapDisplayName(rawMap.c_str());
-							if (!displayName || !displayName[0] || displayName == rawMap)
-							{
-								displayName = Localization::LocalizeMapName(rawMap.c_str());
-							}
-
-							Game::Dvar_SetString(Game::Dvar_FindVar("autosave_mapname_display"), displayName);
-						}
+						const std::string mapDisplayName = displayName ? displayName : rawMap;
+						ensureAutosaveDvar("autosave_map", rawMap.c_str());
+						ensureAutosaveDvar("autosave_mapname_display", mapDisplayName.c_str());
 
 						Command::Execute("openmenu popup_autosave");
 					};
@@ -785,6 +1120,7 @@ namespace Components
 				else
 				{
 					const auto startMs = Game::Sys_Milliseconds();
+
 					Scheduler::Schedule([startMs, doLoadSave]() mutable -> bool
 						{
 							auto* ph = Game::Dvar_FindVar("party_host");
@@ -793,15 +1129,16 @@ namespace Components
 								doLoadSave();
 								return true;
 							}
+
 							if ((Game::Sys_Milliseconds() - startMs) > 2000)
 							{
 								return true;
 							}
+
 							return false;
 						}, Scheduler::Pipeline::MAIN, 50ms);
 				}
 			});
-
 
 		UIScript::Add("LoadSaveAccepted", [](const UIScript::Token&, const Game::uiInfo_s*)
 			{

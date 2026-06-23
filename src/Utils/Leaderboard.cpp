@@ -17,17 +17,25 @@
 namespace Components
 {
 	std::vector<Leaderboard::Entry> Leaderboard::Entries;
+
 	Dvar::Var Leaderboard::UILeaderboardMap;
 	Dvar::Var Leaderboard::UILeaderboardPage;
 	Dvar::Var Leaderboard::UILeaderboardPlayerStatus;
 	Dvar::Var Leaderboard::UIMapNameDisplay;
+	Dvar::Var Leaderboard::UILeaderboardCanPrev;
+	Dvar::Var Leaderboard::UILeaderboardCanNext;
+
 	int Leaderboard::CurrentOffset = 0;
+	int Leaderboard::DisplayedOffset = 0;
 	int Leaderboard::NextOffset = -1;
 	int Leaderboard::TotalItems = -1;
+
 	bool Leaderboard::HasNextPage = false;
 	bool Leaderboard::Loading = false;
+
 	unsigned int Leaderboard::RequestSerial = 0;
 	std::string Leaderboard::CurrentMap;
+
 	int Leaderboard::LastKnownRank = 0;
 	bool Leaderboard::IsSearching = false;
 
@@ -69,6 +77,7 @@ namespace Components
 
 		static char timeBuffers[16][32];
 		static size_t currentBufferIndex = 0;
+
 		char* targetBuffer = timeBuffers[currentBufferIndex];
 		currentBufferIndex = (currentBufferIndex + 1) % 16;
 
@@ -84,23 +93,35 @@ namespace Components
 		return targetBuffer;
 	}
 
+	void Leaderboard::UpdateButtonDvars()
+	{
+		const bool hasEntries = !Entries.empty();
+
+		UILeaderboardCanPrev.set(!Loading && hasEntries && DisplayedOffset > 0);
+		UILeaderboardCanNext.set(!Loading && hasEntries && HasNextPage && NextOffset >= 0);
+	}
+
 	void Leaderboard::UpdatePageDvar()
 	{
-		const auto page = (CurrentOffset / DefaultLimit) + 1;
+		const auto page = (DisplayedOffset / DefaultLimit) + 1;
+
 		if (TotalItems >= 0)
 		{
 			const auto totalPages = std::max(1, (TotalItems + DefaultLimit - 1) / DefaultLimit);
 			UILeaderboardPage.set(Utils::String::VA("Page %i of %i", page, totalPages));
+			UpdateButtonDvars();
 			return;
 		}
 
 		if (!HasNextPage)
 		{
 			UILeaderboardPage.set(Utils::String::VA("Page %i of %i", page, page));
+			UpdateButtonDvars();
 			return;
 		}
 
 		UILeaderboardPage.set(Utils::String::VA("Page %i", page));
+		UpdateButtonDvars();
 	}
 
 	std::string Leaderboard::GetCurrentMapName()
@@ -143,9 +164,11 @@ namespace Components
 		encoded.reserve(value.size());
 
 		constexpr auto* hex = "0123456789ABCDEF";
+
 		for (const auto c : value)
 		{
 			const auto byte = static_cast<unsigned char>(c);
+
 			if (std::isalnum(byte) || byte == '-' || byte == '_' || byte == '.' || byte == '~')
 			{
 				encoded.push_back(static_cast<char>(byte));
@@ -174,11 +197,20 @@ namespace Components
 		if (mapName.empty())
 		{
 			++RequestSerial;
+
 			Entries.clear();
 			Loading = false;
 			HasNextPage = false;
 			NextOffset = -1;
+			TotalItems = 0;
+			CurrentOffset = 0;
+			DisplayedOffset = 0;
+
+			UILeaderboardPlayerStatus.set("Could not detect current map.");
+
 			UpdatePageDvar();
+			UpdateButtonDvars();
+
 			Toast::Show("cardicon_redhand", "^1Leaderboard", "Could not detect the current map for leaderboard lookup.", 5000);
 			return;
 		}
@@ -187,24 +219,40 @@ namespace Components
 		{
 			LastKnownRank = 0;
 			CurrentMap = mapName;
+			CurrentOffset = 0;
+			DisplayedOffset = 0;
+			TotalItems = -1;
 		}
 
-		CurrentOffset = std::max(0, offset);
+		const int requestedOffset = std::max(0, offset);
 		const auto requestId = ++RequestSerial;
+
+		CurrentOffset = requestedOffset;
+
+		Entries.clear();
+		Loading = true;
 		HasNextPage = false;
 		NextOffset = -1;
+
+		if (requestedOffset == 0)
+		{
+			TotalItems = -1;
+		}
+
+		UILeaderboardPlayerStatus.set("Loading leaderboard status...");
+
 		UpdatePageDvar();
+		UpdateButtonDvars();
 
-		Loading = true;
-
-		const auto url = CurrentOffset > 0
-			? std::format("https://stats.zw3.eu/leaderboard/best-rounds?limit={}&map={}&offset={}", DefaultLimit, UrlEncode(mapName), CurrentOffset)
+		const auto url = requestedOffset > 0
+			? std::format("https://stats.zw3.eu/leaderboard/best-rounds?limit={}&map={}&offset={}", DefaultLimit, UrlEncode(mapName), requestedOffset)
 			: std::format("https://stats.zw3.eu/leaderboard/best-rounds?limit={}&map={}", DefaultLimit, UrlEncode(mapName));
 
 		Scheduler::Once([requestId, url]
 			{
 				Utils::WebIO::params headers;
 				headers["Content-Type"] = "application/json";
+
 				const auto reply = Utils::WebIO("zw3-best-rounds", url).setTimeout(5000)->get(headers);
 
 				Scheduler::Once([requestId, reply]
@@ -218,6 +266,16 @@ namespace Components
 
 						if (reply.empty())
 						{
+							Entries.clear();
+							TotalItems = 0;
+							HasNextPage = false;
+							NextOffset = -1;
+
+							UILeaderboardPlayerStatus.set("Could not get a response from the stats API.");
+
+							UpdatePageDvar();
+							UpdateButtonDvars();
+
 							Toast::Show("cardicon_redhand", "^1Leaderboard", "Could not get a response from the stats API.", 5000);
 							return;
 						}
@@ -229,13 +287,18 @@ namespace Components
 
 	void Leaderboard::Refresh([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 	{
-		StartRefresh(CurrentOffset);
+		if (Loading) return;
+
+		StartRefresh(DisplayedOffset);
 	}
 
 	void Leaderboard::RefreshFirstPage([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 	{
 		const auto mapName = GetCurrentMapName();
-		if (CurrentOffset != 0 || Entries.empty() || mapName != CurrentMap)
+
+		if (Loading) return;
+
+		if (DisplayedOffset != 0 || Entries.empty() || mapName != CurrentMap)
 		{
 			StartRefresh(0);
 		}
@@ -243,15 +306,20 @@ namespace Components
 
 	void Leaderboard::PreviousPage([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 	{
-		if (CurrentOffset <= 0) return;
-		StartRefresh(std::max(0, CurrentOffset - DefaultLimit));
+		if (Loading || Entries.empty() || DisplayedOffset <= 0)
+		{
+			UpdateButtonDvars();
+			return;
+		}
+
+		StartRefresh(std::max(0, DisplayedOffset - DefaultLimit));
 	}
 
 	void Leaderboard::NextPage([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 	{
-		if (!HasNextPage)
+		if (Loading || Entries.empty() || !HasNextPage || NextOffset < 0)
 		{
-			UpdatePageDvar();
+			UpdateButtonDvars();
 			return;
 		}
 
@@ -270,7 +338,9 @@ namespace Components
 
 		if (doc.HasParseError() || !doc.IsObject())
 		{
+			TotalItems = 0;
 			UpdatePageDvar();
+			UpdateButtonDvars();
 			return;
 		}
 
@@ -278,6 +348,7 @@ namespace Components
 		{
 			TotalItems = 0;
 			UpdatePageDvar();
+			UpdateButtonDvars();
 			return;
 		}
 
@@ -321,10 +392,13 @@ namespace Components
 			Entries.push_back(entry);
 		}
 
+		DisplayedOffset = CurrentOffset;
+
 		UpdatePageDvar();
 		UpdateLocalPlayerStatus();
+		UpdateButtonDvars();
 
-		if (LastKnownRank == 0 && CurrentOffset == 0 && !IsSearching)
+		if (LastKnownRank == 0 && DisplayedOffset == 0 && !IsSearching)
 		{
 			FetchRankBackground(0);
 		}
@@ -339,7 +413,8 @@ namespace Components
 
 		if (CurrentMap.empty()) return;
 
-		if (offset == 0) {
+		if (offset == 0)
+		{
 			IsSearching = true;
 		}
 
@@ -348,11 +423,18 @@ namespace Components
 		Scheduler::Once([url, offset]
 			{
 				const auto reply = Utils::WebIO("zw3-rank-bg", url).get();
+
 				Scheduler::Once([reply, offset]
 					{
 						rapidjson::Document doc{};
 						doc.Parse(reply);
-						if (doc.HasParseError() || !doc.HasMember("items")) return;
+
+						if (doc.HasParseError() || !doc.HasMember("items") || !doc["items"].IsArray())
+						{
+							IsSearching = false;
+							UpdateLocalPlayerStatus();
+							return;
+						}
 
 						const auto& items = doc["items"];
 						const auto localXuid = Party::GetLocalPlayerXUID();
@@ -372,7 +454,7 @@ namespace Components
 							}
 						}
 
-						int nextOffset = GetJsonInt(doc, "next_offset", -1);
+						const int nextOffset = GetJsonInt(doc, "next_offset", -1);
 						if (nextOffset >= 0)
 						{
 							FetchRankBackground(nextOffset);
@@ -388,9 +470,15 @@ namespace Components
 
 	void Leaderboard::UpdateLocalPlayerStatus()
 	{
+		if (Loading)
+		{
+			UILeaderboardPlayerStatus.set("Loading leaderboard status...");
+			return;
+		}
+
 		if (LastKnownRank > 0)
 		{
-			UILeaderboardPlayerStatus.set(Utils::String::VA("You are currently: ^3#%u", (unsigned int)LastKnownRank));
+			UILeaderboardPlayerStatus.set(Utils::String::VA("You are currently: ^3#%u", static_cast<unsigned int>(LastKnownRank)));
 		}
 		else if (!IsSearching)
 		{
@@ -414,8 +502,8 @@ namespace Components
 			switch (column)
 			{
 			case 0:
-				return "--";
-			case 1:
+				return Loading ? "" : "--";
+			case 2:
 				return Loading ? "Loading leaderboard..." : "No leaderboard entries";
 			default:
 				return "";
@@ -432,7 +520,7 @@ namespace Components
 		switch (column)
 		{
 		case 0:
-			return Utils::String::VA("#%u", static_cast<unsigned int>(CurrentOffset + index + 1));
+			return Utils::String::VA("#%u", static_cast<unsigned int>(DisplayedOffset + index + 1));
 		case 1:
 			return Utils::String::VA("%i", entry.round);
 		case 2:
@@ -463,24 +551,30 @@ namespace Components
 		Events::OnDvarInit([]
 			{
 				UILeaderboardMap = Dvar::Register<const char*>("zw3_leaderboard_map", "", Game::DVAR_INIT, "Current map used by the best rounds leaderboard.");
-				UILeaderboardPage = Dvar::Register<const char*>("zw3_leaderboard_page", "Page 1", Game::DVAR_INIT, "Current page used by the best rounds leaderboard.");
+				UILeaderboardPage = Dvar::Register<const char*>("zw3_leaderboard_page", "Page 1 of 1", Game::DVAR_INIT, "Current page used by the best rounds leaderboard.");
 				UILeaderboardPlayerStatus = Dvar::Register<const char*>("zw3_leaderboard_player_status", "", Game::DVAR_INIT, "Local player leaderboard status.");
-				UILeaderboardPlayerStatus.set("");
 				UIMapNameDisplay = Dvar::Register<const char*>("zw3_leaderboard_mapname_display", "", Game::DVAR_INIT, "Display name of the current map.");
+
+				UILeaderboardCanPrev = Dvar::Register<bool>("zw3_leaderboard_can_prev", false, Game::DVAR_NONE, "Whether leaderboard previous page is available.");
+				UILeaderboardCanNext = Dvar::Register<bool>("zw3_leaderboard_can_next", false, Game::DVAR_NONE, "Whether leaderboard next page is available.");
+
+				UILeaderboardPlayerStatus.set("");
 			});
 
 		Scheduler::Loop([]
 			{
 				static std::string lastRaw;
+
 				const auto raw = GetCurrentMapName();
 				if (raw.empty() || raw == lastRaw) return;
+
 				lastRaw = raw;
 				UpdateMapDisplayDvar(raw);
 			}, Scheduler::Pipeline::MAIN, 2s);
 
 		UIFeeder::Add(FeederId, Leaderboard::GetEntryCount, Leaderboard::GetEntryText, Leaderboard::SelectEntry);
+
 		UIScript::Add("RefreshLeaderboard", Leaderboard::RefreshFirstPage);
-		//UIScript::Add("RefreshLeaderboardPage", Leaderboard::Refresh);
 		UIScript::Add("PreviousLeaderboardPage", Leaderboard::PreviousPage);
 		UIScript::Add("NextLeaderboardPage", Leaderboard::NextPage);
 	}

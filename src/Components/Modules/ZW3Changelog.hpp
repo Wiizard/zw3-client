@@ -27,6 +27,7 @@ namespace Components
 
 		static void Fetch(const UIScript::Token& token, const Game::uiInfo_s* info);
 		static std::vector<Entry> ParseYamlEntries(const std::string& yaml);
+		static std::string FormatDate(const std::string& date);
 		static void SetEntries(std::vector<Entry> entries);
 
 		// Unified Patches Column (Feeder 63)

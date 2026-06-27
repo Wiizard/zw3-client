@@ -8,8 +8,30 @@
 #define ANGLE2SHORT(x) ((int)((x) * (USHRT_MAX + 1) / 360.0f) & USHRT_MAX)
 #define SHORT2ANGLE(x) ((x)* (360.0f / (USHRT_MAX + 1)))
 
+namespace
+{
+	struct ZW3BotCharacter
+	{
+		const char* name;
+		const char* iconDvar;
+	};
+
+	constexpr ZW3BotCharacter ZW3BotCharacters[]
+	{
+		{ "[BOT] Richtofen", "character_1" },
+		{ "[BOT] Dempsey",   "character_2" },
+		{ "[BOT] Nikolai",   "character_3" },
+		{ "[BOT] Takeo",     "character_4" }
+	};
+
+	std::size_t ZW3BotCharacterIndex = 0;
+}
+
 namespace Components
 {
+	std::array<std::string, Game::MAX_CLIENTS> Bots::BotDisplayNames;
+	std::array<std::string, Game::MAX_CLIENTS> Bots::BotIcons;
+
 	constexpr std::size_t MAX_NAME_LENGTH = 16;
 
 	Game::dvar_t** Bots::aim_automelee_range = reinterpret_cast<Game::dvar_t**>(0x7A2F98);
@@ -123,77 +145,106 @@ namespace Components
 
 	int Bots::BuildConnectString(char* buffer, const char* connectString, int num, int, int protocol, int checksum, int statVer, int stats, int port)
 	{
-		static std::vector<bool> usedDvars;
-
 		std::string botName;
+		std::string botIcon;
 		std::string clanName;
 
-		bool foundCharacterDvar = false;
-
-		if (usedDvars.empty())
+		for (int c = 1; c <= 4; ++c)
 		{
-			usedDvars.resize(4, false);
-		}
+			const auto charPlayer = Dvar::Var(Utils::String::VA("character_%d_player", c)).get<std::string>();
+			const auto charIcon = Dvar::Var(Utils::String::VA("character_%d", c)).get<std::string>();
 
-		for (int i = 0; i < 4; ++i)
-		{
-			if (usedDvars[i])
+			if (charPlayer.rfind("[BOT]", 0) != 0)
 			{
 				continue;
 			}
 
-			std::string dvarName = Utils::String::VA("character_%d_player", i + 1);
-			auto dvarValue = Dvar::Var(dvarName).get<std::string>();
-			if (dvarValue.rfind("[BOT]", 0) == 0)
+			bool alreadyUsed = false;
+
+			for (const auto& existingName : BotDisplayNames)
 			{
-				size_t start = dvarValue.find(']');
-				if (start != std::string::npos)
+				if (_stricmp(existingName.c_str(), charPlayer.c_str()) == 0)
 				{
-					botName = dvarValue;
-					clanName = "";
-					foundCharacterDvar = true;
-					usedDvars[i] = true;
+					alreadyUsed = true;
 					break;
 				}
 			}
+
+			if (!alreadyUsed)
+			{
+				botName = charPlayer;
+				botIcon = charIcon;
+				break;
+			}
 		}
 
-		if (!foundCharacterDvar)
+		if (botName.empty())
 		{
-			static const auto botNames = []() -> std::vector<botData>
-				{
-					auto names = LoadBotNames();
-					if (names.empty())
-					{
-						Logger::Print("bots.txt was empty. Using the names from the master server\n");
-						names = RemoteBotNames;
-					}
-
-					if (sv_randomBotNames->current.enabled)
-					{
-						std::random_device rd;
-						std::mt19937 gen(rd());
-						std::ranges::shuffle(names, gen);
-					}
-
-					return names;
-				}();
-
-			if (!botNames.empty())
+			static constexpr const char* fallbackNames[]
 			{
-				BotDataIndex %= botNames.size();
-				const auto index = BotDataIndex++;
-				botName = botNames[index].first;
-				clanName = botNames[index].second;
-			}
-			else
-			{
-				botName = std::format("bot{}", num);
-				clanName = "BOT"s;
-			}
+				"[BOT] Richtofen",
+				"[BOT] Dempsey",
+				"[BOT] Nikolai",
+				"[BOT] Takeo"
+			};
+
+			const auto index = BotDataIndex++ % std::size(fallbackNames);
+			botName = fallbackNames[index];
+			botIcon = "cardicon_illuminati";
+		}
+
+		if (num >= 0 && num < Game::MAX_CLIENTS)
+		{
+			BotDisplayNames[num] = botName;
+			BotIcons[num] = botIcon;
 		}
 
 		return _snprintf_s(buffer, 0x400, _TRUNCATE, connectString, num, botName.data(), clanName.data(), protocol, checksum, statVer, stats, port);
+	}
+
+	void Bots::ResetBotScoreboardData()
+	{
+		BotDataIndex = 0;
+
+		for (auto& name : BotDisplayNames)
+		{
+			name.clear();
+		}
+
+		for (auto& icon : BotIcons)
+		{
+			icon.clear();
+		}
+	}
+
+	std::string Bots::GetBotDisplayName(int clientNum)
+	{
+		if (clientNum < 0 || clientNum >= Game::MAX_CLIENTS)
+		{
+			return {};
+		}
+
+		return BotDisplayNames[clientNum];
+	}
+
+	std::string Bots::GetBotIcon(int clientNum)
+	{
+		if (clientNum < 0 || clientNum >= Game::MAX_CLIENTS)
+		{
+			return {};
+		}
+
+		return BotIcons[clientNum];
+	}
+
+	bool Bots::IsBotClient(int clientNum)
+	{
+		if (clientNum < 0 || clientNum >= Game::MAX_CLIENTS)
+		{
+			return false;
+		}
+
+		return !BotDisplayNames[clientNum].empty();
 	}
 
 	void Bots::Spawn(unsigned int count)
@@ -692,15 +743,29 @@ namespace Components
 		Events::OnClientDisconnect([](const int clientNum) -> void
 			{
 				g_botai[clientNum].active = false;
+
+				if (clientNum >= 0 && clientNum < Game::MAX_CLIENTS)
+				{
+					BotDisplayNames[clientNum].clear();
+					BotIcons[clientNum].clear();
+				}
 			});
 
-		Events::OnSVInit(AddServerCommands);
+		Events::OnSVInit([]
+			{
+				ResetBotScoreboardData();
+				AddServerCommands();
+			});
 
 		CleanBotArray();
 
 		AddScriptMethods();
 
 		// In case a loaded mod didn't call "BotStop" before the VM shutdown
-		Events::OnVMShutdown(CleanBotArray);
+		Events::OnVMShutdown([]
+			{
+				CleanBotArray();
+				ResetBotScoreboardData();
+			});
 	}
 }

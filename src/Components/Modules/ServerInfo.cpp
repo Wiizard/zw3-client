@@ -7,8 +7,13 @@
 #include "ServerList.hpp"
 #include "UIFeeder.hpp"
 #include "Voice.hpp"
+#include "Bots.hpp"
 
 #include <version.hpp>
+
+#include <set>
+
+#define SCOREBOARD_FEEDER 71
 
 namespace Components
 {
@@ -21,21 +26,38 @@ namespace Components
 
 	const char* ServerInfo::GetPlayerText(unsigned int index, int column)
 	{
-		if (index < PlayerContainer.playerList.size())
+		if (index >= PlayerContainer.playerList.size())
 		{
-			switch (column)
-			{
-			case 0:
-				return Utils::String::VA("%d", index);
-			case 1:
-				return PlayerContainer.playerList[index].name.data();
-			case 2:
-				return Utils::String::VA("%d", PlayerContainer.playerList[index].score);
-			case 3:
-				return Utils::String::VA("%d", PlayerContainer.playerList[index].ping);
-			default:
-				break;
-			}
+			return "";
+		}
+
+		const auto& player = PlayerContainer.playerList[index];
+
+		switch (column)
+		{
+		case 0:
+			return player.name.data();
+
+		case 1:
+			return Utils::String::VA("%d", player.score);
+
+		case 2:
+			return Utils::String::VA("%d", player.kills);
+
+		case 3:
+			return Utils::String::VA("%d", player.downs);
+
+		case 4:
+			return Utils::String::VA("%d", player.revives);
+
+		case 5:
+			return Utils::String::VA("%d", player.deaths);
+
+		case 6:
+			return Utils::String::VA("%d", player.ping);
+
+		default:
+			break;
 		}
 
 		return "";
@@ -187,17 +209,42 @@ namespace Components
 	{
 		PlayerContainer.currentPlayer = 0;
 
+		// hide native scoreboard draw
+		Utils::Hook::Nop(0x4FC6EA, 5);
+
 		// Draw IP and hostname on the scoreboard
-		Utils::Hook(0x4FC6EA, DrawScoreboardStub, HOOK_CALL).install()->quick();
+		//Utils::Hook(0x4FC6EA, DrawScoreboardStub, HOOK_CALL).install()->quick();
 
 		// Ignore native getStatus implementation
 		Utils::Hook::Nop(0x62654E, 6);
 
 		// Add uiscript
 		UIScript::Add("ServerStatus", ServerStatus);
+		UIScript::Add("RefreshScoreboard", RefreshScoreboard);
 
 		// Add uifeeder
 		UIFeeder::Add(13.0f, GetPlayerCount, GetPlayerText, SelectPlayer);
+
+		Components::Scheduler::Loop([]()
+			{
+				static int lastRefresh = 0;
+
+				auto* scoreboard = Game::Menus_FindByName(Game::uiContext, "scoreboard");
+				if (!scoreboard || !Game::Menu_IsVisible(Game::uiContext, scoreboard))
+				{
+					return;
+				}
+
+				const auto now = Game::Sys_Milliseconds();
+				if (now - lastRefresh < 250)
+				{
+					return;
+				}
+
+				lastRefresh = now;
+
+				ServerInfo::RefreshScoreboard(UIScript::Token(), nullptr);
+			}, Components::Scheduler::Pipeline::MAIN);
 
 		Network::OnClientPacket("getStatus", [](const Network::Address& address, [[maybe_unused]] const std::string& data)
 		{
@@ -333,6 +380,144 @@ namespace Components
 				PlayerContainer.playerList.push_back(player);
 			}
 		});
+	}
+
+	static std::string GetScoreboardIconForName(const std::string& playerName)
+	{
+		for (int c = 1; c <= 4; ++c)
+		{
+			const auto charPlayer = Dvar::Var(Utils::String::VA("character_%d_player", c)).get<std::string>();
+			const auto charIcon = Dvar::Var(Utils::String::VA("character_%d", c)).get<std::string>();
+
+			if (charPlayer.empty() || charPlayer == "None")
+				continue;
+
+			if (charIcon.empty() || charIcon == "None")
+				continue;
+
+			if (_stricmp(charPlayer.c_str(), playerName.c_str()) == 0)
+				return charIcon;
+		}
+
+		return "cardicon_illuminati";
+	}
+
+	void ServerInfo::RefreshScoreboard([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+	{
+		PlayerContainer.currentPlayer = 0;
+		PlayerContainer.playerList.clear();
+
+		for (std::size_t i = 0; i < Game::MAX_CLIENTS; ++i)
+		{
+			if (Game::svs_clients[i].header.state < Game::CS_ACTIVE)
+				continue;
+
+			if (!Game::svs_clients[i].gentity || !Game::svs_clients[i].gentity->client)
+				continue;
+
+			const auto* client = Game::svs_clients[i].gentity->client;
+
+			if (client->sess.cs.team == Game::TEAM_SPECTATOR)
+				continue;
+
+			const auto clientNum = static_cast<int>(i);
+
+			Container::Player player;
+			player.name = Game::svs_clients[i].name;
+			player.score = Game::SV_GameClientNum_Score(clientNum);
+			player.ping = Game::svs_clients[i].ping;
+			player.kills = 0;
+			player.downs = 0;
+			player.revives = 0;
+			player.deaths = 0;
+			player.icon = GetScoreboardIconForName(player.name);
+
+			PlayerContainer.playerList.push_back(player);
+		}
+
+		if (PlayerContainer.playerList.empty())
+		{
+			Container::Player player;
+			player.name = Dvar::Var("name").get<std::string>();
+			player.score = 0;
+			player.ping = 0;
+			player.kills = 0;
+			player.downs = 0;
+			player.revives = 0;
+			player.deaths = 0;
+			player.icon = GetScoreboardIconForName(player.name);
+
+			PlayerContainer.playerList.push_back(player);
+		}
+
+		std::set<std::string> usedBotNames;
+
+		for (auto& player : PlayerContainer.playerList)
+		{
+			if (player.name.rfind("[BOT]", 0) != 0)
+			{
+				player.icon = GetScoreboardIconForName(player.name);
+				continue;
+			}
+
+			for (int c = 1; c <= 4; ++c)
+			{
+				const auto charPlayer = Dvar::Var(Utils::String::VA("character_%d_player", c)).get<std::string>();
+
+				if (charPlayer.rfind("[BOT]", 0) != 0)
+					continue;
+
+				if (usedBotNames.contains(charPlayer))
+					continue;
+
+				player.name = charPlayer;
+				player.icon = GetScoreboardIconForName(charPlayer);
+				usedBotNames.insert(charPlayer);
+				break;
+			}
+		}
+
+		const auto hostName = Dvar::Var("name").get<std::string>();
+
+		std::stable_sort(PlayerContainer.playerList.begin(), PlayerContainer.playerList.end(),
+			[&](const Container::Player& a, const Container::Player& b)
+			{
+				const bool aIsHost = _stricmp(a.name.c_str(), hostName.c_str()) == 0;
+				const bool bIsHost = _stricmp(b.name.c_str(), hostName.c_str()) == 0;
+
+				if (aIsHost != bIsHost)
+					return aIsHost;
+
+				return a.score > b.score;
+			});
+
+		Dvar::Var("zw3_ui_sb_player_count").set(static_cast<int>(PlayerContainer.playerList.size()));
+
+		for (int i = 0; i < 4; ++i)
+		{
+			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_name", i)).set("");
+			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_score", i)).set("");
+			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_kills", i)).set("");
+			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_downs", i)).set("");
+			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_revives", i)).set("");
+			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_deaths", i)).set("");
+			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_ping", i)).set("");
+			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_icon", i)).set("");
+		}
+
+		for (std::size_t i = 0; i < PlayerContainer.playerList.size() && i < 4; ++i)
+		{
+			const auto& player = PlayerContainer.playerList[i];
+
+			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_name", i)).set(player.name);
+			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_score", i)).set(player.score);
+			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_kills", i)).set(player.kills);
+			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_downs", i)).set(player.downs);
+			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_revives", i)).set(player.revives);
+			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_deaths", i)).set(player.deaths);
+			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_ping", i)).set(player.ping);
+			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_icon", i)).set(player.icon);
+		}
 	}
 
 	ServerInfo::~ServerInfo()

@@ -9,6 +9,14 @@ namespace Components
 
 		static void SV_DirectConnect_Full_Check();
 
+		static std::array<std::string, Game::MAX_CLIENTS> BotDisplayNames;
+		static std::array<std::string, Game::MAX_CLIENTS> BotIcons;
+
+		static void ResetBotScoreboardData();
+		static std::string GetBotDisplayName(int clientNum);
+		static std::string GetBotIcon(int clientNum);
+		static bool IsBotClient(int clientNum);
+
 	private:
 		using botData = std::pair<std::string, std::string>;
 

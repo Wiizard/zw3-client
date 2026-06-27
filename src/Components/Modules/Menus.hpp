@@ -31,6 +31,9 @@ namespace Components
 		static Game::UiContext* GameUiContexts[];
 
 		static Dvar::Var PrintMenuDebug;
+		static Dvar::Var UILoadingStartTime;
+		static Dvar::Var UILoadingProgress;
+		static Dvar::Var UILoadingVisible;
 
 		// Those two point to the ORIGINAL reference of the menu or menu list that was overriden
 		static std::unordered_map<std::string, Game::menuDef_t*> OverridenMenus;
@@ -75,7 +78,7 @@ namespace Components
 
 		static void UnloadMenuFromDisk(const std::string& menuName);
 
-		static void ReloadDiskMenus();
+		static void ReloadDiskMenus(bool preserveConnect = false);
 
 		static void LoadScriptMenu(const char* menu, bool allowNewMenus);
 
@@ -96,6 +99,9 @@ namespace Components
 
 		static void CheckMenus();
 
+		static void RemoveMenuNameFromContext(Game::UiContext* dc, const std::string& name, Game::menuDef_t* keepMenu);
+		static void ForceOnlyCustomConnectMenu();
+		static void OpenCustomConnectMenu();
 
 		template <typename... Args>
 		static void DebugPrint(const std::string_view& fmt, Args&&... args)

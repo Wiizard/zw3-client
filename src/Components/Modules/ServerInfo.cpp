@@ -8,10 +8,12 @@
 #include "UIFeeder.hpp"
 #include "Voice.hpp"
 #include "Bots.hpp"
+#include "GSC/Field.hpp"
 
 #include <version.hpp>
 
 #include <set>
+#include <array>
 
 #define SCOREBOARD_FEEDER 71
 
@@ -205,6 +207,56 @@ namespace Components
 		return info;
 	}
 
+	static std::string GetScoreboardBaseName(std::string name)
+	{
+		Utils::String::Replace(name, "^1[DEAD] ^7", "");
+		Utils::String::Replace(name, "^3[DOWN] ^7", "");
+		Utils::String::Replace(name, "[DEAD] ", "");
+		Utils::String::Replace(name, "[DOWN] ", "");
+
+		return name;
+	}
+
+
+
+	static std::string GetScoreboardStatusName(const bool dead, const bool down)
+	{
+		if (dead)
+		{
+			return "DEAD";
+		}
+
+		if (down)
+		{
+			return "DOWN";
+		}
+
+		return "";
+	}
+
+
+
+	static std::string GetScoreboardIconForName(const std::string& playerName)
+	{
+		for (int c = 1; c <= 4; ++c)
+		{
+			const auto charPlayer = Dvar::Var(Utils::String::VA("character_%d_player", c)).get<std::string>();
+			const auto charIcon = Dvar::Var(Utils::String::VA("character_%d", c)).get<std::string>();
+
+			if (charPlayer.empty() || charPlayer == "None")
+				continue;
+
+			if (charIcon.empty() || charIcon == "None")
+				continue;
+
+			if (_stricmp(charPlayer.c_str(), playerName.c_str()) == 0)
+				return charIcon;
+		}
+
+		return "cardicon_illuminati";
+	}
+
+
 	ServerInfo::ServerInfo()
 	{
 		PlayerContainer.currentPlayer = 0;
@@ -247,160 +299,140 @@ namespace Components
 			}, Components::Scheduler::Pipeline::MAIN);
 
 		Network::OnClientPacket("getStatus", [](const Network::Address& address, [[maybe_unused]] const std::string& data)
-		{
-			std::string playerList;
-
-			Utils::InfoString info = GetInfo();
-			info.set("challenge", Utils::ParseChallenge(data));
-
-			for (std::size_t i = 0; i < Game::MAX_CLIENTS; ++i)
 			{
-				auto score = 0;
-				auto ping = 0;
-				std::string name;
+				std::string playerList;
 
-				if (Dedicated::IsRunning())
+				Utils::InfoString info = GetInfo();
+				info.set("challenge", Utils::ParseChallenge(data));
+
+				for (std::size_t i = 0; i < Game::MAX_CLIENTS; ++i)
 				{
-					if (Game::svs_clients[i].header.state < Game::CS_ACTIVE) continue;
-					if (!Game::svs_clients[i].gentity || !Game::svs_clients[i].gentity->client) continue;
+					auto score = 0;
+					auto ping = 0;
+					std::string name;
 
-					const auto* client = Game::svs_clients[i].gentity->client;
-					const auto team = client->sess.cs.team;
-					if (Game::svs_clients[i].bIsTestClient || team == Game::TEAM_SPECTATOR)
+					if (Dedicated::IsRunning())
 					{
-						continue;
+						if (Game::svs_clients[i].header.state < Game::CS_ACTIVE) continue;
+						if (!Game::svs_clients[i].gentity || !Game::svs_clients[i].gentity->client) continue;
+
+						if (Game::svs_clients[i].bIsTestClient)
+						{
+							continue;
+						}
+
+						const auto clientNum = static_cast<int>(i);
+						score = Game::SV_GameClientNum_Score(clientNum);
+						ping = Game::svs_clients[i].ping;
+						name = Game::svs_clients[i].name;
+					}
+					else
+					{
+						// Score and ping are irrelevant
+						const auto* namePtr = Game::PartyHost_GetMemberName(reinterpret_cast<Game::PartyData*>(0x1081C00), i);
+						if (!namePtr || !*namePtr) continue;
+
+						name = namePtr;
 					}
 
-					score = Game::SV_GameClientNum_Score(static_cast<int>(i));
-					ping = Game::svs_clients[i].ping;
-					name = Game::svs_clients[i].name;
-				}
-				else
-				{
-					// Score and ping are irrelevant
-					const auto* namePtr = Game::PartyHost_GetMemberName(reinterpret_cast<Game::PartyData*>(0x1081C00), i);
-					if (!namePtr || !*namePtr) continue;
-
-					name = namePtr;
+					playerList.append(std::format("{} {} \"{}\"\n", score, ping, name));
 				}
 
-				playerList.append(std::format("{} {} \"{}\"\n", score, ping, name));
-			}
-
-			Network::SendCommand(address, "statusResponse", info.build() + "\n"s + playerList + "\n"s);
-		});
+				Network::SendCommand(address, "statusResponse", info.build() + "\n"s + playerList + "\n"s);
+			});
 
 		Network::OnClientPacket("statusResponse", [](const Network::Address& address, [[maybe_unused]] const std::string& data)
-		{
-			if (PlayerContainer.target != address)
 			{
-				return;
-			}
-
-			const auto pos = data.find_first_of('\n');
-			if (pos == std::string::npos)
-			{
-				return;
-			}
-
-			const Utils::InfoString info(data.substr(0, pos));
-
-			Dvar::Var("uiSi_ServerName").set(info.get("sv_hostname"));
-			Dvar::Var("uiSi_MaxClients").set(info.get("sv_maxclients"));
-			Dvar::Var("uiSi_Version").set(info.get("version"));
-			Dvar::Var("uiSi_SecurityLevel").set(info.get("sv_securityLevel"));
-			Dvar::Var("uiSi_isPrivate").set(info.get("isPrivate") == "0" ? "@MENU_NO" : "@MENU_YES");
-			Dvar::Var("uiSi_Hardcore").set(info.get("g_hardcore") == "0" ? "@MENU_DISABLED" : "@MENU_ENABLED");
-			Dvar::Var("uiSi_KillCam").set(info.get("scr_game_allowkillcam") == "0" ? "@MENU_NO" : "@MENU_YES");
-			Dvar::Var("uiSi_MapName").set(info.get("mapname"));
-			Dvar::Var("uiSi_MapNameLoc").set(Localization::LocalizeMapName(info.get("mapname").data()));
-			Dvar::Var("uiSi_GameType").set(Game::UI_LocalizeGameType(info.get("g_gametype").data()));
-			Dvar::Var("uiSi_ModName").set("");
-			Dvar::Var("uiSi_aimAssist").set(info.get("aimAssist") == "0" ? "@MENU_DISABLED" : "@MENU_ENABLED");
-			Dvar::Var("uiSi_voiceChat").set(info.get("voiceChat") == "0" ? "@MENU_DISABLED" : "@MENU_ENABLED");
-
-			switch (std::strtol(info.get("scr_team_fftype").data(), nullptr, 10))
-			{
-			default:
-				Dvar::Var("uiSi_ffType").set("@MENU_DISABLED");
-				break;
-			case 1:
-				Dvar::Var("uiSi_ffType").set("@MENU_ENABLED");
-				break;
-			case 2:
-				Dvar::Var("uiSi_ffType").set("@MPUI_RULES_REFLECT");
-				break;
-			case 3:
-				Dvar::Var("uiSi_ffType").set("@MPUI_RULES_SHARED");
-				break;
-			}
-
-			if (Utils::String::StartsWith(info.get("fs_game"), "mods/"))
-			{
-				const auto mod = info.get("fs_game");
-				Dvar::Var("uiSi_ModName").set(mod.substr(5));
-			}
-
-			const auto lines = Utils::String::Split(data, '\n');
-
-			if (lines.size() <= 1) return;
-
-			for (std::size_t i = 1; i < lines.size(); ++i)
-			{
-				Container::Player player;
-
-				std::string currentData = lines[i];
-
-				if (currentData.size() < 3) continue;
-
-				// Insert score
-				player.score = std::strtol(currentData.substr(0, currentData.find_first_of(' ')).data(), nullptr, 10);
-
-				// Remove score
-				currentData = currentData.substr(currentData.find_first_of(' ') + 1);
-
-				// Insert ping
-				player.ping = std::strtol(currentData.substr(0, currentData.find_first_of(' ')).data(), nullptr, 10);
-
-				// Remove ping
-				currentData = currentData.substr(currentData.find_first_of(' ') + 1);
-
-				if (currentData[0] == '\"')
+				if (PlayerContainer.target != address)
 				{
-					currentData = currentData.substr(1);
+					return;
 				}
 
-				if (currentData.back() == '\"')
+				const auto pos = data.find_first_of('\n');
+				if (pos == std::string::npos)
 				{
-					currentData.pop_back();
+					return;
 				}
 
-				player.name = currentData;
+				const Utils::InfoString info(data.substr(0, pos));
 
-				PlayerContainer.playerList.push_back(player);
-			}
-		});
+				Dvar::Var("uiSi_ServerName").set(info.get("sv_hostname"));
+				Dvar::Var("uiSi_MaxClients").set(info.get("sv_maxclients"));
+				Dvar::Var("uiSi_Version").set(info.get("version"));
+				Dvar::Var("uiSi_SecurityLevel").set(info.get("sv_securityLevel"));
+				Dvar::Var("uiSi_isPrivate").set(info.get("isPrivate") == "0" ? "@MENU_NO" : "@MENU_YES");
+				Dvar::Var("uiSi_Hardcore").set(info.get("g_hardcore") == "0" ? "@MENU_DISABLED" : "@MENU_ENABLED");
+				Dvar::Var("uiSi_KillCam").set(info.get("scr_game_allowkillcam") == "0" ? "@MENU_NO" : "@MENU_YES");
+				Dvar::Var("uiSi_MapName").set(info.get("mapname"));
+				Dvar::Var("uiSi_MapNameLoc").set(Localization::LocalizeMapName(info.get("mapname").data()));
+				Dvar::Var("uiSi_GameType").set(Game::UI_LocalizeGameType(info.get("g_gametype").data()));
+				Dvar::Var("uiSi_ModName").set("");
+				Dvar::Var("uiSi_aimAssist").set(info.get("aimAssist") == "0" ? "@MENU_DISABLED" : "@MENU_ENABLED");
+				Dvar::Var("uiSi_voiceChat").set(info.get("voiceChat") == "0" ? "@MENU_DISABLED" : "@MENU_ENABLED");
+
+				switch (std::strtol(info.get("scr_team_fftype").data(), nullptr, 10))
+				{
+				default:
+					Dvar::Var("uiSi_ffType").set("@MENU_DISABLED");
+					break;
+				case 1:
+					Dvar::Var("uiSi_ffType").set("@MENU_ENABLED");
+					break;
+				case 2:
+					Dvar::Var("uiSi_ffType").set("@MPUI_RULES_REFLECT");
+					break;
+				case 3:
+					Dvar::Var("uiSi_ffType").set("@MPUI_RULES_SHARED");
+					break;
+				}
+
+				if (Utils::String::StartsWith(info.get("fs_game"), "mods/"))
+				{
+					const auto mod = info.get("fs_game");
+					Dvar::Var("uiSi_ModName").set(mod.substr(5));
+				}
+
+				const auto lines = Utils::String::Split(data, '\n');
+
+				if (lines.size() <= 1) return;
+
+				for (std::size_t i = 1; i < lines.size(); ++i)
+				{
+					Container::Player player;
+
+					std::string currentData = lines[i];
+
+					if (currentData.size() < 3) continue;
+
+					// Insert score
+					player.score = std::strtol(currentData.substr(0, currentData.find_first_of(' ')).data(), nullptr, 10);
+
+					// Remove score
+					currentData = currentData.substr(currentData.find_first_of(' ') + 1);
+
+					// Insert ping
+					player.ping = std::strtol(currentData.substr(0, currentData.find_first_of(' ')).data(), nullptr, 10);
+
+					// Remove ping
+					currentData = currentData.substr(currentData.find_first_of(' ') + 1);
+
+					if (currentData[0] == '\"')
+					{
+						currentData = currentData.substr(1);
+					}
+
+					if (currentData.back() == '\"')
+					{
+						currentData.pop_back();
+					}
+
+					player.name = currentData;
+
+					PlayerContainer.playerList.push_back(player);
+				}
+			});
 	}
 
-	static std::string GetScoreboardIconForName(const std::string& playerName)
-	{
-		for (int c = 1; c <= 4; ++c)
-		{
-			const auto charPlayer = Dvar::Var(Utils::String::VA("character_%d_player", c)).get<std::string>();
-			const auto charIcon = Dvar::Var(Utils::String::VA("character_%d", c)).get<std::string>();
-
-			if (charPlayer.empty() || charPlayer == "None")
-				continue;
-
-			if (charIcon.empty() || charIcon == "None")
-				continue;
-
-			if (_stricmp(charPlayer.c_str(), playerName.c_str()) == 0)
-				return charIcon;
-		}
-
-		return "cardicon_illuminati";
-	}
 
 	void ServerInfo::RefreshScoreboard([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 	{
@@ -410,27 +442,64 @@ namespace Components
 		for (std::size_t i = 0; i < Game::MAX_CLIENTS; ++i)
 		{
 			if (Game::svs_clients[i].header.state < Game::CS_ACTIVE)
+			{
+				GSC::Field::ResetClientScoreboardStats(static_cast<int>(i));
 				continue;
+			}
 
 			if (!Game::svs_clients[i].gentity || !Game::svs_clients[i].gentity->client)
+			{
+				GSC::Field::ResetClientScoreboardStats(static_cast<int>(i));
 				continue;
+			}
 
 			const auto* client = Game::svs_clients[i].gentity->client;
-
-			if (client->sess.cs.team == Game::TEAM_SPECTATOR)
-				continue;
-
 			const auto clientNum = static_cast<int>(i);
+			const auto playerName = std::string(Game::svs_clients[i].name);
 
 			Container::Player player;
-			player.name = Game::svs_clients[i].name;
+			player.name = playerName;
 			player.score = Game::SV_GameClientNum_Score(clientNum);
 			player.ping = Game::svs_clients[i].ping;
-			player.kills = 0;
-			player.downs = 0;
-			player.revives = 0;
-			player.deaths = 0;
-			player.icon = GetScoreboardIconForName(player.name);
+			player.kills = client->sess.kills;
+			player.downs = GSC::Field::GetClientDowns(clientNum);
+			player.revives = GSC::Field::GetClientRevives(clientNum);
+			player.deaths = client->sess.deaths;
+			player.icon = GetScoreboardIconForName(playerName);
+
+			static std::array<int, Game::MAX_CLIENTS> LastDowns{};
+			static std::array<int, Game::MAX_CLIENTS> LastRevives{};
+			static std::array<int, Game::MAX_CLIENTS> LastDeaths{};
+			static std::array<int, Game::MAX_CLIENTS> DownUntil{};
+			static std::array<bool, Game::MAX_CLIENTS> WasSpectator{};
+
+			const auto spectator = client->sess.cs.team == Game::TEAM_SPECTATOR;
+			const auto now = Game::Sys_Milliseconds();
+
+			if (spectator || WasSpectator[clientNum])
+			{
+				DownUntil[clientNum] = 0;
+			}
+
+			if (!spectator && player.downs > LastDowns[clientNum])
+			{
+				DownUntil[clientNum] = now + 40000;
+			}
+
+			if (player.revives > LastRevives[clientNum] || player.deaths > LastDeaths[clientNum])
+			{
+				DownUntil[clientNum] = 0;
+			}
+
+			const auto down = !spectator && (GSC::Field::IsClientDown(clientNum) || DownUntil[clientNum] > now);
+			const auto dead = spectator;
+
+			WasSpectator[clientNum] = spectator;
+			LastDowns[clientNum] = player.downs;
+			LastRevives[clientNum] = player.revives;
+			LastDeaths[clientNum] = player.deaths;
+
+			player.status = GetScoreboardStatusName(dead, down);
 
 			PlayerContainer.playerList.push_back(player);
 		}
@@ -442,10 +511,11 @@ namespace Components
 			player.score = 0;
 			player.ping = 0;
 			player.kills = 0;
-			player.downs = 0;
-			player.revives = 0;
+			player.downs = GSC::Field::GetClientDowns(0);
+			player.revives = GSC::Field::GetClientRevives(0);
 			player.deaths = 0;
 			player.icon = GetScoreboardIconForName(player.name);
+			player.status = "";
 
 			PlayerContainer.playerList.push_back(player);
 		}
@@ -454,9 +524,12 @@ namespace Components
 
 		for (auto& player : PlayerContainer.playerList)
 		{
-			if (player.name.rfind("[BOT]", 0) != 0)
+			const auto baseName = GetScoreboardBaseName(player.name);
+
+			if (baseName.rfind("[BOT]", 0) != 0)
 			{
-				player.icon = GetScoreboardIconForName(player.name);
+				player.icon = GetScoreboardIconForName(baseName);
+				player.name = baseName;
 				continue;
 			}
 
@@ -482,11 +555,20 @@ namespace Components
 		std::stable_sort(PlayerContainer.playerList.begin(), PlayerContainer.playerList.end(),
 			[&](const Container::Player& a, const Container::Player& b)
 			{
-				const bool aIsHost = _stricmp(a.name.c_str(), hostName.c_str()) == 0;
-				const bool bIsHost = _stricmp(b.name.c_str(), hostName.c_str()) == 0;
+				const auto aBaseName = GetScoreboardBaseName(a.name);
+				const auto bBaseName = GetScoreboardBaseName(b.name);
+
+				const bool aIsHost = _stricmp(aBaseName.c_str(), hostName.c_str()) == 0;
+				const bool bIsHost = _stricmp(bBaseName.c_str(), hostName.c_str()) == 0;
 
 				if (aIsHost != bIsHost)
 					return aIsHost;
+
+				const auto aOut = !a.status.empty();
+				const auto bOut = !b.status.empty();
+
+				if (aOut != bOut)
+					return !aOut;
 
 				return a.score > b.score;
 			});
@@ -503,6 +585,7 @@ namespace Components
 			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_deaths", i)).set("");
 			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_ping", i)).set("");
 			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_icon", i)).set("");
+			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_status", i)).set("");
 		}
 
 		for (std::size_t i = 0; i < PlayerContainer.playerList.size() && i < 4; ++i)
@@ -517,6 +600,7 @@ namespace Components
 			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_deaths", i)).set(player.deaths);
 			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_ping", i)).set(player.ping);
 			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_icon", i)).set(player.icon);
+			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_status", i)).set(player.status);
 		}
 	}
 

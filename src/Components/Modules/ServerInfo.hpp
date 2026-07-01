@@ -26,6 +26,7 @@ namespace Components
 				int deaths = 0;
 				std::string name;
 				std::string icon;
+				std::string status;
 			};
 
 			unsigned int currentPlayer = 0;

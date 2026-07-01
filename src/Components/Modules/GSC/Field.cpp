@@ -4,6 +4,70 @@ namespace Components::GSC
 {
 	std::unordered_map<std::uint16_t, Field::EntField> Field::CustomEntityFields;
 	std::unordered_map<std::uint16_t, Field::ClientFields> Field::CustomClientFields;
+	std::array<Field::ScoreboardStats, Game::MAX_CLIENTS> Field::ClientScoreboardStats;
+
+	int Field::GetClientNum(Game::gclient_s* client)
+	{
+		if (!client)
+		{
+			return -1;
+		}
+
+		for (int i = 0; i < Game::MAX_CLIENTS; ++i)
+		{
+			if (Game::svs_clients[i].gentity && Game::svs_clients[i].gentity->client == client)
+			{
+				return i;
+			}
+		}
+
+		return client->sess.cs.clientIndex;
+	}
+
+	bool Field::IsValidClientNum(const int clientNum)
+	{
+		return clientNum >= 0 && clientNum < static_cast<int>(ClientScoreboardStats.size());
+	}
+
+	int Field::GetClientDowns(const int clientNum)
+	{
+		if (!IsValidClientNum(clientNum))
+		{
+			return 0;
+		}
+
+		return ClientScoreboardStats[clientNum].downs;
+	}
+
+	int Field::GetClientRevives(const int clientNum)
+	{
+		if (!IsValidClientNum(clientNum))
+		{
+			return 0;
+		}
+
+		return ClientScoreboardStats[clientNum].revives;
+	}
+
+	bool Field::IsClientDown(const int clientNum)
+	{
+		if (!IsValidClientNum(clientNum))
+		{
+			return false;
+		}
+
+		return ClientScoreboardStats[clientNum].isDown != 0;
+	}
+
+	void Field::ResetClientScoreboardStats(const int clientNum)
+	{
+		if (!IsValidClientNum(clientNum))
+		{
+			return;
+		}
+
+		ClientScoreboardStats[clientNum] = {};
+	}
 
 	void Field::AddEntityField(const char* name, const ScriptCallbackEnt& setter, const ScriptCallbackEnt& getter)
 	{
@@ -147,6 +211,51 @@ namespace Components::GSC
 			[]([[maybe_unused]] Game::client_s* client, [[maybe_unused]] Game::gclient_s* pSelf, [[maybe_unused]] const ClientFields* pField)
 			{
 				Game::Scr_AddString(Game::NET_AdrToString(client->header.netchan.remoteAddress));
+			}
+		);
+
+		AddClientField("downs",
+			[]([[maybe_unused]] Game::client_s* client, Game::gclient_s* pSelf, [[maybe_unused]] const ClientFields* pField)
+			{
+				const auto clientNum = GetClientNum(pSelf);
+				if (IsValidClientNum(clientNum))
+				{
+					ClientScoreboardStats[clientNum].downs = Game::Scr_GetInt(0);
+				}
+			},
+			[]([[maybe_unused]] Game::client_s* client, Game::gclient_s* pSelf, [[maybe_unused]] const ClientFields* pField)
+			{
+				Game::Scr_AddInt(GetClientDowns(GetClientNum(pSelf)));
+			}
+		);
+
+		AddClientField("revives",
+			[]([[maybe_unused]] Game::client_s* client, Game::gclient_s* pSelf, [[maybe_unused]] const ClientFields* pField)
+			{
+				const auto clientNum = GetClientNum(pSelf);
+				if (IsValidClientNum(clientNum))
+				{
+					ClientScoreboardStats[clientNum].revives = Game::Scr_GetInt(0);
+				}
+			},
+			[]([[maybe_unused]] Game::client_s* client, Game::gclient_s* pSelf, [[maybe_unused]] const ClientFields* pField)
+			{
+				Game::Scr_AddInt(GetClientRevives(GetClientNum(pSelf)));
+			}
+		);
+
+		AddClientField("isDown",
+			[]([[maybe_unused]] Game::client_s* client, Game::gclient_s* pSelf, [[maybe_unused]] const ClientFields* pField)
+			{
+				const auto clientNum = GetClientNum(pSelf);
+				if (IsValidClientNum(clientNum))
+				{
+					ClientScoreboardStats[clientNum].isDown = Game::Scr_GetInt(0) != 0 ? 1 : 0;
+				}
+			},
+			[]([[maybe_unused]] Game::client_s* client, Game::gclient_s* pSelf, [[maybe_unused]] const ClientFields* pField)
+			{
+				Game::Scr_AddInt(IsClientDown(GetClientNum(pSelf)) ? 1 : 0);
 			}
 		);
 	}

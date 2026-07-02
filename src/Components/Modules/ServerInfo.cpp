@@ -507,7 +507,6 @@ namespace Components
 
 			if (!spectator && player.downs > LastDowns[clientNum])
 			{
-				// 40s ZW3 bleed-out fallback. Revive/death/spectator clears it earlier.
 				DownStarted[clientNum] = now;
 				DownUntil[clientNum] = now + 40000;
 			}

@@ -419,7 +419,7 @@ namespace Components
 				Toast::Show("cardicon_redhand", "Fetching Servers", "This may take some time. Please wait...", 3000);
 			}
 
-			std::thread([masterServerName, masterPort]()
+			std::jthread([masterServerName, masterPort]()
 				{
 					const auto host = "master.zw3.eu";
 					const auto url = std::format("http://{}/v1/servers/zw3?protocol={}", host, PROTOCOL);
@@ -1482,7 +1482,7 @@ namespace Components
 						RefreshContainer.loadingCache = true;
 					}
 
-					std::thread([]()
+					std::jthread([]()
 						{
 							LoadServerCache();
 							Scheduler::Once([]()
@@ -1583,10 +1583,10 @@ namespace Components
 		Scheduler::Loop(Frame, Scheduler::Pipeline::CLIENT);
 	}
 
-	void ServerList::preDestroy()
+	/*void ServerList::preDestroy()
 	{
 		std::lock_guard _(RefreshContainer.mutex);
 		RefreshContainer.awaitingList = false;
 		RefreshContainer.servers.clear();
-	}
+	}*/
 }

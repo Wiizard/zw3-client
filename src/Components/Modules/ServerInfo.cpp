@@ -14,6 +14,7 @@
 
 #include <set>
 #include <array>
+#include <algorithm>
 
 #define SCOREBOARD_FEEDER 71
 
@@ -470,6 +471,7 @@ namespace Components
 			static std::array<int, Game::MAX_CLIENTS> LastDowns{};
 			static std::array<int, Game::MAX_CLIENTS> LastDeaths{};
 			static std::array<int, Game::MAX_CLIENTS> DownUntil{};
+			static std::array<int, Game::MAX_CLIENTS> DownStarted{};
 			static std::array<bool, Game::MAX_CLIENTS> WasSpectator{};
 			static int LastTotalRevives = 0;
 
@@ -488,6 +490,11 @@ namespace Components
 				{
 					downUntil = 0;
 				}
+
+				for (auto& downStarted : DownStarted)
+				{
+					downStarted = 0;
+				}
 			}
 
 			LastTotalRevives = totalRevives;
@@ -495,26 +502,42 @@ namespace Components
 			if (spectator || WasSpectator[clientNum])
 			{
 				DownUntil[clientNum] = 0;
+				DownStarted[clientNum] = 0;
 			}
 
 			if (!spectator && player.downs > LastDowns[clientNum])
 			{
+				// 40s ZW3 bleed-out fallback. Revive/death/spectator clears it earlier.
+				DownStarted[clientNum] = now;
 				DownUntil[clientNum] = now + 40000;
 			}
 
 			if (player.deaths > LastDeaths[clientNum])
 			{
 				DownUntil[clientNum] = 0;
+				DownStarted[clientNum] = 0;
 			}
 
 			const auto down = !spectator && (GSC::Field::IsClientDown(clientNum) || DownUntil[clientNum] > now);
 			const auto dead = spectator;
+
+			auto downProgress = 0.0f;
+			if (down && DownUntil[clientNum] > now && DownStarted[clientNum] > 0)
+			{
+				downProgress = static_cast<float>(DownUntil[clientNum] - now) / 40000.0f;
+				downProgress = std::clamp(downProgress, 0.0f, 1.0f);
+			}
+			else if (down)
+			{
+				downProgress = 1.0f;
+			}
 
 			WasSpectator[clientNum] = spectator;
 			LastDowns[clientNum] = player.downs;
 			LastDeaths[clientNum] = player.deaths;
 
 			player.status = GetScoreboardStatusName(dead, down);
+			player.downProgress = downProgress;
 
 			PlayerContainer.playerList.push_back(player);
 		}
@@ -601,6 +624,7 @@ namespace Components
 			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_ping", i)).set("");
 			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_icon", i)).set("");
 			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_status", i)).set("");
+			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_down_progress", i)).set(0.0f);
 		}
 
 		for (std::size_t i = 0; i < PlayerContainer.playerList.size() && i < 4; ++i)
@@ -616,6 +640,7 @@ namespace Components
 			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_ping", i)).set(player.ping);
 			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_icon", i)).set(player.icon);
 			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_status", i)).set(player.status);
+			Dvar::Var(Utils::String::VA("zw3_ui_sb_p%d_down_progress", i)).set(player.downProgress);
 		}
 	}
 

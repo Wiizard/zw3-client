@@ -27,6 +27,7 @@ namespace Components
 				std::string name;
 				std::string icon;
 				std::string status;
+				float downProgress = 0.0f;
 			};
 
 			unsigned int currentPlayer = 0;

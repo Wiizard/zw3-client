@@ -413,8 +413,10 @@ namespace Components
 		}
 
 		for (int i = totalPlayers; i < MAX_PARTY_SLOTS; ++i) {
-			Dvar::Var(Utils::String::VA("character_%d", i + 1)).set("None");
-			Dvar::Var(Utils::String::VA("character_%d_player", i + 1)).set("None");
+			std::string charDvarName = Utils::String::VA("character_%d", i + 1);
+			std::string playerDvarName = Utils::String::VA("character_%d_player", i + 1);
+			Dvar::Var(charDvarName).set("None");
+			Dvar::Var(playerDvarName).set("None");
 		}
 	}
 
@@ -516,7 +518,8 @@ namespace Components
 				Dvar::Register<const char*>("autosave_score", "", Game::DVAR_INIT, "");
 				Dvar::Register<const char*>("autosave_time", "", Game::DVAR_INIT, "");
 				Dvar::Register<const char*>("autosave_date", "", Game::DVAR_INIT, "");
-				Dvar::Register<const char*>("autosave_mapname_display", "", Game::DVAR_INIT, "");
+				Dvar::Register<const char*>("autosave_mapname_display", "", Game::DVAR_INIT, "");	
+				Dvar::Register<bool>("autosave_load", false, Game::DVAR_INIT, "");
 			});
 
 		PartyEnable = Dvar::Register<bool>("party_enable", Dedicated::IsEnabled(), Game::DVAR_NONE, "Enable party system");
@@ -1149,6 +1152,23 @@ namespace Components
 					return;
 				}
 
+				Dvar::Var("autosave_load").set(true);
+
+				Scheduler::Schedule([]() -> bool
+					{
+						if (!Game::CL_IsCgameInitialized())
+						{
+							return false;
+						}
+
+						Scheduler::Once([]()
+							{
+								Dvar::Var("autosave_load").set(false);
+							}, Scheduler::Pipeline::MAIN, 5s);
+
+						return true;
+					}, Scheduler::Pipeline::MAIN, 100ms);
+
 				std::string cmd = "map "s + map->current.string;
 				Command::Execute(cmd.c_str());
 			});
@@ -1693,7 +1713,8 @@ namespace Components
 						Dvar::Var("addBots").set(0);
 						RandomizeCharactersForClients();
 						for (int i = 0; i < MAX_PARTY_SLOTS; ++i) {
-							Dvar::Var(Utils::String::VA("character_%d_player", i + 1)).set("None");
+							std::string playerDvarName = Utils::String::VA("character_%d_player", i + 1);
+							Dvar::Var(playerDvarName).set("None");
 						}
 						needsBroadcast = true;
 						needsUpdatePartystate = true;

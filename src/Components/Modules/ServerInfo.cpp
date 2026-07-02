@@ -468,13 +468,29 @@ namespace Components
 			player.icon = GetScoreboardIconForName(playerName);
 
 			static std::array<int, Game::MAX_CLIENTS> LastDowns{};
-			static std::array<int, Game::MAX_CLIENTS> LastRevives{};
 			static std::array<int, Game::MAX_CLIENTS> LastDeaths{};
 			static std::array<int, Game::MAX_CLIENTS> DownUntil{};
 			static std::array<bool, Game::MAX_CLIENTS> WasSpectator{};
+			static int LastTotalRevives = 0;
 
 			const auto spectator = client->sess.cs.team == Game::TEAM_SPECTATOR;
 			const auto now = Game::Sys_Milliseconds();
+
+			int totalRevives = 0;
+			for (int statClient = 0; statClient < Game::MAX_CLIENTS; ++statClient)
+			{
+				totalRevives += GSC::Field::GetClientRevives(statClient);
+			}
+
+			if (totalRevives > LastTotalRevives)
+			{
+				for (auto& downUntil : DownUntil)
+				{
+					downUntil = 0;
+				}
+			}
+
+			LastTotalRevives = totalRevives;
 
 			if (spectator || WasSpectator[clientNum])
 			{
@@ -486,7 +502,7 @@ namespace Components
 				DownUntil[clientNum] = now + 40000;
 			}
 
-			if (player.revives > LastRevives[clientNum] || player.deaths > LastDeaths[clientNum])
+			if (player.deaths > LastDeaths[clientNum])
 			{
 				DownUntil[clientNum] = 0;
 			}
@@ -496,7 +512,6 @@ namespace Components
 
 			WasSpectator[clientNum] = spectator;
 			LastDowns[clientNum] = player.downs;
-			LastRevives[clientNum] = player.revives;
 			LastDeaths[clientNum] = player.deaths;
 
 			player.status = GetScoreboardStatusName(dead, down);

@@ -2094,7 +2094,7 @@ namespace Components
 
 		try
 		{
-			const auto url = Utils::String::VA("https://wiiz.store/zw3/api/news.php?t=%i", Game::Sys_Milliseconds());
+			const auto url = Utils::String::VA("https://stats.zw3.eu/client/news.json?t=%i", Game::Sys_Milliseconds());
 			const auto response = Utils::WebIO("zw3-news").setTimeout(5000)->get(url);
 
 			if (!response.empty())

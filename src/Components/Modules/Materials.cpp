@@ -2,13 +2,24 @@
 #include <array>
 #include <algorithm>
 
-#ifdef NOMINMAX
-#undef NOMINMAX
-#endif
-
 #include "Materials.hpp"
 #include "AssetHandler.hpp"
+
+#pragma push_macro("min")
+#pragma push_macro("max")
+
+#ifndef min
+#define min std::min
+#endif
+
+#ifndef max
+#define max std::max
+#endif
+
 #include <gdiplus.h>
+
+#pragma pop_macro("max")
+#pragma pop_macro("min")
 
 #pragma comment(lib, "gdiplus.lib")
 

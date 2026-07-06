@@ -24,7 +24,10 @@ namespace Components
 	static std::string lastJoinSecret;
 	static int lastPartySize = 0;
 	static int lastPartyMax = 0;
+	static int lastPartyPrivacy = -1;
 	static int64_t lastUpdateTime = 0;
+
+	static bool currentDiscordCanJoin = false;
 
 	static unsigned int GetDiscordNonce()
 	{
@@ -51,7 +54,14 @@ namespace Components
 	static void JoinRequest(const DiscordUser* request)
 	{
 		Logger::Print("Discord: Join request from {} ({})\n", request->username, request->userId);
-		Discord_Respond(request->userId, DISCORD_REPLY_IGNORE);
+
+		if (!currentDiscordCanJoin)
+		{
+			Discord_Respond(request->userId, DISCORD_REPLY_IGNORE);
+			return;
+		}
+
+		Discord_Respond(request->userId, DISCORD_REPLY_YES);
 	}
 
 	static void Errored(const int errorCode, const char* message)
@@ -126,16 +136,24 @@ namespace Components
 		std::string joinSecret;
 		int partySize = 0;
 		int partyMax = 0;
+		int partyPrivacy = DISCORD_PARTY_PUBLIC;
+		bool canJoinDiscordParty = false;
 
 		if (!isInGame)
 		{
 			if (isServerList)
+			{
 				details = "Browsing servers";
+			}
 			else if (isMainMenu)
+			{
 				details = "At the main menu";
+			}
 			else if (isPrivateLobby || isPartyLobby)
 			{
 				const bool isPrivate = Dvar::Var("partyPrivacy").get<int>() == 1;
+
+				partyPrivacy = isPrivate ? DISCORD_PARTY_PRIVATE : DISCORD_PARTY_PUBLIC;
 				details = Utils::String::Format("In a party ({})", isPrivate ? "Private" : "Public");
 
 				int realPlayers = Dvar::Var("party_realPlayers").get<int>();
@@ -151,7 +169,12 @@ namespace Components
 					int lobbyRealPlayers = 0;
 					int lobbyMaxPlayers = 0;
 					sscanf(raw.c_str(), "%d/%d", &lobbyRealPlayers, &lobbyMaxPlayers);
-					partyMax = lobbyMaxPlayers;
+
+					if (lobbyRealPlayers > 0)
+						partySize = lobbyRealPlayers;
+
+					if (lobbyMaxPlayers > 0)
+						partyMax = lobbyMaxPlayers;
 				}
 
 				if (isHosting)
@@ -165,11 +188,15 @@ namespace Components
 					{
 						if (privateMatchNonce == 0)
 							privateMatchNonce = Utils::Cryptography::Rand::GenerateInt();
-						joinSecret = Utils::String::VA("%s", publicIp);
+
+						joinSecret = Utils::String::VA("%s:28960", publicIp);
+						canJoinDiscordParty = true;
 					}
 				}
 				else
+				{
 					state = "Waiting for host to start a match";
+				}
 
 				if (privateMatchNonce == 0)
 					privateMatchNonce = Utils::Cryptography::Rand::GenerateInt();
@@ -191,6 +218,8 @@ namespace Components
 			if (isHosting)
 			{
 				const bool isPrivate = Dvar::Var("partyPrivacy").get<int>() == 1;
+
+				partyPrivacy = isPrivate ? DISCORD_PARTY_PRIVATE : DISCORD_PARTY_PUBLIC;
 				details += isPrivate ? " (Private)" : " (Public)";
 
 				int totalPlayers = Dvar::Var("party_currentPlayers").get<int>();
@@ -210,7 +239,10 @@ namespace Components
 
 				const char* publicIp = Discord::GetHostDiscordInviteIP();
 				if (std::strcmp(publicIp, "0.0.0.0") != 0)
+				{
 					joinSecret = Utils::String::VA("%s:28960", publicIp);
+					canJoinDiscordParty = true;
+				}
 
 				partySize = realPlayers;
 				partyMax = 4;
@@ -230,6 +262,9 @@ namespace Components
 
 				partySize = Game::cgArray[0].snap ? Game::cgArray[0].snap->numClients : 1;
 				partyMax = Party::GetMaxClients();
+
+				canJoinDiscordParty = !joinSecret.empty();
+				partyPrivacy = DISCORD_PARTY_PUBLIC;
 			}
 		}
 
@@ -239,10 +274,11 @@ namespace Components
 		newPresence.joinSecret = joinSecret.empty() ? nullptr : joinSecret.c_str();
 		newPresence.partySize = partySize;
 		newPresence.partyMax = partyMax;
+		newPresence.partyPrivacy = partyPrivacy;
 
 		int64_t now = std::time(nullptr);
 		if (details != lastDetails || state != lastState || partyId != lastPartyId || joinSecret != lastJoinSecret
-			|| partySize != lastPartySize || partyMax != lastPartyMax || now - lastUpdateTime >= 1)
+			|| partySize != lastPartySize || partyMax != lastPartyMax || partyPrivacy != lastPartyPrivacy || now - lastUpdateTime >= 1)
 		{
 			DiscordPresence = newPresence;
 			Discord_UpdatePresence(&DiscordPresence);
@@ -253,7 +289,10 @@ namespace Components
 			lastJoinSecret = joinSecret;
 			lastPartySize = partySize;
 			lastPartyMax = partyMax;
+			lastPartyPrivacy = partyPrivacy;
 			lastUpdateTime = now;
+
+			currentDiscordCanJoin = canJoinDiscordParty;
 		}
 	}
 

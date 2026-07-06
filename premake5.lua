@@ -184,7 +184,7 @@ workspace "iw4x"
 	platforms "Win32"
 
 	systemversion "10.0.19041.0"
-	toolset "msc-v142"
+	toolset "msc-v143"
 	symbols "On"
 	staticruntime "On"
 	editandcontinue "Off"

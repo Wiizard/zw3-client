@@ -1,9 +1,15 @@
 #include <cmath>
 #include <array>
 #include <algorithm>
+
+#ifdef NOMINMAX
+#undef NOMINMAX
+#endif
+
 #include "Materials.hpp"
 #include "AssetHandler.hpp"
 #include <gdiplus.h>
+
 #pragma comment(lib, "gdiplus.lib")
 
 namespace Components

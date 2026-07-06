@@ -65,6 +65,7 @@
 #include "Modules/Threading.hpp"
 #include "Modules/Toast.hpp"
 #include "Modules/UIFeeder.hpp"
+#include "Modules/UPnP.hpp"
 #include "Modules/Updater.hpp"
 #include "Modules/VisionFile.hpp"
 #include "Modules/Voice.hpp"
@@ -196,6 +197,7 @@ namespace Components
 		Register(new Threading());
 		Register(new Toast());
 		Register(new UIFeeder());
+		Register(new UPnP());
 		Register(new Updater());
 		Register(new VisionFile());
 		Register(new Voice());

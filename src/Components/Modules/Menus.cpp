@@ -1,6 +1,9 @@
 #include "Menus.hpp"
+#include "Materials.hpp"
 #include "Party.hpp"
 #include "Events.hpp"
+#include <Utils/WebIO.hpp>
+#include <filesystem>
 // Ensure you have includes for AssetHandler, if it's a separate component.
 // #include "AssetHandler.hpp" // If AssetHandler is in its own header
 
@@ -30,6 +33,24 @@ namespace Components
 	Dvar::Var Menus::UILoadingStartTime;
 	Dvar::Var Menus::UILoadingProgress;
 	Dvar::Var Menus::UILoadingVisible;
+
+	Dvar::Var Menus::UINewsIndex;
+	Dvar::Var Menus::UINewsCount;
+	Dvar::Var Menus::UINewsProgress;
+	Dvar::Var Menus::UINewsHover;
+	Dvar::Var Menus::UINewsTitle;
+	Dvar::Var Menus::UINewsBody;
+	Dvar::Var Menus::UINewsCounter;
+	Dvar::Var Menus::UINewsImage;
+	Dvar::Var Menus::UINewsHasImage;
+	Dvar::Var Menus::UINewsLoading;
+	Dvar::Var Menus::UINewsPage;
+
+	std::vector<Menus::NewsItem> Menus::NewsItems;
+	int Menus::NewsElapsed = 0;
+	int Menus::LastNewsUpdate = 0;
+	int Menus::HoldNewsUntil = 0;
+	bool Menus::WasNewsHovered = false;
 
 	Game::UiContext* Menus::GameUiContexts[] = {
 		Game::uiContext,
@@ -1691,6 +1712,642 @@ namespace Components
 		}
 	}
 
+	void Menus::ClearNews()
+	{
+		NewsItems.clear();
+
+		Dvar::Var("zw3_ui_news_index").set(0);
+		Dvar::Var("zw3_ui_news_page").set(0);
+		Dvar::Var("zw3_ui_news_count").set(0);
+		Dvar::Var("zw3_ui_news_progress").set(0.0f);
+		Dvar::Var("zw3_ui_news_hover").set(false);
+		Dvar::Var("zw3_ui_news_title").set("");
+		Dvar::Var("zw3_ui_news_body").set("");
+		Dvar::Var("zw3_ui_news_counter").set("0 / 0");
+		Dvar::Var("zw3_ui_news_image").set("");
+		Dvar::Var("zw3_ui_news_has_image").set(false);
+		Dvar::Var("zw3_ui_news_loading").set(false);
+
+		ApplyNewsTileTitles();
+		ApplyNewsImageMaterialToMenu(nullptr);
+		ApplyNewsImageMaterialsToMenu();
+
+		NewsElapsed = 0;
+		LastNewsUpdate = 0;
+		HoldNewsUntil = 0;
+		WasNewsHovered = false;
+	}
+
+	std::string Menus::HashNewsString(const std::string& input)
+	{
+		std::uint64_t hash = 14695981039346656037ull;
+
+		for (const auto c : input)
+		{
+			hash ^= static_cast<unsigned char>(c);
+			hash *= 1099511628211ull;
+		}
+
+		return std::format("{:016X}", hash);
+	}
+
+	std::filesystem::path Menus::GetNewsImageCacheDir()
+	{
+		std::filesystem::path basePath;
+
+		const auto baseFilesLocation = Utils::GetBaseFilesLocation();
+		if (!baseFilesLocation.empty())
+		{
+			basePath = baseFilesLocation;
+		}
+		else
+		{
+			basePath = std::filesystem::current_path();
+		}
+
+		return basePath / "zw3" / "data" / "cache" / "news";
+	}
+
+	std::string Menus::GetNewsImageCacheExtension(const std::string&, const std::string&)
+	{
+		return ".iwi";
+	}
+
+	std::string Menus::GetNewsImageCachePath(const std::string& url, const std::string&)
+	{
+		return (GetNewsImageCacheDir() / std::format("{}.iwi", HashNewsString(url))).string();
+	}
+
+	std::string Menus::GetNewsImageMaterialName(const std::string& url, const std::string& data)
+	{
+		return std::format("zw3_news_{}", HashNewsString(url + "|" + HashNewsString(data)));
+	}
+
+	std::string Menus::CacheNewsImage(const std::string& url)
+	{
+		if (url.empty())
+		{
+			return "";
+		}
+
+		const auto cacheDir = GetNewsImageCacheDir();
+		std::error_code ec;
+		std::filesystem::create_directories(cacheDir, ec);
+
+		const auto cachePath = GetNewsImageCachePath(url);
+
+		std::string imageData;
+
+		try
+		{
+			imageData = Utils::WebIO("zw3-news").setTimeout(5000)->get(url);
+		}
+		catch (...)
+		{
+			imageData.clear();
+		}
+
+		if (!imageData.empty() && imageData.size() <= 2 * 1024 * 1024)
+		{
+			const auto iwiData = Materials::ConvertNewsImageBytesToIwi(imageData);
+
+			if (!iwiData.empty())
+			{
+				Utils::IO::WriteFile(cachePath, iwiData);
+				return cachePath;
+			}
+		}
+
+		if (Utils::IO::FileExists(cachePath))
+		{
+			return cachePath;
+		}
+
+		return "";
+	}
+
+	std::string Menus::CreateNewsImageMaterial(const NewsItem& item)
+	{
+		if (item.ImageUrl.empty() || item.ImageCachePath.empty())
+		{
+			return "";
+		}
+
+		const auto iwiData = Utils::IO::ReadFile(item.ImageCachePath);
+		if (iwiData.empty())
+		{
+			return "";
+		}
+
+		const auto materialName = GetNewsImageMaterialName(item.ImageUrl, iwiData);
+		auto* material = Materials::CreateNewsMaterialFromIwiBytes(materialName, iwiData);
+
+		if (!material || !Materials::IsValid(material))
+		{
+			return "";
+		}
+
+		return materialName;
+	}
+
+	void Menus::ApplyNewsImageMaterialToMenu(Game::Material* material)
+	{
+		const auto applyToMenu = [material](Game::menuDef_t* menu)
+			{
+				if (!menu || !menu->items)
+				{
+					return;
+				}
+
+				for (auto i = 0; i < menu->itemCount; ++i)
+				{
+					auto* item = menu->items[i];
+
+					if (!item || !item->window.name)
+					{
+						continue;
+					}
+
+					if (!_stricmp(item->window.name, "news_featured_image") || !_stricmp(item->window.name, "news_image"))
+					{
+						item->window.background = material;
+					}
+				}
+			};
+
+		const auto diskMenu = MenusFromDisk.find("pregame_loaderror");
+		if (diskMenu != MenusFromDisk.end())
+		{
+			applyToMenu(diskMenu->second);
+		}
+
+		for (auto* dc : GameUiContexts)
+		{
+			if (!dc)
+			{
+				continue;
+			}
+
+			for (auto i = 0; i < dc->menuCount; ++i)
+			{
+				auto* menu = dc->Menus[i];
+
+				if (menu && menu->window.name && !_stricmp(menu->window.name, "pregame_loaderror"))
+				{
+					applyToMenu(menu);
+				}
+			}
+
+			for (auto i = 0; i < dc->openMenuCount; ++i)
+			{
+				auto* menu = dc->menuStack[i];
+
+				if (menu && menu->window.name && !_stricmp(menu->window.name, "pregame_loaderror"))
+				{
+					applyToMenu(menu);
+				}
+			}
+		}
+	}
+
+	void Menus::ApplyNewsImageMaterialsToMenu()
+	{
+		const auto applyToMenu = [](Game::menuDef_t* menu)
+			{
+				if (!menu || !menu->items)
+				{
+					return;
+				}
+
+				const auto page = Dvar::Var("zw3_ui_news_page").get<int>();
+
+				for (auto i = 0; i < menu->itemCount; ++i)
+				{
+					auto* item = menu->items[i];
+
+					if (!item || !item->window.name)
+					{
+						continue;
+					}
+
+					if (std::strncmp(item->window.name, "news_thumb_", 11) != 0)
+					{
+						continue;
+					}
+
+					item->window.background = nullptr;
+
+					const auto slot = std::atoi(item->window.name + 11);
+					const auto index = page + slot;
+
+					if (index < 0 || index >= static_cast<int>(NewsItems.size()))
+					{
+						continue;
+					}
+
+					auto* material = NewsItems[index].ImageMaterialPtr;
+
+					if (!material || !Materials::IsValid(material))
+					{
+						continue;
+					}
+
+					item->window.background = material;
+				}
+			};
+
+		const auto diskMenu = MenusFromDisk.find("pregame_loaderror");
+		if (diskMenu != MenusFromDisk.end())
+		{
+			applyToMenu(diskMenu->second);
+		}
+
+		for (auto* dc : GameUiContexts)
+		{
+			if (!dc)
+			{
+				continue;
+			}
+
+			for (auto i = 0; i < dc->menuCount; ++i)
+			{
+				auto* menu = dc->Menus[i];
+
+				if (menu && menu->window.name && !_stricmp(menu->window.name, "pregame_loaderror"))
+				{
+					applyToMenu(menu);
+				}
+			}
+
+			for (auto i = 0; i < dc->openMenuCount; ++i)
+			{
+				auto* menu = dc->menuStack[i];
+
+				if (menu && menu->window.name && !_stricmp(menu->window.name, "pregame_loaderror"))
+				{
+					applyToMenu(menu);
+				}
+			}
+		}
+	}
+
+	void Menus::ApplyNewsItem()
+	{
+		if (NewsItems.empty())
+		{
+			ClearNews();
+			return;
+		}
+
+		auto index = Dvar::Var("zw3_ui_news_index").get<int>();
+
+		if (index < 0 || index >= static_cast<int>(NewsItems.size()))
+		{
+			index = 0;
+			Dvar::Var("zw3_ui_news_index").set(index);
+		}
+
+		const auto page = (index / 5) * 5;
+
+		if (Dvar::Var("zw3_ui_news_page").get<int>() != page)
+		{
+			Dvar::Var("zw3_ui_news_page").set(page);
+		}
+
+		const auto& item = NewsItems[index];
+		const auto count = static_cast<int>(NewsItems.size());
+		const auto hasValidImage = item.ImageMaterialPtr && Materials::IsValid(item.ImageMaterialPtr);
+
+		Dvar::Var("zw3_ui_news_title").set(item.Title);
+		Dvar::Var("zw3_ui_news_body").set(item.Body);
+		Dvar::Var("zw3_ui_news_image").set(hasValidImage ? item.ImageMaterial : "");
+		Dvar::Var("zw3_ui_news_has_image").set(hasValidImage);
+		Dvar::Var("zw3_ui_news_count").set(count);
+		Dvar::Var("zw3_ui_news_counter").set(Utils::String::VA("%d / %d", index + 1, count));
+
+		ApplyNewsTileTitles();
+		ApplyNewsImageMaterialToMenu(hasValidImage ? item.ImageMaterialPtr : nullptr);
+		ApplyNewsImageMaterialsToMenu();
+	}
+
+	void Menus::SelectNewsSlot(const int slot)
+	{
+		if (NewsItems.empty())
+		{
+			return;
+		}
+
+		const auto page = Dvar::Var("zw3_ui_news_page").get<int>();
+		const auto index = page + slot;
+
+		if (index < 0 || index >= static_cast<int>(NewsItems.size()))
+		{
+			return;
+		}
+
+		Dvar::Var("zw3_ui_news_index").set(index);
+		Dvar::Var("zw3_ui_news_progress").set(0.0f);
+		Dvar::Var("zw3_ui_news_hover").set(false);
+
+		NewsElapsed = 0;
+		HoldNewsUntil = Game::Sys_Milliseconds() + 1200;
+		WasNewsHovered = false;
+
+		ApplyNewsItem();
+	}
+
+	void Menus::NewsPrevPage([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+	{
+		auto page = Dvar::Var("zw3_ui_news_page").get<int>();
+		page = std::max(0, page - 5);
+
+		Dvar::Var("zw3_ui_news_page").set(page);
+		Dvar::Var("zw3_ui_news_index").set(page);
+		Dvar::Var("zw3_ui_news_progress").set(0.0f);
+
+		ApplyNewsImageMaterialsToMenu();
+		ApplyNewsItem();
+	}
+
+	void Menus::NewsNextPage([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+	{
+		auto page = Dvar::Var("zw3_ui_news_page").get<int>();
+		const auto count = static_cast<int>(NewsItems.size());
+
+		if (page + 5 < count)
+		{
+			page += 5;
+		}
+
+		Dvar::Var("zw3_ui_news_page").set(page);
+		Dvar::Var("zw3_ui_news_index").set(page);
+		Dvar::Var("zw3_ui_news_progress").set(0.0f);
+
+		ApplyNewsImageMaterialsToMenu();
+		ApplyNewsItem();
+	}
+
+
+	void Menus::FetchNews()
+	{
+		std::vector<NewsItem> fetchedItems;
+
+		try
+		{
+			const auto url = Utils::String::VA("https://wiiz.store/zw3/api/news.php?t=%i", Game::Sys_Milliseconds());
+			const auto response = Utils::WebIO("zw3-news").setTimeout(5000)->get(url);
+
+			if (!response.empty())
+			{
+				const auto json = nlohmann::json::parse(response);
+
+				if (json.contains("items") && json["items"].is_array())
+				{
+					for (const auto& entry : json["items"])
+					{
+						NewsItem item;
+
+						item.Title = entry.value("title", "");
+						item.Body = entry.value("body", "");
+						item.ImageUrl = entry.value("image", entry.value("imageUrl", ""));
+						item.Duration = std::clamp(entry.value("duration", 3000), 1500, 15000);
+
+						if (entry.contains("action") && entry["action"].is_object())
+						{
+							const auto& action = entry["action"];
+
+							item.ActionType = action.value("type", "");
+							item.ActionTarget = action.value("target", "");
+
+							if (action.contains("commands") && action["commands"].is_array())
+							{
+								for (const auto& command : action["commands"])
+								{
+									if (command.is_string())
+									{
+										item.ActionCommands.push_back(command.get<std::string>());
+									}
+								}
+							}
+						}
+						else
+						{
+							item.ActionType = entry.value("actionType", entry.value("action", ""));
+							item.ActionTarget = entry.value("actionTarget", entry.value("url", ""));
+						}
+
+						if (!item.Title.empty() && !item.Body.empty())
+						{
+							item.ImageCachePath = CacheNewsImage(item.ImageUrl);
+							fetchedItems.push_back(item);
+						}
+					}
+				}
+			}
+		}
+		catch (...)
+		{
+			fetchedItems.clear();
+		}
+
+		Components::Scheduler::Once([items = std::move(fetchedItems)]() mutable
+			{
+				if (items.empty())
+				{
+					ClearNews();
+					return;
+				}
+
+				for (auto& item : items)
+				{
+					item.ImageMaterial = CreateNewsImageMaterial(item);
+					item.ImageMaterialPtr = item.ImageMaterial.empty() ? nullptr : Materials::GetRuntimeMaterial(item.ImageMaterial);
+				}
+
+				NewsItems = std::move(items);
+				ApplyNewsImageMaterialsToMenu();
+
+				Dvar::Var("zw3_ui_news_index").set(0);
+				Dvar::Var("zw3_ui_news_page").set(0);
+				Dvar::Var("zw3_ui_news_count").set(static_cast<int>(NewsItems.size()));
+				Dvar::Var("zw3_ui_news_progress").set(0.0f);
+				Dvar::Var("zw3_ui_news_hover").set(false);
+				Dvar::Var("zw3_ui_news_image").set("");
+				Dvar::Var("zw3_ui_news_has_image").set(false);
+				Dvar::Var("zw3_ui_news_loading").set(false);
+
+				NewsElapsed = 0;
+				LastNewsUpdate = 0;
+				HoldNewsUntil = 0;
+				WasNewsHovered = false;
+
+				Components::Scheduler::Once([]()
+					{
+						ApplyNewsItem();
+					}, Components::Scheduler::Pipeline::MAIN);
+			}, Components::Scheduler::Pipeline::MAIN);
+	}
+
+	void Menus::UpdateNewsCarousel()
+	{
+		if (NewsItems.empty())
+		{
+			return;
+		}
+
+		const auto now = Game::Sys_Milliseconds();
+
+		if (!LastNewsUpdate)
+		{
+			LastNewsUpdate = now;
+		}
+
+		const auto delta = std::clamp(now - LastNewsUpdate, 0, 100);
+		LastNewsUpdate = now;
+
+		auto index = Dvar::Var("zw3_ui_news_index").get<int>();
+
+		if (index < 0 || index >= static_cast<int>(NewsItems.size()))
+		{
+			index = 0;
+			Dvar::Var("zw3_ui_news_index").set(index);
+			NewsElapsed = 0;
+			ApplyNewsItem();
+		}
+
+		const bool hovering = Dvar::Var("zw3_ui_news_hover").get<bool>();
+		const auto duration = std::max(NewsItems[index].Duration, 1500);
+
+		if (hovering)
+		{
+			WasNewsHovered = true;
+			Dvar::Var("zw3_ui_news_progress").set(0.0f);
+			ApplyNewsItem();
+			return;
+		}
+
+		if (WasNewsHovered)
+		{
+			WasNewsHovered = false;
+			HoldNewsUntil = now + 1200;
+			NewsElapsed = std::min(duration / 2, duration - 500);
+		}
+
+		if (now >= HoldNewsUntil)
+		{
+			NewsElapsed += delta;
+		}
+
+		if (NewsElapsed >= duration)
+		{
+			NewsElapsed = 0;
+			index = (index + 1) % static_cast<int>(NewsItems.size());
+
+			Dvar::Var("zw3_ui_news_index").set(index);
+			ApplyNewsItem();
+		}
+
+		Dvar::Var("zw3_ui_news_progress").set(std::clamp(static_cast<float>(NewsElapsed) / static_cast<float>(duration), 0.0f, 1.0f));
+		ApplyNewsItem();
+	}
+
+	void Menus::RefreshNews([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+	{
+		Dvar::Var("zw3_ui_news_loading").set(true);
+		Dvar::Var("zw3_ui_news_index").set(0);
+		Dvar::Var("zw3_ui_news_page").set(0);
+		Dvar::Var("zw3_ui_news_count").set(0);
+		Dvar::Var("zw3_ui_news_progress").set(0.0f);
+		Dvar::Var("zw3_ui_news_counter").set("0 / 0");
+		Dvar::Var("zw3_ui_news_image").set("");
+		Dvar::Var("zw3_ui_news_has_image").set(false);
+
+		ApplyNewsTileTitles();
+		ApplyNewsImageMaterialToMenu(nullptr);
+		ApplyNewsImageMaterialsToMenu();
+
+		Components::Scheduler::Once([]()
+			{
+				FetchNews();
+			}, Components::Scheduler::Pipeline::ASYNC);
+	}
+
+	void Menus::OpenNews([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+	{
+		if (NewsItems.empty())
+		{
+			return;
+		}
+
+		const auto index = Dvar::Var("zw3_ui_news_index").get<int>();
+
+		if (index < 0 || index >= static_cast<int>(NewsItems.size()))
+		{
+			return;
+		}
+
+		const auto& item = NewsItems[index];
+
+		for (const auto& command : item.ActionCommands)
+		{
+			if (!command.empty())
+			{
+				Command::Execute(command, true);
+			}
+		}
+
+		if (item.ActionType.empty() || item.ActionTarget.empty())
+		{
+			return;
+		}
+
+		if (!_stricmp(item.ActionType.c_str(), "menu"))
+		{
+			Game::Menus_OpenByName(Game::uiContext, item.ActionTarget.c_str());
+			return;
+		}
+
+		if (!_stricmp(item.ActionType.c_str(), "link"))
+		{
+			Command::Execute(Utils::String::VA("openLink \"%s\"", item.ActionTarget.c_str()), true);
+			return;
+		}
+
+		if (!_stricmp(item.ActionType.c_str(), "command") || !_stricmp(item.ActionType.c_str(), "exec"))
+		{
+			Command::Execute(item.ActionTarget, true);
+			return;
+		}
+	}
+
+	std::string Menus::GetNewsTileTitle(const int slot)
+	{
+		const auto page = Dvar::Var("zw3_ui_news_page").get<int>();
+		const auto index = page + slot;
+
+		if (index < 0 || index >= static_cast<int>(NewsItems.size()))
+		{
+			return "";
+		}
+
+		auto title = NewsItems[index].Title;
+
+		if (title.length() > 11)
+		{
+			title = title.substr(0, 10) + ".";
+		}
+
+		return title;
+	}
+
+	void Menus::ApplyNewsTileTitles()
+	{
+		for (auto i = 0; i < 5; ++i)
+		{
+			Dvar::Var(Utils::String::VA("zw3_ui_news_tile_title%i", i)).set(GetNewsTileTitle(i));
+		}
+	}
+
 	Menus::Menus()
 	{
 		menuParseKeywordHash = reinterpret_cast<Game::KeywordHashEntry<Game::menuDef_t, 128, 3523>**>(0x63AE928);
@@ -1719,8 +2376,28 @@ namespace Components
 			UILoadingStartTime = Dvar::Register<int>("zw3_ui_loading_start_time", 0, 0, INT_MAX, Game::DVAR_INIT, "Loading screen animation start time");
 			UILoadingProgress = Dvar::Register<float>("zw3_ui_loading_progress", 0.0f, 0.0f, 1.0f, Game::DVAR_INIT, "Loading screen progress");
 			UILoadingVisible = Dvar::Register<bool>("zw3_ui_loading_visible", false, Game::DVAR_INIT, "Loading screen progress visibility");
+			UINewsIndex = Dvar::Register<int>("zw3_ui_news_index", 0, 0, INT_MAX, Game::DVAR_INTERNAL, "Current ZW3 news carousel item");
+			UINewsCount = Dvar::Register<int>("zw3_ui_news_count", 0, 0, INT_MAX, Game::DVAR_INTERNAL, "Current ZW3 news carousel item count");
+			UINewsProgress = Dvar::Register<float>("zw3_ui_news_progress", 0.0f, 0.0f, 1.0f, Game::DVAR_INTERNAL, "Current ZW3 news carousel progress");
+			UINewsHover = Dvar::Register<bool>("zw3_ui_news_hover", false, Game::DVAR_INTERNAL, "ZW3 news carousel hover state");
+			UINewsTitle = Dvar::Register<const char*>("zw3_ui_news_title", "", Game::DVAR_INTERNAL, "Current ZW3 news title");
+			UINewsBody = Dvar::Register<const char*>("zw3_ui_news_body", "", Game::DVAR_INTERNAL, "Current ZW3 news body");
+			UINewsCounter = Dvar::Register<const char*>("zw3_ui_news_counter", "0 / 0", Game::DVAR_INTERNAL, "Current ZW3 news counter");
+			UINewsImage = Dvar::Register<const char*>("zw3_ui_news_image", "", Game::DVAR_INTERNAL, "Unused/internal ZW3 news image marker");
+			UINewsHasImage = Dvar::Register<bool>("zw3_ui_news_has_image", false, Game::DVAR_INTERNAL, "Current ZW3 news image availability");
+			UINewsLoading = Dvar::Register<bool>("zw3_ui_news_loading", false, Game::DVAR_INTERNAL, "Current ZW3 news loading state");
+			UINewsPage = Dvar::Register<int>("zw3_ui_news_page", 0, 0, INT_MAX, Game::DVAR_INTERNAL, "Current ZW3 news thumbnail page");
 			}, Components::Scheduler::Pipeline::MAIN);
 
+		UIScript::Add("RefreshNews", RefreshNews);
+		UIScript::Add("OpenNews", OpenNews);
+		UIScript::Add("SelectNewsSlot0", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info) { SelectNewsSlot(0); });
+		UIScript::Add("SelectNewsSlot1", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info) { SelectNewsSlot(1); });
+		UIScript::Add("SelectNewsSlot2", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info) { SelectNewsSlot(2); });
+		UIScript::Add("SelectNewsSlot3", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info) { SelectNewsSlot(3); });
+		UIScript::Add("SelectNewsSlot4", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info) { SelectNewsSlot(4); });
+		UIScript::Add("NewsPrevPage", NewsPrevPage);
+		UIScript::Add("NewsNextPage", NewsNextPage);
 
 		// Increase HunkMemory for people with heavy-loaded menus (e.g. ZW3)
 		// Original is 0xA00000 (10MB), old patch was 0xB00000 (11MB). Raised to 48MB to reduce OOMs.
@@ -1888,6 +2565,8 @@ namespace Components
 				{
 					Dvar::Var("zw3_sb_ui_survived_time").set("00:00:00");
 				}
+
+				UpdateNewsCarousel();
 
 				lastConnState = connState;
 				lastMapName = currentMapName;

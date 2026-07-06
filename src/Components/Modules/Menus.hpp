@@ -22,6 +22,58 @@ namespace Components
 		static Game::XAssetHeader MenuFindHook(Game::XAssetType type, const std::string& filename);
 		static Game::XAssetHeader MenuListFindHook(Game::XAssetType type, const std::string& filename);
 
+		struct NewsItem
+		{
+			std::string Title;
+			std::string Body;
+			std::string ActionType;
+			std::string ActionTarget;
+			std::vector<std::string> ActionCommands;
+			std::string ImageUrl;
+			std::string ImageCachePath;
+			std::string ImageMaterial;
+			Game::Material* ImageMaterialPtr = nullptr;
+			int Duration = 3000;
+		};
+
+		static Dvar::Var UINewsIndex;
+		static Dvar::Var UINewsCount;
+		static Dvar::Var UINewsProgress;
+		static Dvar::Var UINewsHover;
+		static Dvar::Var UINewsTitle;
+		static Dvar::Var UINewsBody;
+		static Dvar::Var UINewsCounter;
+		static Dvar::Var UINewsImage;
+		static Dvar::Var UINewsHasImage;
+		static Dvar::Var UINewsLoading;
+		static Dvar::Var UINewsPage;
+
+		static std::vector<NewsItem> NewsItems;
+		static int NewsElapsed;
+		static int LastNewsUpdate;
+		static int HoldNewsUntil;
+		static bool WasNewsHovered;
+
+		static void ClearNews();
+		static std::string HashNewsString(const std::string& input);
+		static std::filesystem::path GetNewsImageCacheDir();
+		static std::string GetNewsImageCacheExtension(const std::string& url, const std::string& data = {});
+		static std::string GetNewsImageCachePath(const std::string& url, const std::string& data = {});
+		static std::string GetNewsImageMaterialName(const std::string& url, const std::string& data);
+		static std::string CacheNewsImage(const std::string& url);
+		static std::string CreateNewsImageMaterial(const NewsItem& item);
+		static void ApplyNewsImageMaterialToMenu(Game::Material* material);
+		static void ApplyNewsImageMaterialsToMenu();
+		static void FetchNews();
+		static void ApplyNewsItem();
+		static void UpdateNewsCarousel();
+		static void RefreshNews([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
+		static void OpenNews(const UIScript::Token& token, const Game::uiInfo_s* info);
+		static void SelectNewsSlot(int slot);
+		static void NewsPrevPage(const UIScript::Token& token, const Game::uiInfo_s* info);
+		static void NewsNextPage(const UIScript::Token& token, const Game::uiInfo_s* info);
+		static std::string GetNewsTileTitle(int slot);
+		static void ApplyNewsTileTitles();
 
 	private:
 		static std::unordered_map<std::string, Game::menuDef_t*> MenusFromDisk;

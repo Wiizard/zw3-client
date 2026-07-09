@@ -9,6 +9,9 @@ namespace Components
 	Utils::Signal<Renderer::Callback> Renderer::EndRecoverDeviceSignal;
 	Utils::Signal<Renderer::Callback> Renderer::BeginRecoverDeviceSignal;
 
+	bool Renderer::VidRestarting = false;
+	bool Renderer::VidRestartUiReloadPending = false;
+
 	Dvar::Var Renderer::r_drawTriggers;
 	Dvar::Var Renderer::r_drawSceneModelCollisions;
 	Dvar::Var Renderer::r_drawModelBoundingBoxes;
@@ -101,14 +104,29 @@ namespace Components
 		return reinterpret_cast<LPPOINT>(0x66E1C68)->y;
 	}
 
+	bool Renderer::IsVidRestarting()
+	{
+		return Renderer::VidRestarting;
+	}
+
+	bool Renderer::ConsumeVidRestartUiReload()
+	{
+		const auto pending = Renderer::VidRestartUiReloadPending;
+		Renderer::VidRestartUiReloadPending = false;
+		return pending;
+	}
+
 	void Renderer::PreVidRestart()
 	{
+		Renderer::VidRestarting = true;
+		Renderer::VidRestartUiReloadPending = true;
 		Renderer::BeginRecoverDeviceSignal();
 	}
 
 	void Renderer::PostVidRestart()
 	{
 		Renderer::EndRecoverDeviceSignal();
+		Renderer::VidRestarting = false;
 	}
 
 	__declspec(naked) void Renderer::PostVidRestartStub()

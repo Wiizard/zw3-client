@@ -328,10 +328,12 @@ namespace Components
 		return menu && Game::Menu_IsVisible(Game::uiContext, menu);
 	}
 
-	Discord::Discord()
+	void Discord::InitializeDiscord()
 	{
-		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled())
+		if (Initialized_)
+		{
 			return;
+		}
 
 		DiscordEventHandlers handlers{};
 		handlers.ready = Ready;
@@ -346,6 +348,14 @@ namespace Components
 		Scheduler::Loop(UpdateDiscord, Scheduler::Pipeline::MAIN, 1s);
 
 		Initialized_ = true;
+	}
+
+	Discord::Discord()
+	{
+		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled())
+			return;
+
+		Scheduler::OnGameInitialized(Discord::InitializeDiscord, Scheduler::Pipeline::MAIN);
 	}
 
 	void Discord::preDestroy()

@@ -20,6 +20,9 @@ namespace Components
 		static void OnDeviceRecoveryEnd(Utils::Slot<Renderer::Callback> callback);
 		static void OnDeviceRecoveryBegin(Utils::Slot<Renderer::Callback> callback);
 
+		static bool IsVidRestarting();
+		static bool ConsumeVidRestartUiReload();
+
 	private:
 		static void BackendFrameStub();
 		static void BackendFrameHandler();
@@ -49,6 +52,9 @@ namespace Components
 
 		static Utils::Signal<Renderer::Callback> EndRecoverDeviceSignal;
 		static Utils::Signal<Renderer::Callback> BeginRecoverDeviceSignal;
+
+		static bool VidRestarting;
+		static bool VidRestartUiReloadPending;
 
 		static Utils::Signal<BackendCallback> BackendFrameSignal;
 		static Utils::Signal<BackendCallback> SingleBackendFrameSignal;

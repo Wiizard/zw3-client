@@ -2,6 +2,7 @@
 #include "Materials.hpp"
 #include "Party.hpp"
 #include "Events.hpp"
+#include "Renderer.hpp"
 #include <Utils/WebIO.hpp>
 #include <filesystem>
 // Ensure you have includes for AssetHandler, if it's a separate component.
@@ -1424,6 +1425,26 @@ namespace Components
 		// However, it's safer to ensure these arrays are valid.
 		if (!Menus::SupportingData->uifunctions.functions) {
 			InitializeSupportingData(); // Re-allocate the top-level arrays if they were freed
+		}
+
+		if (Renderer::ConsumeVidRestartUiReload() && !MenusFromDisk.empty())
+		{
+			// UI_Init runs during vid_restart. Re-parsing every loose menu here is
+			// slow, but dropping the menus means the restarted UI is incomplete.
+			// Keep the parsed disk menus and only reattach them to the fresh UI
+			// context. Clear old override bookkeeping first because it points at
+			// menus from the pre-restart UI context.
+			OverridenMenus.clear();
+			UpdateSupportingDataContents();
+
+			for (const auto& entry : MenusFromDisk)
+			{
+				AfterLoadedMenuFromDisk(entry.second);
+			}
+
+			CheckMenus();
+			DebugPrint("Reattached {} cached disk menus for vid_restart", MenusFromDisk.size());
+			return;
 		}
 
 		// Now, proceed with reloading all menus.

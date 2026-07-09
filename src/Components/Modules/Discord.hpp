@@ -14,6 +14,8 @@ namespace Components
 	private:
 		static bool Initialized_;
 
+		static void InitializeDiscord();
+
 		static void UpdateDiscord();
 
 		static bool IsPrivateMatchOpen();

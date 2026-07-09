@@ -775,7 +775,12 @@ namespace Components
 		Utils::Hook::Nop(0x4EBF1A, 5);
 #endif
 
-		if (Flags::HasFlag("nointro"))
+		// Starting the ZW3 cinematic here keeps the client in CA_LOGO before the
+		// menu can be used and also delays the real game window on some systems.
+		// Make the fast path the default; -intro is available for anyone who wants
+		// to force the branding cinematic back on. Keep -nointro accepted for
+		// backwards compatibility.
+		if (!Flags::HasFlag("intro") || Flags::HasFlag("nointro"))
 		{
 			Utils::Hook::Set<BYTE>(0x60BECF, 0xEB);
 		}

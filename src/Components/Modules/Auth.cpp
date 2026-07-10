@@ -29,6 +29,32 @@ namespace Components
 
 	bool Auth::HasAccessToReservedSlot;
 
+	namespace
+	{
+		bool IsSameMachineAddress(const Network::Address& address)
+		{
+			if (address.isLoopback())
+			{
+				return true;
+			}
+
+			if (!Game::numIP || !Game::localIP)
+			{
+				return false;
+			}
+
+			for (int i = 0; i < *Game::numIP; ++i)
+			{
+				if (address.getIP().full == Game::localIP[i].full)
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+	}
+
 	void Auth::Frame()
 	{
 		if (TokenContainer.generating)
@@ -268,8 +294,13 @@ namespace Components
 
 			if (userLevel < ourLevel)
 			{
-				Network::Send(address, Utils::String::VA("error\nYour security level (%d) is lower than the server's security level (%d)", userLevel, ourLevel));
-				return;
+				if (!IsSameMachineAddress(address))
+				{
+					Network::Send(address, Utils::String::VA("error\nYour security level (%d) is lower than the server's security level (%d)", userLevel, ourLevel));
+					return;
+				}
+
+				Logger::Debug("Allowing same-machine client {} with security level {} below server level {}", address.getString(), userLevel, ourLevel);
 			}
 
 			Logger::Debug("Verified XUID {:#X} ({}) from {}", xuid, userLevel, address.getString());

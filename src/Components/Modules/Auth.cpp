@@ -234,10 +234,22 @@ namespace Components
 				return;
 			}
 
-			if (xuid != GetKeyHash(connectData.publickey()))
+			/*if (xuid != GetKeyHash(connectData.publickey()))
 			{
 				Network::Send(address, "error\nXUID doesn't match the certificate!");
 				return;
+			}*/
+
+			const auto certificateXuid = GetKeyHash(connectData.publickey());
+			if (xuid != certificateXuid)
+			{
+				if (!address.isLocal())
+				{
+					Network::Send(address, "error\nXUID doesn't match the certificate!");
+					return;
+				}
+
+				Logger::Debug("Allowing local test XUID {:#X} to use certificate XUID {:#X} from {}", xuid, certificateXuid, address.getString());
 			}
 
 			// Verify the signature
@@ -606,8 +618,13 @@ namespace Components
 		Localization::Set("MPUI_SECURITY_INCREASE_MESSAGE", "");
 
 		// Load the key
-		LoadKey(true);
-		Steam::SteamUser()->GetSteamID();
+		//LoadKey(true);
+		//Steam::SteamUser()->GetSteamID();
+		Scheduler::OnGameInitialized([]
+			{
+				LoadKey(true);
+				Steam::SteamUser()->GetSteamID();
+			}, Scheduler::Pipeline::MAIN);
 
 		Scheduler::Loop(Frame, Scheduler::Pipeline::MAIN);
 

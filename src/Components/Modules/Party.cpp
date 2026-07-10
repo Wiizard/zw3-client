@@ -52,13 +52,36 @@ namespace Components
 	Dvar::Var Party::PartyEnable;
 	Dvar::Var Party::ServerVersion;
 
-	std::map<uint64_t, Components::Network::Address> Party::g_xuidToPublicAddressMap;
+	std::map<uint64_t, std::vector<Components::Network::Address>> Party::g_xuidToPublicAddressMap;
 	static int s_lastTotalPlayers = -1;
 	static int s_lastRealPlayers = -1;
 	static std::string s_lastHostName = "";
 	static bool s_wasHostingLastFrame = false;
 	static std::array<int, 4> s_assigned_character_ids = { -1, -1, -1, -1 };
 	const int MAX_PARTY_SLOTS = 4;
+
+	void Party::TrackClientAddress(uint64_t xuid, const Network::Address& address)
+	{
+		if (xuid == 0)
+		{
+			return;
+		}
+
+		auto& addresses = g_xuidToPublicAddressMap[xuid];
+		const auto addressString = address.getString();
+		auto existing = std::find_if(addresses.begin(), addresses.end(), [&addressString](const Network::Address& knownAddress)
+			{
+				return knownAddress.getString() == addressString;
+			});
+
+		if (existing != addresses.end())
+		{
+			*existing = address;
+			return;
+		}
+
+		addresses.push_back(address);
+	}
 
 	uint64_t Party::GetLocalPlayerXUID() {
 		return Steam::SteamUser()->GetSteamID().bits;
@@ -282,6 +305,7 @@ namespace Components
 
 		const std::string builtDvarString = info.build();
 		int totalSent = 0;
+		std::unordered_set<std::string> sentAddresses;
 
 		for (int i = 0; i < maxPartyMembers; ++i)
 		{
@@ -298,14 +322,14 @@ namespace Components
 
 			uint64_t memberXuid = member.player;
 
-			if (memberXuid == GetLocalPlayerXUID())
+			/*if (memberXuid == GetLocalPlayerXUID())
 			{
 				continue;
 			}
 
-			Components::Network::Address targetAddr;
+			Components::Network::Address targetAddr;*/
 
-			auto it = Party::g_xuidToPublicAddressMap.find(memberXuid);
+			/*auto it = Party::g_xuidToPublicAddressMap.find(memberXuid);
 			if (it != Party::g_xuidToPublicAddressMap.end())
 			{
 				targetAddr = it->second;
@@ -313,15 +337,35 @@ namespace Components
 			else
 			{
 				continue;
-			}
+			}*/
 
-			if (strcmp(targetAddr.getString().c_str(), "127.0.0.1") == 0)
+			auto it = Party::g_xuidToPublicAddressMap.find(memberXuid);
+
+			if (it == Party::g_xuidToPublicAddressMap.end())
 			{
 				continue;
 			}
 
-			Network::SendCommand(targetAddr, "dvarUpdate", builtDvarString);
-			++totalSent;
+			/*if (strcmp(targetAddr.getString().c_str(), "127.0.0.1") == 0)
+			{
+				continue;
+			}*/
+
+			for (const auto& targetAddr : it->second)
+			{
+				const auto targetAddressString = targetAddr.getString();
+				if (targetAddressString == "127.0.0.1" || sentAddresses.contains(targetAddressString))
+				{
+					continue;
+				}
+
+				Network::SendCommand(targetAddr, "dvarUpdate", builtDvarString);
+				sentAddresses.insert(targetAddressString);
+				++totalSent;
+			}
+
+			//Network::SendCommand(targetAddr, "dvarUpdate", builtDvarString);
+			//++totalSent;
 		}
 	}
 
@@ -397,8 +441,16 @@ namespace Components
 				}
 			}
 
-			if (i < realPlayers) {
-				Dvar::Var(playerDvarName).set(Game::g_lobbyData->partyMembers[i].gamertag);
+			if (i < realPlayers)
+			{
+				std::string playerName = Dvar::Var(playerDvarName).get<std::string>();
+
+				if (playerName.empty() || playerName == "None" || playerName.find("[BOT]") != std::string::npos)
+				{
+					playerName = (i == 0) ? Dvar::Var("name").get<std::string>() : "None";
+				}
+
+				Dvar::Var(playerDvarName).set(playerName.c_str());
 			}
 			else {
 				std::string assignedCharacter = Dvar::Var(charDvarName).get<std::string>();
@@ -518,7 +570,7 @@ namespace Components
 				Dvar::Register<const char*>("autosave_score", "", Game::DVAR_INIT, "");
 				Dvar::Register<const char*>("autosave_time", "", Game::DVAR_INIT, "");
 				Dvar::Register<const char*>("autosave_date", "", Game::DVAR_INIT, "");
-				Dvar::Register<const char*>("autosave_mapname_display", "", Game::DVAR_INIT, "");	
+				Dvar::Register<const char*>("autosave_mapname_display", "", Game::DVAR_INIT, "");
 				Dvar::Register<bool>("autosave_load", false, Game::DVAR_INIT, "");
 			});
 
@@ -533,8 +585,8 @@ namespace Components
 		Dvar::Register<int>("ui_perklocations", 0, 0, 1, Game::DVAR_CODINFO, "Toggle perk locations");
 		Dvar::Register<int>("thirdPerson", 0, 0, 1, Game::DVAR_CODINFO, "Toggle third person");
 		Dvar::Register<int>("addBots", 0, 0, 3, Game::DVAR_CODINFO, "Change the amount of bots");
-		static const char* partyPrivacyValues[] = { "Public", "Private", nullptr };
-		Game::Dvar_RegisterEnum("partyPrivacy", partyPrivacyValues, 0, Game::DVAR_CODINFO, "Toggle party privacy");
+		static const char* partyPrivacyValues[] = { "Open", "Invite-Only", "Closed", nullptr };
+		Game::Dvar_RegisterEnum("partyPrivacy", partyPrivacyValues, 0, Game::DVAR_CODINFO, "Party privacy");
 
 		// Kill the party migrate handler - it's not necessary and has apparently been used in the past for trickery?
 		Utils::Hook(0x46AB70, PartyMigrate_HandlePacket, HOOK_JUMP).install()->quick();
@@ -1212,7 +1264,9 @@ namespace Components
 
 					if (clientXuid != 0)
 					{
-						Party::g_xuidToPublicAddressMap[clientXuid] = address;
+						//Party::g_xuidToPublicAddressMap[clientXuid] = address;
+
+						Party::TrackClientAddress(clientXuid, address);
 
 						Game::netIP_t clientIpUnion = address.getIP();
 						struct in_addr temp_addr;
@@ -1353,9 +1407,9 @@ namespace Components
 						{
 							std::string party_privacy = info.get("partyPrivacy");
 							std::string client_count = info.get("clients");
-							if (party_privacy == "1" || party_privacy == "Private")
+							if (party_privacy == "2" || party_privacy == "Closed")
 							{
-								ConnectError("The lobby you are trying to join has been set to Private.");
+								ConnectError("The lobby you are trying to join is closed.");
 								return;
 							}
 							else if (std::stoi(client_count) >= MAX_PARTY_SLOTS)
@@ -1655,19 +1709,54 @@ namespace Components
 
 					if (isCurrentlyHosting) {
 						std::vector<std::string> participants;
-						if (Game::g_lobbyData) {
-							for (int i = 0; i < MAX_PARTY_SLOTS; ++i) {
-								if (Game::g_lobbyData->partyMembers[i].status != 0 && Game::g_lobbyData->partyMembers[i].gamertag && Game::g_lobbyData->partyMembers[i].gamertag[0] != '\0') {
-									participants.push_back(Game::g_lobbyData->partyMembers[i].gamertag);
-								}
+						std::unordered_set<std::uint64_t> participantXuids;
+
+						const auto hostXuid = Party::GetLocalPlayerXUID();
+						std::string hostName = Dvar::Var("name").get<std::string>();
+
+						if (!hostName.empty())
+						{
+							participants.push_back(hostName);
+							participantXuids.insert(hostXuid);
+						}
+
+						if (Game::g_lobbyData)
+						{
+							for (int i = 0; i < MAX_PARTY_SLOTS; ++i)
+							{
+								auto& member = Game::g_lobbyData->partyMembers[i];
+
+								if (member.status == 0 || !member.gamertag || member.gamertag[0] == '\0')
+									continue;
+
+								const std::uint64_t memberXuid = member.player;
+
+								if (participantXuids.contains(memberXuid))
+									continue;
+
+								participants.push_back(member.gamertag);
+								participantXuids.insert(memberXuid);
 							}
 						}
 
-						int realPlayers = participants.size();
+						int realPlayers = static_cast<int>(participants.size());
 						int botsToAdd = Dvar::Var("addBots").get<int>();
-						int totalPlayers = realPlayers + std::min(botsToAdd, MAX_PARTY_SLOTS - realPlayers);
+
+						const int maxAllowedBots = std::max(0, MAX_PARTY_SLOTS - realPlayers);
+						const int clampedBotsToAdd = std::clamp(botsToAdd, 0, maxAllowedBots);
 
 						bool dvarChanged = false;
+
+						if (botsToAdd != clampedBotsToAdd)
+						{
+							Dvar::Var("addBots").set(clampedBotsToAdd);
+							botsToAdd = clampedBotsToAdd;
+							dvarChanged = true;
+							needsBroadcast = true;
+							needsUpdatePartystate = true;
+						}
+
+						int totalPlayers = realPlayers + botsToAdd;
 
 						for (int i = 0; i < MAX_PARTY_SLOTS; ++i) {
 							std::string nameDvarName = Utils::String::VA("character_%d_player", i + 1);
@@ -1722,7 +1811,9 @@ namespace Components
 
 					s_lastRealPlayers = Dvar::Var("party_realPlayers").get<int>();
 					std::string currentHost = isCurrentlyHosting ? Dvar::Var("name").get<std::string>() : Dvar::Var("party_hostname").get<std::string>();
-					Dvar::Var("party_currentHost").set(currentHost.c_str());
+					char hostNameBuffer[256]{};
+					TextRenderer::StripColors(currentHost.c_str(), hostNameBuffer, sizeof(hostNameBuffer));
+					Dvar::Var("party_currentHost").set((std::string("^7") + hostNameBuffer).c_str());
 					s_lastHostName = currentHost;
 					s_wasHostingLastFrame = isCurrentlyHosting;
 

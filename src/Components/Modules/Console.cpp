@@ -595,6 +595,10 @@ namespace Components
 			return reinterpret_cast<LRESULT>(BackgroundBrush);
 		}
 
+		case WM_CLOSE:
+			RequestShutdown();
+			return 0;
+
 		case WM_SIZE:
 			RECT rect;
 
@@ -659,6 +663,21 @@ namespace Components
 
 	}
 
+	void Console::RequestShutdown()
+	{
+		Command::Execute("quit\n", false);
+
+		std::thread([]
+			{
+				std::this_thread::sleep_for(10s);
+
+				if (GetCurrentProcessId() != 0)
+				{
+					TerminateProcess(GetCurrentProcess(), EXIT_SUCCESS);
+				}
+			}).detach();
+	}
+
 	void Console::ConsoleRunner()
 	{
 		SkipShutdown = false;
@@ -689,8 +708,9 @@ namespace Components
 		}
 		else
 		{
-			// Send quit command to safely terminate the application
-			Command::Execute("wait 200;quit\n", false);
+			// Send quit command to safely terminate the application, then force exit
+			// if shutdown hangs and would otherwise leave zw3.exe in the background.
+			RequestShutdown();
 		}
 	}
 

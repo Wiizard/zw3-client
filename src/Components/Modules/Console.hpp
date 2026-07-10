@@ -67,6 +67,8 @@ namespace Components
 
 		static void ConsoleRunner();
 
+		static void RequestShutdown();
+
 		static void DrawSolidConsoleStub();
 		static void StoreSafeArea();
 		static void RestoreSafeArea();

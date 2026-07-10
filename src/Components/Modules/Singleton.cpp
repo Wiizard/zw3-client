@@ -8,15 +8,41 @@ namespace Components
 	HANDLE Singleton::Mutex;
 
 	bool Singleton::FirstInstance = true;
+	bool Singleton::MutexInitialized = false;
 
 	bool Singleton::IsFirstInstance()
 	{
 		return FirstInstance;
 	}
 
+	bool Singleton::InitializeMutex()
+	{
+		if (MutexInitialized)
+		{
+			return FirstInstance;
+		}
+
+		MutexInitialized = true;
+
+		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled())
+		{
+			return FirstInstance;
+		}
+
+		Mutex = CreateMutexA(nullptr, FALSE, "zw3_mutex");
+		FirstInstance = (Mutex != nullptr && Mutex != INVALID_HANDLE_VALUE && GetLastError() != ERROR_ALREADY_EXISTS);
+
+		if (!FirstInstance && !ConnectProtocol::Used() && MessageBoxA(nullptr, "Do you want to start another instance?\nNot all features will be available!", "Game already running", MB_ICONEXCLAMATION | MB_YESNO) == IDNO)
+		{
+			ExitProcess(EXIT_SUCCESS);
+		}
+
+		return FirstInstance;
+	}
+
 	void Singleton::preDestroy()
 	{
-		if (INVALID_HANDLE_VALUE != Mutex)
+		if (Mutex != nullptr && Mutex != INVALID_HANDLE_VALUE)
 		{
 			CloseHandle(Mutex);
 		}
@@ -39,12 +65,6 @@ namespace Components
 
 		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled()) return;
 
-		Mutex = CreateMutexA(nullptr, FALSE, "iw4x_mutex");
-		FirstInstance = ((INVALID_HANDLE_VALUE != Mutex) && GetLastError() != ERROR_ALREADY_EXISTS);
-
-		if (!FirstInstance && !ConnectProtocol::Used() && MessageBoxA(nullptr, "Do you want to start another instance?\nNot all features will be available!", "Game already running", MB_ICONEXCLAMATION | MB_YESNO) == IDNO)
-		{
-			ExitProcess(EXIT_SUCCESS);
-		}
+		InitializeMutex();
 	}
 }

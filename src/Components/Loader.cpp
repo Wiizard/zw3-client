@@ -112,8 +112,6 @@ namespace Components
 		// High priority
 		Register(new Singleton());
 
-		FileSystem::CleanupZw3Files();
-
 		Register(new Auth());
 		Register(new Command());
 		Register(new Dvar());

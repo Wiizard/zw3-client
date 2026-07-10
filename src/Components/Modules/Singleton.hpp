@@ -10,9 +10,11 @@ namespace Components
 		void preDestroy() override;
 
 		static bool IsFirstInstance();
+		static bool InitializeMutex();
 
 	private:
 		static HANDLE Mutex;
 		static bool FirstInstance;
+		static bool MutexInitialized;
 	};
 }

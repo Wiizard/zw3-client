@@ -14,6 +14,10 @@ namespace Utils
 #pragma region Rand
 
 		prng_state Rand::State;
+		namespace
+		{
+			std::once_flag RandInitialized;
+		}
 
 		std::string Rand::GenerateChallenge()
 		{
@@ -29,6 +33,8 @@ namespace Utils
 
 		std::uint64_t Rand::GenerateLong()
 		{
+			Rand::Initialize();
+
 			std::uint64_t number = 0;
 			fortuna_read(reinterpret_cast<std::uint8_t*>(&number), sizeof(number), &Rand::State);
 			return number;
@@ -36,6 +42,8 @@ namespace Utils
 
 		std::uint32_t Rand::GenerateInt()
 		{
+			Rand::Initialize();
+
 			std::uint32_t number = 0;
 			fortuna_read(reinterpret_cast<std::uint8_t*>(&number), sizeof(number), &Rand::State);
 			return number;
@@ -43,9 +51,12 @@ namespace Utils
 
 		void Rand::Initialize()
 		{
-			ltc_mp = ltm_desc;
-			register_prng(&fortuna_desc);
-			rng_make_prng(128, find_prng("fortuna"), &Rand::State, nullptr);
+			std::call_once(RandInitialized, []
+			{
+				ltc_mp = ltm_desc;
+				register_prng(&fortuna_desc);
+				rng_make_prng(128, find_prng("fortuna"), &Rand::State, nullptr);
+			});
 		}
 
 #pragma endregion

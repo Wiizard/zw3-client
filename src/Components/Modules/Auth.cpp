@@ -605,9 +605,11 @@ namespace Components
 
 		Localization::Set("MPUI_SECURITY_INCREASE_MESSAGE", "");
 
-		// Load the key
-		LoadKey(true);
-		Steam::SteamUser()->GetSteamID();
+		Scheduler::OnGameInitialized([]
+		{
+			LoadKey(true);
+			Steam::SteamUser()->GetSteamID();
+		}, Scheduler::Pipeline::MAIN);
 
 		Scheduler::Loop(Frame, Scheduler::Pipeline::MAIN);
 

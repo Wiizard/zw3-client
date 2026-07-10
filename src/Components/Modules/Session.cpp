@@ -135,13 +135,13 @@ namespace Components
 	Session::Session()
 	{
 #ifndef DISABLE_SESSION
-		Session::SignatureKey = Utils::Cryptography::ECC::GenerateKey(512);
 		//Scheduler::OnFrame(Session::RunFrame);
 
 		Session::Terminate = false;
 		Session::Thread = std::thread([]()
 		{
 			Com_InitThreadData();
+			Session::SignatureKey = Utils::Cryptography::ECC::GenerateKey(512);
 
 			while (!Session::Terminate)
 			{

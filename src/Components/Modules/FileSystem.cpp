@@ -20,6 +20,42 @@ namespace Components
 	std::recursive_mutex FileSystem::FSMutex;
 	Utils::Memory::Allocator FileSystem::MemAllocator;
 
+	namespace
+	{
+		constexpr auto CleanupStampFileName = L".zw3_cleanup";
+
+		std::filesystem::path GetCleanupStampPath(const std::vector<std::filesystem::path>& roots)
+		{
+			if (roots.empty())
+			{
+				return {};
+			}
+
+			return roots.front() / L"zw3" / CleanupStampFileName;
+		}
+
+		void WriteCleanupStamp(const std::filesystem::path& stampPath, const std::vector<std::string>& details)
+		{
+			if (stampPath.empty())
+			{
+				return;
+			}
+
+			std::error_code ec;
+			std::filesystem::create_directories(stampPath.parent_path(), ec);
+			std::ofstream stamp(stampPath, std::ios::trunc);
+			if (stamp.is_open())
+			{
+				stamp << "cleanup complete\n";
+
+				for (const auto& detail : details)
+				{
+					stamp << detail << '\n';
+				}
+			}
+		}
+	}
+
 	class CleanupProgressDialog
 	{
 	public:
@@ -241,190 +277,163 @@ namespace Components
 				{
 				}
 
-				std::error_code ec;
-				struct MigrationItem { std::wstring srcPath; std::wstring destPath; };
-				std::vector<MigrationItem> migrationFiles;
-				std::vector<std::filesystem::path> allDiscoveredFiles;
-				std::unordered_set<std::wstring> structuralDeleteSet;
-				std::vector<std::wstring> rawDirsToClean;
-				std::wstring globalUserrawScript;
-
-				if (const auto basePath = Utils::GetBaseFilesLocation(); !basePath.empty())
-				{
-					globalUserrawScript = (std::filesystem::path(basePath) / L"userraw" / L"scriptdata").wstring();
-				}
-
-				const auto shouldDelete = [&](const std::filesystem::path& path, const std::filesystem::path& root) -> bool
-					{
-						const auto relative = path.lexically_relative(root).generic_string();
-						std::string relativeLower = relative;
-						std::transform(relativeLower.begin(), relativeLower.end(), relativeLower.begin(),
-							[](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-						const auto filename = path.filename().string();
-						std::string filenameLower = filename;
-						std::transform(filenameLower.begin(), filenameLower.end(), filenameLower.begin(),
-							[](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-
-						if (relativeLower == "zw3.iwd"
-							|| relativeLower == "iw4x/zw3.iwd"
-							|| relativeLower == "main/zw3.iwd"
-							|| relativeLower == "userraw/zw3.iwd"
-							|| relativeLower == "zone/patch/patch_mp.ff"
-							|| relativeLower == "zone/english/zw3_common.ff")
-						{
-							return true;
-						}
-
-						if (relativeLower == "zw3/zw3.iwd")
-						{
-							return true;
-						}
-
-						if (relativeLower.size() >= 4 && relativeLower.rfind("zw3/", 0) == 0)
-						{
-							return false;
-						}
-
-						if (relativeLower == "zone/patch_mp.ff")
-						{
-							return true;
-						}
-
-						if (path.extension() == ".iwd"
-							&& filenameLower.rfind("mp_", 0) == 0
-							&& path.parent_path().filename() == "main")
-						{
-							return true;
-						}
-
-						return false;
-					};
-
-				for (const auto& root : roots)
-				{
-					std::wstring userrawScript = (root / L"userraw" / L"scriptdata").wstring();
-					std::wstring destScript = (root / L"zw3" / L"core" / L"scriptdata").wstring();
-
-					std::error_code internalEc;
-					if (!std::filesystem::exists(root, internalEc))
-					{
-						continue;
-					}
-
-					for (const auto& entry : std::filesystem::recursive_directory_iterator(root, internalEc))
-					{
-						if (internalEc)
-						{
-							break;
-						}
-
-						const auto& path = entry.path();
-						const auto relative = path.lexically_relative(root).generic_string();
-						std::string relativeLower = relative;
-						std::transform(relativeLower.begin(), relativeLower.end(), relativeLower.begin(),
-							[](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-
-						if (relativeLower.rfind("userraw/scriptdata", 0) == 0 || relativeLower.rfind("userraw\\scriptdata", 0) == 0)
-						{
-							std::error_code fileCheckEc;
-							if (std::filesystem::is_regular_file(path, fileCheckEc))
-							{
-								std::string filename = path.filename().string();
-								std::string filenameLower = filename;
-								std::transform(filenameLower.begin(), filenameLower.end(), filenameLower.begin(),
-									[](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-
-								if (filenameLower.rfind("autosave", 0) == 0 ||
-									filenameLower.rfind("rank_", 0) == 0 ||
-									filenameLower.rfind("easteregg", 0) == 0)
-								{
-									std::wstring fileWStr = path.wstring();
-									std::wstring relPath = fileWStr.substr(userrawScript.length());
-									migrationFiles.push_back({ fileWStr, destScript + relPath });
-								}
-							}
-							continue;
-						}
-
-						std::error_code fileCheckEc;
-						if (!std::filesystem::is_regular_file(path, fileCheckEc))
-						{
-							continue;
-						}
-
-						allDiscoveredFiles.push_back(path);
-						if (shouldDelete(path, root))
-						{
-							structuralDeleteSet.insert(path.wstring());
-						}
-					}
-				}
-
-				if (migrationFiles.empty() && structuralDeleteSet.empty())
+				const auto cleanupStampPath = GetCleanupStampPath(roots);
+				std::error_code stampEc;
+				if (!cleanupStampPath.empty() && std::filesystem::exists(cleanupStampPath, stampEc))
 				{
 					return;
 				}
 
-				int totalTasks = static_cast<int>(allDiscoveredFiles.size() + migrationFiles.size());
-				CleanupProgressDialog progress(totalTasks);
-
-				int deletedCount = 0;
-				int skippedCount = 0;
-				int movedCount = 0;
-
-				if (!migrationFiles.empty())
+				struct CleanupTask
 				{
-					for (const auto& fileItem : migrationFiles)
+					std::filesystem::path source;
+					std::filesystem::path destination;
+					bool move = false;
+				};
+
+				std::vector<CleanupTask> tasks;
+				std::unordered_set<std::wstring> seenTasks;
+
+				auto addDelete = [&](const std::filesystem::path& path)
 					{
-						progress.Update(fileItem.srcPath);
-
-						size_t pos = fileItem.destPath.find_last_of(L"\\/");
-						if (pos != std::wstring::npos)
+						std::error_code ec;
+						if (!std::filesystem::is_regular_file(path, ec))
 						{
-							std::wstring targetDir = fileItem.destPath.substr(0, pos);
-							std::filesystem::create_directories(targetDir, ec);
+							return;
 						}
 
-						SetFileAttributesW(fileItem.srcPath.c_str(), FILE_ATTRIBUTE_NORMAL);
-						SetFileAttributesW(fileItem.destPath.c_str(), FILE_ATTRIBUTE_NORMAL);
-
-						if (CopyFileW(fileItem.srcPath.c_str(), fileItem.destPath.c_str(), FALSE))
+						if (seenTasks.insert(path.wstring()).second)
 						{
-							DeleteFileW(fileItem.srcPath.c_str());
-							++movedCount;
+							tasks.push_back({ path, {}, false });
 						}
-						else
+					};
+
+				auto addMove = [&](const std::filesystem::path& source, const std::filesystem::path& destination)
+					{
+						std::error_code ec;
+						if (!std::filesystem::is_regular_file(source, ec))
 						{
-							if (MoveFileExW(fileItem.srcPath.c_str(), fileItem.destPath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED))
+							return;
+						}
+
+						if (seenTasks.insert(source.wstring()).second)
+						{
+							tasks.push_back({ source, destination, true });
+						}
+					};
+
+				const std::filesystem::path legacyFiles[] =
+				{
+					L"zw3.iwd",
+					L"iw4x/zw3.iwd",
+					L"main/zw3.iwd",
+					L"userraw/zw3.iwd",
+					L"zone/patch/patch_mp.ff",
+					L"zone/english/zw3_common.ff",
+					L"zw3/zw3.iwd",
+					L"zone/patch_mp.ff",
+				};
+
+				for (const auto& root : roots)
+				{
+					std::error_code ec;
+					if (!std::filesystem::exists(root, ec))
+					{
+						continue;
+					}
+
+					for (const auto& relative : legacyFiles)
+					{
+						addDelete(root / relative);
+					}
+
+					const auto mainDir = root / L"main";
+					if (std::filesystem::is_directory(mainDir, ec))
+					{
+						for (const auto& entry : std::filesystem::directory_iterator(mainDir, ec))
+						{
+							if (ec)
 							{
-								++movedCount;
+								break;
+							}
+
+							const auto path = entry.path();
+							std::string filename = path.filename().string();
+							std::transform(filename.begin(), filename.end(), filename.begin(), [](unsigned char ch)
+								{
+									return static_cast<char>(std::tolower(ch));
+								});
+
+							if (path.extension() == ".iwd" && filename.rfind("mp_", 0) == 0)
+							{
+								addDelete(path);
+							}
+						}
+					}
+
+					const auto userrawScript = root / L"userraw" / L"scriptdata";
+					const auto destScript = root / L"zw3" / L"core" / L"scriptdata";
+					if (std::filesystem::is_directory(userrawScript, ec))
+					{
+						for (const auto& entry : std::filesystem::recursive_directory_iterator(userrawScript, ec))
+						{
+							if (ec)
+							{
+								break;
+							}
+
+							const auto path = entry.path();
+							if (!std::filesystem::is_regular_file(path, ec))
+							{
+								continue;
+							}
+
+							std::string filename = path.filename().string();
+							std::transform(filename.begin(), filename.end(), filename.begin(), [](unsigned char ch)
+								{
+									return static_cast<char>(std::tolower(ch));
+								});
+
+							if (filename.rfind("autosave", 0) == 0 || filename.rfind("rank_", 0) == 0 || filename.rfind("easteregg", 0) == 0)
+							{
+								addMove(path, destScript / path.lexically_relative(userrawScript));
 							}
 						}
 					}
 				}
 
-				for (const auto& path : allDiscoveredFiles)
+				if (tasks.empty())
 				{
-					const auto widePath = path.wstring();
-					progress.Update(widePath);
+					WriteCleanupStamp(cleanupStampPath, { "no files to clear" });
+					return;
+				}
 
-					if (structuralDeleteSet.find(widePath) == structuralDeleteSet.end())
+				CleanupProgressDialog progress(static_cast<int>(tasks.size()));
+				int movedCount = 0;
+				int deletedCount = 0;
+				int skippedCount = 0;
+				std::vector<std::string> processedFiles;
+
+				for (const auto& task : tasks)
+				{
+					progress.Update(task.source.wstring());
+					std::error_code ec;
+					SetFileAttributesW(task.source.wstring().c_str(), FILE_ATTRIBUTE_NORMAL);
+
+					if (task.move)
 					{
-						++skippedCount;
-						continue;
+						std::filesystem::create_directories(task.destination.parent_path(), ec);
+						SetFileAttributesW(task.destination.wstring().c_str(), FILE_ATTRIBUTE_NORMAL);
+						if (MoveFileExW(task.source.wstring().c_str(), task.destination.wstring().c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED))
+						{
+							processedFiles.emplace_back(std::format("moved: {} -> {}", task.source.string(), task.destination.string()));
+							++movedCount;
+							continue;
+						}
 					}
-
-					ec.clear();
-					if (!std::filesystem::exists(path, ec))
+					else if (DeleteFileW(task.source.wstring().c_str()) != 0)
 					{
-						++skippedCount;
-						continue;
-					}
-
-					SetFileAttributesW(widePath.c_str(), FILE_ATTRIBUTE_NORMAL);
-
-					if (DeleteFileW(widePath.c_str()) != 0)
-					{
+						processedFiles.emplace_back(std::format("deleted: {}", task.source.string()));
 						++deletedCount;
 						continue;
 					}
@@ -432,6 +441,7 @@ namespace Components
 					const auto winError = GetLastError();
 					if (winError == ERROR_FILE_NOT_FOUND)
 					{
+						processedFiles.emplace_back(std::format("skipped (not found): {}", task.source.string()));
 						++skippedCount;
 						continue;
 					}
@@ -440,34 +450,38 @@ namespace Components
 					{
 						progress.Close();
 						MessageBoxA(nullptr,
-							Utils::String::Format("File is in use and cannot be removed:\n{}\n\nPlease close any processes that are using this file and restart the game.",
-								path.string().c_str()),
+							Utils::String::Format("File is in use and cannot be updated:\n{}\n\nPlease close any processes that are using this file and restart the game.",
+								task.source.string().c_str()),
 							"Error",
 							MB_OK | MB_ICONERROR);
 						std::exit(EXIT_FAILURE);
 					}
 
-					ec.clear();
-					const auto removed = std::filesystem::remove(path, ec);
-					if (!removed || ec)
+					if (!task.move && std::filesystem::remove(task.source, ec))
 					{
-						progress.Close();
-						MessageBoxA(nullptr,
-							Utils::String::Format("Failed to remove file:\n{}\n\n{}",
-								path.string().c_str(),
-								ec ? ec.message().c_str() : "unknown"),
-							"Error",
-							MB_OK | MB_ICONERROR);
-						std::exit(EXIT_FAILURE);
+						processedFiles.emplace_back(std::format("deleted: {}", task.source.string()));
+						++deletedCount;
+						continue;
 					}
 
-					++deletedCount;
+					processedFiles.emplace_back(task.move
+						? std::format("skipped: {} -> {}", task.source.string(), task.destination.string())
+						: std::format("skipped: {}", task.source.string()));
+					++skippedCount;
 				}
 
 				progress.Close();
+				std::vector<std::string> stampDetails;
+				stampDetails.emplace_back(std::format("files checked: {}", tasks.size()));
+				stampDetails.emplace_back(std::format("moved: {}", movedCount));
+				stampDetails.emplace_back(std::format("deleted: {}", deletedCount));
+				stampDetails.emplace_back(std::format("skipped: {}", skippedCount));
+				stampDetails.emplace_back("processed files:");
+				stampDetails.insert(stampDetails.end(), processedFiles.begin(), processedFiles.end());
+				WriteCleanupStamp(cleanupStampPath, stampDetails);
 				MessageBoxA(nullptr,
 					Utils::String::Format("Cleanup completed successfully.\n\nFiles checked: {}\nMoved: {}\nDeleted: {}\nSkipped: {}",
-						static_cast<int>(allDiscoveredFiles.size() + migrationFiles.size()),
+						static_cast<int>(tasks.size()),
 						movedCount,
 						deletedCount,
 						skippedCount),
@@ -994,6 +1008,11 @@ namespace Components
 		Utils::Hook::Set<std::uint32_t>(0x64AF78, NEW_MAX_FILES_LISTED);
 		Utils::Hook::Set<std::uint32_t>(0x64B04F, NEW_MAX_FILES_LISTED);
 		Utils::Hook::Set<std::uint32_t>(0x45A8CE, NEW_MAX_FILES_LISTED);
+
+		Scheduler::OnGameInitialized([]
+			{
+				CleanupZw3Files();
+			}, Scheduler::Pipeline::ASYNC, 5s);
 
 		// Sys_ListFiles
 		Utils::Hook(0x45A806, Hunk_UserCreate_Stub, HOOK_CALL).install()->quick();

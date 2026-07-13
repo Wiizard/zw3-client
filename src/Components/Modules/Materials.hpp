@@ -18,12 +18,22 @@ namespace Components
 
 		static bool IsValid(Game::Material* material);
 
+		static Game::GfxImage* CreateNewsImageFromImageBytes(const std::string& imageName, const std::string& imageData);
+		static Game::Material* CreateNewsMaterialFromImageBytes(const std::string& materialName, const std::string& imageData);
+		static std::string ConvertNewsImageBytesToIwi(const std::string& imageData);
+		static Game::GfxImage* CreateNewsImageFromIwiBytes(const std::string& imageName, const std::string& iwiData);
+		static Game::Material* CreateNewsMaterialFromIwiBytes(const std::string& materialName, const std::string& iwiData);
+		static Game::Material* GetRuntimeMaterial(const std::string& materialName);
+		static Game::Material* UpdateNewsMaterialFromImageBytes(const std::string& materialName, const std::string& imageData);
+
 	private:
 		static std::vector<Game::GfxImage*> ImageTable;
 		static std::vector<Game::Material*> MaterialTable;
 
 		static Utils::Hook ImageVersionCheckHook;
 		static void ImageVersionCheck();
+
+		static bool DecodeImageBytesToBGRA(const std::string& imageData, std::vector<unsigned char>& pixels, unsigned int& width, unsigned int& height);
 
 		static int WriteDeathMessageIcon(char* string, int offset, Game::Material* material);
 		static void DeathMessageStub();

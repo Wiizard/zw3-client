@@ -29,7 +29,8 @@ namespace Components
 
 		// ZW3 - Real-time dvar broadcasting
 		static void BroadcastDvarUpdate();
-		static std::map<uint64_t, Network::Address> g_xuidToPublicAddressMap;
+		static std::map<uint64_t, std::vector<Network::Address>> g_xuidToPublicAddressMap;
+		static void TrackClientAddress(uint64_t xuid, const Network::Address& address);
 
 		static uint64_t GetLocalPlayerXUID();
 

@@ -257,7 +257,7 @@ namespace Components
 
 			if (line.rfind("date:", 0) == 0)
 			{
-				current.Date = ParseYamlValue(line, 5);
+				current.Date = FormatDate(ParseYamlValue(line, 5));
 				continue;
 			}
 
@@ -327,6 +327,24 @@ namespace Components
 		flushEntry();
 
 		return entries;
+	}
+
+	std::string ZW3Changelog::FormatDate(const std::string& date)
+	{
+		std::tm tm = {};
+
+		std::istringstream ss(date);
+		ss >> std::get_time(&tm, "%Y-%m-%d");
+
+		if (ss.fail())
+		{
+			return date;
+		}
+
+		char buffer[64];
+		std::strftime(buffer, sizeof(buffer), "%d %B %Y", &tm);
+
+		return buffer;
 	}
 
 	void ZW3Changelog::SetEntries(std::vector<Entry> entries)

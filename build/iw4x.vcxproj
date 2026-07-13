@@ -15,7 +15,8 @@
     <IgnoreWarnCompileDuplicatedFilename>true</IgnoreWarnCompileDuplicatedFilename>
     <Keyword>Win32Proj</Keyword>
     <RootNamespace>iw4x</RootNamespace>
-    <WindowsTargetPlatformVersion>10.0.19041.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ProjectName>zw3</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
@@ -262,6 +263,7 @@ tools\premake5 generate-buildinfo</Command>
     <ClInclude Include="..\src\Components\Modules\UIFeeder.hpp" />
     <ClInclude Include="..\src\Components\Modules\UIScript.hpp" />
     <ClInclude Include="..\src\Components\Modules\Updater.hpp" />
+    <ClInclude Include="..\src\Components\Modules\UPnP.hpp" />
     <ClInclude Include="..\src\Components\Modules\VisionFile.hpp" />
     <ClInclude Include="..\src\Components\Modules\Voice.hpp" />
     <ClInclude Include="..\src\Components\Modules\Vote.hpp" />
@@ -459,6 +461,7 @@ tools\premake5 generate-buildinfo</Command>
     <ClCompile Include="..\src\Components\Modules\UIFeeder.cpp" />
     <ClCompile Include="..\src\Components\Modules\UIScript.cpp" />
     <ClCompile Include="..\src\Components\Modules\Updater.cpp" />
+    <ClCompile Include="..\src\Components\Modules\UPnP.cpp" />
     <ClCompile Include="..\src\Components\Modules\VisionFile.cpp" />
     <ClCompile Include="..\src\Components\Modules\Voice.cpp" />
     <ClCompile Include="..\src\Components\Modules\Vote.cpp" />

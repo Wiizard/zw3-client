@@ -30,7 +30,7 @@ namespace Components
 		};
 
 		static constexpr float FeederId = 70.0f;
-		static constexpr int DefaultLimit = 15;
+		static constexpr int DefaultLimit = 10;
 
 		static std::vector<Entry> Entries;
 		static Dvar::Var UILeaderboardMap;
@@ -38,6 +38,8 @@ namespace Components
 		static Dvar::Var UILeaderboardLoadingIndicator;
 		static Dvar::Var UILeaderboardPlayerStatus;
 		static Dvar::Var UIMapNameDisplay;
+		static Dvar::Var UILeaderboardCanPrev;
+		static Dvar::Var UILeaderboardCanNext;
 		static int CurrentOffset;
 		static int NextOffset;
 		static int TotalItems;
@@ -48,8 +50,10 @@ namespace Components
 		static std::string CurrentMap;
 		static int LastKnownRank;
 		static bool IsSearching;
+		static int DisplayedOffset;
 
 		static void UpdatePageDvar();
+		static void UpdateButtonDvars();
 		static void UpdateLocalPlayerStatus();
 		static void UpdateMapDisplayDvar(const std::string& rawMap);
 		static std::string GetCurrentMapName();

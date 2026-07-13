@@ -5,7 +5,19 @@ namespace Components::GSC
 	class Field : public Component
 	{
 	public:
+		struct ScoreboardStats
+		{
+			int downs = 0;
+			int revives = 0;
+			int isDown = 0;
+		};
+
 		Field();
+
+		static int GetClientDowns(int clientNum);
+		static int GetClientRevives(int clientNum);
+		static bool IsClientDown(int clientNum);
+		static void ResetClientScoreboardStats(int clientNum);
 
 	private:
 		struct EntField
@@ -29,6 +41,7 @@ namespace Components::GSC
 
 		static std::unordered_map<std::uint16_t, EntField> CustomEntityFields;
 		static std::unordered_map<std::uint16_t, ClientFields> CustomClientFields;
+		static std::array<ScoreboardStats, Game::MAX_CLIENTS> ClientScoreboardStats;
 
 		static void AddEntityField(const char* name, const ScriptCallbackEnt& setter, const ScriptCallbackEnt& getter);
 		static void AddClientField(const char* name, const ScriptCallbackClient& setter, const ScriptCallbackClient& getter);
@@ -44,5 +57,8 @@ namespace Components::GSC
 
 		static void AddEntityFields();
 		static void AddClientFields();
+
+		static int GetClientNum(Game::gclient_s* client);
+		static bool IsValidClientNum(int clientNum);
 	};
 }

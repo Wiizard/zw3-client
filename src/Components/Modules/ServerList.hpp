@@ -33,7 +33,7 @@ namespace Components
 
 		ServerList();
 
-		void preDestroy() override;
+		//void preDestroy() override;
 
 		static void Refresh();
 		static void RefreshVisibleList([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);

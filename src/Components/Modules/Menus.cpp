@@ -1,6 +1,9 @@
 #include "Menus.hpp"
+#include "Materials.hpp"
 #include "Party.hpp"
 #include "Events.hpp"
+#include <Utils/WebIO.hpp>
+#include <filesystem>
 // Ensure you have includes for AssetHandler, if it's a separate component.
 // #include "AssetHandler.hpp" // If AssetHandler is in its own header
 
@@ -27,6 +30,27 @@ namespace Components
 	std::vector<std::string> Menus::CustomIW4xMenus;
 
 	Dvar::Var Menus::PrintMenuDebug;
+	Dvar::Var Menus::UILoadingStartTime;
+	Dvar::Var Menus::UILoadingProgress;
+	Dvar::Var Menus::UILoadingVisible;
+
+	Dvar::Var Menus::UINewsIndex;
+	Dvar::Var Menus::UINewsCount;
+	Dvar::Var Menus::UINewsProgress;
+	Dvar::Var Menus::UINewsHover;
+	Dvar::Var Menus::UINewsTitle;
+	Dvar::Var Menus::UINewsBody;
+	Dvar::Var Menus::UINewsCounter;
+	Dvar::Var Menus::UINewsImage;
+	Dvar::Var Menus::UINewsHasImage;
+	Dvar::Var Menus::UINewsLoading;
+	Dvar::Var Menus::UINewsPage;
+
+	std::vector<Menus::NewsItem> Menus::NewsItems;
+	int Menus::NewsElapsed = 0;
+	int Menus::LastNewsUpdate = 0;
+	int Menus::HoldNewsUntil = 0;
+	bool Menus::WasNewsHovered = false;
 
 	Game::UiContext* Menus::GameUiContexts[] = {
 		Game::uiContext,
@@ -370,6 +394,39 @@ namespace Components
 		}
 	}
 
+	void Menus::RemoveMenuNameFromContext(Game::UiContext* dc, const std::string& name, Game::menuDef_t* keepMenu)
+	{
+		if (!dc) return;
+
+		for (int i = 0; i < dc->menuCount; ++i)
+		{
+			auto* menu = dc->Menus[i];
+
+			if (menu && menu->window.name && name == menu->window.name && menu != keepMenu)
+			{
+				for (int j = i; j < dc->menuCount - 1; ++j)
+					dc->Menus[j] = dc->Menus[j + 1];
+
+				dc->Menus[--dc->menuCount] = nullptr;
+				--i;
+			}
+		}
+
+		for (int i = 0; i < dc->openMenuCount; ++i)
+		{
+			auto* menu = dc->menuStack[i];
+
+			if (menu && menu->window.name && name == menu->window.name && menu != keepMenu)
+			{
+				for (int j = i; j < dc->openMenuCount - 1; ++j)
+					dc->menuStack[j] = dc->menuStack[j + 1];
+
+				dc->menuStack[--dc->openMenuCount] = nullptr;
+				--i;
+			}
+		}
+	}
+
 
 	bool Menus::MenuAlreadyExists(const std::string& name)
 	{
@@ -681,7 +738,7 @@ namespace Components
 
 			// 2. If this menu was an override, attempt to put the original back
 			// This is critical for game-referenced menus like 'connect'.
-			if (originalMenu)
+			if (originalMenu && name != "connect")
 			{
 				bool foundExistingSpot = false;
 				// Check if original is already back (e.g., if another part of the game re-added it)
@@ -784,6 +841,15 @@ namespace Components
 		}
 		else {
 			DebugPrint("AfterLoadedMenuFromDisk: Menu '{}' ({:X}) already present in Game::uiContext->Menus, no re-addition.", name, (unsigned int)menu);
+		}
+
+		if (name == "connect")
+		{
+			OverridenMenus["connect"] = nullptr;
+			for (size_t contextIndex = 0; contextIndex < ARRAYSIZE(Menus::GameUiContexts); contextIndex++)
+			{
+				RemoveMenuNameFromContext(Menus::GameUiContexts[contextIndex], "connect", menu);
+			}
 		}
 
 		// Do NOT automatically add it to the menuStack here unless you're explicitly opening it.
@@ -1361,28 +1427,25 @@ namespace Components
 		}
 
 		// Now, proceed with reloading all menus.
-		ReloadDiskMenus();
+		ReloadDiskMenus(false);
 	}
 
 
 	// This is fired up _right before the game starts_, we need to do it once again to load "ingame" menus that we might have skipped prior
 	void Menus::ReloadDiskMenus_OnCGameStart()
 	{
-		ReloadDiskMenus();
+		ReloadDiskMenus(true);
 	}
 
-	void Menus::ReloadDiskMenus()
+	void Menus::ReloadDiskMenus(bool preserveConnect)
 	{
 		const auto connectionState = *reinterpret_cast<Game::connstate_t*>(0xB2C540);
 
-		// We only allow non-menulist menus when we're ingame
-		// Otherwise we load a ton of ingame-only menus that are glitched on main_text
 		const bool allowStrayMenus = connectionState > Game::connstate_t::CA_DISCONNECTED
 			&& Game::CL_IsCgameInitialized();
 
-		DebugPrint("Reloading disk menus...");
+		DebugPrint("Reloading disk menus... preserveConnect={}", preserveConnect);
 
-		// Step 1: unload everything
 		const auto listsFromDisk = MenuListsFromDisk;
 		for (const auto& menuList : listsFromDisk)
 		{
@@ -1393,41 +1456,39 @@ namespace Components
 		const auto menusFromDisk = MenusFromDisk;
 		for (const auto& element : menusFromDisk)
 		{
-			// IMPORTANT: Call UnloadMenuFromDisk which now uses RemoveMenuFromContext
+			if (preserveConnect && !_stricmp(element.first.c_str(), "connect"))
+			{
+				continue;
+			}
+
 			UnloadMenuFromDisk(element.first);
 		}
 
-#if DEBUG
-		if (Allocator.empty() || allowStrayMenus)
+		if (!OverridenMenus.empty())
 		{
-			// good
-		}
-		else
-		{
-			__debugbreak();
-			Logger::Print("Warning - menu leak? Expected allocator to be empty after reload, but it's not!\n");
-		}
-#endif
+			for (auto it = OverridenMenus.begin(); it != OverridenMenus.end();)
+			{
+				if (preserveConnect && !_stricmp(it->first.c_str(), "connect"))
+				{
+					++it;
+					continue;
+				}
 
-		if (OverridenMenus.empty())
-		{
-			// good
-		}
-		else
-		{
-			Logger::Print("Warning - menu leak? Expected overriden menus to be empty after reload, but they're not!\n");
-			OverridenMenus.clear();
+				it = OverridenMenus.erase(it);
+			}
 		}
 
-		// Step 2: Load everything
 		{
 			const auto menus = FileSystem::GetFileList("ui_mp", "menu", Game::FS_LIST_ALL);
 
-			// Load standalone menus
 			for (const auto& filename : menus)
 			{
-				const std::string fullPath = std::format("ui_mp\\{}", filename);
+				if (preserveConnect && !_stricmp(filename.c_str(), "connect.menu"))
+				{
+					continue;
+				}
 
+				const std::string fullPath = std::format("ui_mp\\{}", filename);
 				LoadScriptMenu(fullPath.c_str(), allowStrayMenus);
 			}
 
@@ -1435,11 +1496,9 @@ namespace Components
 			{
 				const auto scriptmenus = FileSystem::GetFileList("ui_mp\\scriptmenus", "menu", Game::FS_LIST_ALL);
 
-				// Load standalone menus
 				for (const auto& filename : scriptmenus)
 				{
 					const std::string fullPath = std::format("ui_mp\\scriptmenus\\{}", filename);
-
 					LoadScriptMenu(fullPath.c_str(), allowStrayMenus);
 				}
 			}
@@ -1448,54 +1507,85 @@ namespace Components
 		{
 			const auto menuLists = FileSystem::GetFileList("ui_mp", "txt", Game::FS_LIST_ALL);
 
-			// Load menu list
 			for (const auto& filename : menuLists)
 			{
 				const std::string fullPath = std::format("ui_mp\\{}", filename);
 				LoadScriptMenu(fullPath.c_str(), true);
 			}
 
-			// "code.txt" for IW4x
 			for (const auto& menuName : CustomIW4xMenus)
 			{
+				if (preserveConnect && !_stricmp(menuName.c_str(), "ui_mp/connect.menu"))
+				{
+					continue;
+				}
+
 				LoadScriptMenu(menuName.c_str(), true);
 			}
 		}
 
-		// Step 3 - Keep supporting data around
+		if (preserveConnect)
+		{
+			ForceOnlyCustomConnectMenu();
+		}
 
-		// Debug-only check
 		CheckMenus();
 	}
 
 	bool Menus::IsMenuVisible(Game::UiContext* dc, Game::menuDef_t* menu)
 	{
-		if (menu && menu->window.name)
+		if (menu && menu->window.name && !_stricmp(menu->window.name, "connect"))
 		{
-			if (menu->window.name == "connect"s) // Check if we're supposed to draw the loadscreen
+			const auto custom = MenusFromDisk.find("connect");
+
+			if (custom != MenusFromDisk.end() && custom->second)
 			{
-				// If this 'menu' is the original one that was overridden by our custom 'connect' menu
-				// then hide it.
-				if (OverridenMenus.contains("connect"s) && OverridenMenus["connect"s] == menu)
-				{
-					return false; // Hide the original
-				}
-				// Also, if the original AssetHandler::FindOriginalAsset is not hooked,
-				// and if the AssetHandler::OnFind hook path is taken,
-				// then check if our custom menu is active and this is the original (fall-through logic)
-				else if (MenusFromDisk.contains("connect"s)) {
-					// If our custom 'connect' is loaded, and this is NOT our custom 'connect' menu (i.e., it's the default one), hide it.
-					if (menu != MenusFromDisk["connect"s]) {
-						DebugPrint("IsMenuVisible: Hiding default 'connect' menu ({:X}) because custom 'connect' is in MenusFromDisk.", (unsigned int)menu);
-						return false;
-					}
-				}
+				return menu == custom->second && Game::Menu_IsVisible(dc, menu);
 			}
+
+			return false;
 		}
 
-		return Game::Menu_IsVisible(dc, menu); // Call the original game function
+		return Game::Menu_IsVisible(dc, menu);
 	}
 
+	void Menus::ForceOnlyCustomConnectMenu()
+	{
+		if (!MenusFromDisk.contains("connect"s))
+		{
+			return;
+		}
+
+		auto* customConnect = MenusFromDisk["connect"s];
+
+		for (size_t contextIndex = 0; contextIndex < ARRAYSIZE(Menus::GameUiContexts); ++contextIndex)
+		{
+			auto* dc = Menus::GameUiContexts[contextIndex];
+
+			if (!dc)
+			{
+				continue;
+			}
+
+			RemoveMenuNameFromContext(dc, "connect", customConnect);
+
+			bool hasCustom = false;
+
+			for (int i = 0; i < dc->menuCount; ++i)
+			{
+				if (dc->Menus[i] == customConnect)
+				{
+					hasCustom = true;
+					break;
+				}
+			}
+
+			if (!hasCustom && dc->menuCount < ARRAYSIZE(dc->Menus))
+			{
+				dc->Menus[dc->menuCount++] = customConnect;
+			}
+		}
+	}
 
 	void Menus::CheckMenus()
 	{
@@ -1577,6 +1667,687 @@ namespace Components
 		Menus::SupportingData->uiStrings.strings = allocator->allocateArray<const char*>(stringListSize / sizeof(const char*));
 	}
 
+	static float EaseOutQuart(float value)
+	{
+		value = std::clamp(value, 0.0f, 1.0f);
+		return 1.0f - std::pow(1.0f - value, 4.0f);
+	}
+
+	void Menus::OpenCustomConnectMenu()
+	{
+		const auto custom = MenusFromDisk.find("connect");
+		if (custom == MenusFromDisk.end() || !custom->second)
+		{
+			return;
+		}
+
+		ForceOnlyCustomConnectMenu();
+
+		auto* menu = custom->second;
+
+		for (size_t contextIndex = 0; contextIndex < ARRAYSIZE(Menus::GameUiContexts); ++contextIndex)
+		{
+			auto* dc = Menus::GameUiContexts[contextIndex];
+
+			if (!dc)
+			{
+				continue;
+			}
+
+			bool alreadyOpen = false;
+
+			for (int i = 0; i < dc->openMenuCount; ++i)
+			{
+				if (dc->menuStack[i] == menu)
+				{
+					alreadyOpen = true;
+					break;
+				}
+			}
+
+			if (!alreadyOpen && dc->openMenuCount < ARRAYSIZE(dc->menuStack))
+			{
+				dc->menuStack[dc->openMenuCount++] = menu;
+			}
+		}
+	}
+
+	void Menus::ClearNews()
+	{
+		NewsItems.clear();
+
+		Dvar::Var("zw3_ui_news_index").set(0);
+		Dvar::Var("zw3_ui_news_page").set(0);
+		Dvar::Var("zw3_ui_news_count").set(0);
+		Dvar::Var("zw3_ui_news_progress").set(0.0f);
+		Dvar::Var("zw3_ui_news_hover").set(false);
+		Dvar::Var("zw3_ui_news_title").set("");
+		Dvar::Var("zw3_ui_news_body").set("");
+		Dvar::Var("zw3_ui_news_counter").set("0 / 0");
+		Dvar::Var("zw3_ui_news_image").set("");
+		Dvar::Var("zw3_ui_news_has_image").set(false);
+		Dvar::Var("zw3_ui_news_loading").set(false);
+
+		ApplyNewsTileTitles();
+		ApplyNewsImageMaterialToMenu(nullptr);
+		ApplyNewsImageMaterialsToMenu();
+
+		NewsElapsed = 0;
+		LastNewsUpdate = 0;
+		HoldNewsUntil = 0;
+		WasNewsHovered = false;
+	}
+
+	std::string Menus::HashNewsString(const std::string& input)
+	{
+		std::uint64_t hash = 14695981039346656037ull;
+
+		for (const auto c : input)
+		{
+			hash ^= static_cast<unsigned char>(c);
+			hash *= 1099511628211ull;
+		}
+
+		return std::format("{:016X}", hash);
+	}
+
+	std::filesystem::path Menus::GetNewsImageCacheDir()
+	{
+		std::filesystem::path basePath;
+
+		const auto baseFilesLocation = Utils::GetBaseFilesLocation();
+		if (!baseFilesLocation.empty())
+		{
+			basePath = baseFilesLocation;
+		}
+		else
+		{
+			basePath = std::filesystem::current_path();
+		}
+
+		return basePath / "zw3" / "data" / "cache" / "news";
+	}
+
+	std::string Menus::GetNewsImageCacheExtension(const std::string&, const std::string&)
+	{
+		return ".iwi";
+	}
+
+	std::string Menus::GetNewsImageCachePath(const std::string& url, const std::string&)
+	{
+		return (GetNewsImageCacheDir() / std::format("{}.iwi", HashNewsString(url))).string();
+	}
+
+	std::string Menus::GetNewsImageMaterialName(const std::string& url, const std::string& data)
+	{
+		return std::format("zw3_news_{}", HashNewsString(url + "|" + HashNewsString(data)));
+	}
+
+	std::string Menus::CacheNewsImage(const std::string& url)
+	{
+		if (url.empty())
+		{
+			return "";
+		}
+
+		const auto cacheDir = GetNewsImageCacheDir();
+		std::error_code ec;
+		std::filesystem::create_directories(cacheDir, ec);
+
+		const auto cachePath = GetNewsImageCachePath(url);
+
+		std::string imageData;
+
+		try
+		{
+			imageData = Utils::WebIO("zw3-news").setTimeout(5000)->get(url);
+		}
+		catch (...)
+		{
+			imageData.clear();
+		}
+
+		if (!imageData.empty() && imageData.size() <= 2 * 1024 * 1024)
+		{
+			const auto iwiData = Materials::ConvertNewsImageBytesToIwi(imageData);
+
+			if (!iwiData.empty())
+			{
+				Utils::IO::WriteFile(cachePath, iwiData);
+				return cachePath;
+			}
+		}
+
+		if (Utils::IO::FileExists(cachePath))
+		{
+			return cachePath;
+		}
+
+		return "";
+	}
+
+	std::string Menus::CreateNewsImageMaterial(const NewsItem& item)
+	{
+		if (item.ImageUrl.empty() || item.ImageCachePath.empty())
+		{
+			return "";
+		}
+
+		const auto iwiData = Utils::IO::ReadFile(item.ImageCachePath);
+		if (iwiData.empty())
+		{
+			return "";
+		}
+
+		const auto materialName = GetNewsImageMaterialName(item.ImageUrl, iwiData);
+		auto* material = Materials::CreateNewsMaterialFromIwiBytes(materialName, iwiData);
+
+		if (!material || !Materials::IsValid(material))
+		{
+			return "";
+		}
+
+		return materialName;
+	}
+
+	void Menus::ApplyNewsImageMaterialToMenu(Game::Material* material)
+	{
+		const auto applyToMenu = [material](Game::menuDef_t* menu)
+			{
+				if (!menu || !menu->items)
+				{
+					return;
+				}
+
+				for (auto i = 0; i < menu->itemCount; ++i)
+				{
+					auto* item = menu->items[i];
+
+					if (!item || !item->window.name)
+					{
+						continue;
+					}
+
+					if (!_stricmp(item->window.name, "news_featured_image") || !_stricmp(item->window.name, "news_image"))
+					{
+						item->window.background = material;
+					}
+				}
+			};
+
+		const auto diskMenu = MenusFromDisk.find("pregame_loaderror");
+		if (diskMenu != MenusFromDisk.end())
+		{
+			applyToMenu(diskMenu->second);
+		}
+
+		for (auto* dc : GameUiContexts)
+		{
+			if (!dc)
+			{
+				continue;
+			}
+
+			for (auto i = 0; i < dc->menuCount; ++i)
+			{
+				auto* menu = dc->Menus[i];
+
+				if (menu && menu->window.name && !_stricmp(menu->window.name, "pregame_loaderror"))
+				{
+					applyToMenu(menu);
+				}
+			}
+
+			for (auto i = 0; i < dc->openMenuCount; ++i)
+			{
+				auto* menu = dc->menuStack[i];
+
+				if (menu && menu->window.name && !_stricmp(menu->window.name, "pregame_loaderror"))
+				{
+					applyToMenu(menu);
+				}
+			}
+		}
+	}
+
+	void Menus::ApplyNewsImageMaterialsToMenu()
+	{
+		const auto applyToMenu = [](Game::menuDef_t* menu)
+			{
+				if (!menu || !menu->items)
+				{
+					return;
+				}
+
+				const auto page = Dvar::Var("zw3_ui_news_page").get<int>();
+
+				for (auto i = 0; i < menu->itemCount; ++i)
+				{
+					auto* item = menu->items[i];
+
+					if (!item || !item->window.name)
+					{
+						continue;
+					}
+
+					if (std::strncmp(item->window.name, "news_thumb_", 11) != 0)
+					{
+						continue;
+					}
+
+					item->window.background = nullptr;
+
+					const auto slot = std::atoi(item->window.name + 11);
+					const auto index = page + slot;
+
+					if (index < 0 || index >= static_cast<int>(NewsItems.size()))
+					{
+						continue;
+					}
+
+					auto* material = NewsItems[index].ImageMaterialPtr;
+
+					if (!material || !Materials::IsValid(material))
+					{
+						continue;
+					}
+
+					item->window.background = material;
+				}
+			};
+
+		const auto diskMenu = MenusFromDisk.find("pregame_loaderror");
+		if (diskMenu != MenusFromDisk.end())
+		{
+			applyToMenu(diskMenu->second);
+		}
+
+		for (auto* dc : GameUiContexts)
+		{
+			if (!dc)
+			{
+				continue;
+			}
+
+			for (auto i = 0; i < dc->menuCount; ++i)
+			{
+				auto* menu = dc->Menus[i];
+
+				if (menu && menu->window.name && !_stricmp(menu->window.name, "pregame_loaderror"))
+				{
+					applyToMenu(menu);
+				}
+			}
+
+			for (auto i = 0; i < dc->openMenuCount; ++i)
+			{
+				auto* menu = dc->menuStack[i];
+
+				if (menu && menu->window.name && !_stricmp(menu->window.name, "pregame_loaderror"))
+				{
+					applyToMenu(menu);
+				}
+			}
+		}
+	}
+
+	void Menus::ApplyNewsItem()
+	{
+		if (NewsItems.empty())
+		{
+			ClearNews();
+			return;
+		}
+
+		auto index = Dvar::Var("zw3_ui_news_index").get<int>();
+
+		if (index < 0 || index >= static_cast<int>(NewsItems.size()))
+		{
+			index = 0;
+			Dvar::Var("zw3_ui_news_index").set(index);
+		}
+
+		const auto page = (index / 5) * 5;
+
+		if (Dvar::Var("zw3_ui_news_page").get<int>() != page)
+		{
+			Dvar::Var("zw3_ui_news_page").set(page);
+		}
+
+		const auto& item = NewsItems[index];
+		const auto count = static_cast<int>(NewsItems.size());
+		const auto hasValidImage = item.ImageMaterialPtr && Materials::IsValid(item.ImageMaterialPtr);
+
+		Dvar::Var("zw3_ui_news_title").set(item.Title);
+		Dvar::Var("zw3_ui_news_body").set(item.Body);
+		Dvar::Var("zw3_ui_news_image").set(hasValidImage ? item.ImageMaterial : "");
+		Dvar::Var("zw3_ui_news_has_image").set(hasValidImage);
+		Dvar::Var("zw3_ui_news_count").set(count);
+		Dvar::Var("zw3_ui_news_counter").set(Utils::String::VA("%d / %d", index + 1, count));
+
+		ApplyNewsTileTitles();
+		ApplyNewsImageMaterialToMenu(hasValidImage ? item.ImageMaterialPtr : nullptr);
+		ApplyNewsImageMaterialsToMenu();
+	}
+
+	void Menus::SelectNewsSlot(const int slot)
+	{
+		if (NewsItems.empty())
+		{
+			return;
+		}
+
+		const auto page = Dvar::Var("zw3_ui_news_page").get<int>();
+		const auto index = page + slot;
+
+		if (index < 0 || index >= static_cast<int>(NewsItems.size()))
+		{
+			return;
+		}
+
+		Dvar::Var("zw3_ui_news_index").set(index);
+		Dvar::Var("zw3_ui_news_progress").set(0.0f);
+		Dvar::Var("zw3_ui_news_hover").set(false);
+
+		NewsElapsed = 0;
+		HoldNewsUntil = Game::Sys_Milliseconds() + 1200;
+		WasNewsHovered = false;
+
+		ApplyNewsItem();
+	}
+
+	void Menus::NewsPrevPage([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+	{
+		auto page = Dvar::Var("zw3_ui_news_page").get<int>();
+		page = std::max(0, page - 5);
+
+		Dvar::Var("zw3_ui_news_page").set(page);
+		Dvar::Var("zw3_ui_news_index").set(page);
+		Dvar::Var("zw3_ui_news_progress").set(0.0f);
+
+		ApplyNewsImageMaterialsToMenu();
+		ApplyNewsItem();
+	}
+
+	void Menus::NewsNextPage([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+	{
+		auto page = Dvar::Var("zw3_ui_news_page").get<int>();
+		const auto count = static_cast<int>(NewsItems.size());
+
+		if (page + 5 < count)
+		{
+			page += 5;
+		}
+
+		Dvar::Var("zw3_ui_news_page").set(page);
+		Dvar::Var("zw3_ui_news_index").set(page);
+		Dvar::Var("zw3_ui_news_progress").set(0.0f);
+
+		ApplyNewsImageMaterialsToMenu();
+		ApplyNewsItem();
+	}
+
+
+	void Menus::FetchNews()
+	{
+		std::vector<NewsItem> fetchedItems;
+
+		try
+		{
+			const auto url = Utils::String::VA("https://stats.zw3.eu/client/news.json?t=%i", Game::Sys_Milliseconds());
+			const auto response = Utils::WebIO("zw3-news").setTimeout(5000)->get(url);
+
+			if (!response.empty())
+			{
+				const auto json = nlohmann::json::parse(response);
+
+				if (json.contains("items") && json["items"].is_array())
+				{
+					for (const auto& entry : json["items"])
+					{
+						NewsItem item;
+
+						item.Title = entry.value("title", "");
+						item.Body = entry.value("body", "");
+						item.ImageUrl = entry.value("image", entry.value("imageUrl", ""));
+						item.Duration = std::clamp(entry.value("duration", 3000), 1500, 15000);
+
+						if (entry.contains("action") && entry["action"].is_object())
+						{
+							const auto& action = entry["action"];
+
+							item.ActionType = action.value("type", "");
+							item.ActionTarget = action.value("target", "");
+
+							if (action.contains("commands") && action["commands"].is_array())
+							{
+								for (const auto& command : action["commands"])
+								{
+									if (command.is_string())
+									{
+										item.ActionCommands.push_back(command.get<std::string>());
+									}
+								}
+							}
+						}
+						else
+						{
+							item.ActionType = entry.value("actionType", entry.value("action", ""));
+							item.ActionTarget = entry.value("actionTarget", entry.value("url", ""));
+						}
+
+						if (!item.Title.empty() && !item.Body.empty())
+						{
+							item.ImageCachePath = CacheNewsImage(item.ImageUrl);
+							fetchedItems.push_back(item);
+						}
+					}
+				}
+			}
+		}
+		catch (...)
+		{
+			fetchedItems.clear();
+		}
+
+		Components::Scheduler::Once([items = std::move(fetchedItems)]() mutable
+			{
+				if (items.empty())
+				{
+					ClearNews();
+					return;
+				}
+
+				for (auto& item : items)
+				{
+					item.ImageMaterial = CreateNewsImageMaterial(item);
+					item.ImageMaterialPtr = item.ImageMaterial.empty() ? nullptr : Materials::GetRuntimeMaterial(item.ImageMaterial);
+				}
+
+				NewsItems = std::move(items);
+				ApplyNewsImageMaterialsToMenu();
+
+				Dvar::Var("zw3_ui_news_index").set(0);
+				Dvar::Var("zw3_ui_news_page").set(0);
+				Dvar::Var("zw3_ui_news_count").set(static_cast<int>(NewsItems.size()));
+				Dvar::Var("zw3_ui_news_progress").set(0.0f);
+				Dvar::Var("zw3_ui_news_hover").set(false);
+				Dvar::Var("zw3_ui_news_image").set("");
+				Dvar::Var("zw3_ui_news_has_image").set(false);
+				Dvar::Var("zw3_ui_news_loading").set(false);
+
+				NewsElapsed = 0;
+				LastNewsUpdate = 0;
+				HoldNewsUntil = 0;
+				WasNewsHovered = false;
+
+				Components::Scheduler::Once([]()
+					{
+						ApplyNewsItem();
+					}, Components::Scheduler::Pipeline::MAIN);
+			}, Components::Scheduler::Pipeline::MAIN);
+	}
+
+	void Menus::UpdateNewsCarousel()
+	{
+		if (NewsItems.empty())
+		{
+			return;
+		}
+
+		const auto now = Game::Sys_Milliseconds();
+
+		if (!LastNewsUpdate)
+		{
+			LastNewsUpdate = now;
+		}
+
+		const auto delta = std::clamp(now - LastNewsUpdate, 0, 100);
+		LastNewsUpdate = now;
+
+		auto index = Dvar::Var("zw3_ui_news_index").get<int>();
+
+		if (index < 0 || index >= static_cast<int>(NewsItems.size()))
+		{
+			index = 0;
+			Dvar::Var("zw3_ui_news_index").set(index);
+			NewsElapsed = 0;
+			ApplyNewsItem();
+		}
+
+		const bool hovering = Dvar::Var("zw3_ui_news_hover").get<bool>();
+		const auto duration = std::max(NewsItems[index].Duration, 1500);
+
+		if (hovering)
+		{
+			WasNewsHovered = true;
+			Dvar::Var("zw3_ui_news_progress").set(0.0f);
+			ApplyNewsItem();
+			return;
+		}
+
+		if (WasNewsHovered)
+		{
+			WasNewsHovered = false;
+			HoldNewsUntil = now + 1200;
+			NewsElapsed = std::min(duration / 2, duration - 500);
+		}
+
+		if (now >= HoldNewsUntil)
+		{
+			NewsElapsed += delta;
+		}
+
+		if (NewsElapsed >= duration)
+		{
+			NewsElapsed = 0;
+			index = (index + 1) % static_cast<int>(NewsItems.size());
+
+			Dvar::Var("zw3_ui_news_index").set(index);
+			ApplyNewsItem();
+		}
+
+		Dvar::Var("zw3_ui_news_progress").set(std::clamp(static_cast<float>(NewsElapsed) / static_cast<float>(duration), 0.0f, 1.0f));
+		ApplyNewsItem();
+	}
+
+	void Menus::RefreshNews([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+	{
+		Dvar::Var("zw3_ui_news_loading").set(true);
+		Dvar::Var("zw3_ui_news_index").set(0);
+		Dvar::Var("zw3_ui_news_page").set(0);
+		Dvar::Var("zw3_ui_news_count").set(0);
+		Dvar::Var("zw3_ui_news_progress").set(0.0f);
+		Dvar::Var("zw3_ui_news_counter").set("0 / 0");
+		Dvar::Var("zw3_ui_news_image").set("");
+		Dvar::Var("zw3_ui_news_has_image").set(false);
+
+		ApplyNewsTileTitles();
+		ApplyNewsImageMaterialToMenu(nullptr);
+		ApplyNewsImageMaterialsToMenu();
+
+		Components::Scheduler::Once([]()
+			{
+				FetchNews();
+			}, Components::Scheduler::Pipeline::ASYNC);
+	}
+
+	void Menus::OpenNews([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+	{
+		if (NewsItems.empty())
+		{
+			return;
+		}
+
+		const auto index = Dvar::Var("zw3_ui_news_index").get<int>();
+
+		if (index < 0 || index >= static_cast<int>(NewsItems.size()))
+		{
+			return;
+		}
+
+		const auto& item = NewsItems[index];
+
+		for (const auto& command : item.ActionCommands)
+		{
+			if (!command.empty())
+			{
+				Command::Execute(command, true);
+			}
+		}
+
+		if (item.ActionType.empty() || item.ActionTarget.empty())
+		{
+			return;
+		}
+
+		if (!_stricmp(item.ActionType.c_str(), "menu"))
+		{
+			Game::Menus_OpenByName(Game::uiContext, item.ActionTarget.c_str());
+			return;
+		}
+
+		if (!_stricmp(item.ActionType.c_str(), "link"))
+		{
+			Command::Execute(Utils::String::VA("openLink \"%s\"", item.ActionTarget.c_str()), true);
+			return;
+		}
+
+		if (!_stricmp(item.ActionType.c_str(), "command") || !_stricmp(item.ActionType.c_str(), "exec"))
+		{
+			Command::Execute(item.ActionTarget, true);
+			return;
+		}
+	}
+
+	std::string Menus::GetNewsTileTitle(const int slot)
+	{
+		const auto page = Dvar::Var("zw3_ui_news_page").get<int>();
+		const auto index = page + slot;
+
+		if (index < 0 || index >= static_cast<int>(NewsItems.size()))
+		{
+			return "";
+		}
+
+		auto title = NewsItems[index].Title;
+
+		if (title.length() > 11)
+		{
+			title = title.substr(0, 10) + ".";
+		}
+
+		return title;
+	}
+
+	void Menus::ApplyNewsTileTitles()
+	{
+		for (auto i = 0; i < 5; ++i)
+		{
+			Dvar::Var(Utils::String::VA("zw3_ui_news_tile_title%i", i)).set(GetNewsTileTitle(i));
+		}
+	}
+
 	Menus::Menus()
 	{
 		menuParseKeywordHash = reinterpret_cast<Game::KeywordHashEntry<Game::menuDef_t, 128, 3523>**>(0x63AE928);
@@ -1602,8 +2373,31 @@ namespace Components
 
 		Components::Scheduler::Once([]() {
 			PrintMenuDebug = Dvar::Register<bool>("g_log_menu_allocations", false, Game::DVAR_SAVED, "Prints all menu allocations and swapping in the console");
+			UILoadingStartTime = Dvar::Register<int>("zw3_ui_loading_start_time", 0, 0, INT_MAX, Game::DVAR_INIT, "Loading screen animation start time");
+			UILoadingProgress = Dvar::Register<float>("zw3_ui_loading_progress", 0.0f, 0.0f, 1.0f, Game::DVAR_INIT, "Loading screen progress");
+			UILoadingVisible = Dvar::Register<bool>("zw3_ui_loading_visible", false, Game::DVAR_INIT, "Loading screen progress visibility");
+			UINewsIndex = Dvar::Register<int>("zw3_ui_news_index", 0, 0, INT_MAX, Game::DVAR_INTERNAL, "Current ZW3 news carousel item");
+			UINewsCount = Dvar::Register<int>("zw3_ui_news_count", 0, 0, INT_MAX, Game::DVAR_INTERNAL, "Current ZW3 news carousel item count");
+			UINewsProgress = Dvar::Register<float>("zw3_ui_news_progress", 0.0f, 0.0f, 1.0f, Game::DVAR_INTERNAL, "Current ZW3 news carousel progress");
+			UINewsHover = Dvar::Register<bool>("zw3_ui_news_hover", false, Game::DVAR_INTERNAL, "ZW3 news carousel hover state");
+			UINewsTitle = Dvar::Register<const char*>("zw3_ui_news_title", "", Game::DVAR_INTERNAL, "Current ZW3 news title");
+			UINewsBody = Dvar::Register<const char*>("zw3_ui_news_body", "", Game::DVAR_INTERNAL, "Current ZW3 news body");
+			UINewsCounter = Dvar::Register<const char*>("zw3_ui_news_counter", "0 / 0", Game::DVAR_INTERNAL, "Current ZW3 news counter");
+			UINewsImage = Dvar::Register<const char*>("zw3_ui_news_image", "", Game::DVAR_INTERNAL, "Unused/internal ZW3 news image marker");
+			UINewsHasImage = Dvar::Register<bool>("zw3_ui_news_has_image", false, Game::DVAR_INTERNAL, "Current ZW3 news image availability");
+			UINewsLoading = Dvar::Register<bool>("zw3_ui_news_loading", false, Game::DVAR_INTERNAL, "Current ZW3 news loading state");
+			UINewsPage = Dvar::Register<int>("zw3_ui_news_page", 0, 0, INT_MAX, Game::DVAR_INTERNAL, "Current ZW3 news thumbnail page");
 			}, Components::Scheduler::Pipeline::MAIN);
 
+		UIScript::Add("RefreshNews", RefreshNews);
+		UIScript::Add("OpenNews", OpenNews);
+		UIScript::Add("SelectNewsSlot0", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info) { SelectNewsSlot(0); });
+		UIScript::Add("SelectNewsSlot1", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info) { SelectNewsSlot(1); });
+		UIScript::Add("SelectNewsSlot2", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info) { SelectNewsSlot(2); });
+		UIScript::Add("SelectNewsSlot3", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info) { SelectNewsSlot(3); });
+		UIScript::Add("SelectNewsSlot4", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info) { SelectNewsSlot(4); });
+		UIScript::Add("NewsPrevPage", NewsPrevPage);
+		UIScript::Add("NewsNextPage", NewsNextPage);
 
 		// Increase HunkMemory for people with heavy-loaded menus (e.g. ZW3)
 		// Original is 0xA00000 (10MB), old patch was 0xB00000 (11MB). Raised to 48MB to reduce OOMs.
@@ -1636,28 +2430,127 @@ namespace Components
 		Components::Scheduler::Loop([]()
 			{
 				static auto lastConnState = Game::connstate_t::CA_DISCONNECTED;
+				static std::string lastMapName;
+				static bool wasLoading = false;
+				static bool wasConnectMenuVisible = false;
+				static int lastUpdateTime = 0;
+
+				const auto now = Game::Sys_Milliseconds();
+
+				if (!lastUpdateTime)
+				{
+					lastUpdateTime = now;
+				}
+
+				const float deltaSeconds = std::clamp((now - lastUpdateTime) / 1000.0f, 0.0f, 0.1f);
+				lastUpdateTime = now;
+
 				const auto connState = *reinterpret_cast<Game::connstate_t*>(0xB2C540);
+
+				const char* mapNameRaw = Dvar::Var("mapname").get<const char*>();
+				const std::string currentMapName = mapNameRaw ? mapNameRaw : "";
+
+				const bool isLoading = connState >= Game::connstate_t::CA_CONNECTING
+					&& connState < Game::connstate_t::CA_ACTIVE;
+
+				if (isLoading || lastConnState >= Game::connstate_t::CA_CONNECTING)
+				{
+					ForceOnlyCustomConnectMenu();
+				}
+
+				auto* connectMenu = Game::Menus_FindByName(Game::uiContext, "connect");
+				const bool connectMenuVisible = connectMenu && Game::Menu_IsVisible(Game::uiContext, connectMenu);
+
+				const bool connectMenuJustOpened = !wasConnectMenuVisible && connectMenuVisible;
+
+				const bool startedLoading = !wasLoading && isLoading;
 
 				const bool isNewConnection = lastConnState < Game::connstate_t::CA_CONNECTING
 					&& connState >= Game::connstate_t::CA_CONNECTING;
+
 				const bool isMapRestart = lastConnState >= Game::connstate_t::CA_ACTIVE
 					&& connState < Game::connstate_t::CA_ACTIVE
 					&& connState > Game::connstate_t::CA_DISCONNECTED;
 
-				if (isNewConnection || isMapRestart)
+				const bool mapChanged = !lastMapName.empty()
+					&& !currentMapName.empty()
+					&& lastMapName != currentMapName;
+
+				if (connectMenuJustOpened || startedLoading || isNewConnection || isMapRestart || mapChanged)
 				{
+					Dvar::Var("zw3_ui_loading_start_time").set(now);
+					Dvar::Var("zw3_ui_loading_progress").set(0.0f);
+					Dvar::Var("zw3_ui_loading_visible").set(true);
+
+					ForceOnlyCustomConnectMenu();
+
 					const Game::StringTable* table = nullptr;
 					Game::StringTable_GetAsset_FastFile("mp/didyouknow.csv", &table);
+
 					if (table && table->rowCount > 0)
 					{
 						static std::mt19937 rng(std::random_device{}());
 						std::uniform_int_distribution<int> dist(0, table->rowCount - 1);
+
 						const auto* tip = Game::StringTable_GetColumnValueForRow(table, dist(rng), 0);
 						if (tip && *tip)
 						{
 							Dvar::Var("didyouknow").set(tip);
 						}
 					}
+				}
+
+				if (connectMenuVisible || isLoading)
+				{
+					const auto startTime = Dvar::Var("zw3_ui_loading_start_time").get<int>();
+					const auto elapsed = std::max(0, now - startTime);
+
+					float stateTarget = 0.08f;
+
+					if (connState >= Game::connstate_t::CA_CONNECTING)
+						stateTarget = 0.22f;
+
+					if (connState >= Game::connstate_t::CA_CHALLENGING)
+						stateTarget = 0.38f;
+
+					if (connState >= Game::connstate_t::CA_CONNECTED)
+						stateTarget = 0.58f;
+
+					if (connState >= Game::connstate_t::CA_LOADING)
+						stateTarget = 0.84f;
+
+					if (connState >= Game::connstate_t::CA_PRIMED)
+						stateTarget = 0.995f;
+
+					const float timeTarget = EaseOutQuart(static_cast<float>(elapsed) / 5200.0f) * 0.985f;
+					const float target = std::clamp(std::max(stateTarget, timeTarget), 0.0f, 0.995f);
+
+					const float current = Dvar::Var("zw3_ui_loading_progress").get<float>();
+
+					float rate = 0.75f;
+
+					if (target > 0.35f)
+						rate = 0.55f;
+
+					if (target > 0.70f)
+						rate = 0.95f;
+
+					if (target > 0.88f)
+						rate = 1.8f;
+
+					if (connState >= Game::connstate_t::CA_PRIMED)
+						rate = 5.0f;
+
+					const float maxStep = rate * deltaSeconds;
+					const float next = current + std::clamp(target - current, 0.0f, maxStep);
+
+					Dvar::Var("zw3_ui_loading_progress").set(std::clamp(next, 0.0f, 0.995f));
+					Dvar::Var("zw3_ui_loading_visible").set(true);
+				}
+				else
+				{
+					Dvar::Var("zw3_ui_loading_progress").set(0.0f);
+					Dvar::Var("zw3_ui_loading_visible").set(false);
 				}
 
 				if (connState >= Game::connstate_t::CA_CONNECTING)
@@ -1668,7 +2561,17 @@ namespace Components
 					}
 				}
 
+				if (startedLoading || isNewConnection || isMapRestart)
+				{
+					Dvar::Var("zw3_sb_ui_survived_time").set("00:00:00");
+				}
+
+				UpdateNewsCarousel();
+
 				lastConnState = connState;
+				lastMapName = currentMapName;
+				wasLoading = isLoading;
+				wasConnectMenuVisible = connectMenuVisible;
 			}, Components::Scheduler::Pipeline::MAIN);
 
 		Command::Add("openmenu", [](const Command::Params* params)
@@ -1732,48 +2635,59 @@ namespace Components
 {
 	Game::XAssetHeader Menus::MenuFindHook(Game::XAssetType /*type*/, const std::string& filename)
 	{
-		// This hook needs to return YOUR loaded menu, if it exists in MenusFromDisk.
-		// Otherwise, it should call the original game function to find the asset.
-		// Since we don't have a direct "DB_FindXAssetHeader_Original" in this strategy,
-		// we rely on the game's default asset handler to load it if we don't have it.
-		// The ImenuDef_t::load function (which is part of the AssetHandler process)
-		// will handle loading from disk.
-
-		// Clean the name similar to DB_FindXAssetHeader_Hook logic in the previous attempt
 		std::string shortName = filename;
-		size_t lastSlash = shortName.find_last_of("/\\");
-		if (lastSlash != std::string::npos) shortName = shortName.substr(lastSlash + 1);
-		if (shortName.length() > 5 && shortName.substr(shortName.length() - 5) == ".menu") {
+
+		const auto slash = shortName.find_last_of("/\\");
+		if (slash != std::string::npos)
+		{
+			shortName = shortName.substr(slash + 1);
+		}
+
+		if (shortName.length() > 5 && !_stricmp(shortName.substr(shortName.length() - 5).c_str(), ".menu"))
+		{
 			shortName = shortName.substr(0, shortName.length() - 5);
 		}
 
-		if (MenusFromDisk.contains(shortName))
+		if (!_stricmp(shortName.c_str(), "connect"))
 		{
-			DebugPrint("MenuFindHook: Intercepted request for menu '{}'. Returning custom menu ({:X})", shortName, (unsigned int)MenusFromDisk[shortName]);
-			return { MenusFromDisk[shortName] };
+			const auto custom = MenusFromDisk.find("connect");
+			if (custom != MenusFromDisk.end() && custom->second)
+			{
+				return { custom->second };
+			}
 		}
 
-		// If not found in our custom map, let the game's default DB_FindXAssetHeader handle it.
-		// The AssetHandler::IAsset::load implementation (e.g., in ImenuDef_t.cpp)
-		// will be responsible for loading the actual game asset or calling our LoadMenuByName_Recursive.
-		// Returning a nullptr XAssetHeader might force the AssetHandler to call the IAsset::load method.
-		DebugPrint("MenuFindHook: Menu '{}' not found in custom list. Returning nullptr to trigger default AssetHandler load.", shortName);
+		const auto found = MenusFromDisk.find(shortName);
+		if (found != MenusFromDisk.end() && found->second)
+		{
+			return { found->second };
+		}
+
 		return { nullptr };
 	}
 
-	Game::XAssetHeader Menus::MenuListFindHook(Game::XAssetType type, const std::string& filename)
+	Game::XAssetHeader Menus::MenuListFindHook(Game::XAssetType /*type*/, const std::string& filename)
 	{
-		(void)type;
+		std::string listName = filename;
 
-		// This hook needs to return YOUR loaded menulist, if it exists.
-		if (MenuListsFromDisk.contains(filename))
+		const auto slash = listName.find_last_of("/\\");
+		if (slash != std::string::npos)
 		{
-			DebugPrint("MenuListFindHook: Intercepted request for menulist '{}'. Returning custom menulist ({:X})", filename, (unsigned int)MenuListsFromDisk[filename]);
-			return { MenuListsFromDisk[filename] };
+			listName = listName.substr(slash + 1);
 		}
 
-		// If not found in our custom map, let the game's default DB_FindXAssetHeader handle it.
-		DebugPrint("MenuListFindHook: Menulist '{}' not found in custom list. Returning nullptr to trigger default AssetHandler load.", filename);
+		const auto foundExact = MenuListsFromDisk.find(filename);
+		if (foundExact != MenuListsFromDisk.end() && foundExact->second)
+		{
+			return { foundExact->second };
+		}
+
+		const auto foundShort = MenuListsFromDisk.find(listName);
+		if (foundShort != MenuListsFromDisk.end() && foundShort->second)
+		{
+			return { foundShort->second };
+		}
+
 		return { nullptr };
 	}
 }

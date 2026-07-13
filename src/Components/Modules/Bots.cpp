@@ -8,8 +8,43 @@
 #define ANGLE2SHORT(x) ((int)((x) * (USHRT_MAX + 1) / 360.0f) & USHRT_MAX)
 #define SHORT2ANGLE(x) ((x)* (360.0f / (USHRT_MAX + 1)))
 
+namespace
+{
+	std::array<bool, Game::MAX_CLIENTS> ZW3BotIdentityReserved{};
+
+	std::string GetBotCharacterName(const std::string& value)
+	{
+		std::string name = value;
+
+		for (std::size_t i = 0; i + 1 < name.size();)
+		{
+			if (name[i] == '^')
+			{
+				name.erase(i, 2);
+				continue;
+			}
+
+			++i;
+		}
+
+		if (name.rfind("[BOT] ", 0) == 0)
+		{
+			name.erase(0, 6);
+		}
+
+		if (_stricmp(name.c_str(), "Richtofen") == 0) return "Richtofen";
+		if (_stricmp(name.c_str(), "Dempsey") == 0) return "Dempsey";
+		if (_stricmp(name.c_str(), "Nikolai") == 0) return "Nikolai";
+		if (_stricmp(name.c_str(), "Takeo") == 0) return "Takeo";
+		return {};
+	}
+}
+
 namespace Components
 {
+	std::array<std::string, Game::MAX_CLIENTS> Bots::BotDisplayNames;
+	std::array<std::string, Game::MAX_CLIENTS> Bots::BotIcons;
+
 	constexpr std::size_t MAX_NAME_LENGTH = 16;
 
 	Game::dvar_t** Bots::aim_automelee_range = reinterpret_cast<Game::dvar_t**>(0x7A2F98);
@@ -123,77 +158,254 @@ namespace Components
 
 	int Bots::BuildConnectString(char* buffer, const char* connectString, int num, int, int protocol, int checksum, int statVer, int stats, int port)
 	{
-		static std::vector<bool> usedDvars;
-
 		std::string botName;
+		std::string botIcon;
 		std::string clanName;
 
-		bool foundCharacterDvar = false;
+		const auto validClientNum = num >= 0 && num < Game::MAX_CLIENTS;
 
-		if (usedDvars.empty())
+		if (validClientNum && ZW3BotIdentityReserved[num] && !BotDisplayNames[num].empty())
 		{
-			usedDvars.resize(4, false);
+			botName = BotDisplayNames[num];
+			botIcon = BotIcons[num];
 		}
-
-		for (int i = 0; i < 4; ++i)
+		else
 		{
-			if (usedDvars[i])
+			if (validClientNum)
 			{
-				continue;
+				ZW3BotIdentityReserved[num] = false;
+				BotDisplayNames[num].clear();
+				BotIcons[num].clear();
 			}
 
-			std::string dvarName = Utils::String::VA("character_%d_player", i + 1);
-			auto dvarValue = Dvar::Var(dvarName).get<std::string>();
-			if (dvarValue.rfind("[BOT]", 0) == 0)
-			{
-				size_t start = dvarValue.find(']');
-				if (start != std::string::npos)
+			auto identityAlreadyReserved = [](const std::string& candidate)
 				{
-					botName = dvarValue;
-					clanName = "";
-					foundCharacterDvar = true;
-					usedDvars[i] = true;
+					const auto candidateCharacter = GetBotCharacterName(candidate);
+
+					for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
+					{
+						if (!ZW3BotIdentityReserved[clientNum])
+						{
+							continue;
+						}
+
+						std::string reservedCharacter;
+						if (const auto* characterDvar = Game::Dvar_FindVar(
+							Utils::String::VA("zw3_character_client_%d", clientNum));
+							characterDvar && characterDvar->current.string)
+						{
+							reservedCharacter = GetBotCharacterName(characterDvar->current.string);
+						}
+
+						if (reservedCharacter.empty())
+						{
+							reservedCharacter = GetBotCharacterName(BotDisplayNames[clientNum]);
+						}
+
+						if (!reservedCharacter.empty())
+						{
+							BotDisplayNames[clientNum] = Utils::String::VA("[BOT] %s", reservedCharacter.c_str());
+							BotIcons[clientNum] = reservedCharacter;
+						}
+
+						if (!candidateCharacter.empty() && !reservedCharacter.empty() &&
+							_stricmp(reservedCharacter.c_str(), candidateCharacter.c_str()) == 0)
+						{
+							return true;
+						}
+					}
+
+					return false;
+				};
+
+			auto characterOwnedByRealPlayer = [](const std::string& candidate)
+				{
+					const auto candidateCharacter = GetBotCharacterName(candidate);
+					if (candidateCharacter.empty())
+					{
+						return false;
+					}
+
+					for (int slot = 1; slot <= 4; ++slot)
+					{
+						const auto owner = Dvar::Var(Utils::String::VA("character_%d_player", slot)).get<std::string>();
+						const auto character = GetBotCharacterName(
+							Dvar::Var(Utils::String::VA("character_%d", slot)).get<std::string>());
+
+						if (!owner.empty() && owner != "None" && owner.rfind("[BOT]", 0) != 0 &&
+							_stricmp(character.c_str(), candidateCharacter.c_str()) == 0)
+						{
+							return true;
+						}
+					}
+
+					return false;
+				};
+
+			for (int c = 1; c <= 4; ++c)
+			{
+				const auto charPlayer = Dvar::Var(Utils::String::VA("character_%d_player", c)).get<std::string>();
+				const auto charIcon = Dvar::Var(Utils::String::VA("character_%d", c)).get<std::string>();
+
+				if (charPlayer.rfind("[BOT]", 0) != 0 || identityAlreadyReserved(charPlayer))
+				{
+					continue;
+				}
+
+				botName = charPlayer;
+				botIcon = charIcon;
+				break;
+			}
+			if (botName.empty())
+			{
+				static constexpr const char* fallbackNames[]
+				{
+					"[BOT] Richtofen",
+					"[BOT] Dempsey",
+					"[BOT] Nikolai",
+					"[BOT] Takeo"
+				};
+
+				for (std::size_t offset = 0; offset < std::size(fallbackNames); ++offset)
+				{
+					const auto index = (BotDataIndex + offset) % std::size(fallbackNames);
+					const std::string candidate = fallbackNames[index];
+
+					if (identityAlreadyReserved(candidate) || characterOwnedByRealPlayer(candidate))
+					{
+						continue;
+					}
+
+					botName = candidate;
+					botIcon = GetBotCharacterName(candidate);
+					BotDataIndex = (index + 1) % std::size(fallbackNames);
 					break;
 				}
 			}
+
+			if (botName.empty())
+			{
+				botName = Utils::String::VA("[BOT] Bot%d", num);
+				botIcon = "hud_status_connecting";
+			}
+
+			if (validClientNum)
+			{
+				BotDisplayNames[num] = botName;
+				BotIcons[num] = botIcon;
+				ZW3BotIdentityReserved[num] = true;
+			}
 		}
 
-		if (!foundCharacterDvar)
+		if (botIcon.empty())
 		{
-			static const auto botNames = []() -> std::vector<botData>
-				{
-					auto names = LoadBotNames();
-					if (names.empty())
-					{
-						Logger::Print("bots.txt was empty. Using the names from the master server\n");
-						names = RemoteBotNames;
-					}
+			botIcon = GetBotCharacterName(botName);
+		}
 
-					if (sv_randomBotNames->current.enabled)
-					{
-						std::random_device rd;
-						std::mt19937 gen(rd());
-						std::ranges::shuffle(names, gen);
-					}
-
-					return names;
-				}();
-
-			if (!botNames.empty())
+		if (validClientNum)
+		{
+			const auto character = GetBotCharacterName(botIcon.empty() ? botName : botIcon);
+			const auto* dvarName = Utils::String::VA("zw3_character_client_%d", num);
+			auto* characterDvar = Game::Dvar_FindVar(dvarName);
+			if (!characterDvar)
 			{
-				BotDataIndex %= botNames.size();
-				const auto index = BotDataIndex++;
-				botName = botNames[index].first;
-				clanName = botNames[index].second;
+				characterDvar = Game::Dvar_RegisterString(dvarName, "None", Game::DVAR_NONE,
+					"Authoritative ZW3 character for this server client");
 			}
-			else
-			{
-				botName = std::format("bot{}", num);
-				clanName = "BOT"s;
-			}
+
+			Game::Dvar_SetString(characterDvar, character.empty() ? "None" : character.c_str());
+
+			Dvar::Var(Utils::String::VA("zw3_sb_down_%d", num)).set(0);
+			Dvar::Var(Utils::String::VA("zw3_sb_down_progress_%d", num)).set(0.0f);
 		}
 
 		return _snprintf_s(buffer, 0x400, _TRUNCATE, connectString, num, botName.data(), clanName.data(), protocol, checksum, statVer, stats, port);
+	}
+
+	void Bots::ResetBotScoreboardData()
+	{
+		BotDataIndex = 0;
+		ZW3BotIdentityReserved.fill(false);
+
+		for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
+		{
+			BotDisplayNames[clientNum].clear();
+			BotIcons[clientNum].clear();
+
+			if (auto* characterDvar = Game::Dvar_FindVar(Utils::String::VA("zw3_character_client_%d", clientNum)))
+			{
+				Game::Dvar_SetString(characterDvar, "None");
+			}
+
+			Dvar::Var(Utils::String::VA("zw3_sb_down_%d", clientNum)).set(0);
+			Dvar::Var(Utils::String::VA("zw3_sb_down_progress_%d", clientNum)).set(0.0f);
+		}
+	}
+
+	std::string Bots::GetBotDisplayName(int clientNum)
+	{
+		if (clientNum < 0 || clientNum >= Game::MAX_CLIENTS)
+		{
+			return {};
+		}
+
+		if (!BotDisplayNames[clientNum].empty())
+		{
+			return BotDisplayNames[clientNum];
+		}
+
+		if (Game::svs_clients[clientNum].bIsTestClient && Game::svs_clients[clientNum].name[0])
+		{
+			return Game::svs_clients[clientNum].name;
+		}
+
+		return {};
+	}
+
+	std::string Bots::GetBotIcon(int clientNum)
+	{
+		if (clientNum < 0 || clientNum >= Game::MAX_CLIENTS)
+		{
+			return {};
+		}
+
+		const auto reservedCharacter = GetBotCharacterName(BotDisplayNames[clientNum]);
+		if (!reservedCharacter.empty())
+		{
+			return reservedCharacter;
+		}
+
+		if (const auto* characterDvar = Game::Dvar_FindVar(Utils::String::VA("zw3_character_client_%d", clientNum));
+			characterDvar && characterDvar->current.string)
+		{
+			const auto character = GetBotCharacterName(characterDvar->current.string);
+			if (!character.empty())
+			{
+				return character;
+			}
+		}
+
+		const auto liveName = GetBotDisplayName(clientNum);
+		for (int characterSlot = 1; characterSlot <= 4; ++characterSlot)
+		{
+			const auto owner = Dvar::Var(Utils::String::VA("character_%d_player", characterSlot)).get<std::string>();
+			if (_stricmp(owner.c_str(), liveName.c_str()) == 0)
+			{
+				return Dvar::Var(Utils::String::VA("character_%d", characterSlot)).get<std::string>();
+			}
+		}
+
+		return BotIcons[clientNum];
+	}
+
+	bool Bots::IsBotClient(int clientNum)
+	{
+		if (clientNum < 0 || clientNum >= Game::MAX_CLIENTS)
+		{
+			return false;
+		}
+
+		return Game::svs_clients[clientNum].bIsTestClient;
 	}
 
 	void Bots::Spawn(unsigned int count)
@@ -571,16 +783,120 @@ namespace Components
 			return;
 		}
 
-		for (auto i = 0; i < (*Game::sv_maxclients)->current.integer; ++i)
+		std::string preferredCharacter;
+
+		for (int characterSlot = 1; characterSlot <= 4; ++characterSlot)
 		{
-			auto* cl = &Game::svs_clients[i];
-			if (cl->bIsTestClient)
+			const auto owner = Dvar::Var(Utils::String::VA("character_%d_player", characterSlot)).get<std::string>();
+			if (owner.rfind("[BOT]", 0) != 0)
 			{
-				Game::SV_DropClient(cl, "EXE_DISCONNECTED", false);
-				cl->header.state = Game::CS_FREE;
-				return;
+				continue;
+			}
+
+			preferredCharacter = GetBotCharacterName(
+				Dvar::Var(Utils::String::VA("character_%d", characterSlot)).get<std::string>());
+			if (preferredCharacter.empty())
+			{
+				preferredCharacter = GetBotCharacterName(owner);
+			}
+			break;
+		}
+
+		int selectedClientNum = -1;
+
+		if (!preferredCharacter.empty())
+		{
+			for (int clientNum = 0; clientNum < (*Game::sv_maxclients)->current.integer; ++clientNum)
+			{
+				auto* cl = &Game::svs_clients[clientNum];
+				if (!cl->bIsTestClient || cl->header.state < Game::CS_CONNECTED)
+				{
+					continue;
+				}
+
+				std::string actualCharacter;
+				if (const auto* characterDvar = Game::Dvar_FindVar(
+					Utils::String::VA("zw3_character_client_%d", clientNum));
+					characterDvar && characterDvar->current.string)
+				{
+					actualCharacter = GetBotCharacterName(characterDvar->current.string);
+				}
+
+				if (actualCharacter.empty())
+				{
+					actualCharacter = GetBotCharacterName(cl->name);
+				}
+
+				if (actualCharacter.empty())
+				{
+					actualCharacter = GetBotCharacterName(BotDisplayNames[clientNum]);
+				}
+
+				if (_stricmp(actualCharacter.c_str(), preferredCharacter.c_str()) == 0)
+				{
+					selectedClientNum = clientNum;
+					break;
+				}
 			}
 		}
+
+		if (selectedClientNum == -1)
+		{
+			for (int clientNum = 0; clientNum < (*Game::sv_maxclients)->current.integer; ++clientNum)
+			{
+				if (Game::svs_clients[clientNum].bIsTestClient &&
+					Game::svs_clients[clientNum].header.state >= Game::CS_CONNECTED)
+				{
+					selectedClientNum = clientNum;
+					break;
+				}
+			}
+		}
+
+		if (selectedClientNum == -1)
+		{
+			return;
+		}
+
+		auto* cl = &Game::svs_clients[selectedClientNum];
+		std::string droppedCharacter;
+
+		if (const auto* characterDvar = Game::Dvar_FindVar(
+			Utils::String::VA("zw3_character_client_%d", selectedClientNum));
+			characterDvar && characterDvar->current.string)
+		{
+			droppedCharacter = GetBotCharacterName(characterDvar->current.string);
+		}
+
+		if (droppedCharacter.empty())
+		{
+			droppedCharacter = GetBotCharacterName(cl->name);
+		}
+
+		if (droppedCharacter.empty())
+		{
+			droppedCharacter = GetBotCharacterName(BotDisplayNames[selectedClientNum]);
+		}
+
+		if (!droppedCharacter.empty())
+		{
+			Dvar::Var("zw3_pending_replacement_character").set(droppedCharacter);
+		}
+
+		ZW3BotIdentityReserved[selectedClientNum] = false;
+		BotDisplayNames[selectedClientNum].clear();
+		BotIcons[selectedClientNum].clear();
+		ZeroMemory(&g_botai[selectedClientNum], sizeof(BotMovementInfo));
+		g_botai[selectedClientNum].weapon = 1;
+
+		if (auto* characterDvar = Game::Dvar_FindVar(
+			Utils::String::VA("zw3_character_client_%d", selectedClientNum)))
+		{
+			Game::Dvar_SetString(characterDvar, "None");
+		}
+
+		Game::SV_DropClient(cl, "EXE_DISCONNECTED", false);
+		cl->header.state = Game::CS_FREE;
 	}
 
 	void Bots::CleanBotArray()
@@ -692,15 +1008,38 @@ namespace Components
 		Events::OnClientDisconnect([](const int clientNum) -> void
 			{
 				g_botai[clientNum].active = false;
+
+				if (clientNum >= 0 && clientNum < Game::MAX_CLIENTS)
+				{
+					ZW3BotIdentityReserved[clientNum] = false;
+					BotDisplayNames[clientNum].clear();
+					BotIcons[clientNum].clear();
+
+					if (auto* characterDvar = Game::Dvar_FindVar(Utils::String::VA("zw3_character_client_%d", clientNum)))
+					{
+						Game::Dvar_SetString(characterDvar, "None");
+					}
+
+					Dvar::Var(Utils::String::VA("zw3_sb_down_%d", clientNum)).set(0);
+					Dvar::Var(Utils::String::VA("zw3_sb_down_progress_%d", clientNum)).set(0.0f);
+				}
 			});
 
-		Events::OnSVInit(AddServerCommands);
+		Events::OnSVInit([]
+			{
+				ResetBotScoreboardData();
+				AddServerCommands();
+			});
 
 		CleanBotArray();
 
 		AddScriptMethods();
 
 		// In case a loaded mod didn't call "BotStop" before the VM shutdown
-		Events::OnVMShutdown(CleanBotArray);
+		Events::OnVMShutdown([]
+			{
+				CleanBotArray();
+				ResetBotScoreboardData();
+			});
 	}
 }

@@ -323,10 +323,9 @@ namespace Main
 
 		Utils::SetEnvironment();
 
-		Components::FileSystem::CleanupZw3Files();
-
 		if (Components::Singleton::InitializeMutex())
 		{
+			Components::FileSystem::CleanupZw3Files();
 			StartupSplash::Start();
 		}
 

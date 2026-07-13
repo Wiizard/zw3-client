@@ -279,22 +279,19 @@ namespace Components
 
 				const auto cleanupStampPath = GetCleanupStampPath(roots);
 				std::error_code stampEc;
-				if (!cleanupStampPath.empty() && std::filesystem::exists(cleanupStampPath, stampEc))
-				{
-					return;
-				}
 
 				struct CleanupTask
 				{
 					std::filesystem::path source;
 					std::filesystem::path destination;
 					bool move = false;
+					bool directory = false;
 				};
 
 				std::vector<CleanupTask> tasks;
 				std::unordered_set<std::wstring> seenTasks;
 
-				auto addDelete = [&](const std::filesystem::path& path)
+				auto addDeleteFile = [&](const std::filesystem::path& path)
 					{
 						std::error_code ec;
 						if (!std::filesystem::is_regular_file(path, ec))
@@ -304,7 +301,21 @@ namespace Components
 
 						if (seenTasks.insert(path.wstring()).second)
 						{
-							tasks.push_back({ path, {}, false });
+							tasks.push_back({ path, {}, false, false });
+						}
+					};
+
+				auto addDeleteDirectory = [&](const std::filesystem::path& path)
+					{
+						std::error_code ec;
+						if (!std::filesystem::is_directory(path, ec))
+						{
+							return;
+						}
+
+						if (seenTasks.insert(path.wstring()).second)
+						{
+							tasks.push_back({ path, {}, false, true });
 						}
 					};
 
@@ -318,7 +329,7 @@ namespace Components
 
 						if (seenTasks.insert(source.wstring()).second)
 						{
-							tasks.push_back({ source, destination, true });
+							tasks.push_back({ source, destination, true, false });
 						}
 					};
 
@@ -344,8 +355,30 @@ namespace Components
 
 					for (const auto& relative : legacyFiles)
 					{
-						addDelete(root / relative);
+						addDeleteFile(root / relative);
 					}
+
+					const std::filesystem::path zw3ExtractedDirectories[] =
+					{
+						L"images",
+						L"localizedstrings",
+						L"maps",
+						L"mp",
+						L"scriptdata",
+						L"scripts",
+						L"sound",
+						L"ui_mp",
+						L"weapons",
+						L"zw",
+					};
+
+					const auto zw3Dir = root / L"zw3";
+					for (const auto& relative : zw3ExtractedDirectories)
+					{
+						addDeleteDirectory(zw3Dir / relative);
+					}
+
+					addDeleteFile(zw3Dir / L"bots.txt");
 
 					const auto mainDir = root / L"main";
 					if (std::filesystem::is_directory(mainDir, ec))
@@ -366,7 +399,7 @@ namespace Components
 
 							if (path.extension() == ".iwd" && filename.rfind("mp_", 0) == 0)
 							{
-								addDelete(path);
+								addDeleteFile(path);
 							}
 						}
 					}
@@ -419,6 +452,32 @@ namespace Components
 					progress.Update(task.source.wstring());
 					std::error_code ec;
 					SetFileAttributesW(task.source.wstring().c_str(), FILE_ATTRIBUTE_NORMAL);
+
+					if (task.directory)
+					{
+						const auto removed = std::filesystem::remove_all(task.source, ec);
+						if (!ec && removed > 0)
+						{
+							processedFiles.emplace_back(std::format("deleted directory: {}", task.source.string()));
+							++deletedCount;
+							continue;
+						}
+
+						if (!std::filesystem::exists(task.source, ec))
+						{
+							processedFiles.emplace_back(std::format("skipped (not found): {}", task.source.string()));
+							++skippedCount;
+							continue;
+						}
+
+						progress.Close();
+						MessageBoxA(nullptr,
+							Utils::String::Format("Directory cannot be deleted:\n{}\n\nPlease close any processes that are using this directory and restart the game.",
+								task.source.string().c_str()),
+							"Error",
+							MB_OK | MB_ICONERROR);
+						std::exit(EXIT_FAILURE);
+					}
 
 					if (task.move)
 					{
@@ -1008,11 +1067,6 @@ namespace Components
 		Utils::Hook::Set<std::uint32_t>(0x64AF78, NEW_MAX_FILES_LISTED);
 		Utils::Hook::Set<std::uint32_t>(0x64B04F, NEW_MAX_FILES_LISTED);
 		Utils::Hook::Set<std::uint32_t>(0x45A8CE, NEW_MAX_FILES_LISTED);
-
-		Scheduler::OnGameInitialized([]
-			{
-				CleanupZw3Files();
-			}, Scheduler::Pipeline::ASYNC, 5s);
 
 		// Sys_ListFiles
 		Utils::Hook(0x45A806, Hunk_UserCreate_Stub, HOOK_CALL).install()->quick();

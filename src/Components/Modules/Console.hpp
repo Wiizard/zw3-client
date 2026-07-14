@@ -44,6 +44,7 @@ namespace Components
 
 		static bool HasConsole;
 		static bool SkipShutdown;
+		static std::atomic_bool ShutdownRequested;
 
 		static std::thread ConsoleThread;
 
@@ -67,7 +68,8 @@ namespace Components
 
 		static void ConsoleRunner();
 
-		static void RequestShutdown();
+		static void RequestShutdown(DWORD watchdogDelayMs = 10000);
+		static BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType);
 
 		static void DrawSolidConsoleStub();
 		static void StoreSafeArea();

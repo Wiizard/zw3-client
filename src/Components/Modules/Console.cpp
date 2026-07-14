@@ -1,5 +1,6 @@
 #include "Console.hpp"
 #include "TextRenderer.hpp"
+#include "Window.hpp"
 
 #include "Terminus_4.49.1.ttf.hpp"
 
@@ -32,6 +33,7 @@ namespace Components
 
 	bool Console::HasConsole = false;
 	bool Console::SkipShutdown = false;
+	std::atomic_bool Console::ShutdownRequested = false;
 
 	COLORREF Console::TextColor =
 #ifdef _DEBUG
@@ -596,7 +598,7 @@ namespace Components
 		}
 
 		case WM_CLOSE:
-			RequestShutdown();
+			RequestShutdown(5000);
 			return 0;
 
 		case WM_SIZE:
@@ -663,19 +665,40 @@ namespace Components
 
 	}
 
-	void Console::RequestShutdown()
+	void Console::RequestShutdown(const DWORD watchdogDelayMs)
 	{
-		Command::Execute("quit\n", false);
-
-		std::thread([]
+		const auto alreadyRequested = ShutdownRequested.exchange(true);
+		if (!alreadyRequested)
+		{
+			if (Game::g_quitRequested)
 			{
-				std::this_thread::sleep_for(10s);
+				*Game::g_quitRequested = true;
+			}
 
-				if (GetCurrentProcessId() != 0)
-				{
-					TerminateProcess(GetCurrentProcess(), EXIT_SUCCESS);
-				}
+			Command::Execute("quit\n", false);
+		}
+
+		std::thread([watchdogDelayMs]
+			{
+				std::this_thread::sleep_for(std::chrono::milliseconds(watchdogDelayMs));
+				TerminateProcess(GetCurrentProcess(), EXIT_SUCCESS);
 			}).detach();
+	}
+
+	BOOL WINAPI Console::ConsoleCtrlHandler(const DWORD ctrlType)
+	{
+		switch (ctrlType)
+		{
+		case CTRL_C_EVENT:
+		case CTRL_BREAK_EVENT:
+		case CTRL_CLOSE_EVENT:
+		case CTRL_LOGOFF_EVENT:
+		case CTRL_SHUTDOWN_EVENT:
+			RequestShutdown(3000);
+			return TRUE;
+		default:
+			return FALSE;
+		}
 	}
 
 	void Console::ConsoleRunner()
@@ -879,6 +902,37 @@ namespace Components
 		AssertOffset(Game::clientUIActive_t, connectionState, 0x9B8);
 		AssertOffset(Game::clientUIActive_t, keyCatchers, 0x9B0);
 
+		SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
+		Window::OnWndMessage(WM_CLOSE, []([[maybe_unused]] WPARAM wParam, [[maybe_unused]] LPARAM lParam)
+			{
+				RequestShutdown(5000);
+				return TRUE;
+			});
+		Window::OnWndMessage(WM_DESTROY, []([[maybe_unused]] WPARAM wParam, [[maybe_unused]] LPARAM lParam)
+			{
+				RequestShutdown(3000);
+				return TRUE;
+			});
+		Window::OnWndMessage(WM_NCDESTROY, []([[maybe_unused]] WPARAM wParam, [[maybe_unused]] LPARAM lParam)
+			{
+				RequestShutdown(3000);
+				return TRUE;
+			});
+		Window::OnWndMessage(WM_QUERYENDSESSION, []([[maybe_unused]] WPARAM wParam, [[maybe_unused]] LPARAM lParam)
+			{
+				RequestShutdown(3000);
+				return TRUE;
+			});
+		Window::OnWndMessage(WM_ENDSESSION, [](WPARAM wParam, [[maybe_unused]] LPARAM lParam)
+			{
+				if (wParam)
+				{
+					RequestShutdown(3000);
+				}
+
+				return TRUE;
+			});
+
 		// Console '%s: %s> ' string
 #ifdef EXPERIMENTAL_BUILD
 		Utils::Hook::Set<const char*>(0x5A44B4, "Call of Duty: Zombie Warfare 3> ");
@@ -994,6 +1048,7 @@ namespace Components
 
 	Console::~Console()
 	{
+		SetConsoleCtrlHandler(ConsoleCtrlHandler, FALSE);
 		SetSkipShutdown();
 		if (ConsoleThread.joinable())
 		{

@@ -908,16 +908,6 @@ namespace Components
 				RequestShutdown(5000);
 				return TRUE;
 			});
-		Window::OnWndMessage(WM_DESTROY, []([[maybe_unused]] WPARAM wParam, [[maybe_unused]] LPARAM lParam)
-			{
-				RequestShutdown(3000);
-				return TRUE;
-			});
-		Window::OnWndMessage(WM_NCDESTROY, []([[maybe_unused]] WPARAM wParam, [[maybe_unused]] LPARAM lParam)
-			{
-				RequestShutdown(3000);
-				return TRUE;
-			});
 		Window::OnWndMessage(WM_QUERYENDSESSION, []([[maybe_unused]] WPARAM wParam, [[maybe_unused]] LPARAM lParam)
 			{
 				RequestShutdown(3000);

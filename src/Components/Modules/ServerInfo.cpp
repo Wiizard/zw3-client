@@ -26,6 +26,10 @@ namespace Components
 	ServerInfo::Container ServerInfo::PlayerContainer;
 	static int ListenServerHostClientNum = -1;
 	static std::array<int, Game::MAX_CLIENTS> ClientDownStateSuppressedUntil{};
+	static std::array<int, Game::MAX_CLIENTS> ClientConnectingLastPacketTime{};
+	static std::array<int, Game::MAX_CLIENTS> ClientConnectingLastPacketAdvanceAt{};
+	static std::array<bool, Game::MAX_CLIENTS> ClientConnectingStale{};
+	static constexpr int ConnectingPacketTimeout = 10000;
 
 	static void ResetClientTransientScoreboardState(const int clientNum, const int suppressMilliseconds = 1000)
 	{
@@ -37,6 +41,50 @@ namespace Components
 		Dvar::Var(Utils::String::VA("zw3_sb_down_%d", clientNum)).set(0);
 		Dvar::Var(Utils::String::VA("zw3_sb_down_progress_%d", clientNum)).set(0.0f);
 		ClientDownStateSuppressedUntil[clientNum] = Game::Sys_Milliseconds() + suppressMilliseconds;
+	}
+
+	static void ResetClientConnectingState(const int clientNum)
+	{
+		if (clientNum < 0 || clientNum >= Game::MAX_CLIENTS)
+		{
+			return;
+		}
+
+		ClientConnectingLastPacketTime[clientNum] = 0;
+		ClientConnectingLastPacketAdvanceAt[clientNum] = 0;
+		ClientConnectingStale[clientNum] = false;
+	}
+
+	static void UpdateClientConnectingState(const int clientNum, const int now)
+	{
+		if (clientNum < 0 || clientNum >= Game::MAX_CLIENTS)
+		{
+			return;
+		}
+
+		const auto& client = Game::svs_clients[clientNum];
+
+		if (client.header.state < Game::CS_CONNECTED ||
+			client.header.state >= Game::CS_ACTIVE ||
+			client.bIsTestClient)
+		{
+			ResetClientConnectingState(clientNum);
+			return;
+		}
+
+		if (ClientConnectingLastPacketAdvanceAt[clientNum] == 0 ||
+			ClientConnectingLastPacketTime[clientNum] != client.lastPacketTime)
+		{
+			ClientConnectingLastPacketTime[clientNum] = client.lastPacketTime;
+			ClientConnectingLastPacketAdvanceAt[clientNum] = now;
+			ClientConnectingStale[clientNum] = false;
+			return;
+		}
+
+		if (now - ClientConnectingLastPacketAdvanceAt[clientNum] >= ConnectingPacketTimeout)
+		{
+			ClientConnectingStale[clientNum] = true;
+		}
 	}
 
 	unsigned int ServerInfo::GetPlayerCount()
@@ -292,7 +340,13 @@ namespace Components
 		for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
 		{
 			const auto& client = Game::svs_clients[clientNum];
-			if (client.header.state >= Game::CS_CONNECTED && !client.bIsTestClient)
+			const bool staleConnecting =
+				client.header.state < Game::CS_ACTIVE &&
+				ClientConnectingStale[clientNum];
+
+			if (client.header.state >= Game::CS_CONNECTED &&
+				!client.bIsTestClient &&
+				!staleConnecting)
 			{
 				realClientNums.push_back(clientNum);
 			}
@@ -538,7 +592,7 @@ namespace Components
 			{
 				GSC::Field::ResetClientScoreboardStats(clientNum);
 				ResetClientTransientScoreboardState(clientNum, 1500);
-
+				ResetClientConnectingState(clientNum);
 
 				if (ListenServerHostClientNum == clientNum)
 				{
@@ -552,6 +606,7 @@ namespace Components
 				static std::array<bool, Game::MAX_CLIENTS> previousBotFlags{};
 				static std::array<std::string, Game::MAX_CLIENTS> previousNames{};
 				static bool initialized = false;
+				const auto now = Game::Sys_Milliseconds();
 
 				for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
 				{
@@ -575,6 +630,7 @@ namespace Components
 						occupantTypeChanged || occupantNameChanged)
 					{
 						ResetClientTransientScoreboardState(clientNum, 1500);
+						ResetClientConnectingState(clientNum);
 					}
 
 
@@ -582,6 +638,8 @@ namespace Components
 					{
 						ResetClientTransientScoreboardState(clientNum, 1500);
 					}
+
+					UpdateClientConnectingState(clientNum, now);
 
 					previousStates[clientNum] = state;
 					previousBotFlags[clientNum] = isBot;
@@ -794,11 +852,13 @@ namespace Components
 		{
 			static int lastScoreboardRequest = 0;
 			const auto now = Game::Sys_Milliseconds();
+
 			if (now - lastScoreboardRequest >= 250)
 			{
 				lastScoreboardRequest = now;
 				Network::SendCommand(Party::Target(), "getZW3Scoreboard");
 			}
+
 			return;
 		}
 
@@ -812,16 +872,30 @@ namespace Components
 		for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
 		{
 			const auto& serverClient = Game::svs_clients[clientNum];
+
 			if (serverClient.header.state < Game::CS_CONNECTED)
 			{
 				GSC::Field::ResetClientScoreboardStats(clientNum);
 				ResetClientTransientScoreboardState(clientNum, 0);
+				ResetClientConnectingState(clientNum);
 				continue;
 			}
+
+			UpdateClientConnectingState(clientNum, now);
 
 			const auto xuid =
 				CharacterAssignments::GetClientXuid(serverClient);
 			const bool isBot = serverClient.bIsTestClient && xuid == 0;
+
+			const bool staleConnecting =
+				!isBot &&
+				serverClient.header.state < Game::CS_ACTIVE &&
+				ClientConnectingStale[clientNum];
+
+			if (staleConnecting)
+			{
+				continue;
+			}
 
 			if (!isBot && xuid != 0 &&
 				!publishedRealXuids.insert(xuid).second)
@@ -842,7 +916,9 @@ namespace Components
 
 			if (!hasActiveGameClient)
 			{
-				if (isBot || clientNum == ListenServerHostClientNum)
+				if (isBot ||
+					clientNum == ListenServerHostClientNum ||
+					ClientConnectingStale[clientNum])
 				{
 					continue;
 				}
@@ -850,15 +926,18 @@ namespace Components
 				Container::Player player;
 				player.clientNum = clientNum;
 				player.name = GetScoreboardBaseName(serverClient.name);
+
 				if (player.name.empty())
 				{
 					player.name = "Connecting...";
 				}
+
 				player.icon = character;
 				player.ping = serverClient.ping;
 				player.survivalTime =
 					Dvar::Var("zw3_ui_sb_survived_time").get<std::string>();
 				player.status = "CONNECTING";
+
 				PlayerContainer.playerList.push_back(player);
 				continue;
 			}
@@ -880,15 +959,22 @@ namespace Components
 			player.revives = GSC::Field::GetClientRevives(clientNum);
 			player.deaths = client->sess.deaths;
 
-			const bool dead = client->sess.cs.team == Game::TEAM_SPECTATOR;
+			const bool dead =
+				client->sess.cs.team == Game::TEAM_SPECTATOR;
 			const bool suppressDown =
 				now < ClientDownStateSuppressedUntil[clientNum];
-			const auto rawDown = suppressDown ? 0 :
-				GetDvarIntStringSafe(
+
+			const auto rawDown = suppressDown
+				? 0
+				: GetDvarIntStringSafe(
 					Utils::String::VA("zw3_sb_down_%d", clientNum));
-			const auto rawProgress = suppressDown ? 0.0f :
-				GetDvarFloatStringSafe(
-					Utils::String::VA("zw3_sb_down_progress_%d", clientNum));
+
+			const auto rawProgress = suppressDown
+				? 0.0f
+				: GetDvarFloatStringSafe(
+					Utils::String::VA(
+						"zw3_sb_down_progress_%d",
+						clientNum));
 
 			player.down = (!dead && rawDown == 1) ? 1 : 0;
 			player.downProgress = player.down
@@ -896,13 +982,15 @@ namespace Components
 				: 0.0f;
 			player.status =
 				GetScoreboardStatusName(dead, player.down == 1);
+
 			NormalisePlayerDownState(player);
 			PlayerContainer.playerList.push_back(player);
 		}
 
-		std::stable_sort(PlayerContainer.playerList.begin(),
-			PlayerContainer.playerList.end(), [](const Container::Player& a,
-				const Container::Player& b)
+		std::stable_sort(
+			PlayerContainer.playerList.begin(),
+			PlayerContainer.playerList.end(),
+			[](const Container::Player& a, const Container::Player& b)
 			{
 				auto group = [](const Container::Player& player)
 					{
@@ -911,15 +999,20 @@ namespace Components
 						{
 							return 0;
 						}
-						return Game::svs_clients[player.clientNum].bIsTestClient ? 2 : 1;
+
+						return Game::svs_clients[player.clientNum].bIsTestClient
+							? 2
+							: 1;
 					};
 
 				const int aGroup = group(a);
 				const int bGroup = group(b);
+
 				if (aGroup != bGroup)
 				{
 					return aGroup < bGroup;
 				}
+
 				return a.clientNum < b.clientNum;
 			});
 

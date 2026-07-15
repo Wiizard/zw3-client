@@ -2563,7 +2563,7 @@ namespace Components
 
 				if (startedLoading || isNewConnection || isMapRestart)
 				{
-					Dvar::Var("zw3_sb_ui_survived_time").set("00:00:00");
+					Dvar::Var("zw3_ui_sb_survived_time").set("00:00:00");
 				}
 
 				UpdateNewsCarousel();

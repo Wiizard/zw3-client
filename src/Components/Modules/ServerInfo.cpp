@@ -5,6 +5,7 @@
 #include "Gamepad.hpp"
 #include "Party.hpp"
 #include "ServerInfo.hpp"
+#include "CharacterAssignments.hpp"
 #include "ServerList.hpp"
 #include "UIFeeder.hpp"
 #include "Voice.hpp"
@@ -359,40 +360,6 @@ namespace Components
 		ListenServerHostClientNum = bestClientNum;
 	}
 
-
-	static bool IsBotDisplayName(const std::string& name)
-	{
-		const auto normalized = NormalizeIdentityName(name);
-		return normalized.size() >= 6 && _strnicmp(normalized.c_str(), "[BOT] ", 6) == 0;
-	}
-
-	static std::string CanonicalCharacterName(const std::string& value)
-	{
-		const auto normalized = NormalizeIdentityName(value);
-
-		if (_stricmp(normalized.c_str(), "Richtofen") == 0)
-		{
-			return "Richtofen";
-		}
-
-		if (_stricmp(normalized.c_str(), "Dempsey") == 0)
-		{
-			return "Dempsey";
-		}
-
-		if (_stricmp(normalized.c_str(), "Nikolai") == 0)
-		{
-			return "Nikolai";
-		}
-
-		if (_stricmp(normalized.c_str(), "Takeo") == 0)
-		{
-			return "Takeo";
-		}
-
-		return {};
-	}
-
 	static std::string GetCharacterForClient(const int clientNum)
 	{
 		if (clientNum < 0 || clientNum >= Game::MAX_CLIENTS)
@@ -400,13 +367,10 @@ namespace Components
 			return {};
 		}
 
-		const auto* characterDvar = Game::Dvar_FindVar(Utils::String::VA("zw3_character_client_%d", clientNum));
-		if (!characterDvar || !characterDvar->current.string || !*characterDvar->current.string)
-		{
-			return {};
-		}
-
-		return CanonicalCharacterName(characterDvar->current.string);
+		const auto character = CharacterAssignments::ResolveClientCharacter(clientNum);
+		return CharacterAssignments::IsValid(character)
+			? CharacterAssignments::ToString(character)
+			: std::string();
 	}
 
 	static int GetDvarIntStringSafe(const char* name)
@@ -575,11 +539,6 @@ namespace Components
 				GSC::Field::ResetClientScoreboardStats(clientNum);
 				ResetClientTransientScoreboardState(clientNum, 1500);
 
-				if (auto* characterDvar = Game::Dvar_FindVar(
-					Utils::String::VA("zw3_character_client_%d", clientNum)))
-				{
-					Game::Dvar_SetString(characterDvar, "None");
-				}
 
 				if (ListenServerHostClientNum == clientNum)
 				{
@@ -618,15 +577,6 @@ namespace Components
 						ResetClientTransientScoreboardState(clientNum, 1500);
 					}
 
-					if (departed || (!isBot &&
-						(becameConnected || occupantTypeChanged || occupantNameChanged)))
-					{
-						if (auto* characterDvar = Game::Dvar_FindVar(
-							Utils::String::VA("zw3_character_client_%d", clientNum)))
-						{
-							Game::Dvar_SetString(characterDvar, "None");
-						}
-					}
 
 					if (hasOccupant && !isBot && state < Game::CS_ACTIVE)
 					{
@@ -844,13 +794,11 @@ namespace Components
 		{
 			static int lastScoreboardRequest = 0;
 			const auto now = Game::Sys_Milliseconds();
-
 			if (now - lastScoreboardRequest >= 250)
 			{
 				lastScoreboardRequest = now;
 				Network::SendCommand(Party::Target(), "getZW3Scoreboard");
 			}
-
 			return;
 		}
 
@@ -858,342 +806,112 @@ namespace Components
 		PlayerContainer.playerList.clear();
 		UpdateListenServerHostClientNum();
 
-		struct PublishedCharacterSlot
-		{
-			int index = -1;
-			std::string character;
-			std::string owner;
-			bool bot = false;
-		};
-
-		std::vector<PublishedCharacterSlot> publishedSlots;
-		publishedSlots.reserve(4);
-
-		for (int slot = 1; slot <= 4; ++slot)
-		{
-			const auto character = CanonicalCharacterName(
-				Dvar::Var(Utils::String::VA("character_%d", slot)).get<std::string>());
-			const auto owner = Dvar::Var(
-				Utils::String::VA("character_%d_player", slot)).get<std::string>();
-
-			if (character.empty() || owner.empty() || owner == "None")
-			{
-				continue;
-			}
-
-			publishedSlots.push_back({ slot - 1, character, owner, IsBotDisplayName(owner) });
-		}
-
-		auto characterFromBotName = [](const std::string& value) -> std::string
-			{
-				auto normalized = NormalizeIdentityName(GetScoreboardBaseName(value));
-				if (normalized.size() >= 6 && _strnicmp(normalized.c_str(), "[BOT] ", 6) == 0)
-				{
-					normalized.erase(0, 6);
-				}
-
-				return CanonicalCharacterName(normalized);
-			};
-
-		auto slotIndexForCharacter = [&](const std::string& value)
-			{
-				const auto character = CanonicalCharacterName(value);
-				for (const auto& slot : publishedSlots)
-				{
-					if (_stricmp(slot.character.c_str(), character.c_str()) == 0)
-					{
-						return slot.index;
-					}
-				}
-
-				return std::numeric_limits<int>::max();
-			};
-
-		std::vector<int> realClientOrder;
-		for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
-		{
-			const auto& client = Game::svs_clients[clientNum];
-			if (client.header.state >= Game::CS_CONNECTED && !client.bIsTestClient)
-			{
-				realClientOrder.push_back(clientNum);
-			}
-		}
-
-		std::stable_sort(realClientOrder.begin(), realClientOrder.end(), [](const int a, const int b)
-			{
-				const bool aHost = a == ListenServerHostClientNum;
-				const bool bHost = b == ListenServerHostClientNum;
-				if (aHost != bHost)
-				{
-					return aHost;
-				}
-				return a < b;
-			});
-
-		std::vector<std::string> publishedRealCharacters;
-		for (const auto& slot : publishedSlots)
-		{
-			if (!slot.bot)
-			{
-				publishedRealCharacters.push_back(slot.character);
-			}
-		}
-
-		std::unordered_map<int, std::string> realFallbackCharacter;
-		for (std::size_t i = 0; i < realClientOrder.size() && i < publishedRealCharacters.size(); ++i)
-		{
-			realFallbackCharacter[realClientOrder[i]] = publishedRealCharacters[i];
-		}
-
-		std::vector<std::string> publishedBotCharacters;
-		for (const auto& slot : publishedSlots)
-		{
-			if (!slot.bot)
-			{
-				continue;
-			}
-
-			bool duplicate = false;
-			for (const auto& existing : publishedBotCharacters)
-			{
-				if (_stricmp(existing.c_str(), slot.character.c_str()) == 0)
-				{
-					duplicate = true;
-					break;
-				}
-			}
-
-			if (!duplicate)
-			{
-				publishedBotCharacters.push_back(slot.character);
-			}
-		}
-
-		std::vector<int> liveBotClients;
-		for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
-		{
-			const auto& client = Game::svs_clients[clientNum];
-			if (client.header.state >= Game::CS_CONNECTED && client.bIsTestClient)
-			{
-				liveBotClients.push_back(clientNum);
-			}
-		}
-
-		std::unordered_map<int, std::string> resolvedBotCharacters;
-		std::vector<std::string> claimedBotCharacters;
-
-		auto tryClaimBotCharacter = [&](const int clientNum, const std::string& value)
-			{
-				const auto character = CanonicalCharacterName(value);
-				if (character.empty())
-				{
-					return false;
-				}
-
-				bool published = false;
-				for (const auto& candidate : publishedBotCharacters)
-				{
-					if (_stricmp(candidate.c_str(), character.c_str()) == 0)
-					{
-						published = true;
-						break;
-					}
-				}
-
-				if (!published)
-				{
-					return false;
-				}
-
-				for (const auto& claimed : claimedBotCharacters)
-				{
-					if (_stricmp(claimed.c_str(), character.c_str()) == 0)
-					{
-						return false;
-					}
-				}
-
-				resolvedBotCharacters[clientNum] = character;
-				claimedBotCharacters.push_back(character);
-				return true;
-			};
-
-		for (const auto clientNum : liveBotClients)
-		{
-			tryClaimBotCharacter(clientNum, GetCharacterForClient(clientNum));
-		}
-
-		for (const auto clientNum : liveBotClients)
-		{
-			if (resolvedBotCharacters.contains(clientNum))
-			{
-				continue;
-			}
-
-			auto character = characterFromBotName(Bots::GetBotDisplayName(clientNum));
-			if (character.empty())
-			{
-				character = characterFromBotName(Game::svs_clients[clientNum].name);
-			}
-
-			tryClaimBotCharacter(clientNum, character);
-		}
-
-		for (const auto clientNum : liveBotClients)
-		{
-			if (resolvedBotCharacters.contains(clientNum))
-			{
-				continue;
-			}
-
-			for (const auto& character : publishedBotCharacters)
-			{
-				if (tryClaimBotCharacter(clientNum, character))
-				{
-					break;
-				}
-			}
-		}
-
 		const auto now = Game::Sys_Milliseconds();
+		std::unordered_set<std::uint64_t> publishedRealXuids;
 
 		for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
 		{
-			const auto state = Game::svs_clients[clientNum].header.state;
-			const bool isBot = Game::svs_clients[clientNum].bIsTestClient;
-
-			if (state < Game::CS_CONNECTED)
+			const auto& serverClient = Game::svs_clients[clientNum];
+			if (serverClient.header.state < Game::CS_CONNECTED)
 			{
 				GSC::Field::ResetClientScoreboardStats(clientNum);
 				ResetClientTransientScoreboardState(clientNum, 0);
 				continue;
 			}
 
-			if (isBot && state < Game::CS_ACTIVE)
+			const auto xuid =
+				CharacterAssignments::GetClientXuid(serverClient);
+			const bool isBot = serverClient.bIsTestClient && xuid == 0;
+
+			if (!isBot && xuid != 0 &&
+				!publishedRealXuids.insert(xuid).second)
 			{
+				continue;
+			}
+
+			const auto character = GetCharacterForClient(clientNum);
+			if (character.empty())
+			{
+				continue;
+			}
+
+			const bool hasActiveGameClient =
+				serverClient.header.state >= Game::CS_ACTIVE &&
+				serverClient.gentity &&
+				serverClient.gentity->client;
+
+			if (!hasActiveGameClient)
+			{
+				if (isBot || clientNum == ListenServerHostClientNum)
+				{
+					continue;
+				}
+
+				Container::Player player;
+				player.clientNum = clientNum;
+				player.name = GetScoreboardBaseName(serverClient.name);
+				if (player.name.empty())
+				{
+					player.name = "Connecting...";
+				}
+				player.icon = character;
+				player.ping = serverClient.ping;
+				player.survivalTime =
+					Dvar::Var("zw3_ui_sb_survived_time").get<std::string>();
+				player.status = "CONNECTING";
+				PlayerContainer.playerList.push_back(player);
 				continue;
 			}
 
 			Container::Player player;
 			player.clientNum = clientNum;
-			player.name = Game::svs_clients[clientNum].name;
-			player.ping = Game::svs_clients[clientNum].ping;
-			player.survivalTime = Dvar::Var("zw3_ui_sb_survived_time").get<std::string>();
+			player.name = isBot
+				? Utils::String::VA("[BOT] %s", character.c_str())
+				: GetScoreboardBaseName(serverClient.name);
+			player.icon = character;
+			player.ping = serverClient.ping;
+			player.survivalTime =
+				Dvar::Var("zw3_ui_sb_survived_time").get<std::string>();
 
-			if (!isBot && state < Game::CS_ACTIVE)
-			{
-				player.score = 0;
-				player.kills = 0;
-				player.downs = 0;
-				player.revives = 0;
-				player.deaths = 0;
-				player.down = 0;
-				player.downProgress = 0.0f;
-				player.status = "CONNECTING";
-				ResetClientTransientScoreboardState(clientNum, 1500);
-			}
-			else
-			{
-				if (!Game::svs_clients[clientNum].gentity ||
-					!Game::svs_clients[clientNum].gentity->client)
-				{
-					continue;
-				}
+			const auto* client = serverClient.gentity->client;
+			player.score = Game::SV_GameClientNum_Score(clientNum);
+			player.kills = client->sess.kills;
+			player.downs = GSC::Field::GetClientDowns(clientNum);
+			player.revives = GSC::Field::GetClientRevives(clientNum);
+			player.deaths = client->sess.deaths;
 
-				const auto* client = Game::svs_clients[clientNum].gentity->client;
-				player.score = Game::SV_GameClientNum_Score(clientNum);
-				player.kills = client->sess.kills;
-				player.downs = GSC::Field::GetClientDowns(clientNum);
-				player.revives = GSC::Field::GetClientRevives(clientNum);
-				player.deaths = client->sess.deaths;
+			const bool dead = client->sess.cs.team == Game::TEAM_SPECTATOR;
+			const bool suppressDown =
+				now < ClientDownStateSuppressedUntil[clientNum];
+			const auto rawDown = suppressDown ? 0 :
+				GetDvarIntStringSafe(
+					Utils::String::VA("zw3_sb_down_%d", clientNum));
+			const auto rawProgress = suppressDown ? 0.0f :
+				GetDvarFloatStringSafe(
+					Utils::String::VA("zw3_sb_down_progress_%d", clientNum));
 
-				const bool dead = client->sess.cs.team == Game::TEAM_SPECTATOR;
-				const bool suppressDown = now < ClientDownStateSuppressedUntil[clientNum];
-				const auto rawDown = suppressDown ? 0 :
-					GetDvarIntStringSafe(Utils::String::VA("zw3_sb_down_%d", clientNum));
-				const auto rawDownProgress = suppressDown ? 0.0f :
-					GetDvarFloatStringSafe(Utils::String::VA("zw3_sb_down_progress_%d", clientNum));
-
-				player.down = (!dead && rawDown == 1) ? 1 : 0;
-				player.downProgress = player.down
-					? std::clamp(rawDownProgress, 0.0f, 1.0f)
-					: 0.0f;
-				player.status = GetScoreboardStatusName(dead, player.down == 1);
-				NormalisePlayerDownState(player);
-			}
-
-			std::string character;
-			if (isBot)
-			{
-				const auto resolved = resolvedBotCharacters.find(clientNum);
-				if (resolved == resolvedBotCharacters.end())
-				{
-					continue;
-				}
-
-				character = resolved->second;
-			}
-			else
-			{
-				character = GetCharacterForClient(clientNum);
-				if (character.empty())
-				{
-					const auto fallback = realFallbackCharacter.find(clientNum);
-					if (fallback != realFallbackCharacter.end())
-					{
-						character = fallback->second;
-					}
-				}
-			}
-
-			if (!character.empty())
-			{
-				player.icon = character;
-				if (isBot)
-				{
-					player.name = Utils::String::VA("[BOT] %s", character.c_str());
-				}
-				else
-				{
-					player.name = GetScoreboardBaseName(player.name);
-				}
-			}
-			else
-			{
-				player.name = GetScoreboardBaseName(player.name);
-				player.icon = "hud_status_connecting";
-			}
-
+			player.down = (!dead && rawDown == 1) ? 1 : 0;
+			player.downProgress = player.down
+				? std::clamp(rawProgress, 0.0f, 1.0f)
+				: 0.0f;
+			player.status =
+				GetScoreboardStatusName(dead, player.down == 1);
+			NormalisePlayerDownState(player);
 			PlayerContainer.playerList.push_back(player);
 		}
 
-		if (PlayerContainer.playerList.empty() && !Dedicated::IsRunning())
-		{
-			Container::Player host;
-			host.clientNum = ListenServerHostClientNum >= 0 ? ListenServerHostClientNum : 0;
-			host.name = Dvar::Var("name").get<std::string>();
-			host.icon = GetCharacterForClient(host.clientNum);
-			if (host.icon.empty() && !publishedRealCharacters.empty())
+		std::stable_sort(PlayerContainer.playerList.begin(),
+			PlayerContainer.playerList.end(), [](const Container::Player& a,
+				const Container::Player& b)
 			{
-				host.icon = publishedRealCharacters.front();
-			}
-			PlayerContainer.playerList.push_back(host);
-		}
-
-		std::stable_sort(PlayerContainer.playerList.begin(), PlayerContainer.playerList.end(),
-			[&](const Container::Player& a, const Container::Player& b)
-			{
-				auto group = [&](const Container::Player& player)
+				auto group = [](const Container::Player& player)
 					{
-						if (!Dedicated::IsRunning() && Dvar::Var("party_host").get<bool>() &&
+						if (!Dedicated::IsRunning() &&
 							player.clientNum == ListenServerHostClientNum)
 						{
 							return 0;
 						}
-
-						const bool bot = player.clientNum >= 0 && player.clientNum < Game::MAX_CLIENTS &&
-							Game::svs_clients[player.clientNum].bIsTestClient;
-						return bot ? 2 : 1;
+						return Game::svs_clients[player.clientNum].bIsTestClient ? 2 : 1;
 					};
 
 				const int aGroup = group(a);
@@ -1202,15 +920,6 @@ namespace Components
 				{
 					return aGroup < bGroup;
 				}
-
-				const int aSlot = slotIndexForCharacter(a.icon);
-				const int bSlot = slotIndexForCharacter(b.icon);
-
-				if (aSlot != bSlot)
-				{
-					return aSlot < bSlot;
-				}
-
 				return a.clientNum < b.clientNum;
 			});
 

@@ -80,6 +80,12 @@
 
 #include <Utils/Leaderboard.hpp>
 
+namespace StartupSplash
+{
+	void Start();
+	void Stop();
+}
+
 namespace Components
 {
 	bool Loader::Pregame = true;
@@ -111,6 +117,13 @@ namespace Components
 
 		// High priority
 		Register(new Singleton());
+		Register(new Scheduler());
+
+		const auto showStartupSplash = Singleton::IsFirstInstance();
+		if (showStartupSplash)
+		{
+			StartupSplash::Start();
+		}
 
 		Register(new Auth());
 		Register(new Command());
@@ -177,7 +190,7 @@ namespace Components
 		Register(new RawMouse());
 		Register(new RCon());
 		Register(new Renderer());
-		Register(new Scheduler());
+		//Register(new Scheduler());
 		Register(new Security());
 		Register(new ServerCommands());
 		Register(new ServerInfo());
@@ -214,6 +227,11 @@ namespace Components
 		Register(new Leaderboard());
 
 		Pregame = false;
+
+		if (showStartupSplash)
+		{
+			Scheduler::Once(StartupSplash::Stop, Scheduler::Pipeline::ASYNC);
+		}
 
 		// Make sure preDestroy is called when the game shuts down
 		Scheduler::OnGameShutdown(PreDestroy);

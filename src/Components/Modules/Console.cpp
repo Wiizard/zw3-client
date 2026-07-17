@@ -34,6 +34,7 @@ namespace Components
 	bool Console::HasConsole = false;
 	bool Console::SkipShutdown = false;
 	std::atomic_bool Console::ShutdownRequested = false;
+	std::atomic_bool Console::ShutdownWatchdogStarted = false;
 
 	COLORREF Console::TextColor =
 #ifdef _DEBUG
@@ -668,14 +669,20 @@ namespace Components
 	void Console::RequestShutdown(const DWORD watchdogDelayMs)
 	{
 		const auto alreadyRequested = ShutdownRequested.exchange(true);
-		if (!alreadyRequested)
+		if (alreadyRequested)
 		{
-			if (Game::g_quitRequested)
-			{
-				*Game::g_quitRequested = true;
-			}
+			return;
+		}
 
-			Command::Execute("quit\n", false);
+		Command::Execute("quit\n", false);
+		StartShutdownWatchdog(watchdogDelayMs);
+	}
+
+	void Console::StartShutdownWatchdog(const DWORD watchdogDelayMs)
+	{
+		if (ShutdownWatchdogStarted.exchange(true))
+		{
+			return;
 		}
 
 		std::thread([watchdogDelayMs]
@@ -700,6 +707,7 @@ namespace Components
 			return FALSE;
 		}
 	}
+
 
 	void Console::ConsoleRunner()
 	{
@@ -733,7 +741,7 @@ namespace Components
 		{
 			// Send quit command to safely terminate the application, then force exit
 			// if shutdown hangs and would otherwise leave zw3.exe in the background.
-			RequestShutdown();
+			Command::Execute("wait 200;quit\n", false);
 		}
 	}
 
@@ -903,24 +911,9 @@ namespace Components
 		AssertOffset(Game::clientUIActive_t, keyCatchers, 0x9B0);
 
 		SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
-		Window::OnWndMessage(WM_CLOSE, []([[maybe_unused]] WPARAM wParam, [[maybe_unused]] LPARAM lParam)
+		Scheduler::OnGameShutdown([]
 			{
-				RequestShutdown(5000);
-				return TRUE;
-			});
-		Window::OnWndMessage(WM_QUERYENDSESSION, []([[maybe_unused]] WPARAM wParam, [[maybe_unused]] LPARAM lParam)
-			{
-				RequestShutdown(3000);
-				return TRUE;
-			});
-		Window::OnWndMessage(WM_ENDSESSION, [](WPARAM wParam, [[maybe_unused]] LPARAM lParam)
-			{
-				if (wParam)
-				{
-					RequestShutdown(3000);
-				}
-
-				return TRUE;
+				StartShutdownWatchdog(5000);
 			});
 
 		// Console '%s: %s> ' string

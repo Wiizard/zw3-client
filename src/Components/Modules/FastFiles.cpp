@@ -4,14 +4,30 @@
 
 namespace Components
 {
+	namespace
+	{
+		constexpr std::array<unsigned char, 32> ZW3_ZONE_KEY =
+		{
+			0x1F, 0x76, 0x3E, 0xCD, 0xD0, 0x4D, 0x4C, 0xD1,
+			0x9E, 0xD7, 0x6A, 0xFE, 0xA7, 0x7B, 0x2B, 0x18,
+			0xBA, 0x33, 0x58, 0xCE, 0x2A, 0xAA, 0xD0, 0x3F,
+			0xCD, 0x39, 0x39, 0x17, 0xFB, 0x52, 0xD6, 0x46,
+		};
+
+		constexpr std::size_t ZW3_ZONE_NONCE_SIZE = 16;
+	}
+
 	FastFiles::Key FastFiles::CurrentKey;
 	symmetric_CTR FastFiles::CurrentCTR;
+	symmetric_CTR FastFiles::ZW3CTR;
 	std::vector<std::string> FastFiles::ZonePaths;
 
 	Dvar::Var FastFiles::g_loadingInitialZones;
 
 	bool FastFiles::IsIW4xZone = false;
+	bool FastFiles::IsZW3Zone = false;
 	bool FastFiles::StreamRead = false;
+	bool FastFiles::ZW3CTRInitialized = false;
 
 	char FastFiles::LastByteRead = 0;
 
@@ -145,7 +161,11 @@ namespace Components
 			data.push_back({ "iw4x_patch_mp", 1, 0 });
 		}
 
-		if (Utils::IO::FileExists(Dvar::Var("fs_game").get<std::string>() + "/mod.ff"))
+		const auto fsGame = Dvar::Var("fs_game").get<std::string>();
+		const auto hasModFastFile = Utils::IO::FileExists(fsGame + "/mod.ff");
+		const auto loadDevModSeparately = Flags::HasFlag("dev") && hasModFastFile;
+
+		if (hasModFastFile && !loadDevModSeparately)
 		{
 			data.push_back({ "mod", 1, 0 });
 		}
@@ -154,7 +174,11 @@ namespace Components
 
 		const auto zw3Patch = std::string(basepath) + "\\zw3\\zw3.ff";
 		//const auto zw3Patch = std::format("{}\\zw3\\zw3.ff", basepath);
-		if (Utils::IO::FileExists(zw3Patch))
+		if (Flags::HasFlag("dev"))
+		{
+			Logger::Print("Skipping zw3/zw3.ff because -dev is enabled.\n");
+		}
+		else if (Utils::IO::FileExists(zw3Patch))
 		{
 			// zw3.ff is now loaded synchronously as part of the initial load batch
 			// instead of being loaded asynchronously via the scheduler.
@@ -177,7 +201,13 @@ namespace Components
 			std::exit(EXIT_FAILURE);
 		}
 
-		return FastFiles::LoadDLCUIZones(data.data(), data.size(), sync);
+		FastFiles::LoadDLCUIZones(data.data(), data.size(), sync);
+
+		if (loadDevModSeparately)
+		{
+			Game::XZoneInfo modZone{ "mod", 1, 0 };
+			Game::DB_LoadXAssets(&modZone, 1, true);
+		}
 	}
 
 	// This has to be called every time the cgame is reinitialized
@@ -340,8 +370,97 @@ namespace Components
 		return file;
 	}
 
+	bool FastFiles::IsZombieZoneName(const std::string_view zoneName)
+	{
+		return Utils::String::ToLower(std::string(zoneName)).find("zombie") != std::string::npos;
+	}
+
+	bool FastFiles::IsPrivateZW3Module()
+	{
+		HMODULE module = nullptr;
+		if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+			reinterpret_cast<LPCSTR>(&FastFiles::IsPrivateZW3Module), &module))
+		{
+			return false;
+		}
+
+		char modulePath[MAX_PATH]{};
+		if (!GetModuleFileNameA(module, modulePath, ARRAYSIZE(modulePath)))
+		{
+			return false;
+		}
+
+		return Utils::String::ToLower(std::filesystem::path(modulePath).filename().string()) == "zw3.dll";
+	}
+
+	bool FastFiles::ShouldProtectZone(const std::string_view zoneName)
+	{
+		return FastFiles::IsPrivateZW3Module() && FastFiles::IsZombieZoneName(zoneName);
+	}
+
+	void FastFiles::ProtectZoneBuffer(std::string& buffer)
+	{
+		std::array<unsigned char, ZW3_ZONE_NONCE_SIZE> nonce{};
+		for (std::size_t offset = 0; offset < nonce.size(); offset += sizeof(std::uint32_t))
+		{
+			const auto value = Utils::Cryptography::Rand::GenerateInt();
+			std::memcpy(nonce.data() + offset, &value, sizeof(value));
+		}
+
+		register_cipher(&aes_desc);
+		const auto aes = find_cipher("aes");
+		if (aes < 0)
+		{
+			Logger::Error(Game::ERR_FATAL, "Unable to initialize ZW3 zone encryption: AES is unavailable");
+		}
+
+		symmetric_CTR ctr{};
+		if (ctr_start(aes, nonce.data(), ZW3_ZONE_KEY.data(), static_cast<int>(ZW3_ZONE_KEY.size()), 0, 0, &ctr) != CRYPT_OK)
+		{
+			Logger::Error(Game::ERR_FATAL, "Unable to initialize ZW3 zone encryption");
+		}
+
+		if (ctr_encrypt(reinterpret_cast<unsigned char*>(buffer.data()), reinterpret_cast<unsigned char*>(buffer.data()), static_cast<unsigned long>(buffer.size()), &ctr) != CRYPT_OK)
+		{
+			ctr_done(&ctr);
+			Logger::Error(Game::ERR_FATAL, "Unable to encrypt ZW3 zone data");
+		}
+
+		ctr_done(&ctr);
+		buffer.insert(0, reinterpret_cast<const char*>(nonce.data()), nonce.size());
+	}
+
+	void FastFiles::ResetZW3Crypto()
+	{
+		if (FastFiles::ZW3CTRInitialized)
+		{
+			ctr_done(&FastFiles::ZW3CTR);
+			FastFiles::ZW3CTRInitialized = false;
+		}
+	}
+
+	void FastFiles::InitZW3Crypto(const unsigned char* nonce)
+	{
+		FastFiles::ResetZW3Crypto();
+		register_cipher(&aes_desc);
+		const auto aes = find_cipher("aes");
+		if (aes < 0 || ctr_start(aes, nonce, ZW3_ZONE_KEY.data(), static_cast<int>(ZW3_ZONE_KEY.size()), 0, 0, &FastFiles::ZW3CTR) != CRYPT_OK)
+		{
+			Logger::Error(Game::ERR_FATAL, "Unable to initialize ZW3 zone decryption");
+		}
+
+		FastFiles::ZW3CTRInitialized = true;
+	}
+
 	void FastFiles::ReadXFileHeader(void* buffer, int size)
 	{
+		if (FastFiles::IsZW3Zone)
+		{
+			std::array<unsigned char, ZW3_ZONE_NONCE_SIZE> nonce{};
+			FastFiles::ReadXFile(nonce.data(), static_cast<int>(nonce.size()));
+			FastFiles::InitZW3Crypto(nonce.data());
+		}
+
 		if (FastFiles::IsIW4xZone)
 		{
 			char pad;
@@ -372,11 +491,29 @@ namespace Components
 
 	void FastFiles::ReadHeaderStub(unsigned int* header, int size)
 	{
+		FastFiles::ResetZW3Crypto();
 		FastFiles::IsIW4xZone = false;
+		FastFiles::IsZW3Zone = false;
 		FastFiles::LastByteRead = 0;
 		Game::DB_ReadXFileUncompressed(header, size);
 
-		if (header[0] == XFILE_HEADER_IW4X)
+		if (header[0] == XFILE_HEADER_ZW3)
+		{
+			if (!FastFiles::IsPrivateZW3Module())
+			{
+				Logger::Error(Game::ERR_FATAL, "Protected zombie fastfiles require zw3.dll");
+			}
+
+			FastFiles::IsZW3Zone = true;
+
+			if (header[1] != XFILE_VERSION_ZW3)
+			{
+				Logger::Error(Game::ERR_FATAL, "Unsupported ZW3 fastfile version {} (expected {})", header[1], XFILE_VERSION_ZW3);
+			}
+
+			*reinterpret_cast<unsigned __int64*>(header) = XFILE_MAGIC_UNSIGNED;
+		}
+		else if (header[0] == XFILE_HEADER_IW4X)
 		{
 			FastFiles::IsIW4xZone = true;
 
@@ -494,7 +631,14 @@ namespace Components
 	{
 		FastFiles::ReadXFile(buffer, size);
 
-		if (FastFiles::IsIW4xZone)
+		if (FastFiles::IsZW3Zone)
+		{
+			if (!FastFiles::ZW3CTRInitialized || ctr_decrypt(reinterpret_cast<unsigned char*>(buffer), reinterpret_cast<unsigned char*>(buffer), static_cast<unsigned long>(size), &FastFiles::ZW3CTR) != CRYPT_OK)
+			{
+				Logger::Error(Game::ERR_FATAL, "Unable to decrypt ZW3 zone data");
+			}
+		}
+		else if (FastFiles::IsIW4xZone)
 		{
 			for (int i = 0; i < size; ++i)
 			{
@@ -573,7 +717,6 @@ namespace Components
 	Game::Sys_File FastFiles::Sys_CreateFile_Stub(const char* dir, const char* filename)
 	{
 		static_assert(sizeof(Game::Sys_File) == 4);
-
 		auto file = Game::Sys_CreateFile(dir, filename);
 
 		static const std::filesystem::path home = FileSystem::Sys_HomePath_Hk();

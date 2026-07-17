@@ -803,6 +803,12 @@ namespace Components
 
 		RegisterFolder("userraw");
 
+		if (Flags::HasFlag("dev"))
+		{
+			Logger::Print("Skipping ZW3 filesystem folders because -dev is enabled.\n");
+			return;
+		}
+
 		const auto basepath = (*Game::fs_basepath)->current.string;
 		if (basepath && basepath[0] != '\0')
 		{

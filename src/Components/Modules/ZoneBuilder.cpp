@@ -415,14 +415,23 @@ namespace Components
 	{
 		FILETIME fileTime;
 		GetSystemTimeAsFileTime(&fileTime);
+		const auto protectZone = FastFiles::ShouldProtectZone(this->zoneName);
+
+		auto fastFileMagic = static_cast<unsigned __int64>(XFILE_MAGIC_UNSIGNED);
+		if (protectZone)
+		{
+			fastFileMagic = XFILE_HEADER_ZW3 | (static_cast<unsigned __int64>(XFILE_VERSION_ZW3) << 32);
+		}
+#ifdef GENERATE_IW4X_SPECIFIC_ZONES
+		else
+		{
+			fastFileMagic = XFILE_HEADER_IW4X | (static_cast<unsigned __int64>(XFILE_VERSION_IW4X) << 32);
+		}
+#endif
 
 		Game::XFileHeader header =
 		{
-#ifndef GENERATE_IW4X_SPECIFIC_ZONES
-			XFILE_MAGIC_UNSIGNED,
-#else
-			XFILE_HEADER_IW4X | (static_cast<unsigned __int64>(XFILE_VERSION_IW4X) << 32),
-#endif
+			fastFileMagic,
 			XFILE_VERSION,
 			Game::XFileLanguage::XLANG_NONE,
 			fileTime.dwHighDateTime,
@@ -434,20 +443,27 @@ namespace Components
 
 		std::string zoneBuffer = this->buffer.toBuffer();
 
-#ifdef GENERATE_IW4X_SPECIFIC_ZONES
-		// Insert a random byte, this will destroy the whole alignment and result in a crash, if not handled
-		zoneBuffer.insert(zoneBuffer.begin(), static_cast<char>(Utils::Cryptography::Rand::GenerateInt()));
-
-		char lastByte = 0;
-		for (unsigned int i = 0; i < zoneBuffer.size(); ++i)
+		if (protectZone)
 		{
-			char oldLastByte = lastByte;
-			lastByte = zoneBuffer[i];
+			FastFiles::ProtectZoneBuffer(zoneBuffer);
+		}
+#ifdef GENERATE_IW4X_SPECIFIC_ZONES
+		else
+		{
+			// Insert a random byte, this will destroy the whole alignment and result in a crash, if not handled
+			zoneBuffer.insert(zoneBuffer.begin(), static_cast<char>(Utils::Cryptography::Rand::GenerateInt()));
 
-			Utils::RotLeft(zoneBuffer[i], 6);
-			zoneBuffer[i] ^= -1;
-			Utils::RotRight(zoneBuffer[i], 4);
-			zoneBuffer[i] ^= oldLastByte;
+			char lastByte = 0;
+			for (unsigned int i = 0; i < zoneBuffer.size(); ++i)
+			{
+				char oldLastByte = lastByte;
+				lastByte = zoneBuffer[i];
+
+				Utils::RotLeft(zoneBuffer[i], 6);
+				zoneBuffer[i] ^= -1;
+				Utils::RotRight(zoneBuffer[i], 4);
+				zoneBuffer[i] ^= oldLastByte;
+			}
 		}
 #endif
 
@@ -1165,6 +1181,12 @@ namespace Components
 
 	void ZoneBuilder::DumpZone(const std::string& zone)
 	{
+		if (FastFiles::IsZombieZoneName(zone))
+		{
+			Logger::PrintError(Game::CON_CHANNEL_ERROR, "Dumping zombie zones is disabled.\n");
+			return;
+		}
+
 		ZoneBuilder::DumpingZone = zone;
 		ZoneBuilder::RefreshExporterWorkDirectory();
 

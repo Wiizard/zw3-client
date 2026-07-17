@@ -11,6 +11,9 @@ namespace Components
 		static std::string Current();
 		static bool Ready();
 		static bool Exists(const std::string& file);
+		static bool IsZombieZoneName(std::string_view zoneName);
+		static bool ShouldProtectZone(std::string_view zoneName);
+		static void ProtectZoneBuffer(std::string& buffer);
 
 		static void LoadLocalizeZones(Game::XZoneInfo *zoneInfo, unsigned int zoneCount, int sync);
 
@@ -36,9 +39,12 @@ namespace Components
 		static unsigned int MaxZones;
 
 		static bool IsIW4xZone;
+		static bool IsZW3Zone;
 		static bool StreamRead;
 
 		static char LastByteRead;
+		static symmetric_CTR ZW3CTR;
+		static bool ZW3CTRInitialized;
 
 		static Dvar::Var g_loadingInitialZones;
 
@@ -53,6 +59,9 @@ namespace Components
 		static void ReadVersionStub(unsigned int* version, int size);
 
 		static void ReadXFileHeader(void* buffer, int size);
+		static bool IsPrivateZW3Module();
+		static void InitZW3Crypto(const unsigned char* nonce);
+		static void ResetZW3Crypto();
 
 		static void AuthLoadInitCrypto();
 		static int AuthLoadInflateCompare(unsigned char* buffer, int length, unsigned char* ivValue);

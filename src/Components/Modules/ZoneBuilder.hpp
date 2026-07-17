@@ -8,6 +8,9 @@
 #define XFILE_HEADER_IW4X 0x78345749 // 'IW4x'
 #define XFILE_VERSION_IW4X 3
 
+#define XFILE_HEADER_ZW3 0x4633575A // 'ZW3F'
+#define XFILE_VERSION_ZW3 1
+
 namespace Components
 {
 	class ZoneBuilder : public Component

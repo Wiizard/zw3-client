@@ -27,6 +27,8 @@ namespace Components
 				int deaths = 0;
 				int down = 0;
 				float downProgress = 0.0f;
+				int rank = -1;
+				int prestige = 0;
 				std::string survivalTime;
 				std::string name;
 				std::string icon;

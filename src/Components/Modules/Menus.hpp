@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #undef LoadMenuByName_Recursive
 
 namespace Components
@@ -53,6 +55,7 @@ namespace Components
 		static int LastNewsUpdate;
 		static int HoldNewsUntil;
 		static bool WasNewsHovered;
+		static std::atomic_bool NewsFetchInProgress;
 
 		static void ClearNews();
 		static std::string HashNewsString(const std::string& input);
@@ -65,6 +68,7 @@ namespace Components
 		static void ApplyNewsImageMaterialToMenu(Game::Material* material);
 		static void ApplyNewsImageMaterialsToMenu();
 		static void FetchNews();
+		static void BeginNewsFetch();
 		static void ApplyNewsItem();
 		static void UpdateNewsCarousel();
 		static void RefreshNews([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);

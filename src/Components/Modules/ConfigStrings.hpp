@@ -10,11 +10,14 @@ namespace Components
 	{
 	public:
 		static const int BASEGAME_MAX_CONFIGSTRINGS = Game::MAX_CONFIGSTRINGS;
+		static const int DEV_DVAR_CONFIGSTRINGS_CAPACITY = 512;
 		static const int MAX_CONFIGSTRINGS =
 			(BASEGAME_MAX_CONFIGSTRINGS
 				+ Weapon::ADDED_WEAPONS
 				+ ModelCache::ADDITIONAL_GMODELS
 				+ Gamepad::RUMBLE_CONFIGSTRINGS_COUNT
+				+ 1
+				+ (DEV_DVAR_CONFIGSTRINGS_CAPACITY * 2)
 			);
 
 		static_assert(MAX_CONFIGSTRINGS < USHRT_MAX);
@@ -43,5 +46,8 @@ namespace Components
 		static int CG_ParseExtraConfigStrings();
 		static void CG_ParseConfigStrings();
 		static int SV_ClearConfigStrings(void* dest, int value, int size);
+
+		static void RelocateDevDvarConfigStrings(int* range);
+		static void RelocateDevDvarConfigStringsStub();
 	};
 }

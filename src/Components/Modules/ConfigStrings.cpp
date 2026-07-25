@@ -23,6 +23,10 @@ namespace Components
 	constexpr auto RUMBLE_FIRST = EXTRA_MODELCACHE_LAST + 1;
 	constexpr auto RUMBLE_LAST = RUMBLE_FIRST + Gamepad::RUMBLE_CONFIGSTRINGS_COUNT - 1; // TODO
 
+	constexpr auto BASE_DVAR_CONFIGSTRINGS_FIRST = 24;
+	constexpr auto BASE_DVAR_CONFIGSTRINGS_CAPACITY = 200;
+	constexpr auto DEV_DVAR_CONFIGSTRINGS_FIRST = RUMBLE_LAST + 1;
+
 	void ConfigStrings::PatchConfigStrings()
 	{
 		// bump clientstate fields
@@ -318,9 +322,39 @@ namespace Components
 		return Utils::Hook::Call<int(void*, int, int)>(0x4C98D0)(dest, value, size); // Com_Memset
 	}
 
+	void ConfigStrings::RelocateDevDvarConfigStrings(int* range)
+	{
+		if (range[0] == BASE_DVAR_CONFIGSTRINGS_FIRST && range[1] == BASE_DVAR_CONFIGSTRINGS_CAPACITY)
+		{
+			range[0] = DEV_DVAR_CONFIGSTRINGS_FIRST;
+			range[1] = DEV_DVAR_CONFIGSTRINGS_CAPACITY;
+		}
+	}
+
+	__declspec(naked) void ConfigStrings::RelocateDevDvarConfigStringsStub()
+	{
+		__asm
+		{
+			// Reproduce the overwritten prologue before patching the shared range descriptor.
+			push esi
+			mov esi, [esp + 8h]
+			push [esp + 0Ch]
+			call RelocateDevDvarConfigStrings
+			add esp, 4h
+
+			push 60D1C5h
+			ret
+		}
+	}
+
 
 	ConfigStrings::ConfigStrings()
 	{
 		PatchConfigStrings();
+
+		if (Flags::HasFlag("dev"))
+		{
+			Utils::Hook(0x60D1C0, ConfigStrings::RelocateDevDvarConfigStringsStub, HOOK_JUMP).install()->quick();
+		}
 	}
 }

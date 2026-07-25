@@ -2,16 +2,26 @@ namespace StartupSplash
 {
 	constexpr auto* WindowClassName = "ZW3StartupSplash";
 	constexpr UINT_PTR AnimationTimerId = 1;
+	constexpr UINT_PTR DotAnimationTimerId = 2;
+	constexpr auto AnimationTimerInterval = 35;
+	constexpr auto DotAnimationInterval = 700;
 	constexpr LONG MinWindowWidth = 760;
 	constexpr LONG DefaultImageHeight = 380;
-	constexpr LONG FooterHeight = 126;
+	constexpr LONG FooterHeight = 150;
 	constexpr int CancelButtonWidth = 118;
 	constexpr int CancelButtonHeight = 28;
 
 	std::atomic<HWND> Window = nullptr;
+	std::atomic_bool Active = false;
+	std::atomic_bool Determinate = false;
+	std::atomic<float> Progress = 0.0f;
+	std::mutex StatusMutex;
+	std::string StatusText = "Launching game, please wait";
+
 	HBITMAP SplashBitmap = nullptr;
 	HFONT TitleFont = nullptr;
 	HFONT StatusFont = nullptr;
+	HFONT PercentageFont = nullptr;
 	HFONT ButtonFont = nullptr;
 	HBRUSH BackgroundBrush = nullptr;
 	LONG ImageWidth = MinWindowWidth;
@@ -20,7 +30,6 @@ namespace StartupSplash
 	LONG WindowHeight = DefaultImageHeight + FooterHeight;
 	int DotCount = 0;
 	int ProgressOffset = 0;
-	int AnimationTick = 0;
 
 	HBITMAP LoadSplashBitmap()
 	{
@@ -33,29 +42,60 @@ namespace StartupSplash
 		return bitmap;
 	}
 
-	const char* GetStatusText()
+	std::string GetStatusText()
 	{
-		static constexpr const char* StatusTexts[] =
-		{
-			"Launching game, please wait",
-			"Launching game, please wait.",
-			"Launching game, please wait..",
-			"Launching game, please wait...",
-		};
+		std::lock_guard lock(StatusMutex);
+		auto text = StatusText;
 
-		return StatusTexts[DotCount];
+		if (!Determinate.load(std::memory_order_relaxed))
+		{
+			text.append(static_cast<std::size_t>(DotCount), '.');
+		}
+
+		return text;
+	}
+
+	void SetStatus(const std::string_view status)
+	{
+		{
+			std::lock_guard lock(StatusMutex);
+			StatusText.assign(status);
+		}
+
+		if (const auto window = Window.load(std::memory_order_acquire); window && IsWindow(window))
+		{
+			InvalidateRect(window, nullptr, FALSE);
+		}
+	}
+
+	void SetProgress(const float progress)
+	{
+		Progress.store(std::clamp(progress, 0.0f, 1.0f), std::memory_order_release);
+		Determinate.store(true, std::memory_order_release);
+
+		if (const auto window = Window.load(std::memory_order_acquire); window && IsWindow(window))
+		{
+			InvalidateRect(window, nullptr, FALSE);
+		}
+	}
+
+	bool IsActive()
+	{
+		return Active.load(std::memory_order_acquire);
 	}
 
 	RECT GetCancelButtonRect()
 	{
 		const auto x = (WindowWidth - CancelButtonWidth) / 2;
-		const auto y = ImageHeight + 92;
+		const auto y = ImageHeight + 112;
 		return { x, y, x + CancelButtonWidth, y + CancelButtonHeight };
 	}
 
 	void Destroy()
 	{
-		const auto hwnd = Window.exchange(nullptr);
+		Active.store(false, std::memory_order_release);
+
+		const auto hwnd = Window.exchange(nullptr, std::memory_order_acq_rel);
 		if (hwnd && IsWindow(hwnd))
 		{
 			DestroyWindow(hwnd);
@@ -63,11 +103,13 @@ namespace StartupSplash
 
 		if (TitleFont) DeleteObject(TitleFont);
 		if (StatusFont) DeleteObject(StatusFont);
+		if (PercentageFont) DeleteObject(PercentageFont);
 		if (ButtonFont) DeleteObject(ButtonFont);
 		if (SplashBitmap) DeleteObject(SplashBitmap);
 		if (BackgroundBrush) DeleteObject(BackgroundBrush);
 		TitleFont = nullptr;
 		StatusFont = nullptr;
+		PercentageFont = nullptr;
 		ButtonFont = nullptr;
 		SplashBitmap = nullptr;
 		BackgroundBrush = nullptr;
@@ -102,6 +144,7 @@ namespace StartupSplash
 		const auto footerBrush = CreateSolidBrush(RGB(9, 9, 12));
 		FillRect(bufferDc, &footer, footerBrush);
 		DeleteObject(footerBrush);
+
 		const auto accentBrush = CreateSolidBrush(RGB(132, 16, 22));
 		const RECT accent{ 0, ImageHeight, WindowWidth, ImageHeight + 2 };
 		FillRect(bufferDc, &accent, accentBrush);
@@ -110,36 +153,62 @@ namespace StartupSplash
 		SetBkMode(bufferDc, TRANSPARENT);
 		SetTextColor(bufferDc, RGB(248, 248, 248));
 		const auto oldFont = SelectObject(bufferDc, TitleFont);
-		RECT titleRect{ 0, ImageHeight + 14, WindowWidth, ImageHeight + 38 };
+		RECT titleRect{ 0, ImageHeight + 13, WindowWidth, ImageHeight + 37 };
 		DrawTextA(bufferDc, "Zombie Warfare 3", -1, &titleRect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+
 		SetTextColor(bufferDc, RGB(190, 190, 196));
 		SelectObject(bufferDc, StatusFont);
-		RECT statusRect{ 0, ImageHeight + 40, WindowWidth, ImageHeight + 62 };
-		DrawTextA(bufferDc, GetStatusText(), -1, &statusRect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
-		SelectObject(bufferDc, oldFont);
+		const auto status = GetStatusText();
+		RECT statusRect{ 24, ImageHeight + 39, WindowWidth - 24, ImageHeight + 62 };
+		DrawTextA(bufferDc, status.c_str(), -1, &statusRect, DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
 
 		const auto trackWidth = std::min<LONG>(WindowWidth - 128, 560);
 		constexpr auto trackHeight = 8;
 		constexpr auto chunkWidth = 150;
 		const auto trackX = (WindowWidth - trackWidth) / 2;
-		const auto trackY = ImageHeight + 68;
-		const auto chunkX = trackX + (ProgressOffset % (trackWidth + chunkWidth)) - chunkWidth;
+		const auto trackY = ImageHeight + 72;
 		const auto nullPen = static_cast<HPEN>(GetStockObject(NULL_PEN));
 		const auto oldPen = SelectObject(bufferDc, nullPen);
 		const auto trackBrush = CreateSolidBrush(RGB(42, 42, 46));
 		const auto oldBrush = SelectObject(bufferDc, trackBrush);
 		RoundRect(bufferDc, trackX, trackY, trackX + trackWidth, trackY + trackHeight, trackHeight, trackHeight);
+
 		const auto clip = CreateRoundRectRgn(trackX, trackY, trackX + trackWidth, trackY + trackHeight, trackHeight, trackHeight);
 		SelectClipRgn(bufferDc, clip);
-		const auto chunkBrush = CreateSolidBrush(RGB(190, 32, 38));
-		SelectObject(bufferDc, chunkBrush);
-		RoundRect(bufferDc, chunkX, trackY, chunkX + chunkWidth, trackY + trackHeight, trackHeight, trackHeight);
+		const auto progressBrush = CreateSolidBrush(RGB(190, 32, 38));
+		SelectObject(bufferDc, progressBrush);
+
+		const auto determinate = Determinate.load(std::memory_order_acquire);
+		const auto progress = Progress.load(std::memory_order_acquire);
+		if (determinate)
+		{
+			const auto filledWidth = static_cast<LONG>(static_cast<float>(trackWidth) * progress);
+			if (filledWidth > 0)
+			{
+				RoundRect(bufferDc, trackX, trackY, trackX + filledWidth, trackY + trackHeight, trackHeight, trackHeight);
+			}
+		}
+		else
+		{
+			const auto chunkX = trackX + (ProgressOffset % (trackWidth + chunkWidth)) - chunkWidth;
+			RoundRect(bufferDc, chunkX, trackY, chunkX + chunkWidth, trackY + trackHeight, trackHeight, trackHeight);
+		}
+
 		SelectClipRgn(bufferDc, nullptr);
 		DeleteObject(clip);
 		SelectObject(bufferDc, oldBrush);
 		SelectObject(bufferDc, oldPen);
-		DeleteObject(chunkBrush);
+		DeleteObject(progressBrush);
 		DeleteObject(trackBrush);
+
+		if (determinate)
+		{
+			SelectObject(bufferDc, PercentageFont);
+			SetTextColor(bufferDc, RGB(175, 175, 182));
+			const auto percentage = std::format("{}%", static_cast<int>((progress * 100.0f) + 0.5f));
+			RECT percentageRect{ 0, ImageHeight + 84, WindowWidth, ImageHeight + 104 };
+			DrawTextA(bufferDc, percentage.c_str(), -1, &percentageRect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+		}
 
 		const auto cancelRect = GetCancelButtonRect();
 		const auto buttonBrush = CreateSolidBrush(RGB(24, 24, 28));
@@ -155,6 +224,7 @@ namespace StartupSplash
 		SelectObject(bufferDc, oldButtonPen);
 		DeleteObject(buttonPen);
 		DeleteObject(buttonBrush);
+		SelectObject(bufferDc, oldFont);
 
 		BitBlt(dc, 0, 0, client.right, client.bottom, bufferDc, 0, 0, SRCCOPY);
 		SelectObject(bufferDc, oldBufferBitmap);
@@ -168,16 +238,20 @@ namespace StartupSplash
 		switch (message)
 		{
 		case WM_TIMER:
-			if (wParam == AnimationTimerId)
+			if (wParam == DotAnimationTimerId)
 			{
-				++AnimationTick;
-				if ((AnimationTick % 14) == 0)
+				if (!Determinate.load(std::memory_order_acquire))
 				{
 					DotCount = (DotCount + 1) % 4;
+					InvalidateRect(hwnd, nullptr, FALSE);
 				}
+				return 0;
+			}
 
+			if (wParam == AnimationTimerId)
+			{
 				const auto trackWidth = std::min<LONG>(WindowWidth - 128, 560);
-				ProgressOffset = (ProgressOffset + 10) % (trackWidth + 150);
+				ProgressOffset = (ProgressOffset + 5) % (trackWidth + 150);
 				InvalidateRect(hwnd, nullptr, FALSE);
 				return 0;
 			}
@@ -204,6 +278,7 @@ namespace StartupSplash
 			return 0;
 		case WM_DESTROY:
 			KillTimer(hwnd, AnimationTimerId);
+			KillTimer(hwnd, DotAnimationTimerId);
 			return 0;
 		}
 
@@ -212,7 +287,7 @@ namespace StartupSplash
 
 	void Create()
 	{
-		if (Window.load())
+		if (Window.load(std::memory_order_acquire))
 		{
 			return;
 		}
@@ -226,6 +301,7 @@ namespace StartupSplash
 		wc.hbrBackground = BackgroundBrush;
 		wc.lpszClassName = WindowClassName;
 		RegisterClassA(&wc);
+
 		SplashBitmap = LoadSplashBitmap();
 		BITMAP info{};
 		if (SplashBitmap) GetObjectA(SplashBitmap, sizeof(info), &info);
@@ -237,6 +313,7 @@ namespace StartupSplash
 		const auto y = (GetSystemMetrics(SM_CYSCREEN) - WindowHeight) / 2;
 		const auto hwnd = CreateWindowExA(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, WindowClassName, "Call of Duty: Zombie Warfare 3", WS_POPUP,
 			x, y, WindowWidth, WindowHeight, nullptr, nullptr, instance, nullptr);
+
 		if (!hwnd)
 		{
 			Destroy();
@@ -245,11 +322,14 @@ namespace StartupSplash
 
 		TitleFont = CreateFontA(22, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Segoe UI");
 		StatusFont = CreateFontA(17, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Segoe UI");
+		PercentageFont = CreateFontA(14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Segoe UI");
 		ButtonFont = CreateFontA(16, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, "Segoe UI");
-		Window.store(hwnd);
+		Window.store(hwnd, std::memory_order_release);
+		Active.store(true, std::memory_order_release);
 		ShowWindow(hwnd, SW_SHOWNORMAL);
 		UpdateWindow(hwnd);
-		SetTimer(hwnd, AnimationTimerId, 35, nullptr);
+		SetTimer(hwnd, AnimationTimerId, AnimationTimerInterval, nullptr);
+		SetTimer(hwnd, DotAnimationTimerId, DotAnimationInterval, nullptr);
 	}
 
 	void Pump()
@@ -264,11 +344,20 @@ namespace StartupSplash
 
 	void Start()
 	{
+		Determinate.store(false, std::memory_order_release);
+		Progress.store(0.0f, std::memory_order_release);
+		DotCount = 0;
+		ProgressOffset = 0;
+		{
+			std::lock_guard lock(StatusMutex);
+			StatusText = "Launching game, please wait";
+		}
+
 		Components::Scheduler::Once(Create, Components::Scheduler::Pipeline::ASYNC);
 		Components::Scheduler::Schedule([]
 			{
 				Pump();
-				return Window.load() == nullptr;
+				return Window.load(std::memory_order_acquire) == nullptr;
 			}, Components::Scheduler::Pipeline::ASYNC, 10ms);
 	}
 

@@ -57,6 +57,7 @@
 #include "Modules/Session.hpp"
 #include "Modules/SlowMotion.hpp"
 #include "Modules/StartupMessages.hpp"
+#include "Modules/ZW3StartupSplash.hpp"
 #include "Modules/Stats.hpp"
 #include "Modules/StringTable.hpp"
 #include "Modules/StructuredData.hpp"
@@ -79,12 +80,6 @@
 #include "Modules/BotLib/lPrecomp.hpp"
 
 #include <Utils/Leaderboard.hpp>
-
-namespace StartupSplash
-{
-	void Start();
-	void Stop();
-}
 
 namespace Components
 {
@@ -122,23 +117,28 @@ namespace Components
 		const auto showStartupSplash = Singleton::IsFirstInstance();
 		if (showStartupSplash)
 		{
-			StartupSplash::Start();
+			ZW3StartupSplash::Start();
 		}
 
 		Register(new Auth());
 		Register(new Command());
 		Register(new Dvar());
-		Register(new Exception()); // Install our exception handler as early as possible to get better debug dumps from startup crashes
 
-		Register(new MemoryGuard()); // Hook Sys_OutOfMemError early so startup OOMs are captured
-		Register(new MemoryTuning()); // Must run before engine registers r_picmip_* dvars
+		// Install the exception handler as early as possible so startup
+		// crashes generate useful diagnostics.
+		Register(new Exception());
+
+		// These must be installed early during startup.
+		Register(new MemoryGuard());
+		Register(new MemoryTuning());
 		Register(new IPCPipe());
 		Register(new Network());
 		Register(new Logger());
 		Register(new UIScript());
 		Register(new ZoneBuilder());
 
-		Register(new ConfigStrings()); // Needs to be there early !! Before modelcache & weapons
+		// Must be registered before model cache and weapon components.
+		Register(new ConfigStrings());
 
 		Register(new ArenaLength());
 		Register(new AssetHandler());
@@ -190,7 +190,6 @@ namespace Components
 		Register(new RawMouse());
 		Register(new RCon());
 		Register(new Renderer());
-		//Register(new Scheduler());
 		Register(new Security());
 		Register(new ServerCommands());
 		Register(new ServerInfo());
@@ -219,10 +218,9 @@ namespace Components
 		Register(new ZW3Changelog());
 
 		Register(new GSC::GSC());
-
 		Register(new BotLib::lPrecomp());
 
-		//Register(new Debugger::DebugSetup());
+		// Register(new Debugger::DebugSetup());
 
 		Register(new Leaderboard());
 
@@ -233,7 +231,6 @@ namespace Components
 			Scheduler::Once(StartupSplash::Stop, Scheduler::Pipeline::ASYNC);
 		}
 
-		// Make sure preDestroy is called when the game shuts down
 		Scheduler::OnGameShutdown(PreDestroy);
 	}
 
@@ -243,11 +240,16 @@ namespace Components
 		PreDestroyNoPostGame();
 
 		std::reverse(Components.begin(), Components.end());
+
 		for (auto& component : Components)
 		{
 #ifdef DEBUG
-			Logger::Print("Unregister component: {}\n", component->getName());
+			Logger::Print(
+				"Unregister component: {}\n",
+				component->getName()
+			);
 #endif
+
 			delete component;
 		}
 
@@ -263,8 +265,8 @@ namespace Components
 			Postgame = true;
 
 			auto components = Components;
-
 			std::reverse(components.begin(), components.end());
+
 			for (auto& component : components)
 			{
 				component->preDestroy();
@@ -277,8 +279,8 @@ namespace Components
 		if (!Postgame)
 		{
 			auto components = Components;
-
 			std::reverse(components.begin(), components.end());
+
 			for (auto& component : components)
 			{
 				component->preDestroy();
@@ -293,8 +295,12 @@ namespace Components
 		if (component)
 		{
 #if defined(DEBUG)
-			Logger::Print("Component registered: {}\n", component->getName());
+			Logger::Print(
+				"Component registered: {}\n",
+				component->getName()
+			);
 #endif
+
 			Components.push_back(component);
 		}
 	}

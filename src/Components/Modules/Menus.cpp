@@ -51,6 +51,7 @@ namespace Components
 	int Menus::LastNewsUpdate = 0;
 	int Menus::HoldNewsUntil = 0;
 	bool Menus::WasNewsHovered = false;
+	std::atomic_bool Menus::NewsFetchInProgress = false;
 
 	Game::UiContext* Menus::GameUiContexts[] = {
 		Game::uiContext,
@@ -2155,6 +2156,7 @@ namespace Components
 				if (items.empty())
 				{
 					ClearNews();
+					NewsFetchInProgress.store(false);
 					return;
 				}
 
@@ -2176,6 +2178,8 @@ namespace Components
 				Dvar::Var("zw3_ui_news_has_image").set(false);
 				Dvar::Var("zw3_ui_news_loading").set(false);
 
+				NewsFetchInProgress.store(false);
+
 				NewsElapsed = 0;
 				LastNewsUpdate = 0;
 				HoldNewsUntil = 0;
@@ -2186,6 +2190,21 @@ namespace Components
 						ApplyNewsItem();
 					}, Components::Scheduler::Pipeline::MAIN);
 			}, Components::Scheduler::Pipeline::MAIN);
+	}
+
+	void Menus::BeginNewsFetch()
+	{
+		Dvar::Var("zw3_ui_news_loading").set(true);
+
+		if (NewsFetchInProgress.exchange(true))
+		{
+			return;
+		}
+
+		Components::Scheduler::Once([]
+			{
+				FetchNews();
+			}, Components::Scheduler::Pipeline::ASYNC);
 	}
 
 	void Menus::UpdateNewsCarousel()
@@ -2253,7 +2272,6 @@ namespace Components
 
 	void Menus::RefreshNews([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 	{
-		Dvar::Var("zw3_ui_news_loading").set(true);
 		Dvar::Var("zw3_ui_news_index").set(0);
 		Dvar::Var("zw3_ui_news_page").set(0);
 		Dvar::Var("zw3_ui_news_count").set(0);
@@ -2266,10 +2284,7 @@ namespace Components
 		ApplyNewsImageMaterialToMenu(nullptr);
 		ApplyNewsImageMaterialsToMenu();
 
-		Components::Scheduler::Once([]()
-			{
-				FetchNews();
-			}, Components::Scheduler::Pipeline::ASYNC);
+		BeginNewsFetch();
 	}
 
 	void Menus::OpenNews([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
@@ -2398,6 +2413,11 @@ namespace Components
 		UIScript::Add("SelectNewsSlot4", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info) { SelectNewsSlot(4); });
 		UIScript::Add("NewsPrevPage", NewsPrevPage);
 		UIScript::Add("NewsNextPage", NewsNextPage);
+
+		Components::Scheduler::OnGameInitialized([]
+			{
+				BeginNewsFetch();
+			}, Components::Scheduler::Pipeline::MAIN);
 
 		// Increase HunkMemory for people with heavy-loaded menus (e.g. ZW3)
 		// Original is 0xA00000 (10MB), old patch was 0xB00000 (11MB). Raised to 48MB to reduce OOMs.
@@ -2563,7 +2583,7 @@ namespace Components
 
 				if (startedLoading || isNewConnection || isMapRestart)
 				{
-					Dvar::Var("zw3_sb_ui_survived_time").set("00:00:00");
+					Dvar::Var("zw3_ui_sb_survived_time").set("00:00:00");
 				}
 
 				UpdateNewsCarousel();

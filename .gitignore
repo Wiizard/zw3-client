@@ -151,3 +151,10 @@ user*.bat
 
 ### Visual Studio Code
 .vscode/
+
+# Generated ZW3 online-system runtime/package data
+zw3-online-system/dist/
+zw3-online-system/backend/data/
+zw3-online-system/backend/.env
+zw3-online-system/backend/agent/.env
+zw3-online-system/backend/relay/.env

@@ -75,6 +75,7 @@
 #include "Modules/Sound.hpp"
 #include "Modules/SPLoadscreens.hpp"
 #include "Modules/ZW3Changelog.hpp"
+#include "Modules/ZWNet.hpp"
 
 #include "Modules/BotLib/lPrecomp.hpp"
 
@@ -204,6 +205,7 @@ namespace Components
 		Register(new Window());
 		Register(new Zones());
 		Register(new ZW3Changelog());
+		Register(new ZWNet());
 
 		Register(new GSC::GSC());
 

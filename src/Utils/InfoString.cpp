@@ -29,7 +29,7 @@ namespace Utils
 
 	void InfoString::parse(std::string buffer)
 	{
-		if (buffer[0] == '\\')
+		if (!buffer.empty() && buffer[0] == '\\')
 		{
 			buffer = buffer.substr(1);
 		}

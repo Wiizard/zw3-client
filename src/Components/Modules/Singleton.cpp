@@ -45,6 +45,7 @@ namespace Components
 		if (Mutex != nullptr && Mutex != INVALID_HANDLE_VALUE)
 		{
 			CloseHandle(Mutex);
+			Mutex = nullptr;
 		}
 	}
 

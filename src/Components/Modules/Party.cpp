@@ -13,6 +13,7 @@
 #include "Voice.hpp"
 #include "Events.hpp"
 #include "Bots.hpp"
+#include "CharacterAssignments.hpp"
 #include <version.hpp>
 #include <unordered_set>
 #include <unordered_map>
@@ -20,6 +21,7 @@
 #include <charconv>
 #include <functional>
 #include <array>
+#include <algorithm>
 
 #define CL_MOD_LOADING
 
@@ -59,11 +61,10 @@ namespace Components
 	Dvar::Var Party::ServerVersion;
 
 	std::map<uint64_t, std::vector<Components::Network::Address>> Party::g_xuidToPublicAddressMap;
-	static std::unordered_map<std::uint64_t, std::string> s_characterByXuid;
 	static std::string s_hostCharacter;
-	static int s_liveHostClientNum = -1;
+	static bool s_characterRosterFrozen = false;
+	static bool s_directLaunchRoster = false;
 	const int MAX_PARTY_SLOTS = 4;
-
 	static bool SetStringDvarIfChanged(const char* name, const std::string& value)
 	{
 		auto* dvar = Game::Dvar_FindVar(name);
@@ -82,9 +83,42 @@ namespace Components
 		return true;
 	}
 
-	static bool SetStringDvarIfChanged(const std::string& name, const std::string& value)
+	static bool ApplyCharacterRosterSnapshot(const Utils::InfoString& info)
 	{
-		return SetStringDvarIfChanged(name.c_str(), value);
+		std::array<std::string, MAX_PARTY_SLOTS> characters{};
+		std::array<std::string, MAX_PARTY_SLOTS> owners{};
+
+		for (int slot = 0; slot < MAX_PARTY_SLOTS; ++slot)
+		{
+			characters[slot] = info.get(Utils::String::VA("character_%d", slot + 1));
+			owners[slot] = info.get(Utils::String::VA("character_%d_player", slot + 1));
+
+			if (characters[slot].empty() || owners[slot].empty())
+			{
+				return false;
+			}
+
+			const bool characterEmpty = characters[slot] == "None";
+			const bool ownerEmpty = owners[slot] == "None";
+			if (characterEmpty != ownerEmpty)
+			{
+				return false;
+			}
+		}
+
+		if (characters[0] == "None" || owners[0] == "None")
+		{
+			return false;
+		}
+
+		for (int slot = 0; slot < MAX_PARTY_SLOTS; ++slot)
+		{
+			SetStringDvarIfChanged(Utils::String::VA("character_%d", slot + 1), characters[slot]);
+			SetStringDvarIfChanged(Utils::String::VA("character_%d_player", slot + 1), owners[slot]);
+		}
+
+		Dvar::Var("party_roster_loading").set(false);
+		return true;
 	}
 
 	static bool TryParseHexXuid(const std::string& value, std::uint64_t& xuid)
@@ -177,6 +211,8 @@ namespace Components
 		Container.target = target;
 		Container.challenge = Utils::Cryptography::Rand::GenerateChallenge();
 		Container.downloadOnly = downloadOnly;
+
+		Dvar::Var("party_roster_loading").set(true);
 
 		Utils::InfoString clientRequestInfo;
 		clientRequestInfo.set("challenge", Container.challenge.c_str());
@@ -435,18 +471,9 @@ namespace Components
 
 	struct RealCharacterParticipant
 	{
-		std::uint64_t identity = 0;
+		std::uint64_t xuid = 0;
 		std::string name;
 		bool host = false;
-		int clientNum = -1;
-	};
-
-	struct CharacterRosterEntry
-	{
-		std::string character;
-		std::string owner;
-		bool bot = false;
-		std::uint64_t identity = 0;
 	};
 
 	static constexpr const char* ZW3Characters[MAX_PARTY_SLOTS]
@@ -459,360 +486,69 @@ namespace Components
 
 	static std::string NormalizePartyIdentityName(const std::string& name)
 	{
-		std::string result;
-		result.reserve(name.size());
-
-		for (std::size_t i = 0; i < name.size(); ++i)
-		{
-			if (name[i] == '^' && i + 1 < name.size())
-			{
-				++i;
-				continue;
-			}
-
-			result.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(name[i]))));
-		}
-
-		const auto first = result.find_first_not_of(" \t");
-		if (first == std::string::npos)
-		{
-			return {};
-		}
-
-		const auto last = result.find_last_not_of(" \t");
-		return result.substr(first, last - first + 1);
+		return CharacterAssignments::Normalize(name);
 	}
 
 	static std::string CanonicalCharacterName(const std::string& name)
 	{
-		const auto normalized = NormalizePartyIdentityName(name);
-
-		for (const auto* character : ZW3Characters)
-		{
-			if (normalized == NormalizePartyIdentityName(character))
-			{
-				return character;
-			}
-		}
-
-		return {};
+		const auto character = CharacterAssignments::Parse(name);
+		return CharacterAssignments::IsValid(character)
+			? CharacterAssignments::ToString(character)
+			: std::string();
 	}
 
-	static bool IsBotCharacterOwner(const std::string& owner)
+	static bool CollectStableLobbyParticipants(
+		std::vector<RealCharacterParticipant>& participants)
 	{
-		return NormalizePartyIdentityName(owner).rfind("[bot] ", 0) == 0;
-	}
-
-	static std::string CharacterFromBotOwner(const std::string& owner)
-	{
-		auto normalized = NormalizePartyIdentityName(owner);
-		if (normalized.rfind("[bot] ", 0) != 0)
-		{
-			return {};
-		}
-
-		return CanonicalCharacterName(normalized.substr(6));
-	}
-
-	static bool IsSyntheticCharacterIdentity(const std::uint64_t identity)
-	{
-		const auto prefix = identity & 0xF000000000000000ull;
-		return prefix == 0x6000000000000000ull || prefix == 0x8000000000000000ull;
-	}
-
-	static Game::dvar_t* EnsurePerClientCharacterDvar(const int clientNum)
-	{
-		if (clientNum < 0 || clientNum >= Game::MAX_CLIENTS)
-		{
-			return nullptr;
-		}
-
-		const auto* name = Utils::String::VA("zw3_character_client_%d", clientNum);
-		auto* dvar = Game::Dvar_FindVar(name);
-		if (!dvar)
-		{
-			dvar = Game::Dvar_RegisterString(name, "None", Game::DVAR_NONE,
-				"Authoritative ZW3 character for this server client");
-		}
-
-		return dvar;
-	}
-
-	static int FindLiveHostClientNum()
-	{
-		if (Dedicated::IsRunning() || !Dvar::Var("party_host").get<bool>())
-		{
-			s_liveHostClientNum = -1;
-			return -1;
-		}
-
-		if (s_liveHostClientNum >= 0 && s_liveHostClientNum < Game::MAX_CLIENTS)
-		{
-			const auto& cached = Game::svs_clients[s_liveHostClientNum];
-			if (cached.header.state >= Game::CS_CONNECTED && !cached.bIsTestClient)
-			{
-				return s_liveHostClientNum;
-			}
-		}
-
-		s_liveHostClientNum = -1;
-		const auto localName = NormalizePartyIdentityName(Dvar::Var("name").get<std::string>());
-		int firstRealClient = -1;
-		int bestNameMatch = -1;
-
-		for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
-		{
-			const auto& client = Game::svs_clients[clientNum];
-			if (client.header.state < Game::CS_CONNECTED || client.bIsTestClient)
-			{
-				continue;
-			}
-
-			if (firstRealClient == -1)
-			{
-				firstRealClient = clientNum;
-			}
-
-			if (!localName.empty() &&
-				_stricmp(NormalizePartyIdentityName(client.name).c_str(), localName.c_str()) == 0)
-			{
-				if (bestNameMatch == -1 ||
-					client.ping < Game::svs_clients[bestNameMatch].ping ||
-					(client.ping == Game::svs_clients[bestNameMatch].ping && clientNum < bestNameMatch))
-				{
-					bestNameMatch = clientNum;
-				}
-			}
-		}
-
-		s_liveHostClientNum = bestNameMatch != -1 ? bestNameMatch : firstRealClient;
-		return s_liveHostClientNum;
-	}
-
-	static std::vector<RealCharacterParticipant> CollectRealCharacterParticipants()
-	{
-		std::vector<RealCharacterParticipant> result;
+		participants.clear();
 		if (!Dvar::Var("party_host").get<bool>())
 		{
-			return result;
+			return false;
 		}
 
 		const auto hostXuid = Party::GetLocalPlayerXUID();
+		if (hostXuid == 0)
+		{
+			return false;
+		}
+
 		const auto hostName = Dvar::Var("name").get<std::string>();
-		const auto normalizedHostName = NormalizePartyIdentityName(hostName);
-		const std::uint64_t hostIdentity = hostXuid != 0
-			? hostXuid
-			: 0x4000000000000001ull;
+		participants.push_back({ hostXuid, hostName, true });
 
-		if (Game::CL_IsCgameInitialized())
+		std::unordered_set<std::uint64_t> seen{ hostXuid };
+		if (!Game::g_lobbyData)
 		{
-			const int hostClientNum = FindLiveHostClientNum();
-			if (hostClientNum >= 0)
-			{
-				result.push_back({ hostIdentity,
-					hostName.empty() ? std::string(Game::svs_clients[hostClientNum].name) : hostName,
-					true, hostClientNum });
-			}
-
-			struct LobbyIdentity
-			{
-				std::uint64_t xuid = 0;
-				std::string normalizedName;
-				bool claimed = false;
-			};
-
-			std::vector<LobbyIdentity> lobbyIdentities;
-			bool skippedHost = false;
-			bool hasExactHostLobbyEntry = false;
-
-			if (Game::g_lobbyData && hostXuid != 0)
-			{
-				for (int slot = 0; slot < MAX_PARTY_SLOTS; ++slot)
-				{
-					const auto& member = Game::g_lobbyData->partyMembers[slot];
-					if (member.status != 0 && member.player == hostXuid)
-					{
-						hasExactHostLobbyEntry = true;
-						break;
-					}
-				}
-			}
-
-			if (Game::g_lobbyData)
-			{
-				for (int slot = 0; slot < MAX_PARTY_SLOTS; ++slot)
-				{
-					auto& member = Game::g_lobbyData->partyMembers[slot];
-					if (member.status == 0 || !member.gamertag || !member.gamertag[0])
-					{
-						continue;
-					}
-
-					const auto normalizedName = NormalizePartyIdentityName(member.gamertag);
-					const bool isHost = hasExactHostLobbyEntry
-						? (member.player != 0 && member.player == hostXuid)
-						: (!normalizedHostName.empty() && normalizedName == normalizedHostName);
-
-					if (!skippedHost && isHost)
-					{
-						skippedHost = true;
-						continue;
-					}
-
-					lobbyIdentities.push_back({ member.player, normalizedName, false });
-				}
-			}
-
-			std::vector<int> otherRealClients;
-			for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
-			{
-				const auto& client = Game::svs_clients[clientNum];
-				if (clientNum == hostClientNum || client.header.state < Game::CS_CONNECTED ||
-					client.bIsTestClient || !client.name[0])
-				{
-					continue;
-				}
-
-				otherRealClients.push_back(clientNum);
-			}
-
-			std::sort(otherRealClients.begin(), otherRealClients.end());
-			std::unordered_set<std::uint64_t> usedIdentities{ hostIdentity };
-
-			for (const auto clientNum : otherRealClients)
-			{
-				const std::string name = Game::svs_clients[clientNum].name;
-				const auto normalizedName = NormalizePartyIdentityName(name);
-				std::uint64_t identity = 0;
-
-				for (auto& lobbyIdentity : lobbyIdentities)
-				{
-					if (lobbyIdentity.claimed || lobbyIdentity.normalizedName != normalizedName)
-					{
-						continue;
-					}
-
-					lobbyIdentity.claimed = true;
-					if (lobbyIdentity.xuid != 0 && !usedIdentities.contains(lobbyIdentity.xuid))
-					{
-						identity = lobbyIdentity.xuid;
-					}
-					break;
-				}
-
-				if (identity == 0)
-				{
-					const auto nameHash = static_cast<std::uint64_t>(std::hash<std::string>{}(normalizedName));
-					identity = 0x8000000000000000ull |
-						((nameHash << 8) & 0x7FFFFFFFFFFFFF00ull) |
-						static_cast<std::uint64_t>((clientNum + 1) & 0xFF);
-
-					while (usedIdentities.contains(identity))
-					{
-						++identity;
-					}
-				}
-
-				usedIdentities.insert(identity);
-				result.push_back({ identity, name, false, clientNum });
-				if (result.size() >= MAX_PARTY_SLOTS)
-				{
-					break;
-				}
-			}
-
-			if (!result.empty())
-			{
-				return result;
-			}
+			return true;
 		}
 
-		result.push_back({ hostIdentity, hostName, true, -1 });
-		std::unordered_set<std::uint64_t> usedIdentities{ hostIdentity };
-		bool skippedHost = false;
-		bool hasExactHostLobbyEntry = false;
-
-		if (Game::g_lobbyData && hostXuid != 0)
+		for (int slot = 0; slot < MAX_PARTY_SLOTS &&
+			participants.size() < MAX_PARTY_SLOTS; ++slot)
 		{
-			for (int slot = 0; slot < MAX_PARTY_SLOTS; ++slot)
-			{
-				const auto& member = Game::g_lobbyData->partyMembers[slot];
-				if (member.status != 0 && member.player == hostXuid)
-				{
-					hasExactHostLobbyEntry = true;
-					break;
-				}
-			}
-		}
-
-		if (Game::g_lobbyData)
-		{
-			for (int slot = 0; slot < MAX_PARTY_SLOTS && result.size() < MAX_PARTY_SLOTS; ++slot)
-			{
-				auto& member = Game::g_lobbyData->partyMembers[slot];
-				if (member.status == 0 || !member.gamertag || !member.gamertag[0])
-				{
-					continue;
-				}
-
-				const std::string memberName = member.gamertag;
-				const auto normalizedName = NormalizePartyIdentityName(memberName);
-				const bool isHost = hasExactHostLobbyEntry
-					? (member.player != 0 && member.player == hostXuid)
-					: (!normalizedHostName.empty() && normalizedName == normalizedHostName);
-
-				if (!skippedHost && isHost)
-				{
-					skippedHost = true;
-					continue;
-				}
-
-				std::uint64_t identity = member.player;
-				if (identity == 0 || usedIdentities.contains(identity))
-				{
-					const auto nameHash = static_cast<std::uint64_t>(std::hash<std::string>{}(normalizedName));
-					identity = 0x6000000000000000ull |
-						((nameHash << 8) & 0x1FFFFFFFFFFFFF00ull) |
-						static_cast<std::uint64_t>((slot + 1) & 0xFF);
-					while (usedIdentities.contains(identity))
-					{
-						++identity;
-					}
-				}
-
-				usedIdentities.insert(identity);
-				result.push_back({ identity, memberName, false, -1 });
-			}
-		}
-
-		return result;
-	}
-
-	static std::vector<CharacterRosterEntry> ReadPublishedCharacterRoster()
-	{
-		std::vector<CharacterRosterEntry> result;
-		result.reserve(MAX_PARTY_SLOTS);
-
-		for (int slot = 1; slot <= MAX_PARTY_SLOTS; ++slot)
-		{
-			auto character = CanonicalCharacterName(
-				Dvar::Var(Utils::String::VA("character_%d", slot)).get<std::string>());
-			const auto owner = Dvar::Var(Utils::String::VA("character_%d_player", slot)).get<std::string>();
-
-			if (character.empty() && IsBotCharacterOwner(owner))
-			{
-				character = CharacterFromBotOwner(owner);
-			}
-
-			if (character.empty() || owner.empty() || owner == "None")
+			const auto& member = Game::g_lobbyData->partyMembers[slot];
+			if (member.status == 0 || !member.gamertag[0])
 			{
 				continue;
 			}
 
-			result.push_back({ character, owner, IsBotCharacterOwner(owner), 0 });
+			if (member.player == hostXuid)
+			{
+				continue;
+			}
+
+			if (member.player == 0)
+			{
+				return false;
+			}
+
+			if (!seen.insert(member.player).second)
+			{
+				continue;
+			}
+
+			participants.push_back({ member.player, member.gamertag, false });
 		}
 
-		return result;
+		return true;
 	}
 
 	static std::string ChooseInitialHostCharacter()
@@ -822,308 +558,11 @@ namespace Components
 			return CanonicalCharacterName(s_hostCharacter);
 		}
 
-		const auto existingOwner = Dvar::Var("character_1_player").get<std::string>();
-		const auto existingCharacter = CanonicalCharacterName(Dvar::Var("character_1").get<std::string>());
-		const auto hostName = Dvar::Var("name").get<std::string>();
-
-		if (!existingCharacter.empty() && !existingOwner.empty() &&
-			_stricmp(NormalizePartyIdentityName(existingOwner).c_str(),
-				NormalizePartyIdentityName(hostName).c_str()) == 0)
-		{
-			s_hostCharacter = existingCharacter;
-			return s_hostCharacter;
-		}
-
-		const auto index = static_cast<std::size_t>(Game::Sys_Milliseconds()) % MAX_PARTY_SLOTS;
-		s_hostCharacter = ZW3Characters[index];
+		const auto index = static_cast<std::size_t>(
+			Game::Sys_Milliseconds()) % CharacterAssignments::Characters.size();
+		s_hostCharacter = CharacterAssignments::ToString(
+			CharacterAssignments::Characters[index]);
 		return s_hostCharacter;
-	}
-
-	static void SetClientCharacter(const int clientNum, const std::string& character, const bool resetTransientState)
-	{
-		auto* dvar = EnsurePerClientCharacterDvar(clientNum);
-		if (!dvar)
-		{
-			return;
-		}
-
-		const auto canonical = CanonicalCharacterName(character);
-		const auto previous = CanonicalCharacterName(dvar->current.string ? dvar->current.string : "");
-
-		if (_stricmp(previous.c_str(), canonical.c_str()) == 0)
-		{
-			return;
-		}
-
-		Game::Dvar_SetString(dvar, canonical.empty() ? "None" : canonical.c_str());
-
-		if (resetTransientState)
-		{
-			Dvar::Var(Utils::String::VA("zw3_sb_down_%d", clientNum)).set(0);
-			Dvar::Var(Utils::String::VA("zw3_sb_down_progress_%d", clientNum)).set(0.0f);
-		}
-	}
-
-	static void SyncLiveClientCharacterDvars(
-		const std::vector<RealCharacterParticipant>& participants,
-		const std::vector<CharacterRosterEntry>& roster)
-	{
-		std::vector<int> resolvedClientNums(participants.size(), -1);
-		std::unordered_set<int> assignedRealClients;
-		static std::array<bool, Game::MAX_CLIENTS> wasConnected{};
-		static std::array<bool, Game::MAX_CLIENTS> wasBot{};
-		static std::array<int, Game::MAX_CLIENTS> previousState{};
-		static std::array<std::string, Game::MAX_CLIENTS> occupantNames{};
-		std::unordered_set<int> freshOccupants;
-
-		for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
-		{
-			const auto& client = Game::svs_clients[clientNum];
-			const int state = client.header.state;
-			const bool connected = state >= Game::CS_CONNECTED;
-			const bool bot = connected && client.bIsTestClient;
-			std::string occupantName;
-
-			if (connected && !bot)
-			{
-				occupantName = NormalizePartyIdentityName(client.name);
-			}
-
-			const bool lifecycleRestarted = connected && !bot && wasConnected[clientNum] &&
-				previousState[clientNum] >= Game::CS_ACTIVE && state < Game::CS_ACTIVE;
-			const bool realNameChanged = connected && !bot && wasConnected[clientNum] &&
-				!wasBot[clientNum] && occupantNames[clientNum] != occupantName;
-			const bool occupantChanged = connected &&
-				(!wasConnected[clientNum] || wasBot[clientNum] != bot ||
-					lifecycleRestarted || realNameChanged);
-
-			if (!connected)
-			{
-				if (wasConnected[clientNum])
-				{
-					SetClientCharacter(clientNum, "None", false);
-				}
-
-				wasConnected[clientNum] = false;
-				wasBot[clientNum] = false;
-				previousState[clientNum] = state;
-				occupantNames[clientNum].clear();
-				continue;
-			}
-
-			if (occupantChanged)
-			{
-				freshOccupants.insert(clientNum);
-				Dvar::Var(Utils::String::VA("zw3_sb_down_%d", clientNum)).set(0);
-				Dvar::Var(Utils::String::VA("zw3_sb_down_progress_%d", clientNum)).set(0.0f);
-			}
-
-			wasConnected[clientNum] = true;
-			wasBot[clientNum] = bot;
-			previousState[clientNum] = state;
-			occupantNames[clientNum] = occupantName;
-		}
-
-		for (std::size_t index = 0; index < participants.size(); ++index)
-		{
-			const auto clientNum = participants[index].clientNum;
-			if (clientNum < 0 || clientNum >= Game::MAX_CLIENTS)
-			{
-				continue;
-			}
-
-			const auto& client = Game::svs_clients[clientNum];
-			if (client.header.state < Game::CS_CONNECTED || client.bIsTestClient)
-			{
-				continue;
-			}
-
-			resolvedClientNums[index] = clientNum;
-			assignedRealClients.insert(clientNum);
-		}
-
-		if (!participants.empty() && resolvedClientNums[0] == -1 && participants[0].host)
-		{
-			const auto hostClientNum = FindLiveHostClientNum();
-			if (hostClientNum >= 0 && !assignedRealClients.contains(hostClientNum))
-			{
-				resolvedClientNums[0] = hostClientNum;
-				assignedRealClients.insert(hostClientNum);
-			}
-		}
-
-		for (std::size_t index = 0; index < participants.size(); ++index)
-		{
-			if (resolvedClientNums[index] != -1)
-			{
-				continue;
-			}
-
-			const auto normalizedParticipantName = NormalizePartyIdentityName(participants[index].name);
-			if (normalizedParticipantName.empty())
-			{
-				continue;
-			}
-
-			for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
-			{
-				const auto& client = Game::svs_clients[clientNum];
-				if (client.header.state < Game::CS_CONNECTED || client.bIsTestClient ||
-					assignedRealClients.contains(clientNum) || !client.name[0])
-				{
-					continue;
-				}
-
-				if (NormalizePartyIdentityName(client.name) != normalizedParticipantName)
-				{
-					continue;
-				}
-
-				resolvedClientNums[index] = clientNum;
-				assignedRealClients.insert(clientNum);
-				break;
-			}
-		}
-
-		std::size_t realRosterIndex = 0;
-		for (const auto& entry : roster)
-		{
-			if (entry.bot)
-			{
-				continue;
-			}
-
-			if (realRosterIndex >= resolvedClientNums.size())
-			{
-				break;
-			}
-
-			const auto clientNum = resolvedClientNums[realRosterIndex++];
-			if (clientNum >= 0)
-			{
-				SetClientCharacter(clientNum, entry.character, true);
-			}
-		}
-
-		std::vector<std::string> desiredBotCharacters;
-		std::unordered_set<std::string> desiredBotCharacterKeys;
-
-		for (const auto& entry : roster)
-		{
-			if (!entry.bot)
-			{
-				continue;
-			}
-
-			const auto character = CanonicalCharacterName(entry.character);
-			const auto key = NormalizePartyIdentityName(character);
-			if (character.empty() || desiredBotCharacterKeys.contains(key))
-			{
-				continue;
-			}
-
-			desiredBotCharacters.push_back(character);
-			desiredBotCharacterKeys.insert(key);
-		}
-
-		std::vector<int> liveBotClients;
-		for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
-		{
-			const auto& client = Game::svs_clients[clientNum];
-			if (client.header.state < Game::CS_CONNECTED)
-			{
-				SetClientCharacter(clientNum, "None", false);
-				continue;
-			}
-
-			if (!client.bIsTestClient && !assignedRealClients.contains(clientNum))
-			{
-				if (Game::CL_IsCgameInitialized())
-				{
-					SetClientCharacter(clientNum, "None", true);
-				}
-				continue;
-			}
-
-			if (client.bIsTestClient)
-			{
-				liveBotClients.push_back(clientNum);
-			}
-		}
-
-		std::unordered_map<int, std::string> resolvedBotCharacters;
-		std::unordered_set<std::string> claimedBotCharacterKeys;
-
-		auto tryClaimBotCharacter = [&](const int clientNum, const std::string& value)
-			{
-				const auto character = CanonicalCharacterName(value);
-				const auto key = NormalizePartyIdentityName(character);
-
-				if (character.empty() || !desiredBotCharacterKeys.contains(key) ||
-					claimedBotCharacterKeys.contains(key))
-				{
-					return false;
-				}
-
-				resolvedBotCharacters[clientNum] = character;
-				claimedBotCharacterKeys.insert(key);
-				return true;
-			};
-
-		for (const auto clientNum : liveBotClients)
-		{
-			const auto reservedOwner = Bots::GetBotDisplayName(clientNum);
-			const auto reservedCharacter = CharacterFromBotOwner(reservedOwner);
-
-			if (!reservedCharacter.empty())
-			{
-				tryClaimBotCharacter(clientNum, reservedCharacter);
-			}
-		}
-
-		for (const auto clientNum : liveBotClients)
-		{
-			if (resolvedBotCharacters.contains(clientNum))
-			{
-				continue;
-			}
-
-			const auto* dvar = EnsurePerClientCharacterDvar(clientNum);
-			if (dvar && dvar->current.string)
-			{
-				tryClaimBotCharacter(clientNum, dvar->current.string);
-			}
-		}
-
-		for (const auto clientNum : liveBotClients)
-		{
-			if (resolvedBotCharacters.contains(clientNum) ||
-				!Bots::GetBotDisplayName(clientNum).empty())
-			{
-				continue;
-			}
-
-			for (const auto& character : desiredBotCharacters)
-			{
-				if (tryClaimBotCharacter(clientNum, character))
-				{
-					break;
-				}
-			}
-		}
-
-		for (const auto clientNum : liveBotClients)
-		{
-			const auto found = resolvedBotCharacters.find(clientNum);
-			if (found != resolvedBotCharacters.end())
-			{
-				SetClientCharacter(clientNum, found->second, freshOccupants.contains(clientNum));
-			}
-			else
-			{
-				SetClientCharacter(clientNum, "None", true);
-			}
-		}
 	}
 
 	static std::string BuildCharacterRosterSignature(
@@ -1131,331 +570,107 @@ namespace Components
 		const int botsToAdd)
 	{
 		std::string signature = std::to_string(botsToAdd);
-		signature.append("|pending=");
-		signature.append(NormalizePartyIdentityName(
-			Dvar::Var("zw3_pending_replacement_character").get<std::string>()));
-
 		for (const auto& participant : participants)
 		{
 			signature.append("|");
-			signature.append(std::to_string(participant.identity));
+			signature.append(Utils::String::VA("%llX", participant.xuid));
 			signature.append(":");
 			signature.append(NormalizePartyIdentityName(participant.name));
-			signature.append(":");
-			signature.append(std::to_string(participant.clientNum));
 		}
-
 		return signature;
 	}
 
 	void Party::RandomizeCharactersForClients()
 	{
-		if (!Dvar::Var("party_host").get<bool>())
+		if (!Dvar::Var("party_host").get<bool>() ||
+			s_characterRosterFrozen)
 		{
 			return;
 		}
 
-		const auto participants = CollectRealCharacterParticipants();
-		if (participants.empty())
+		std::vector<RealCharacterParticipant> participants;
+		if (!CollectStableLobbyParticipants(participants) || participants.empty())
 		{
+			Dvar::Var("party_roster_loading").set(true);
 			return;
 		}
 
-		const auto previousRoster = ReadPublishedCharacterRoster();
-		const int realPlayers = std::min(static_cast<int>(participants.size()), MAX_PARTY_SLOTS);
-		const int botsToAdd = std::clamp(Dvar::Var("addBots").get<int>(), 0,
-			MAX_PARTY_SLOTS - realPlayers);
-
-		int previousBotCount = 0;
-		std::unordered_set<std::string> protectedBotCharacters;
-		for (const auto& entry : previousRoster)
-		{
-			if (!entry.bot || CanonicalCharacterName(entry.character).empty())
-			{
-				continue;
-			}
-
-			++previousBotCount;
-			protectedBotCharacters.insert(NormalizePartyIdentityName(entry.character));
-		}
-
-		int botsToRemove = std::max(0, previousBotCount - botsToAdd);
-
-		std::unordered_set<std::uint64_t> activeIdentities;
+		std::unordered_set<std::uint64_t> activeXuids;
 		for (const auto& participant : participants)
 		{
-			activeIdentities.insert(participant.identity);
+			activeXuids.insert(participant.xuid);
 		}
+		CharacterAssignments::PruneRealCharacters(activeXuids);
 
-		for (auto it = s_characterByXuid.begin(); it != s_characterByXuid.end();)
-		{
-			if (IsSyntheticCharacterIdentity(it->first) && !activeIdentities.contains(it->first))
-			{
-				it = s_characterByXuid.erase(it);
-			}
-			else
-			{
-				++it;
-			}
-		}
-
-		std::vector<bool> previousConsumed(previousRoster.size(), false);
-		std::unordered_set<std::string> usedCharacters;
-		std::vector<CharacterRosterEntry> roster;
+		std::vector<std::pair<std::string, std::string>> roster;
 		roster.reserve(MAX_PARTY_SLOTS);
+		std::unordered_set<int> usedCharacters;
 
-		auto isAvailable = [&](const std::string& value)
-			{
-				const auto character = CanonicalCharacterName(value);
-				return !character.empty() &&
-					!usedCharacters.contains(NormalizePartyIdentityName(character));
-			};
-
-		auto useCharacter = [&](const std::string& value)
-			{
-				const auto character = CanonicalCharacterName(value);
-				usedCharacters.insert(NormalizePartyIdentityName(character));
-				return character;
-			};
-
-		auto isAvailableWithoutStealingBot = [&](const std::string& value)
-			{
-				const auto character = CanonicalCharacterName(value);
-				return isAvailable(character) &&
-					!protectedBotCharacters.contains(NormalizePartyIdentityName(character));
-			};
-
-		auto releaseProtectedBotCharacter = [&](const std::string& value)
-			{
-				const auto character = CanonicalCharacterName(value);
-				if (character.empty())
-				{
-					return;
-				}
-
-				protectedBotCharacters.erase(NormalizePartyIdentityName(character));
-				for (std::size_t i = 0; i < previousRoster.size(); ++i)
-				{
-					if (!previousConsumed[i] && previousRoster[i].bot &&
-						_stricmp(previousRoster[i].character.c_str(), character.c_str()) == 0)
-					{
-						previousConsumed[i] = true;
-						break;
-					}
-				}
-
-				if (botsToRemove > 0)
-				{
-					--botsToRemove;
-				}
-			};
-
-		auto firstAvailableCanonical = [&]() -> std::string
-			{
-				for (const auto* character : ZW3Characters)
-				{
-					if (isAvailable(character))
-					{
-						return character;
-					}
-				}
-				return {};
-			};
-
-		auto firstAvailableWithoutStealingBot = [&]() -> std::string
-			{
-				for (const auto* character : ZW3Characters)
-				{
-					if (isAvailableWithoutStealingBot(character))
-					{
-						return character;
-					}
-				}
-				return {};
-			};
-
-		auto findPreviousHumanCharacter = [&](const std::string& owner) -> std::string
-			{
-				const auto normalizedOwner = NormalizePartyIdentityName(owner);
-				for (std::size_t i = 0; i < previousRoster.size(); ++i)
-				{
-					if (previousConsumed[i] || previousRoster[i].bot ||
-						!isAvailable(previousRoster[i].character))
-					{
-						continue;
-					}
-
-					if (_stricmp(NormalizePartyIdentityName(previousRoster[i].owner).c_str(),
-						normalizedOwner.c_str()) == 0)
-					{
-						previousConsumed[i] = true;
-						return previousRoster[i].character;
-					}
-				}
-				return {};
-			};
-
-		auto takeFirstPreviousBotCharacter = [&]() -> std::string
-			{
-				for (std::size_t i = 0; i < previousRoster.size(); ++i)
-				{
-					if (previousConsumed[i] || !previousRoster[i].bot ||
-						!isAvailable(previousRoster[i].character))
-					{
-						continue;
-					}
-
-					previousConsumed[i] = true;
-					return previousRoster[i].character;
-				}
-				return {};
-			};
-
-		const auto pendingReplacement = CanonicalCharacterName(
-			Dvar::Var("zw3_pending_replacement_character").get<std::string>());
-		bool pendingConsumed = false;
-
-		for (int index = 0; index < realPlayers; ++index)
+		for (const auto& participant : participants)
 		{
-			const auto& participant = participants[index];
-			std::string character;
-
-			auto tryRememberedCharacter = [&]()
-				{
-					const auto remembered = s_characterByXuid.find(participant.identity);
-					if (remembered == s_characterByXuid.end())
-					{
-						return;
-					}
-
-					if (isAvailableWithoutStealingBot(remembered->second))
-					{
-						character = remembered->second;
-						return;
-					}
-
-					if (!participant.host && botsToRemove > 0 && isAvailable(remembered->second) &&
-						protectedBotCharacters.contains(NormalizePartyIdentityName(remembered->second)))
-					{
-						character = remembered->second;
-						releaseProtectedBotCharacter(character);
-					}
-				};
-
-			tryRememberedCharacter();
-
-			if (character.empty())
-			{
-				character = findPreviousHumanCharacter(participant.name);
-			}
-
-			if (participant.host)
-			{
-				if (character.empty() && isAvailableWithoutStealingBot(ChooseInitialHostCharacter()))
-				{
-					character = ChooseInitialHostCharacter();
-				}
-			}
-			else
-			{
-				if (character.empty() && !pendingConsumed && isAvailable(pendingReplacement))
-				{
-					character = pendingReplacement;
-					pendingConsumed = true;
-					if (protectedBotCharacters.contains(NormalizePartyIdentityName(character)))
-					{
-						releaseProtectedBotCharacter(character);
-					}
-				}
-
-				if (character.empty() && botsToRemove > 0)
-				{
-					character = takeFirstPreviousBotCharacter();
-					if (!character.empty())
-					{
-						protectedBotCharacters.erase(NormalizePartyIdentityName(character));
-						--botsToRemove;
-					}
-				}
-			}
-
-			if (character.empty())
-			{
-				character = firstAvailableWithoutStealingBot();
-			}
-
-			if (character.empty())
-			{
-				character = firstAvailableCanonical();
-			}
-
-			if (character.empty())
+			const auto preferred = participant.host
+				? CharacterAssignments::Parse(ChooseInitialHostCharacter())
+				: CharacterAssignments::Character::None;
+			const auto character = CharacterAssignments::EnsureRealCharacter(
+				participant.xuid, preferred);
+			if (!CharacterAssignments::IsValid(character))
 			{
 				continue;
 			}
 
-			character = useCharacter(character);
-			s_characterByXuid[participant.identity] = character;
 			if (participant.host)
 			{
-				s_hostCharacter = character;
+				s_hostCharacter = CharacterAssignments::ToString(character);
 			}
 
-			roster.push_back({ character, participant.name, false, participant.identity });
+			usedCharacters.insert(static_cast<int>(character));
+			roster.emplace_back(CharacterAssignments::ToString(character),
+				participant.name);
 		}
 
-		if (pendingConsumed)
-		{
-			SetStringDvarIfChanged("zw3_pending_replacement_character", "");
-		}
+		const int realPlayers = static_cast<int>(roster.size());
+		const int botsToAdd = std::clamp(Dvar::Var("addBots").get<int>(),
+			0, MAX_PARTY_SLOTS - realPlayers);
 
-		int botsAssigned = 0;
-		for (std::size_t i = 0; i < previousRoster.size() && botsAssigned < botsToAdd; ++i)
+		for (const auto character : CharacterAssignments::Characters)
 		{
-			if (previousConsumed[i] || !previousRoster[i].bot ||
-				!isAvailable(previousRoster[i].character))
-			{
-				continue;
-			}
-
-			const auto character = useCharacter(previousRoster[i].character);
-			roster.push_back({ character,
-				Utils::String::VA("[BOT] %s", character.c_str()), true, 0 });
-			++botsAssigned;
-		}
-
-		while (botsAssigned < botsToAdd)
-		{
-			const auto available = firstAvailableCanonical();
-			if (available.empty())
+			if (static_cast<int>(roster.size()) >= realPlayers + botsToAdd)
 			{
 				break;
 			}
 
-			const auto character = useCharacter(available);
-			roster.push_back({ character,
-				Utils::String::VA("[BOT] %s", character.c_str()), true, 0 });
-			++botsAssigned;
+			if (usedCharacters.contains(static_cast<int>(character)))
+			{
+				continue;
+			}
+
+			const std::string characterName = CharacterAssignments::ToString(character);
+			roster.emplace_back(characterName,
+				Utils::String::VA("[BOT] %s", characterName.c_str()));
+			usedCharacters.insert(static_cast<int>(character));
 		}
 
 		for (int slot = 0; slot < MAX_PARTY_SLOTS; ++slot)
 		{
-			const auto characterDvar = std::string(Utils::String::VA("character_%d", slot + 1));
-			const auto playerDvar = std::string(Utils::String::VA("character_%d_player", slot + 1));
-
 			if (slot < static_cast<int>(roster.size()))
 			{
-				SetStringDvarIfChanged(characterDvar, roster[slot].character);
-				SetStringDvarIfChanged(playerDvar, roster[slot].owner);
+				SetStringDvarIfChanged(Utils::String::VA("character_%d", slot + 1),
+					roster[slot].first);
+				SetStringDvarIfChanged(Utils::String::VA("character_%d_player", slot + 1),
+					roster[slot].second);
 			}
 			else
 			{
-				SetStringDvarIfChanged(characterDvar, "None");
-				SetStringDvarIfChanged(playerDvar, "None");
+				SetStringDvarIfChanged(Utils::String::VA("character_%d", slot + 1), "None");
+				SetStringDvarIfChanged(Utils::String::VA("character_%d_player", slot + 1), "None");
 			}
 		}
 
-		SyncLiveClientCharacterDvars(participants, roster);
+		const int desiredPartySize = std::clamp(realPlayers + botsToAdd, 1, MAX_PARTY_SLOTS);
+		CharacterAssignments::SetDesiredPartySize(desiredPartySize);
+		Dvar::Var("party_realPlayers").set(realPlayers);
+		Dvar::Var("party_currentPlayers").set(desiredPartySize);
+		Dvar::Var("party_roster_loading").set(false);
 	}
 
 	std::string Party::GetPlayerName(int slot_index)
@@ -1470,6 +685,390 @@ namespace Components
 		return "None";
 	}
 
+
+	static bool HasCompletePublishedRoster()
+	{
+		const int publishedPartySize = std::clamp(
+			Dvar::Var("party_currentPlayers").get<int>(), 0, MAX_PARTY_SLOTS);
+
+		if (publishedPartySize < 1 ||
+			Dvar::Var("party_realPlayers").get<int>() < 1)
+		{
+			return false;
+		}
+
+		for (int slot = 0; slot < publishedPartySize; ++slot)
+		{
+			const auto character = CanonicalCharacterName(
+				Dvar::Var(Utils::String::VA("character_%d", slot + 1))
+				.get<std::string>());
+			const auto playerName = Dvar::Var(
+				Utils::String::VA("character_%d_player", slot + 1))
+				.get<std::string>();
+
+			if (character.empty() || playerName.empty() ||
+				NormalizePartyIdentityName(playerName) == "none")
+			{
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+
+	static int FindConnectedLocalRealClient()
+	{
+		const auto localXuid = Party::GetLocalPlayerXUID();
+
+		if (localXuid != 0)
+		{
+			for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
+			{
+				const auto& client = Game::svs_clients[clientNum];
+				if (client.header.state >= Game::CS_CONNECTED &&
+					!client.bIsTestClient &&
+					CharacterAssignments::GetClientXuid(client) == localXuid)
+				{
+					return clientNum;
+				}
+			}
+		}
+
+		for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
+		{
+			const auto& client = Game::svs_clients[clientNum];
+			if (client.header.state >= Game::CS_CONNECTED &&
+				!client.bIsTestClient)
+			{
+				return clientNum;
+			}
+		}
+
+		return -1;
+	}
+
+	static bool PublishDirectLaunchRosterFromRuntime()
+	{
+		const int clientNum = FindConnectedLocalRealClient();
+		if (clientNum < 0)
+		{
+			return false;
+		}
+
+		auto character =
+			CharacterAssignments::ResolveClientCharacter(clientNum);
+
+		if (!CharacterAssignments::IsValid(character))
+		{
+			const auto preferred = CharacterAssignments::Parse(
+				ChooseInitialHostCharacter());
+			const auto xuid = CharacterAssignments::GetClientXuid(
+				Game::svs_clients[clientNum]);
+
+			if (xuid != 0)
+			{
+				character = CharacterAssignments::EnsureRealCharacter(
+					xuid, preferred, clientNum);
+			}
+			else if (CharacterAssignments::IsValid(preferred))
+			{
+				character = preferred;
+				CharacterAssignments::SetClientCharacter(clientNum, character);
+			}
+		}
+
+		if (!CharacterAssignments::IsValid(character))
+		{
+			character = CharacterAssignments::Character::Richtofen;
+			CharacterAssignments::SetClientCharacter(clientNum, character);
+		}
+
+		s_hostCharacter = CharacterAssignments::ToString(character);
+
+		std::string hostName = Game::svs_clients[clientNum].name;
+		if (hostName.empty())
+		{
+			hostName = Dvar::Var("name").get<std::string>();
+		}
+		if (hostName.empty())
+		{
+			hostName = "Player";
+		}
+
+		SetStringDvarIfChanged("character_1",
+			CharacterAssignments::ToString(character));
+		SetStringDvarIfChanged("character_1_player", hostName);
+
+		for (int slot = 2; slot <= MAX_PARTY_SLOTS; ++slot)
+		{
+			SetStringDvarIfChanged(
+				Utils::String::VA("character_%d", slot), "None");
+			SetStringDvarIfChanged(
+				Utils::String::VA("character_%d_player", slot), "None");
+		}
+
+		CharacterAssignments::SetDesiredPartySize(1);
+		Dvar::Var("party_realPlayers").set(1);
+		Dvar::Var("party_currentPlayers").set(1);
+		Dvar::Var("party_currentHost").set(hostName);
+		Dvar::Var("party_roster_loading").set(false);
+
+		s_directLaunchRoster = true;
+		s_characterRosterFrozen = true;
+		return true;
+	}
+
+	static void FinalizeServerCharacterRoster(const bool authoritativePass)
+	{
+		if (Party::IsEnabled())
+		{
+			s_directLaunchRoster = false;
+			s_characterRosterFrozen = true;
+
+			if (HasCompletePublishedRoster())
+			{
+				CharacterAssignments::SetDesiredPartySize(
+					Dvar::Var("party_currentPlayers").get<int>());
+				Dvar::Var("party_roster_loading").set(false);
+			}
+			return;
+		}
+
+		if (!authoritativePass && HasCompletePublishedRoster() &&
+			Dvar::Var("party_currentPlayers").get<int>() > 1)
+		{
+			s_characterRosterFrozen = true;
+			return;
+		}
+
+		PublishDirectLaunchRosterFromRuntime();
+	}
+
+
+	struct RuntimeCharacterRosterEntry
+	{
+		int clientNum = -1;
+		bool bot = false;
+		bool host = false;
+		std::uint64_t xuid = 0;
+		CharacterAssignments::Character character =
+			CharacterAssignments::Character::None;
+		std::string name;
+	};
+
+	static int CountRuntimeRealPlayers()
+	{
+		std::unordered_set<std::uint64_t> xuids;
+		std::unordered_set<std::string> fallbackNames;
+
+		for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
+		{
+			const auto& client = Game::svs_clients[clientNum];
+			if (client.header.state < Game::CS_CONNECTED)
+			{
+				continue;
+			}
+
+			const auto xuid = CharacterAssignments::GetClientXuid(client);
+			if (client.bIsTestClient && xuid == 0)
+			{
+				continue;
+			}
+
+			if (xuid != 0)
+			{
+				xuids.insert(xuid);
+			}
+			else if (client.name[0])
+			{
+				fallbackNames.insert(NormalizePartyIdentityName(client.name));
+			}
+		}
+
+		return std::clamp(static_cast<int>(
+			xuids.size() + fallbackNames.size()), 0, MAX_PARTY_SLOTS);
+	}
+
+	static bool PublishRuntimeCharacterRoster()
+	{
+		std::vector<RuntimeCharacterRosterEntry> entries;
+		std::unordered_set<std::uint64_t> realXuids;
+		const auto localXuid = Party::GetLocalPlayerXUID();
+		const int runtimeRealPlayers = CountRuntimeRealPlayers();
+		bool changed = false;
+
+		if (Dvar::Var("party_realPlayers").get<int>() != runtimeRealPlayers)
+		{
+			Dvar::Var("party_realPlayers").set(runtimeRealPlayers);
+			changed = true;
+		}
+
+		for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
+		{
+			const auto& client = Game::svs_clients[clientNum];
+			if (client.header.state < Game::CS_CONNECTED)
+			{
+				continue;
+			}
+
+			const auto xuid = CharacterAssignments::GetClientXuid(client);
+			const bool bot = client.bIsTestClient && xuid == 0;
+
+			if (!bot && xuid != 0 && !realXuids.insert(xuid).second)
+			{
+				continue;
+			}
+
+			auto character =
+				CharacterAssignments::GetClientCharacterId(clientNum);
+			if (!CharacterAssignments::IsValid(character))
+			{
+				character =
+					CharacterAssignments::ResolveClientCharacter(clientNum);
+			}
+			if (!CharacterAssignments::IsValid(character))
+			{
+				continue;
+			}
+
+			RuntimeCharacterRosterEntry entry;
+			entry.clientNum = clientNum;
+			entry.bot = bot;
+			entry.host = !bot && localXuid != 0 && xuid == localXuid;
+			entry.xuid = xuid;
+			entry.character = character;
+
+			if (bot)
+			{
+				entry.name = Utils::String::VA("[BOT] %s",
+					CharacterAssignments::ToString(character));
+			}
+			else
+			{
+				entry.name = client.name;
+				if (entry.name.empty())
+				{
+					entry.name = "Player";
+				}
+			}
+
+			entries.push_back(std::move(entry));
+		}
+
+		if (entries.empty())
+		{
+			return changed;
+		}
+
+		if (std::none_of(entries.begin(), entries.end(),
+			[](const RuntimeCharacterRosterEntry& entry)
+			{
+				return entry.host;
+			}))
+		{
+			const auto firstReal = std::find_if(entries.begin(), entries.end(),
+				[](const RuntimeCharacterRosterEntry& entry)
+				{
+					return !entry.bot;
+				});
+			if (firstReal != entries.end())
+			{
+				firstReal->host = true;
+			}
+		}
+
+		std::stable_sort(entries.begin(), entries.end(),
+			[](const RuntimeCharacterRosterEntry& a,
+				const RuntimeCharacterRosterEntry& b)
+			{
+				const int aGroup = a.host ? 0 : (a.bot ? 2 : 1);
+				const int bGroup = b.host ? 0 : (b.bot ? 2 : 1);
+
+				if (aGroup != bGroup)
+				{
+					return aGroup < bGroup;
+				}
+
+				if (a.bot && b.bot && a.character != b.character)
+				{
+					return static_cast<int>(a.character) <
+						static_cast<int>(b.character);
+				}
+
+				return a.clientNum < b.clientNum;
+			});
+
+		if (entries.size() > MAX_PARTY_SLOTS)
+		{
+			entries.resize(MAX_PARTY_SLOTS);
+		}
+
+		std::string signature;
+		for (const auto& entry : entries)
+		{
+			signature.append(Utils::String::VA("%d:%d:%llX:",
+				entry.clientNum,
+				static_cast<int>(entry.character),
+				entry.xuid));
+			signature.append(entry.name);
+			signature.push_back('|');
+		}
+
+		static std::string candidateSignature;
+		static int candidateTicks = 0;
+
+		if (signature != candidateSignature)
+		{
+			candidateSignature = signature;
+			candidateTicks = 1;
+			return changed;
+		}
+
+		if (candidateTicks < 3)
+		{
+			++candidateTicks;
+			return changed;
+		}
+
+		for (int slot = 0; slot < MAX_PARTY_SLOTS; ++slot)
+		{
+			if (slot < static_cast<int>(entries.size()))
+			{
+				const auto& entry = entries[slot];
+				changed |= SetStringDvarIfChanged(
+					Utils::String::VA("character_%d", slot + 1),
+					CharacterAssignments::ToString(entry.character));
+				changed |= SetStringDvarIfChanged(
+					Utils::String::VA("character_%d_player", slot + 1),
+					entry.name);
+			}
+			else
+			{
+				changed |= SetStringDvarIfChanged(
+					Utils::String::VA("character_%d", slot + 1), "None");
+				changed |= SetStringDvarIfChanged(
+					Utils::String::VA("character_%d_player", slot + 1), "None");
+			}
+		}
+
+		if (Dvar::Var("party_currentPlayers").get<int>() !=
+			static_cast<int>(entries.size()))
+		{
+			Dvar::Var("party_currentPlayers").set(
+				static_cast<int>(entries.size()));
+			changed = true;
+		}
+
+		if (Dvar::Var("party_roster_loading").get<bool>())
+		{
+			Dvar::Var("party_roster_loading").set(false);
+			changed = true;
+		}
+
+		return changed;
+	}
+
 	__declspec(naked) void PartyMigrate_HandlePacket()
 	{
 		__asm
@@ -1481,6 +1080,7 @@ namespace Components
 
 	void SV_SpawnServer_Com_SyncThreads_Hook()
 	{
+		s_characterRosterFrozen = true;
 		Game::Com_SyncThreads(); // Com_SyncThreads
 
 		// Whenever the game starts a server,
@@ -1539,23 +1139,18 @@ namespace Components
 		Events::OnDvarInit([]
 			{
 				ServerVersion = Dvar::Register<const char*>("sv_version", "", Game::DVAR_SERVERINFO | Game::DVAR_INIT, "Server version");
-				Dvar::Register<const char*>("character_1", "", Game::DVAR_CODINFO | Game::DVAR_INIT, "Character assigned to player 1");
-				Dvar::Register<const char*>("character_2", "", Game::DVAR_CODINFO | Game::DVAR_INIT, "Character assigned to player 2");
-				Dvar::Register<const char*>("character_3", "", Game::DVAR_CODINFO | Game::DVAR_INIT, "Character assigned to player 3");
-				Dvar::Register<const char*>("character_4", "", Game::DVAR_CODINFO | Game::DVAR_INIT, "Character assigned to player 4");
-				Dvar::Register<const char*>("character_1_player", "None", Game::DVAR_CODINFO | Game::DVAR_INIT, "Player name assigned to slot 1");
-				Dvar::Register<const char*>("character_2_player", "None", Game::DVAR_CODINFO | Game::DVAR_INIT, "Player name assigned to slot 2");
-				Dvar::Register<const char*>("character_3_player", "None", Game::DVAR_CODINFO | Game::DVAR_INIT, "Player name assigned to slot 3");
-				Dvar::Register<const char*>("character_4_player", "None", Game::DVAR_CODINFO | Game::DVAR_INIT, "Player name assigned to slot 4");
-				Dvar::Register<const char*>("zw3_pending_replacement_character", "", Game::DVAR_NONE, "Smart-bot character reserved for an incoming real player");
-				for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
-				{
-					Game::Dvar_RegisterString(Utils::String::VA("zw3_character_client_%d", clientNum),
-						"None", Game::DVAR_NONE, "Authoritative ZW3 character for this server client");
-				}
-				Dvar::Register<int>("party_currentPlayers", 0, 0, 4, Game::DVAR_CODINFO | Game::DVAR_INIT, "Total current players in the party");
-				Dvar::Register<int>("party_realPlayers", 0, 0, 4, Game::DVAR_CODINFO | Game::DVAR_INIT, "Current real players in the party");
+				Dvar::Register<const char*>("character_1", "None", Game::DVAR_CODINFO, "Character assigned to player 1");
+				Dvar::Register<const char*>("character_2", "None", Game::DVAR_CODINFO, "Character assigned to player 2");
+				Dvar::Register<const char*>("character_3", "None", Game::DVAR_CODINFO, "Character assigned to player 3");
+				Dvar::Register<const char*>("character_4", "None", Game::DVAR_CODINFO, "Character assigned to player 4");
+				Dvar::Register<const char*>("character_1_player", "None", Game::DVAR_CODINFO, "Player name assigned to slot 1");
+				Dvar::Register<const char*>("character_2_player", "None", Game::DVAR_CODINFO, "Player name assigned to slot 2");
+				Dvar::Register<const char*>("character_3_player", "None", Game::DVAR_CODINFO, "Player name assigned to slot 3");
+				Dvar::Register<const char*>("character_4_player", "None", Game::DVAR_CODINFO, "Player name assigned to slot 4");
+				Dvar::Register<int>("party_currentPlayers", 0, 0, 4, Game::DVAR_CODINFO, "Total current players in the party");
+				Dvar::Register<int>("party_realPlayers", 0, 0, 4, Game::DVAR_CODINFO, "Current real players in the party");
 				Dvar::Register<const char*>("party_currentHost", "", Game::DVAR_NONE, "Current private-party host display name");
+				Dvar::Register<bool>("party_roster_loading", true, Game::DVAR_NONE, "Waiting for a complete private-party roster snapshot");
 				Dvar::Register<const char*>("autosave_map", "", Game::DVAR_INIT, "");
 				Dvar::Register<const char*>("autosave_round", "", Game::DVAR_INIT, "");
 				Dvar::Register<const char*>("autosave_zombiemode", "", Game::DVAR_INIT, "");
@@ -1686,6 +1281,19 @@ namespace Components
 		// Otherwise they timeout while the host load
 		Utils::Hook(0x5B34D0, SV_SpawnServer_Com_SyncThreads_Hook, HOOK_CALL).install()->quick();
 
+		Events::OnSVInit([]
+			{
+				Scheduler::Once([]
+					{
+						FinalizeServerCharacterRoster(false);
+					}, Scheduler::Pipeline::SERVER, 1s);
+
+				Scheduler::Once([]
+					{
+						FinalizeServerCharacterRoster(true);
+					}, Scheduler::Pipeline::SERVER, 3s);
+			});
+
 		Command::Add("connect", [](const Command::Params* params)
 			{
 				if (params->size() < 2)
@@ -1716,12 +1324,14 @@ namespace Components
 					return;
 				}
 
-				const auto participants = CollectRealCharacterParticipants();
-				const int realPlayers = std::clamp(static_cast<int>(participants.size()), 1, MAX_PARTY_SLOTS);
-				const int bots = std::clamp(Dvar::Var("addBots").get<int>(), 0, MAX_PARTY_SLOTS - realPlayers);
-				Dvar::Var("addBots").set(bots);
-				Dvar::Var("party_realPlayers").set(realPlayers);
-				Dvar::Var("party_currentPlayers").set(realPlayers + bots);
+				s_directLaunchRoster = false;
+				s_characterRosterFrozen = false;
+
+				std::vector<RealCharacterParticipant> participants;
+				if (!CollectStableLobbyParticipants(participants))
+				{
+					return;
+				}
 
 				RandomizeCharactersForClients();
 				BroadcastDvarUpdate();
@@ -1735,7 +1345,13 @@ namespace Components
 					return;
 				}
 
-				const auto participants = CollectRealCharacterParticipants();
+				s_directLaunchRoster = false;
+				s_characterRosterFrozen = false;
+				std::vector<RealCharacterParticipant> participants;
+				if (!CollectStableLobbyParticipants(participants))
+				{
+					return;
+				}
 				const int realPlayers = std::clamp(static_cast<int>(participants.size()), 1, MAX_PARTY_SLOTS);
 				const int maxBots = std::max(0, MAX_PARTY_SLOTS - realPlayers);
 				const int currentBots = std::clamp(Dvar::Var("addBots").get<int>(), 0, maxBots);
@@ -1745,6 +1361,7 @@ namespace Components
 				Dvar::Var("party_realPlayers").set(realPlayers);
 				Dvar::Var("party_currentPlayers").set(realPlayers + nextBots);
 				RandomizeCharactersForClients();
+				Dvar::Var("party_roster_loading").set(false);
 				BroadcastDvarUpdate();
 				Command::Execute("xupdatepartystate");
 			});
@@ -2381,10 +1998,16 @@ namespace Components
 					currentHostName = Dvar::Var("name").get<std::string>();
 				}
 				hostResponseInfo.set("party_currentHost", currentHostName);
+				hostResponseInfo.set("party_currentPlayers", std::to_string(Dvar::Var("party_currentPlayers").get<int>()));
+				hostResponseInfo.set("party_realPlayers", std::to_string(Dvar::Var("party_realPlayers").get<int>()));
 				hostResponseInfo.set("character_1", Dvar::Var("character_1").get<std::string>());
 				hostResponseInfo.set("character_2", Dvar::Var("character_2").get<std::string>());
 				hostResponseInfo.set("character_3", Dvar::Var("character_3").get<std::string>());
 				hostResponseInfo.set("character_4", Dvar::Var("character_4").get<std::string>());
+				hostResponseInfo.set("character_1_player", Dvar::Var("character_1_player").get<std::string>());
+				hostResponseInfo.set("character_2_player", Dvar::Var("character_2_player").get<std::string>());
+				hostResponseInfo.set("character_3_player", Dvar::Var("character_3_player").get<std::string>());
+				hostResponseInfo.set("character_4_player", Dvar::Var("character_4_player").get<std::string>());
 
 				if (hostResponseInfo.get("mapname").empty() || IsInLobby())
 				{
@@ -2485,10 +2108,16 @@ namespace Components
 						Dvar::Var("addBots").set(static_cast<int>(std::strtol(info.get("addBots").data(), nullptr, 10)));
 						Dvar::Var("partyPrivacy").set(static_cast<int>(std::strtol(info.get("partyPrivacy").data(), nullptr, 10)));
 
-						int new_party_currentPlayers = static_cast<int>(std::strtol(info.get("party_currentPlayers").data(), nullptr, 10));
-						int new_party_realPlayers = static_cast<int>(std::strtol(info.get("party_realPlayers").data(), nullptr, 10));
-						Dvar::Var("party_currentPlayers").set(new_party_currentPlayers);
-						Dvar::Var("party_realPlayers").set(new_party_realPlayers);
+						const auto currentPlayersValue = info.get("party_currentPlayers");
+						const auto realPlayersValue = info.get("party_realPlayers");
+						if (!currentPlayersValue.empty())
+						{
+							Dvar::Var("party_currentPlayers").set(static_cast<int>(std::strtol(currentPlayersValue.data(), nullptr, 10)));
+						}
+						if (!realPlayersValue.empty())
+						{
+							Dvar::Var("party_realPlayers").set(static_cast<int>(std::strtol(realPlayersValue.data(), nullptr, 10)));
+						}
 
 						auto receivedHostName = info.get("party_currentHost");
 						if (receivedHostName.empty())
@@ -2500,17 +2129,7 @@ namespace Components
 							SetStringDvarIfChanged("party_currentHost", receivedHostName);
 						}
 
-						for (int i = 1; i <= MAX_PARTY_SLOTS; ++i)
-						{
-							std::string charDvarName = Utils::String::VA("character_%d", i);
-							std::string playerDvarName = Utils::String::VA("character_%d_player", i);
-
-							const std::string charValue = info.get(charDvarName);
-							SetStringDvarIfChanged(charDvarName, charValue.empty() ? "None" : charValue);
-
-							const std::string playerValue = info.get(playerDvarName);
-							SetStringDvarIfChanged(playerDvarName, playerValue.empty() ? "None" : playerValue);
-						}
+						ApplyCharacterRosterSnapshot(info);
 
 						auto securityLevel = std::strtoul(info.get("securityLevel").data(), nullptr, 10);
 						bool isUsermap = !info.get("usermaphash").empty();
@@ -2690,10 +2309,16 @@ namespace Components
 				allDvarsSuccessfullySet &= parseAndSetDvar("thirdPerson", "thirdPerson");
 				allDvarsSuccessfullySet &= parseAndSetDvar("addBots", "addBots");
 				allDvarsSuccessfullySet &= parseAndSetDvar("partyPrivacy", "partyPrivacy");
-				int new_party_currentPlayers = static_cast<int>(std::strtol(info.get("party_currentPlayers").data(), nullptr, 10));
-				int new_party_realPlayers = static_cast<int>(std::strtol(info.get("party_realPlayers").data(), nullptr, 10));
-				Dvar::Var("party_currentPlayers").set(new_party_currentPlayers);
-				Dvar::Var("party_realPlayers").set(new_party_realPlayers);
+				const auto currentPlayersValue = info.get("party_currentPlayers");
+				const auto realPlayersValue = info.get("party_realPlayers");
+				if (!currentPlayersValue.empty())
+				{
+					Dvar::Var("party_currentPlayers").set(static_cast<int>(std::strtol(currentPlayersValue.data(), nullptr, 10)));
+				}
+				if (!realPlayersValue.empty())
+				{
+					Dvar::Var("party_realPlayers").set(static_cast<int>(std::strtol(realPlayersValue.data(), nullptr, 10)));
+				}
 
 				const auto receivedHostName = info.get("party_currentHost");
 				if (!receivedHostName.empty())
@@ -2701,17 +2326,7 @@ namespace Components
 					SetStringDvarIfChanged("party_currentHost", receivedHostName);
 				}
 
-				for (int i = 1; i <= MAX_PARTY_SLOTS; ++i)
-				{
-					std::string charDvarName = Utils::String::VA("character_%d", i);
-					std::string playerDvarName = Utils::String::VA("character_%d_player", i);
-
-					const std::string charValue = info.get(charDvarName);
-					SetStringDvarIfChanged(charDvarName, charValue.empty() ? "None" : charValue);
-
-					const std::string playerValue = info.get(playerDvarName);
-					SetStringDvarIfChanged(playerDvarName, playerValue.empty() ? "None" : playerValue);
-				}
+				ApplyCharacterRosterSnapshot(info);
 			});
 
 		if (!Dedicated::IsEnabled())
@@ -2749,79 +2364,71 @@ namespace Components
 					bool isCurrentlyHosting = Dvar::Var("party_host").get<bool>();
 					const bool startedHosting = isCurrentlyHosting && !s_wasHostingLastFrame;
 
-					if (startedHosting)
+					if (startedHosting && !s_directLaunchRoster)
 					{
-						s_characterByXuid.clear();
+						s_characterRosterFrozen = false;
+						CharacterAssignments::ResetAll();
 						s_hostCharacter.clear();
-						s_liveHostClientNum = -1;
-						SetStringDvarIfChanged("zw3_pending_replacement_character", "");
+						Dvar::Var("party_roster_loading").set(true);
 					}
 
 					if (isCurrentlyHosting)
 					{
-						const auto participants = CollectRealCharacterParticipants();
-						const int realPlayers = std::min(static_cast<int>(participants.size()), MAX_PARTY_SLOTS);
-						int botsToAdd = Dvar::Var("addBots").get<int>();
-
-						const int maxAllowedBots = std::max(0, MAX_PARTY_SLOTS - realPlayers);
-						const int clampedBotsToAdd = std::clamp(botsToAdd, 0, maxAllowedBots);
-						bool dvarChanged = false;
-
-						if (botsToAdd != clampedBotsToAdd)
+						if (!s_characterRosterFrozen && !s_directLaunchRoster)
 						{
-							Dvar::Var("addBots").set(clampedBotsToAdd);
-							botsToAdd = clampedBotsToAdd;
-							dvarChanged = true;
-							needsBroadcast = true;
-							needsUpdatePartystate = true;
-						}
+							std::vector<RealCharacterParticipant> participants;
+							if (CollectStableLobbyParticipants(participants))
+							{
+								const int realPlayers = std::clamp(
+									static_cast<int>(participants.size()), 1, MAX_PARTY_SLOTS);
+								const int botsToAdd = std::clamp(
+									Dvar::Var("addBots").get<int>(), 0,
+									MAX_PARTY_SLOTS - realPlayers);
+								const auto rosterSignature =
+									BuildCharacterRosterSignature(participants, botsToAdd);
 
-						const int totalPlayers = realPlayers + botsToAdd;
+								static std::string s_lastCharacterRosterSignature;
+								static std::string s_candidateCharacterRosterSignature;
+								static int s_candidateCharacterRosterTicks = 0;
 
-						if (Dvar::Var("party_realPlayers").get<int>() != realPlayers)
-						{
-							Dvar::Var("party_realPlayers").set(realPlayers);
-							dvarChanged = true;
-						}
+								if (rosterSignature != s_candidateCharacterRosterSignature)
+								{
+									s_candidateCharacterRosterSignature = rosterSignature;
+									s_candidateCharacterRosterTicks = 1;
+								}
+								else if (s_candidateCharacterRosterTicks < 3)
+								{
+									++s_candidateCharacterRosterTicks;
+								}
 
-						if (Dvar::Var("party_currentPlayers").get<int>() != totalPlayers)
-						{
-							Dvar::Var("party_currentPlayers").set(totalPlayers);
-							dvarChanged = true;
-						}
+								const bool initialRoster =
+									Dvar::Var("party_roster_loading").get<bool>();
+								if ((initialRoster || s_candidateCharacterRosterTicks >= 3) &&
+									(initialRoster || rosterSignature != s_lastCharacterRosterSignature))
+								{
+									RandomizeCharactersForClients();
+									s_lastCharacterRosterSignature = rosterSignature;
+									needsBroadcast = true;
+									needsUpdatePartystate = true;
+								}
 
-						static std::string s_lastCharacterRosterSignature;
-						const auto rosterSignature = BuildCharacterRosterSignature(participants, botsToAdd);
-
-						if (startedHosting || rosterSignature != s_lastCharacterRosterSignature ||
-							s_lastRealPlayers != realPlayers || s_lastBotsToAdd != botsToAdd)
-						{
-							RandomizeCharactersForClients();
-							s_lastCharacterRosterSignature = BuildCharacterRosterSignature(CollectRealCharacterParticipants(), botsToAdd);
-							needsBroadcast = true;
-							needsUpdatePartystate = true;
-						}
-
-						SyncLiveClientCharacterDvars(participants, ReadPublishedCharacterRoster());
-
-						s_lastRealPlayers = realPlayers;
-						s_lastBotsToAdd = botsToAdd;
-
-						if (dvarChanged)
-						{
-							needsBroadcast = true;
-							needsUpdatePartystate = true;
+								s_lastRealPlayers = realPlayers;
+								s_lastBotsToAdd = botsToAdd;
+							}
 						}
 
 					}
-					else if (!isCurrentlyHosting && s_wasHostingLastFrame) {
+					else if (!isCurrentlyHosting && s_wasHostingLastFrame &&
+						!s_characterRosterFrozen && !s_directLaunchRoster)
+					{
 						Dvar::Var("party_currentPlayers").set(0);
 						Dvar::Var("party_realPlayers").set(0);
 						Dvar::Var("addBots").set(0);
-						s_characterByXuid.clear();
+						Dvar::Var("party_roster_loading").set(true);
+						s_directLaunchRoster = false;
+						s_characterRosterFrozen = false;
+						CharacterAssignments::ResetAll();
 						s_hostCharacter.clear();
-						s_liveHostClientNum = -1;
-						SetStringDvarIfChanged("zw3_pending_replacement_character", "");
 						for (int slot = 1; slot <= MAX_PARTY_SLOTS; ++slot)
 						{
 							SetStringDvarIfChanged(Utils::String::VA("character_%d", slot), "None");
@@ -2832,6 +2439,13 @@ namespace Components
 					}
 
 					s_lastRealPlayers = Dvar::Var("party_realPlayers").get<int>();
+
+					if (isCurrentlyHosting &&
+						(s_characterRosterFrozen || s_directLaunchRoster) &&
+						PublishRuntimeCharacterRoster())
+					{
+						needsBroadcast = true;
+					}
 
 					if (isCurrentlyHosting)
 					{

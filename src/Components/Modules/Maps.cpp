@@ -447,10 +447,11 @@ namespace Components
 
 	void Maps::PrepareUsermap(const char* mapname)
 	{
-		if (mapname)
-		{
-			SPLoadscreens::SetLoadingMap(mapname);
-		}
+		if (!mapname || !*mapname)
+			return;
+
+
+		SPLoadscreens::SetLoadingMap(mapname);
 
 		// Handle the redundant call scenario first.
 		//

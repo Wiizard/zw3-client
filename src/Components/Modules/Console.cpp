@@ -1,5 +1,6 @@
 #include "Console.hpp"
 #include "TextRenderer.hpp"
+#include "Window.hpp"
 
 #include "Terminus_4.49.1.ttf.hpp"
 
@@ -32,6 +33,8 @@ namespace Components
 
 	bool Console::HasConsole = false;
 	bool Console::SkipShutdown = false;
+	std::atomic_bool Console::ShutdownRequested = false;
+	std::atomic_bool Console::ShutdownWatchdogStarted = false;
 
 	COLORREF Console::TextColor =
 #ifdef _DEBUG
@@ -596,7 +599,7 @@ namespace Components
 		}
 
 		case WM_CLOSE:
-			RequestShutdown();
+			RequestShutdown(5000);
 			return 0;
 
 		case WM_SIZE:
@@ -663,20 +666,48 @@ namespace Components
 
 	}
 
-	void Console::RequestShutdown()
+	void Console::RequestShutdown(const DWORD watchdogDelayMs)
 	{
+		const auto alreadyRequested = ShutdownRequested.exchange(true);
+		if (alreadyRequested)
+		{
+			return;
+		}
+
 		Command::Execute("quit\n", false);
+		StartShutdownWatchdog(watchdogDelayMs);
+	}
 
-		std::thread([]
+	void Console::StartShutdownWatchdog(const DWORD watchdogDelayMs)
+	{
+		if (ShutdownWatchdogStarted.exchange(true))
+		{
+			return;
+		}
+
+		std::thread([watchdogDelayMs]
 			{
-				std::this_thread::sleep_for(10s);
-
-				if (GetCurrentProcessId() != 0)
-				{
-					TerminateProcess(GetCurrentProcess(), EXIT_SUCCESS);
-				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(watchdogDelayMs));
+				TerminateProcess(GetCurrentProcess(), EXIT_SUCCESS);
 			}).detach();
 	}
+
+	BOOL WINAPI Console::ConsoleCtrlHandler(const DWORD ctrlType)
+	{
+		switch (ctrlType)
+		{
+		case CTRL_C_EVENT:
+		case CTRL_BREAK_EVENT:
+		case CTRL_CLOSE_EVENT:
+		case CTRL_LOGOFF_EVENT:
+		case CTRL_SHUTDOWN_EVENT:
+			RequestShutdown(3000);
+			return TRUE;
+		default:
+			return FALSE;
+		}
+	}
+
 
 	void Console::ConsoleRunner()
 	{
@@ -710,7 +741,7 @@ namespace Components
 		{
 			// Send quit command to safely terminate the application, then force exit
 			// if shutdown hangs and would otherwise leave zw3.exe in the background.
-			RequestShutdown();
+			Command::Execute("wait 200;quit\n", false);
 		}
 	}
 
@@ -879,6 +910,12 @@ namespace Components
 		AssertOffset(Game::clientUIActive_t, connectionState, 0x9B8);
 		AssertOffset(Game::clientUIActive_t, keyCatchers, 0x9B0);
 
+		SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
+		Scheduler::OnGameShutdown([]
+			{
+				StartShutdownWatchdog(5000);
+			});
+
 		// Console '%s: %s> ' string
 #ifdef EXPERIMENTAL_BUILD
 		Utils::Hook::Set<const char*>(0x5A44B4, "Call of Duty: Zombie Warfare 3> ");
@@ -994,6 +1031,7 @@ namespace Components
 
 	Console::~Console()
 	{
+		SetConsoleCtrlHandler(ConsoleCtrlHandler, FALSE);
 		SetSkipShutdown();
 		if (ConsoleThread.joinable())
 		{

@@ -33,6 +33,18 @@ namespace Components::GSC
 			return std::isfinite(scale) && scale >= MinModelScale && scale <= MaxModelScale;
 		}
 
+		bool HasCompatibleDObjHierarchy(const Game::XModel* source, const Game::XModel* replacement)
+		{
+			return source && replacement
+				&& source->numBones == replacement->numBones
+				&& source->numRootBones == replacement->numRootBones
+				&& source->numsurfs == replacement->numsurfs
+				&& source->boneNames == replacement->boneNames
+				&& source->parentList == replacement->parentList
+				&& source->quats == replacement->quats
+				&& source->partClassification == replacement->partClassification;
+		}
+
 		float Lerp(const float from, const float to, const float fraction)
 		{
 			return from + ((to - from) * fraction);
@@ -1076,7 +1088,8 @@ namespace Components::GSC
 				continue;
 			}
 
-			if (entityModel && sourceModel != EntityModelCloneSources.end() && model->name && sourceModel->second == model->name)
+			if (entityModel && sourceModel != EntityModelCloneSources.end() && model->name && sourceModel->second == model->name
+				&& HasCompatibleDObjHierarchy(model, entityModel))
 			{
 				model = entityModel;
 				continue;
@@ -1084,16 +1097,12 @@ namespace Components::GSC
 
 			if (model->name)
 			{
-				if (auto* globalOverride = GetGlobalVisualModelOverride(model->name))
+				if (auto* globalOverride = GetGlobalVisualModelOverride(model->name);
+					HasCompatibleDObjHierarchy(model, globalOverride))
 				{
 					model = globalOverride;
 				}
 			}
-		}
-
-		if (entityModel && obj->numModels == 1)
-		{
-			obj->models[0] = entityModel;
 		}
 
 		if (obj->numModels > 0 && obj->models[0])
@@ -1697,7 +1706,13 @@ namespace Components::GSC
 		const auto entNum = ent->s.number;
 		if (const auto cloneIndex = EntityModelCloneIndexes.find(entNum); cloneIndex != EntityModelCloneIndexes.end())
 		{
-			if (auto* clone = GetModelByIndex(cloneIndex->second))
+			auto* clone = GetModelByIndex(cloneIndex->second);
+			auto* currentModel = GetModelByIndex(ent->model);
+			const auto sourceModel = EntityModelCloneSources.find(entNum);
+			const auto sourceMatches = clone && currentModel && sourceModel != EntityModelCloneSources.end()
+				&& (currentModel == clone || (currentModel->name && sourceModel->second == currentModel->name));
+
+			if (sourceMatches)
 			{
 				if (activateOverride)
 				{
@@ -1707,13 +1722,7 @@ namespace Components::GSC
 				return clone;
 			}
 
-			RemoveModelScaleTransition(GetModelByIndex(cloneIndex->second));
-			ModelCache::cached_models_reallocated[cloneIndex->second] = nullptr;
-			ModelCache::gameModels_reallocated[cloneIndex->second] = nullptr;
-			EntityModelCloneIndexes.erase(cloneIndex);
-			EntityModelCloneSources.erase(entNum);
-			EntityModelCloneOrigins.erase(entNum);
-			EntityVisualModelOverrides.erase(entNum);
+			ClearEntityModelClone(entNum, false);
 		}
 
 		auto* sourceModel = GetModelByIndex(ent->model);
@@ -1757,7 +1766,9 @@ namespace Components::GSC
 
 		if (const auto cloneIndex = EntityModelCloneIndexes.find(entNum); cloneIndex != EntityModelCloneIndexes.end())
 		{
-			if (cloneIndex->second == modelIndex)
+			const auto sourceModel = EntityModelCloneSources.find(entNum);
+			if (cloneIndex->second == modelIndex && sourceModel != EntityModelCloneSources.end()
+				&& sourceModelName && sourceModel->second == sourceModelName)
 			{
 				auto* clone = GetModelByIndex(cloneIndex->second);
 				if (clone && activateOverride)
@@ -1768,13 +1779,7 @@ namespace Components::GSC
 				return clone;
 			}
 
-			RemoveModelScaleTransition(GetModelByIndex(cloneIndex->second));
-			ModelCache::cached_models_reallocated[cloneIndex->second] = nullptr;
-			ModelCache::gameModels_reallocated[cloneIndex->second] = nullptr;
-			EntityModelCloneIndexes.erase(cloneIndex);
-			EntityModelCloneSources.erase(entNum);
-			EntityModelCloneOrigins.erase(entNum);
-			EntityVisualModelOverrides.erase(entNum);
+			ClearEntityModelClone(entNum, false);
 		}
 
 		auto* sourceModel = Game::DB_FindXAssetHeader(Game::ASSET_TYPE_XMODEL, sourceModelName).model;
@@ -1968,13 +1973,24 @@ namespace Components::GSC
 
 		const auto entNum = ent->s.number;
 		std::string sourceModelName;
-		if (const auto source = EntityModelCloneSources.find(entNum); source != EntityModelCloneSources.end())
+		if (auto* currentModel = GetModelByIndex(ent->model); currentModel && currentModel->name)
+		{
+			const auto cloneIndex = EntityModelCloneIndexes.find(entNum);
+			const auto source = EntityModelCloneSources.find(entNum);
+			auto* clone = cloneIndex != EntityModelCloneIndexes.end() ? GetModelByIndex(cloneIndex->second) : nullptr;
+
+			if (currentModel == clone && source != EntityModelCloneSources.end())
+			{
+				sourceModelName = source->second;
+			}
+			else
+			{
+				sourceModelName = currentModel->name;
+			}
+		}
+		else if (const auto source = EntityModelCloneSources.find(entNum); source != EntityModelCloneSources.end())
 		{
 			sourceModelName = source->second;
-		}
-		else if (auto* model = GetModelByIndex(ent->model); model && model->name)
-		{
-			sourceModelName = model->name;
 		}
 
 		if (sourceModelName.empty())

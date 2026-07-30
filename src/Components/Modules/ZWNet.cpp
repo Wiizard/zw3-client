@@ -109,7 +109,7 @@ namespace Components
 		std::string FriendlyErrorText(const std::string& error)
 		{
 			if (error.empty()) return {};
-			if (error == "ZWNET_LOGIN_REQUIRED") return "Sign in through the ZW3 launcher.";
+			if (error == "ZWNET_LOGIN_REQUIRED") return "Sign in on the ZW3 Stats page.";
 			if (error == "ZWNET_SESSION_EXPIRED") return "Your ZW3 session expired. Please sign in again.";
 			if (error == "ZWNET_SEARCH_FAILED") return "Quick Play could not enter matchmaking. Please try again.";
 			if (error == "ZWNET_VERSION_MISMATCH") return "Your ZW3 client version does not match the online service.";
@@ -119,7 +119,7 @@ namespace Components
 			if (error == "ZWNET_ROUTE_UNAVAILABLE") return "No direct or relay route is available.";
 			if (error == "ZWNET_SERVER_NOT_READY") return "The assigned ZW3 server is no longer available. Return to the lobby and search again.";
 			if (error == "ZWNET_DESCRIPTOR_INVALID") return "The assigned server address is invalid.";
-			if (error == "ZWNET_ACCOUNT_LINK_REQUIRED") return "Sign in with Discord and link this ZW3 GUID first.";
+			if (error == "ZWNET_ACCOUNT_LINK_REQUIRED") return "Link this GUID in ZW3 Stats Settings.";
 			if (error == "ZWNET_SESSION_STORAGE_FAILED") return "The secure ZW3 session could not be stored.";
 			if (error == "ZWNET_REGISTRATION_UNAVAILABLE") return "The ZW3 account page is unavailable.";
 			if (error == "ZWNET_PARTY_FAILED") return "The ZW3 party could not be created or loaded.";
@@ -130,10 +130,17 @@ namespace Components
 			return "The ZW3 online service could not complete this request.";
 		}
 
+		std::string JsonString(const nlohmann::json& object, const char* key, const char* fallback = "")
+		{
+			if (!object.is_object()) return fallback;
+			const auto it = object.find(key);
+			return it != object.end() && it->is_string() ? it->get<std::string>() : std::string{fallback};
+		}
+
 		std::string ResponseErrorCode(const nlohmann::json& response)
 		{
 			if (!response.contains("error") || !response.at("error").is_object()) return {};
-			return response.at("error").value("code", "");
+			return JsonString(response.at("error"), "code");
 		}
 
 		bool IsActiveMatchmakingState(const std::string& state)
@@ -185,6 +192,7 @@ namespace Components
 	std::atomic_bool& ZWNet::ActiveState() { static std::atomic_bool value = false; return value; }
 	std::atomic_bool& ZWNet::SearchingState() { static std::atomic_bool value = false; return value; }
 	std::atomic_bool& ZWNet::ClosingOnlineSessionState() { static std::atomic_bool value = false; return value; }
+	std::atomic_bool& ZWNet::ServerJoinTransitionState() { static std::atomic_bool value = false; return value; }
 	bool& ZWNet::LoginInFlightState() { static bool value = false; return value; }
 	std::mutex& ZWNet::StateMutex() { static std::mutex value; return value; }
 	std::string& ZWNet::AccessTokenState() { static std::string value; return value; }
@@ -408,13 +416,13 @@ namespace Components
 	void ZWNet::Register()
 	{
 		const auto result = Request("GET", "/social/client/register");
-		if (!result || !result->contains("login_url"))
+		if (!result || !result->contains("guid_link_url"))
 		{
 			SetState("ERROR", "ZWNET_REGISTRATION_UNAVAILABLE");
 			return;
 		}
-		const auto url = result->at("login_url").get<std::string>();
-		if (url != "https://backend.zw3.eu/account.html")
+		const auto url = JsonString(*result, "guid_link_url");
+		if (url != "https://stats.zw3.eu/settings")
 		{
 			SetState("ERROR", "ZWNET_REGISTRATION_UNAVAILABLE");
 			return;
@@ -477,14 +485,14 @@ namespace Components
 	void ZWNet::UpdateLobbyDvars(const nlohmann::json& party)
 	{
 		if (party.is_null() || !party.is_object()) return;
-		const auto partyId = party.value("id", "");
-		const auto leaderId = party.value("leader_id", "");
-		const auto state = party.value("state", "IDLE");
+		const auto partyId = JsonString(party, "id");
+		const auto leaderId = JsonString(party, "leader_id");
+		const auto state = JsonString(party, "state", "IDLE");
 		const auto members = party.value("members", nlohmann::json::array());
 		std::string owner;
 		std::string currentPlayerId;
 		{ std::lock_guard lock(StateMutex()); currentPlayerId = CurrentPlayerIdState(); }
-		for (const auto& member : members) if (member.value("player_id", "") == leaderId) owner = member.value("display_name", "");
+		for (const auto& member : members) if (JsonString(member, "player_id") == leaderId) owner = JsonString(member, "display_name");
 		{
 			std::lock_guard lock(StateMutex());
 			CurrentPartyIdState() = partyId;
@@ -507,11 +515,11 @@ namespace Components
 				{
 					const auto& member = members[i];
 					const auto ready = member.value("ready", 0) == 1;
-					Dvar::Var(prefix + "_name").set(member.value("display_name", ""));
-					Dvar::Var(prefix + "_role").set(member.value("player_id", "") == leaderId ? "PARTY LEADER" : "MEMBER");
+					Dvar::Var(prefix + "_name").set(JsonString(member, "display_name"));
+					Dvar::Var(prefix + "_role").set(JsonString(member, "player_id") == leaderId ? "PARTY LEADER" : "MEMBER");
 					Dvar::Var(prefix + "_ready").set(ready);
 					allReady = allReady && ready;
-					if (member.value("player_id", "") == currentPlayerId) selfReady = ready;
+					if (JsonString(member, "player_id") == currentPlayerId) selfReady = ready;
 				}
 				else
 				{
@@ -526,13 +534,21 @@ namespace Components
 		}, Scheduler::Pipeline::MAIN);
 	}
 
+	void ZWNet::ResumeParty(const nlohmann::json& party)
+	{
+		if (!ActiveState() || !party.is_object() || JsonString(party, "id").empty()) return;
+		SearchingState() = false;
+		UpdateLobbyDvars(party);
+		SetState("IN_PARTY");
+	}
+
 	void ZWNet::EnterLobby(std::string map)
 	{
 		auto party = Request("GET", "/zwnet/parties/current");
 		if (!party || party->is_null()) party = Request("POST", "/zwnet/parties/create", nlohmann::json::object());
 		if (!party || party->contains("error")) { SetState("ERROR", "ZWNET_PARTY_FAILED"); return; }
 		UpdateLobbyDvars(*party);
-		const auto partyId = party->value("id", "");
+		const auto partyId = JsonString(*party, "id");
 		if (!partyId.empty())
 		{
 			Request("POST", "/zwnet/parties/" + partyId + "/set-map", {{"map", map}});
@@ -574,6 +590,79 @@ namespace Components
 			Dvar::Var("zwnet_all_ready").set(false);
 			Dvar::Var("zwnet_start_phase").set("");
 			Dvar::Var("zwnet_start_seconds").set(0);
+		}, Scheduler::Pipeline::MAIN);
+	}
+
+	void ZWNet::UpdateMatchLobbyDvars(const nlohmann::json& status)
+	{
+		if (!status.contains("lobby") || !status.at("lobby").is_object()) return;
+		const auto& lobby = status.at("lobby");
+		const auto membersIt = lobby.find("members");
+		if (membersIt == lobby.end() || !membersIt->is_array()) return;
+		struct LobbyMemberSnapshot
+		{
+			std::string playerId;
+			std::string displayName;
+			std::string role;
+			bool ready{};
+		};
+		std::array<LobbyMemberSnapshot, 4> members{};
+		std::size_t memberCount{};
+		for (const auto& member : *membersIt)
+		{
+			if (memberCount >= members.size()) break;
+			if (!member.is_object()) continue;
+			auto& snapshot = members[memberCount++];
+			snapshot.playerId = JsonString(member, "player_id");
+			snapshot.displayName = JsonString(member, "display_name");
+			snapshot.role = JsonString(member, "role", "MEMBER");
+			const auto readyIt = member.find("ready");
+			if (readyIt != member.end())
+			{
+				if (readyIt->is_boolean()) snapshot.ready = readyIt->get<bool>();
+				else if (readyIt->is_number_integer()) snapshot.ready = readyIt->get<std::int64_t>() != 0;
+			}
+		}
+		const auto stateText = FriendlyStateText(JsonString(status, "state", "WAITING_FOR_READY"));
+		std::string currentPlayerId;
+		{ std::lock_guard lock(StateMutex()); currentPlayerId = CurrentPlayerIdState(); }
+		Scheduler::Once([members = std::move(members), memberCount, stateText, currentPlayerId]
+		{
+			if (!ActiveState()) return;
+			static constexpr std::array memberPrefixes
+			{
+				"zwnet_lobby_member_0",
+				"zwnet_lobby_member_1",
+				"zwnet_lobby_member_2",
+				"zwnet_lobby_member_3",
+			};
+			Dvar::Var("zwnet_lobby_active").set(true);
+			Dvar::Var("zwnet_lobby_member_count").set(static_cast<int>(memberCount));
+			Dvar::Var("zwnet_lobby_status_text").set(stateText);
+			bool allReady = memberCount > 0;
+			bool selfReady = false;
+			for (std::size_t i = 0; i < members.size(); ++i)
+			{
+				const auto prefix = memberPrefixes[i];
+				if (i < memberCount)
+				{
+					const auto& member = members[i];
+					Dvar::Var(std::string{prefix} + "_name").set(member.displayName);
+					Dvar::Var(std::string{prefix} + "_role").set(member.role);
+					Dvar::Var(std::string{prefix} + "_ready").set(member.ready);
+					allReady = allReady && member.ready;
+					if (member.playerId == currentPlayerId) selfReady = member.ready;
+				}
+				else
+				{
+					Dvar::Var(std::string{prefix} + "_name").set("");
+					Dvar::Var(std::string{prefix} + "_role").set("");
+					Dvar::Var(std::string{prefix} + "_ready").set(false);
+				}
+			}
+			Dvar::Var("zwnet_lobby_self_ready").set(selfReady);
+			Dvar::Var("zwnet_all_ready").set(allReady);
+			Dvar::Var("zwnet_lobby_can_start").set(false);
 		}, Scheduler::Pipeline::MAIN);
 	}
 
@@ -669,6 +758,7 @@ namespace Components
 	{
 		if (!ActiveState() || ClosingOnlineSessionState().exchange(true)) return;
 		const auto closingGuard = gsl::finally([] { ClosingOnlineSessionState() = false; });
+		ServerJoinTransitionState() = false;
 		std::string matchId;
 		{
 			std::lock_guard lock(StateMutex());
@@ -727,7 +817,7 @@ namespace Components
 			return;
 		}
 		const auto key = relay ? "relay_endpoint" : "direct_endpoint";
-		const auto endpoint = descriptor->value(key, "");
+		const auto endpoint = JsonString(*descriptor, key);
 		if (endpoint.empty()) { SearchingState() = false; SetState("ERROR", "ZWNET_DESCRIPTOR_INVALID"); return; }
 		// Never place the returned short-lived connect ticket in a command line or URL.
 		SearchingState() = false;
@@ -749,6 +839,11 @@ namespace Components
 			Dvar::Var("zwnet_server_endpoint").set(endpoint);
 			Dvar::Var("zwnet_server_status").set("SERVER ASSIGNED");
 			Dvar::Var("zwnet_join_status").set("JOINING SERVER");
+			ServerJoinTransitionState() = true;
+			Scheduler::Once([]
+			{
+				ServerJoinTransitionState() = false;
+			}, Scheduler::Pipeline::MAIN, 12s);
 			Party::Connect(target);
 		}, Scheduler::Pipeline::MAIN);
 	}
@@ -762,8 +857,8 @@ namespace Components
 		const auto allReady = status.value("all_ready", false);
 		{
 			std::lock_guard lock(StateMutex());
-			CurrentProposalIdState() = vote.value("proposal_id", "");
-			CurrentMatchIdState() = status.value("match_id", "");
+			CurrentProposalIdState() = JsonString(vote, "proposal_id");
+			CurrentMatchIdState() = JsonString(status, "match_id");
 		}
 		Scheduler::Once([vote, choices, allReady]
 		{
@@ -773,7 +868,7 @@ namespace Components
 			Dvar::Var("zwnet_all_ready").set(allReady);
 			Dvar::Var("zwnet_start_phase").set("");
 			Dvar::Var("zwnet_start_seconds").set(0);
-			Dvar::Var("zwnet_vote_proposal_id").set(vote.value("proposal_id", ""));
+			Dvar::Var("zwnet_vote_proposal_id").set(JsonString(vote, "proposal_id"));
 			Dvar::Var("zwnet_vote_seconds").set(vote.value("seconds_remaining", 0));
 			Dvar::Var("zwnet_vote_selection").set(selected);
 			Dvar::Var("zwnet_vote_winner_id").set("");
@@ -784,9 +879,9 @@ namespace Components
 			for (std::size_t i = 0; i < 2; ++i)
 			{
 				const auto prefix = std::format("zwnet_vote_map_{}", i == 0 ? "a" : "b");
-				Dvar::Var(prefix + "_id").set(choices[i].value("id", ""));
-				Dvar::Var(prefix + "_name").set(choices[i].value("name", ""));
-				Dvar::Var(prefix + "_image").set(choices[i].value("image", ""));
+				Dvar::Var(prefix + "_id").set(JsonString(choices[i], "id"));
+				Dvar::Var(prefix + "_name").set(JsonString(choices[i], "name"));
+				Dvar::Var(prefix + "_image").set(JsonString(choices[i], "image"));
 				Dvar::Var(prefix + "_votes").set(choices[i].value("votes", 0));
 			}
 			Dvar::Var("zwnet_vote_random_votes").set(choices[2].value("votes", 0));
@@ -797,13 +892,18 @@ namespace Components
 	{
 		if (!ActiveState() || !SearchingState()) return;
 		const auto party = Request("GET", "/zwnet/parties/current");
-		if (party && !party->is_null() && !party->contains("error")) UpdateLobbyDvars(*party);
 		const auto status = Request("GET", "/zwnet/matchmaking/status");
-		if (!status || status->contains("error")) return;
-		const auto state = status->value("state", "SEARCHING");
+		if (!status || status->contains("error"))
+		{
+			if (party && !party->is_null() && !party->contains("error")) UpdateLobbyDvars(*party);
+			return;
+		}
+		if (status->contains("lobby") && status->at("lobby").is_object()) UpdateMatchLobbyDvars(*status);
+		else if (party && !party->is_null() && !party->contains("error")) UpdateLobbyDvars(*party);
+		const auto state = JsonString(*status, "state", "SEARCHING");
 		const auto joinCountdown = status->value("join_countdown_seconds", 0);
 		const auto allReady = status->value("all_ready", false);
-		const auto startPhase = status->value("start_phase", "");
+		const auto startPhase = JsonString(*status, "start_phase");
 		const auto startSeconds = status->value("start_seconds", joinCountdown);
 		if (state == "ERROR" || state == "FAILED")
 		{
@@ -816,8 +916,8 @@ namespace Components
 		if (state == "MAP_VOTE") UpdateVoteDvars(*status);
 		else
 		{
-			const auto map = status->value("map", "");
-			const auto matchId = status->value("match_id", "");
+			const auto map = JsonString(*status, "map");
+			const auto matchId = JsonString(*status, "match_id");
 			if (!matchId.empty())
 			{
 				std::lock_guard lock(StateMutex());
@@ -827,8 +927,8 @@ namespace Components
 			auto mapImage = std::string{};
 			if (status->contains("selected_map") && status->at("selected_map").is_object())
 			{
-				mapName = status->at("selected_map").value("name", "");
-				mapImage = status->at("selected_map").value("image", "");
+				mapName = JsonString(status->at("selected_map"), "name");
+				mapImage = JsonString(status->at("selected_map"), "image");
 			}
 			auto serverStatus = std::string{"NOT ASSIGNED"};
 			auto joinStatus = std::string{"WAITING IN LOBBY"};
@@ -947,13 +1047,13 @@ namespace Components
 	{
 		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled()) return;
 		PatchMaterialEnumerationScratch();
-		Localization::Set("ZWNET_LOGIN_REQUIRED", "Sign in through the ZW3 launcher.");
+		Localization::Set("ZWNET_LOGIN_REQUIRED", "Sign in on the ZW3 Stats page.");
 		Localization::Set("ZWNET_SESSION_EXPIRED", "Your ZW3 session expired. Please sign in again.");
 		Localization::Set("ZWNET_SEARCH_FAILED", "Matchmaking could not be started.");
 		Localization::Set("ZWNET_ROUTE_UNAVAILABLE", "No direct or relay route is available.");
 		Localization::Set("ZWNET_SERVER_NOT_READY", "The assigned ZW3 server is no longer available.");
 		Localization::Set("ZWNET_DESCRIPTOR_INVALID", "The connection response was invalid.");
-		Localization::Set("ZWNET_ACCOUNT_LINK_REQUIRED", "Sign in with Discord and link this ZW3 GUID first.");
+		Localization::Set("ZWNET_ACCOUNT_LINK_REQUIRED", "Link this GUID in ZW3 Stats Settings.");
 		Localization::Set("ZWNET_SESSION_STORAGE_FAILED", "The secure ZW3 session could not be stored.");
 		Localization::Set("ZWNET_REGISTRATION_UNAVAILABLE", "The ZW3 registration page is unavailable.");
 		Localization::Set("ZWNET_PARTY_FAILED", "The party could not be created or loaded.");
@@ -1007,12 +1107,25 @@ namespace Components
 		UIScript::Add("ZWNET_VoteRandom", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { EnqueueAsync([] { VoteMap("RANDOM"); }); });
 		Events::OnCLDisconnected([](const bool wasConnected)
 		{
+			// CL_ConnectFromParty performs an internal CL_Disconnect while moving
+			// from the ZWNET lobby into the assigned dedicated server. That planned
+			// transition must not revoke the match and reset the server underneath
+			// the in-flight connection.
+			if (ServerJoinTransitionState().exchange(false))
+			{
+				Logger::Print("ZWNET server join transition: preserving online session\n");
+				return;
+			}
 			bool hasMatch = false;
 			{
 				std::lock_guard lock(StateMutex());
 				hasMatch = !CurrentMatchIdState().empty();
 			}
 			if (wasConnected || hasMatch) EnqueueAsync([] { CloseOnlineSession(false); });
+		});
+		Events::OnCGameInit([]
+		{
+			ServerJoinTransitionState() = false;
 		});
 		Scheduler::OnGameInitialized([]
 		{
@@ -1051,6 +1164,7 @@ namespace Components
 		if (ActiveState()) CloseOnlineSession(true);
 		ActiveState() = false;
 		SearchingState() = false;
+		ServerJoinTransitionState() = false;
 		{
 			std::lock_guard lock(StateMutex());
 			LoginInFlightState() = false;

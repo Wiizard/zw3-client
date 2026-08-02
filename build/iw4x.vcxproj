@@ -197,6 +197,7 @@ tools\premake5 generate-buildinfo</Command>
     <ClInclude Include="..\src\Components\Modules\FileSystem.hpp" />
     <ClInclude Include="..\src\Components\Modules\Flags.hpp" />
     <ClInclude Include="..\src\Components\Modules\Friends.hpp" />
+    <ClInclude Include="..\src\Components\Modules\GSC\Entity.hpp" />
     <ClInclude Include="..\src\Components\Modules\GSC\Field.hpp" />
     <ClInclude Include="..\src\Components\Modules\GSC\GSC.hpp" />
     <ClInclude Include="..\src\Components\Modules\GSC\IO.hpp" />
@@ -398,6 +399,7 @@ tools\premake5 generate-buildinfo</Command>
     <ClCompile Include="..\src\Components\Modules\FileSystem.cpp" />
     <ClCompile Include="..\src\Components\Modules\Flags.cpp" />
     <ClCompile Include="..\src\Components\Modules\Friends.cpp" />
+    <ClCompile Include="..\src\Components\Modules\GSC\Entity.cpp" />
     <ClCompile Include="..\src\Components\Modules\GSC\Field.cpp" />
     <ClCompile Include="..\src\Components\Modules\GSC\GSC.cpp" />
     <ClCompile Include="..\src\Components\Modules\GSC\IO.cpp" />

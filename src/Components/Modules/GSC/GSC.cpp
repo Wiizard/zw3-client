@@ -9,11 +9,13 @@
 #include "ScriptStorage.hpp"
 #include "String.hpp"
 #include "UserInfo.hpp"
+#include "Entity.hpp"
 
 namespace Components::GSC
 {
 	GSC::GSC()
 	{
+		Loader::Register(new Entity());
 		Loader::Register(new Field());
 		Loader::Register(new Int64());
 		Loader::Register(new IO());

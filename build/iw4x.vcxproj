@@ -122,6 +122,8 @@ tools\premake5 generate-buildinfo</Command>
       <AdditionalLibraryDirectories>..\deps\dxsdk\Lib\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <ImportLibrary>bin\Win32\Release\zw3.lib</ImportLibrary>
       <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
+      <GenerateMapFile>true</GenerateMapFile>
+      <MapFileName>$(TargetDir)$(TargetName).map</MapFileName>
       <AdditionalOptions>/IGNORE:4702 /LTCG %(AdditionalOptions)</AdditionalOptions>
     </Link>
     <PreBuildEvent>
@@ -264,15 +266,16 @@ tools\premake5 generate-buildinfo</Command>
     <ClInclude Include="..\src\Components\Modules\Toast.hpp" />
     <ClInclude Include="..\src\Components\Modules\UIFeeder.hpp" />
     <ClInclude Include="..\src\Components\Modules\UIScript.hpp" />
-    <ClInclude Include="..\src\Components\Modules\Updater.hpp" />
     <ClInclude Include="..\src\Components\Modules\UPnP.hpp" />
     <ClInclude Include="..\src\Components\Modules\ViewModelFxSetup.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Updater.hpp" />
     <ClInclude Include="..\src\Components\Modules\VisionFile.hpp" />
     <ClInclude Include="..\src\Components\Modules\Voice.hpp" />
     <ClInclude Include="..\src\Components\Modules\Vote.hpp" />
     <ClInclude Include="..\src\Components\Modules\Weapon.hpp" />
     <ClInclude Include="..\src\Components\Modules\Window.hpp" />
     <ClInclude Include="..\src\Components\Modules\ZW3Changelog.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ZWNet.hpp" />
     <ClInclude Include="..\src\Components\Modules\ZoneBuilder.hpp" />
     <ClInclude Include="..\src\Components\Modules\Zones.hpp" />
     <ClInclude Include="..\src\Components\Modules\ZW3StartupSplash.hpp" />
@@ -465,15 +468,16 @@ tools\premake5 generate-buildinfo</Command>
     <ClCompile Include="..\src\Components\Modules\Toast.cpp" />
     <ClCompile Include="..\src\Components\Modules\UIFeeder.cpp" />
     <ClCompile Include="..\src\Components\Modules\UIScript.cpp" />
-    <ClCompile Include="..\src\Components\Modules\Updater.cpp" />
     <ClCompile Include="..\src\Components\Modules\UPnP.cpp" />
     <ClCompile Include="..\src\Components\Modules\ViewModelFx.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Updater.cpp" />
     <ClCompile Include="..\src\Components\Modules\VisionFile.cpp" />
     <ClCompile Include="..\src\Components\Modules\Voice.cpp" />
     <ClCompile Include="..\src\Components\Modules\Vote.cpp" />
     <ClCompile Include="..\src\Components\Modules\Weapon.cpp" />
     <ClCompile Include="..\src\Components\Modules\Window.cpp" />
     <ClCompile Include="..\src\Components\Modules\ZW3Changelog.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ZWNet.cpp" />
     <ClCompile Include="..\src\Components\Modules\ZoneBuilder.cpp" />
     <ClCompile Include="..\src\Components\Modules\Zones.cpp" />
     <ClCompile Include="..\src\DllMain.cpp" />

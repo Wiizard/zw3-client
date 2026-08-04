@@ -3,17 +3,436 @@
 #include <proto/friends.pb.h>
 #pragma warning(pop)
 
+#include <Utils/WebIO.hpp>
+#include <wincrypt.h>
+
+#include "Auth.hpp"
 #include "Friends.hpp"
 #include "Events.hpp"
+#include "FileSystem.hpp"
 #include "Materials.hpp"
 #include "Node.hpp"
 #include "Party.hpp"
+#include "Scheduler.hpp"
 #include "TextRenderer.hpp"
 #include "Toast.hpp"
 #include "UIFeeder.hpp"
+#include "UIScript.hpp"
 
 namespace Components
 {
+	namespace
+	{
+		constexpr auto ZWNET_SOCIAL_API_BASE = "https://backend.zw3.eu";
+		constexpr auto ZWNET_SOCIAL_USER_AGENT = "ZW3-ZWNET-Social/3.0.3";
+		constexpr auto SOCIAL_FRIEND_FEEDER = 65.0f;
+		constexpr auto SOCIAL_REQUEST_FEEDER = 66.0f;
+		constexpr std::size_t MAX_SOCIAL_FRIENDS = 512;
+		constexpr std::size_t MAX_SOCIAL_REQUESTS = 128;
+
+		struct SocialFriend
+		{
+			std::string id;
+			std::string guid;
+			std::string discordId;
+			std::string displayName;
+			std::string status;
+			bool joinable{};
+		};
+
+		struct IncomingFriendRequest
+		{
+			nlohmann::json requestId;
+			std::string senderId;
+			std::string guid;
+			std::string displayName;
+		};
+
+		std::atomic_bool SocialActive{false};
+		std::atomic_bool SocialBusy{false};
+		std::mutex SocialMutex;
+		std::vector<SocialFriend> SocialFriends;
+		std::vector<IncomingFriendRequest> IncomingRequests;
+		unsigned int CurrentSocialFriend{};
+		unsigned int CurrentIncomingRequest{};
+
+		std::string SafeSocialText(std::string value, const std::size_t maxLength)
+		{
+			value = TextRenderer::StripColors(value);
+			value.erase(std::remove_if(value.begin(), value.end(), [](const unsigned char character)
+			{
+				return character < 0x20 || character == 0x7F;
+			}), value.end());
+			if (value.size() > maxLength) value.resize(maxLength);
+			return value;
+		}
+
+		std::string JsonString(const nlohmann::json& object, const char* key)
+		{
+			if (!object.is_object() || !object.contains(key) || !object.at(key).is_string()) return {};
+			return object.at(key).get<std::string>();
+		}
+
+		bool JsonBool(const nlohmann::json& object, const char* key, const bool fallback = false)
+		{
+			if (!object.is_object() || !object.contains(key)) return fallback;
+			const auto& value = object.at(key);
+			if (value.is_boolean()) return value.get<bool>();
+			if (value.is_number_integer()) return value.get<std::int64_t>() != 0;
+			if (value.is_number_unsigned()) return value.get<std::uint64_t>() != 0;
+			return fallback;
+		}
+
+		bool IsPublicGuid(const std::string& value)
+		{
+			return value.size() == 16 && std::ranges::all_of(value, [](const unsigned char character)
+			{
+				return std::isxdigit(character) != 0;
+			});
+		}
+
+		bool IsOpaquePartyId(const std::string& value)
+		{
+			return !value.empty() && value.size() <= 80 && std::ranges::all_of(value, [](const unsigned char character)
+			{
+				return std::isalnum(character) != 0 || character == '-' || character == '_';
+			});
+		}
+
+		void SetSocialUi(const std::string& status, const bool busy)
+		{
+			Scheduler::Once([status, busy]
+			{
+				if (!SocialActive) return;
+				Dvar::Var("ui_social_status_message").set(status);
+				Dvar::Var("ui_social_invite_busy").set(busy);
+			}, Scheduler::Pipeline::MAIN);
+		}
+
+		std::optional<std::string> LoadSocialAccessToken()
+		{
+			const auto encrypted = Utils::IO::ReadFile((FileSystem::GetAppdataPath() / "zwnet.session").string());
+			if (encrypted.empty()) return std::nullopt;
+
+			DATA_BLOB input
+			{
+				static_cast<DWORD>(encrypted.size()),
+				reinterpret_cast<BYTE*>(const_cast<char*>(encrypted.data()))
+			};
+			DATA_BLOB output{};
+			if (!CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &output))
+			{
+				return std::nullopt;
+			}
+
+			std::string plain{reinterpret_cast<char*>(output.pbData), output.cbData};
+			SecureZeroMemory(output.pbData, output.cbData);
+			LocalFree(output.pbData);
+			const auto clearPlain = gsl::finally([&plain]
+			{
+				if (!plain.empty()) SecureZeroMemory(plain.data(), plain.size());
+			});
+
+			try
+			{
+				const auto session = nlohmann::json::parse(plain);
+				if (!session.contains("access_token") || !session.at("access_token").is_string()) return std::nullopt;
+				auto accessToken = session.at("access_token").get<std::string>();
+				if (accessToken.empty() || accessToken.size() > 8192) return std::nullopt;
+				return accessToken;
+			}
+			catch (const nlohmann::json::exception&)
+			{
+				return std::nullopt;
+			}
+		}
+
+		std::optional<nlohmann::json> SocialApiRequest(const std::string& method, const std::string& path,
+			const nlohmann::json& body = nlohmann::json::object(), const bool idempotent = false)
+		{
+			if (!SocialActive || (method != "GET" && method != "POST") || path.empty() || path.front() != '/')
+			{
+				return std::nullopt;
+			}
+
+			auto accessToken = LoadSocialAccessToken();
+			if (!accessToken) return std::nullopt;
+			const auto clearToken = gsl::finally([&accessToken]
+			{
+				if (accessToken && !accessToken->empty()) SecureZeroMemory(accessToken->data(), accessToken->size());
+			});
+
+			try
+			{
+				Utils::WebIO::params headers
+				{
+					{"Accept", "application/json"},
+					{"Authorization", "Bearer " + *accessToken},
+					{"Content-Type", "application/json"}
+				};
+				if (idempotent)
+				{
+					headers["Idempotency-Key"] = std::format("zw3-social-{}-{}", Game::Sys_Milliseconds(),
+						Utils::Cryptography::Rand::GenerateChallenge());
+				}
+
+				bool success = false;
+				Utils::WebIO request(ZWNET_SOCIAL_USER_AGENT, std::string(ZWNET_SOCIAL_API_BASE) + path);
+				const auto response = method == "GET"
+					? request.setTimeout(5000)->get(headers, &success)
+					: request.setTimeout(5000)->post(body.dump(), headers, &success);
+				if (!SocialActive || !success || response.empty()) return std::nullopt;
+				const auto parsed = nlohmann::json::parse(response);
+				if (parsed.is_object() && parsed.contains("error")) return std::nullopt;
+				if (parsed.is_object() && parsed.contains("ok") && !JsonBool(parsed, "ok")) return std::nullopt;
+				return parsed;
+			}
+			catch (const std::exception&)
+			{
+				return std::nullopt;
+			}
+			catch (...)
+			{
+				return std::nullopt;
+			}
+		}
+
+		bool ReplaceSocialFriends(const nlohmann::json& response)
+		{
+			const nlohmann::json* rows = nullptr;
+			if (response.is_array()) rows = &response;
+			else if (response.is_object() && response.contains("friends") && response.at("friends").is_array())
+			{
+				rows = &response.at("friends");
+			}
+			if (!rows) return false;
+
+			std::vector<SocialFriend> updated;
+			updated.reserve(std::min(rows->size(), MAX_SOCIAL_FRIENDS));
+			for (const auto& row : *rows)
+			{
+				if (!row.is_object() || updated.size() >= MAX_SOCIAL_FRIENDS) break;
+				auto guid = JsonString(row, "guid");
+				auto id = guid;
+				if (id.empty()) id = JsonString(row, "id");
+				std::ranges::transform(id, id.begin(), [](const unsigned char character)
+				{
+					return static_cast<char>(std::tolower(character));
+				});
+				if (!IsPublicGuid(id)) continue;
+				if (guid.empty()) guid = id;
+
+				auto status = JsonString(row, "status");
+				bool joinable = JsonBool(row, "joinable");
+				if (row.contains("presence") && row.at("presence").is_object())
+				{
+					const auto& presence = row.at("presence");
+					if (status.empty()) status = JsonString(presence, "state");
+					joinable = JsonBool(presence, "joinable", joinable);
+				}
+				if (status.empty()) status = JsonBool(row, "online") ? "ONLINE" : "OFFLINE";
+				std::ranges::transform(status, status.begin(), [](const unsigned char character)
+				{
+					return static_cast<char>(std::toupper(character));
+				});
+
+				auto displayName = SafeSocialText(JsonString(row, "display_name"), 48);
+				if (displayName.empty()) displayName = SafeSocialText(JsonString(row, "player_name"), 48);
+				if (displayName.empty()) displayName = "ZW3 Player";
+				updated.push_back(
+				{
+					SafeSocialText(id, 80),
+					SafeSocialText(guid, 32),
+					SafeSocialText(JsonString(row, "discord_user_id"), 32),
+					std::move(displayName),
+					SafeSocialText(status, 32),
+					joinable
+				});
+			}
+
+			std::lock_guard lock(SocialMutex);
+			SocialFriends = std::move(updated);
+			CurrentSocialFriend = SocialFriends.empty() ? 0 : std::min<unsigned int>(CurrentSocialFriend,
+				static_cast<unsigned int>(SocialFriends.size() - 1));
+			return true;
+		}
+
+		bool ReplaceIncomingRequests(const nlohmann::json& response)
+		{
+			const nlohmann::json* rows = nullptr;
+			if (response.is_array()) rows = &response;
+			else if (response.is_object() && response.contains("requests") && response.at("requests").is_array())
+			{
+				rows = &response.at("requests");
+			}
+			if (!rows) return false;
+
+			std::vector<IncomingFriendRequest> updated;
+			updated.reserve(std::min(rows->size(), MAX_SOCIAL_REQUESTS));
+			for (const auto& row : *rows)
+			{
+				if (!row.is_object() || updated.size() >= MAX_SOCIAL_REQUESTS) break;
+				nlohmann::json requestId;
+				if (row.contains("request_id")) requestId = row.at("request_id");
+				else if (row.contains("id")) requestId = row.at("id");
+				if ((!requestId.is_string() && !requestId.is_number_integer() && !requestId.is_number_unsigned())
+					|| (requestId.is_string() && requestId.get_ref<const std::string&>().size() > 80))
+				{
+					continue;
+				}
+				const nlohmann::json* sender = nullptr;
+				if (row.contains("sender") && row.at("sender").is_object()) sender = &row.at("sender");
+				auto displayName = JsonString(row, "sender_name");
+				if (displayName.empty()) displayName = JsonString(row, "sender_display_name");
+				if (displayName.empty()) displayName = JsonString(row, "from_display_name");
+				if (displayName.empty()) displayName = JsonString(row, "display_name");
+				if (displayName.empty() && sender) displayName = JsonString(*sender, "display_name");
+				if (displayName.empty() && sender) displayName = JsonString(*sender, "name");
+				displayName = SafeSocialText(std::move(displayName), 48);
+				if (displayName.empty()) displayName = "ZW3 Player";
+				auto senderId = JsonString(row, "sender_id");
+				if (senderId.empty()) senderId = JsonString(row, "sender_guid");
+				if (senderId.empty()) senderId = JsonString(row, "from_guid");
+				auto guid = JsonString(row, "guid");
+				if (guid.empty() && sender) guid = JsonString(*sender, "guid");
+				if (senderId.empty() && sender) senderId = JsonString(*sender, "guid");
+				std::ranges::transform(guid, guid.begin(), [](const unsigned char character)
+				{
+					return static_cast<char>(std::tolower(character));
+				});
+				if (!guid.empty() && !IsPublicGuid(guid)) guid.clear();
+				if (senderId.empty()) senderId = guid;
+				updated.push_back(
+				{
+					std::move(requestId),
+					SafeSocialText(senderId, 80),
+					SafeSocialText(guid, 32),
+					std::move(displayName)
+				});
+			}
+
+			std::lock_guard lock(SocialMutex);
+			IncomingRequests = std::move(updated);
+			CurrentIncomingRequest = IncomingRequests.empty() ? 0 : std::min<unsigned int>(CurrentIncomingRequest,
+				static_cast<unsigned int>(IncomingRequests.size() - 1));
+			return true;
+		}
+
+		bool RefreshSocialFriends()
+		{
+			const auto response = SocialApiRequest("GET", "/social/friends");
+			return response && ReplaceSocialFriends(*response);
+		}
+
+		bool RefreshIncomingRequests()
+		{
+			const auto response = SocialApiRequest("GET", "/social/friends/requests");
+			return response && ReplaceIncomingRequests(*response);
+		}
+
+		void RunSocialTask(const std::string& pendingStatus, std::function<std::string()> task)
+		{
+			if (SocialBusy.exchange(true))
+			{
+				SetSocialUi("A social request is already running.", true);
+				return;
+			}
+			SetSocialUi(pendingStatus, true);
+			Scheduler::Once([task = std::move(task)]
+			{
+				std::string result = "The ZW3 social service is unavailable.";
+				try
+				{
+					result = task();
+				}
+				catch (const std::exception&)
+				{
+					result = "The ZW3 social request failed safely.";
+				}
+				catch (...)
+				{
+					result = "The ZW3 social request failed safely.";
+				}
+				SocialBusy = false;
+				SetSocialUi(result, false);
+			}, Scheduler::Pipeline::ASYNC);
+		}
+
+		unsigned int GetSocialFriendCount()
+		{
+			std::lock_guard lock(SocialMutex);
+			return static_cast<unsigned int>(SocialFriends.size());
+		}
+
+		const char* GetSocialFriendText(const unsigned int index, const int column)
+		{
+			std::string value;
+			{
+				std::lock_guard lock(SocialMutex);
+				if (index >= SocialFriends.size()) return "";
+				const auto& user = SocialFriends[index];
+				switch (column)
+				{
+				case 0: value = ""; break;
+				case 1: value = user.displayName; break;
+				case 2: value = user.status + (user.joinable ? " / JOINABLE" : ""); break;
+				default: return "";
+				}
+			}
+			return Utils::String::VA("%s", value.c_str());
+		}
+
+		void SelectSocialFriend(const unsigned int index)
+		{
+			std::lock_guard lock(SocialMutex);
+			if (index < SocialFriends.size()) CurrentSocialFriend = index;
+		}
+
+		unsigned int GetIncomingRequestCount()
+		{
+			std::lock_guard lock(SocialMutex);
+			return static_cast<unsigned int>(IncomingRequests.size());
+		}
+
+		const char* GetIncomingRequestText(const unsigned int index, const int column)
+		{
+			std::string value;
+			{
+				std::lock_guard lock(SocialMutex);
+				if (index >= IncomingRequests.size()) return "";
+				const auto& request = IncomingRequests[index];
+				switch (column)
+				{
+				case 0: value = ""; break;
+				case 1: value = request.displayName; break;
+				case 2: value = request.guid.empty() ? request.senderId : request.guid; break;
+				default: return "";
+				}
+			}
+			return Utils::String::VA("%s", value.c_str());
+		}
+
+		void SelectIncomingRequest(const unsigned int index)
+		{
+			std::lock_guard lock(SocialMutex);
+			if (index < IncomingRequests.size()) CurrentIncomingRequest = index;
+		}
+
+		std::optional<SocialFriend> SelectedSocialFriend()
+		{
+			std::lock_guard lock(SocialMutex);
+			if (CurrentSocialFriend >= SocialFriends.size()) return std::nullopt;
+			return SocialFriends[CurrentSocialFriend];
+		}
+
+		std::optional<IncomingFriendRequest> SelectedIncomingRequest()
+		{
+			std::lock_guard lock(SocialMutex);
+			if (CurrentIncomingRequest >= IncomingRequests.size()) return std::nullopt;
+			return IncomingRequests[CurrentIncomingRequest];
+		}
+	}
+
 	bool Friends::LoggedOn = false;
 	bool Friends::TriggerSort = false;
 	bool Friends::TriggerUpdate = false;
@@ -594,6 +1013,126 @@ namespace Components
 			Friends::UpdateFriends();
 		});
 
+		UIScript::Add("RefreshFriends", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+		{
+			// Preserve the legacy Steam presence cache while refreshing the
+			// authoritative ZWNET social lists used by this menu.
+			Friends::UpdateFriends();
+			RunSocialTask("Refreshing ZW3 friends...", []
+			{
+				const auto friendsOk = RefreshSocialFriends();
+				const auto requestsOk = RefreshIncomingRequests();
+				if (friendsOk && requestsOk) return "Friends and requests updated.";
+				if (friendsOk) return "Friends updated; requests are temporarily unavailable.";
+				return "The ZW3 friends service is unavailable.";
+			});
+		});
+
+		UIScript::Add("LoadFriendRequests", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+		{
+			RunSocialTask("Refreshing friend requests...", []
+			{
+				return RefreshIncomingRequests()
+					? "Friend requests updated."
+					: "Friend requests are temporarily unavailable.";
+			});
+		});
+
+		UIScript::Add("AddFriendFromDvar", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+		{
+			auto target = Dvar::Var("ui_social_friend_guid").get<std::string>();
+			std::ranges::transform(target, target.begin(), [](const unsigned char character)
+			{
+				return static_cast<char>(std::tolower(character));
+			});
+			if (!IsPublicGuid(target))
+			{
+				SetSocialUi("Enter the 16-character public ZW3 GUID.", false);
+				return;
+			}
+
+			RunSocialTask("Sending friend request...", [target]
+			{
+				const auto response = SocialApiRequest("POST", "/social/friends/request", {{"guid", target}}, true);
+				if (!response) return "The friend request could not be sent.";
+				Scheduler::Once([]
+				{
+					if (SocialActive) Dvar::Var("ui_social_friend_guid").set("");
+				}, Scheduler::Pipeline::MAIN);
+				RefreshIncomingRequests();
+				return "Friend request sent.";
+			});
+		});
+
+		UIScript::Add("AcceptFriendRequest", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+		{
+			const auto request = SelectedIncomingRequest();
+			if (!request)
+			{
+				SetSocialUi("Select an incoming friend request first.", false);
+				return;
+			}
+			RunSocialTask("Accepting friend request...", [request]
+			{
+				const auto response = SocialApiRequest("POST", "/social/friends/accept",
+					{{"request_id", request->requestId}}, true);
+				if (!response) return "The friend request could not be accepted.";
+				const auto friendsOk = RefreshSocialFriends();
+				const auto requestsOk = RefreshIncomingRequests();
+				return friendsOk && requestsOk
+					? "Friend request accepted."
+					: "Request accepted; the lists will refresh shortly.";
+			});
+		});
+
+		UIScript::Add("RemoveSelectedFriend", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+		{
+			const auto user = SelectedSocialFriend();
+			if (!user)
+			{
+				SetSocialUi("Select a ZW3 friend first.", false);
+				return;
+			}
+			RunSocialTask("Removing friend...", [user]
+			{
+				if (user->discordId.empty()) return "The Stats friend response has no removable Discord identity.";
+				const auto response = SocialApiRequest("POST", "/social/friends/remove",
+					{{"discord_user_id", user->discordId}}, true);
+				if (!response) return "The friend could not be removed.";
+				return RefreshSocialFriends()
+					? "Friend removed."
+					: "Friend removed; the list will refresh shortly.";
+			});
+		});
+
+		UIScript::Add("InviteSelectedFriend", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+		{
+			const auto user = SelectedSocialFriend();
+			if (!user)
+			{
+				SetSocialUi("Select a ZW3 friend first.", false);
+				return;
+			}
+			RunSocialTask("Preparing party invitation...", [user]
+			{
+				auto party = SocialApiRequest("GET", "/zwnet/parties/current");
+				if (!party || party->is_null())
+				{
+					party = SocialApiRequest("POST", "/zwnet/parties/create", nlohmann::json::object(), true);
+				}
+				if (!party || !party->is_object()) return "A party could not be created or loaded.";
+				auto partyId = JsonString(*party, "id");
+				if (partyId.empty()) partyId = JsonString(*party, "partyId");
+				if (!IsOpaquePartyId(partyId)) return "The party response was invalid.";
+
+				const auto response = SocialApiRequest("POST", "/zwnet/parties/" + partyId + "/invite",
+					{{"player_id", user->id}}, true);
+				return response
+					? "Party invitation sent."
+					: "The party invitation could not be sent.";
+			});
+		});
+
 		UIScript::Add("JoinFriend", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 		{
 			std::lock_guard<std::recursive_mutex> _(Friends::Mutex);
@@ -603,7 +1142,12 @@ namespace Components
 
 			if (user.online && user.server.getType() != Game::NA_BAD)
 			{
-				Party::Connect(user.server);
+				const auto server = user.server;
+				Scheduler::Once([server]
+				{
+					if (!SocialActive) return;
+					Party::Connect(server);
+				}, Scheduler::Pipeline::MAIN);
 			}
 			else
 			{
@@ -653,6 +1197,8 @@ namespace Components
 		}, Scheduler::Pipeline::CLIENT);
 
 		UIFeeder::Add(61.0f, Friends::GetFriendCount, Friends::GetFriendText, Friends::SelectFriend);
+		UIFeeder::Add(SOCIAL_FRIEND_FEEDER, GetSocialFriendCount, GetSocialFriendText, SelectSocialFriend);
+		UIFeeder::Add(SOCIAL_REQUEST_FEEDER, GetIncomingRequestCount, GetIncomingRequestText, SelectIncomingRequest);
 
 		Scheduler::OnGameShutdown([]
 		{
@@ -674,6 +1220,19 @@ namespace Components
 
 		Scheduler::OnGameInitialized([]
 		{
+			// String Dvars use the engine's RD_BUFFER critical section. Register
+			// them only after the game database and critical sections are ready.
+			Dvar::Register<const char*>("ui_social_status_message", "ZW3 social is ready.", Game::DVAR_NONE,
+				"Stable, non-technical status shown by the ZW3 social menu");
+			Dvar::Register<bool>("ui_social_invite_busy", false, Game::DVAR_NONE,
+				"Prevents duplicate ZW3 social menu actions");
+			Dvar::Register<const char*>("ui_social_friend_guid", "", Game::DVAR_NONE,
+				"Public ZW3 GUID entered for a friend request");
+			Dvar::Register<const char*>("ui_social_own_guid", "", Game::DVAR_ROM,
+				"Local public ZW3 GUID shown in the social menu");
+			SocialActive = true;
+			Dvar::Var("ui_social_own_guid").set(std::format("{:016x}", Auth::GetKeyHash()));
+
 			if (Steam::Proxy::SteamFriends)
 			{
 				Friends::InitialState = Steam::Proxy::SteamFriends->GetFriendPersonaState(Steam::Proxy::SteamUser_->GetSteamID());
@@ -700,17 +1259,25 @@ namespace Components
 			Friends::UpdateState();
 
 			Friends::UpdateFriends();
-		}, Scheduler::Pipeline::CLIENT);
+		}, Scheduler::Pipeline::MAIN);
 	}
 
 	Friends::~Friends()
 	{
 		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled()) return;
 
+		SocialActive = false;
+		SocialBusy = false;
 		Friends::StoreFriendsList();
 
 		Steam::Proxy::UnregisterCallback(336);
 		Steam::Proxy::UnregisterCallback(304);
+
+		{
+			std::lock_guard lock(SocialMutex);
+			SocialFriends.clear();
+			IncomingRequests.clear();
+		}
 
 		std::lock_guard<std::recursive_mutex> _(Friends::Mutex);
 		Friends::FriendsList.clear();

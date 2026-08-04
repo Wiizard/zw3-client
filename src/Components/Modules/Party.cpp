@@ -18,6 +18,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <cctype>
+#include <charconv>
 #include <functional>
 #include <array>
 #include <algorithm>
@@ -117,6 +118,42 @@ namespace Components
 		}
 
 		Dvar::Var("party_roster_loading").set(false);
+		return true;
+	}
+
+	static bool TryParseHexXuid(const std::string& value, std::uint64_t& xuid)
+	{
+		if (value.empty() || value.size() > 16)
+		{
+			return false;
+		}
+
+		std::uint64_t parsedXuid = 0;
+		const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), parsedXuid, 16);
+		if (error != std::errc{} || end != value.data() + value.size())
+		{
+			return false;
+		}
+
+		xuid = parsedXuid;
+		return true;
+	}
+
+	static bool TryParseClientCount(const std::string& value, unsigned int& count)
+	{
+		if (value.empty())
+		{
+			return false;
+		}
+
+		unsigned int parsedCount = 0;
+		const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), parsedCount, 10);
+		if (error != std::errc{} || end != value.data() + value.size())
+		{
+			return false;
+		}
+
+		count = parsedCount;
 		return true;
 	}
 
@@ -1873,9 +1910,9 @@ namespace Components
 				{
 					receivedChallenge = clientInfo.get("challenge");
 					uint64_t clientXuid = 0;
-					clientXuid = std::stoull(clientInfo.get("xuid"), nullptr, 16);
+					const auto hasClientXuid = TryParseHexXuid(clientInfo.get("xuid"), clientXuid);
 
-					if (clientXuid != 0)
+					if (hasClientXuid && clientXuid != 0)
 					{
 						//Party::g_xuidToPublicAddressMap[clientXuid] = address;
 
@@ -2032,12 +2069,18 @@ namespace Components
 						{
 							std::string party_privacy = info.get("partyPrivacy");
 							std::string client_count = info.get("clients");
+							unsigned int clientCount = 0;
 							if (party_privacy == "2" || party_privacy == "Closed")
 							{
 								ConnectError("The lobby you are trying to join is closed.");
 								return;
 							}
-							else if (std::stoi(client_count) >= MAX_PARTY_SLOTS)
+							else if (!TryParseClientCount(client_count, clientCount))
+							{
+								ConnectError("Invalid server info.");
+								return;
+							}
+							else if (clientCount >= MAX_PARTY_SLOTS)
 							{
 								ConnectError("The lobby you are trying to join is full.");
 								return;
@@ -2050,7 +2093,11 @@ namespace Components
 						}
 
 						uint64_t hostXuid = 0;
-						hostXuid = std::stoull(info.get("xuid"), nullptr, 16);
+						if (!TryParseHexXuid(info.get("xuid"), hostXuid) || hostXuid == 0)
+						{
+							ConnectError("Invalid server info.");
+							return;
+						}
 
 						Dvar::Var("zombiemode").set(static_cast<int>(std::strtol(info.get("zombiemode").data(), nullptr, 10)));
 						Dvar::Var("ui_zombiecounter").set(static_cast<int>(std::strtol(info.get("ui_zombiecounter").data(), nullptr, 10)));

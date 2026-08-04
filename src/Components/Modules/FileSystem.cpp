@@ -341,9 +341,11 @@ namespace Components
 					L"userraw/zw3.iwd",
 					L"zone/patch/patch_mp.ff",
 					L"zone/english/zw3_common.ff",
-					L"zw3/zw3.iwd",
 					L"zone/patch_mp.ff",
 				};
+
+				// ZW3 3.x always mounts zw3/zw3.ff together with zw3/zw3.iwd.
+				// The latter is an authoritative runtime file, not a legacy mod IWD.
 
 				for (const auto& root : roots)
 				{

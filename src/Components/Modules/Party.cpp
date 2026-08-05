@@ -22,6 +22,7 @@
 #include <functional>
 #include <array>
 #include <algorithm>
+#include <cstring>
 
 #define CL_MOD_LOADING
 
@@ -66,6 +67,253 @@ namespace Components
 	static bool s_directLaunchRoster = false;
 	static bool s_autosaveMapLaunchPending = false;
 	const int MAX_PARTY_SLOTS = 4;
+
+	static Dvar::Var s_prefHitmarker;
+	static Dvar::Var s_prefZombieCounter;
+	static Dvar::Var s_prefShowDamage;
+	static Dvar::Var s_prefPerkLocations;
+	static Dvar::Var s_prefThirdPerson;
+	static Dvar::Var s_prefWeather;
+	static Dvar::Var s_prefDayNightCycle;
+	static Dvar::Var s_prefOmnimovement;
+	static Dvar::Var s_prefZombieMode;
+	static Dvar::Var s_prefAddBots;
+	static Dvar::Var s_prefPartyPrivacy;
+	static Dvar::Var s_prefMap;
+
+	static bool s_customizationPreferencesReady = false;
+	static bool s_mapPreferenceReady = false;
+
+	static bool s_zombieModeStartRestorePending = false;
+	static int s_zombieModeStartValue = 0;
+
+	static constexpr std::array<const char*, 3> ZOMBIE_MODE_NAMES =
+	{
+		"Normal",
+		"Classic",
+		"Hardcore"
+	};
+
+	static int ClampZombieModeIndex(const int value)
+	{
+		return std::clamp(value, 0, static_cast<int>(ZOMBIE_MODE_NAMES.size()) - 1);
+	}
+
+	static int GetZombieModeIndex()
+	{
+		const auto* zombieMode = Game::Dvar_FindVar("zombiemode");
+		if (!zombieMode || zombieMode->type != Game::DVAR_TYPE_ENUM)
+		{
+			return 0;
+		}
+
+		return ClampZombieModeIndex(zombieMode->current.integer);
+	}
+
+	static bool SetZombieModeIndex(const int value)
+	{
+		auto* zombieMode = Game::Dvar_FindVar("zombiemode");
+		if (!zombieMode || zombieMode->type != Game::DVAR_TYPE_ENUM)
+		{
+			return false;
+		}
+
+		const int mode = ClampZombieModeIndex(value);
+		Game::Dvar_SetFromStringByNameFromSource(
+			"zombiemode",
+			ZOMBIE_MODE_NAMES[mode],
+			Game::DVAR_SOURCE_INTERNAL);
+
+		zombieMode = Game::Dvar_FindVar("zombiemode");
+		return zombieMode && zombieMode->type == Game::DVAR_TYPE_ENUM &&
+			zombieMode->current.integer == mode;
+	}
+
+	static void ApplyPendingZombieModeForServerStart()
+	{
+		if (!s_zombieModeStartRestorePending)
+		{
+			return;
+		}
+
+		SetZombieModeIndex(s_zombieModeStartValue);
+	}
+
+	static bool CanUseLocalHostPreferences()
+	{
+		return Dvar::Var("party_host").get<bool>() ||
+			!Dvar::Var("xblive_privateserver").get<bool>();
+	}
+
+	static void SaveIntPreference(Dvar::Var& preference, const char* runtimeDvarName)
+	{
+		if (Dedicated::IsEnabled() || !s_customizationPreferencesReady)
+		{
+			return;
+		}
+
+		if (std::strcmp(runtimeDvarName, "zombiemode") == 0)
+		{
+			preference.set(GetZombieModeIndex());
+			return;
+		}
+
+		preference.set(Dvar::Var(runtimeDvarName).get<int>());
+	}
+
+	static void ApplyCustomizationSettings();
+
+	static bool IsUsableMapName(const std::string& mapName)
+	{
+		return !mapName.empty() && mapName != "none" && mapName != "None";
+	}
+
+	static std::string GetMapNameFromDvar(const char* dvarName)
+	{
+		if (auto* dvar = Game::Dvar_FindVar(dvarName))
+		{
+			if (dvar->current.string)
+			{
+				const std::string mapName = dvar->current.string;
+				if (IsUsableMapName(mapName))
+				{
+					return mapName;
+				}
+			}
+		}
+
+		return {};
+	}
+
+	static std::string GetSelectedMapName(const bool preferRunningMap)
+	{
+		if (preferRunningMap)
+		{
+			if (const auto runningMap = GetMapNameFromDvar("mapname"); IsUsableMapName(runningMap))
+			{
+				return runningMap;
+			}
+		}
+
+		if (const auto selectedMap = GetMapNameFromDvar("ui_mapname"); IsUsableMapName(selectedMap))
+		{
+			return selectedMap;
+		}
+
+		return GetMapNameFromDvar("mapname");
+	}
+
+	static void SaveSelectedMapPreference(const bool preferRunningMap = false)
+	{
+		if (Dedicated::IsEnabled() || !s_mapPreferenceReady)
+		{
+			return;
+		}
+
+		const auto selectedMap = GetSelectedMapName(preferRunningMap);
+		if (IsUsableMapName(selectedMap))
+		{
+			s_prefMap.set(selectedMap);
+		}
+	}
+
+	static void ApplySelectedMapPreference()
+	{
+		if (Dedicated::IsEnabled() || !s_mapPreferenceReady)
+		{
+			return;
+		}
+
+		const auto selectedMap = s_prefMap.get<std::string>();
+		if (!IsUsableMapName(selectedMap))
+		{
+			return;
+		}
+
+		if (auto* uiMapName = Game::Dvar_FindVar("ui_mapname"))
+		{
+			Game::Dvar_SetString(uiMapName, selectedMap.c_str());
+		}
+	}
+
+	static void RecreatePrivateMatchLobby()
+	{
+		Command::Execute("xrequirelivesignin", false);
+		Command::Execute("set systemlink 0", false);
+		Command::Execute("set splitscreen 0", false);
+		Command::Execute("set onlinegame 1", false);
+		Command::Execute("exec default_xboxlive.cfg", false);
+		Command::Execute("set party_maxplayers 4", false);
+		Command::Execute("set party_maxprivatepartyplayers 4", false);
+		Command::Execute("set xblive_privateserver 0", false);
+		Command::Execute("set xblive_rankedmatch 0", false);
+		Command::Execute("xstartprivateparty", false);
+		Command::Execute("set ui_mptype 0", false);
+		Command::Execute("xcheckezpatch", false);
+		Command::Execute("exec default_xboxlive.cfg", false);
+		Command::Execute("set xblive_rankedmatch 0", false);
+		Command::Execute("ui_enumeratesaved", false);
+		Command::Execute("set xblive_privateserver 1", false);
+		Command::Execute("xstartprivatematch", false);
+		Command::Execute("openmenu menu_xboxlive_privatelobby", false);
+	}
+
+	static void ApplyCustomizationSettings()
+	{
+		if (Dedicated::IsEnabled() || !s_customizationPreferencesReady)
+		{
+			return;
+		}
+
+		Dvar::Var("weather").set(s_prefWeather.get<int>());
+		Dvar::Var("dayNightCycle").set(s_prefDayNightCycle.get<int>());
+		Dvar::Var("bg_omnimovement").set(s_prefOmnimovement.get<int>());
+
+		if (!CanUseLocalHostPreferences())
+		{
+			return;
+		}
+
+		Dvar::Var("ui_hitmarker").set(s_prefHitmarker.get<int>());
+		Dvar::Var("ui_zombiecounter").set(s_prefZombieCounter.get<int>());
+		Dvar::Var("ui_showdamage").set(s_prefShowDamage.get<int>());
+		Dvar::Var("ui_perklocations").set(s_prefPerkLocations.get<int>());
+		Dvar::Var("thirdPerson").set(s_prefThirdPerson.get<int>());
+		SetZombieModeIndex(s_prefZombieMode.get<int>());
+		Dvar::Var("addBots").set(s_prefAddBots.get<int>());
+		Dvar::Var("partyPrivacy").set(s_prefPartyPrivacy.get<int>());
+
+		if (Game::Dvar_FindVar("cg_thirdPerson"))
+		{
+			Dvar::Var("cg_thirdPerson").set(s_prefThirdPerson.get<int>() != 0);
+		}
+	}
+
+	static void SaveCustomizationSettings()
+	{
+		if (Dedicated::IsEnabled() || !s_customizationPreferencesReady)
+		{
+			return;
+		}
+
+		SaveIntPreference(s_prefWeather, "weather");
+		SaveIntPreference(s_prefDayNightCycle, "dayNightCycle");
+		SaveIntPreference(s_prefOmnimovement, "bg_omnimovement");
+
+		if (!CanUseLocalHostPreferences())
+		{
+			return;
+		}
+
+		SaveIntPreference(s_prefHitmarker, "ui_hitmarker");
+		SaveIntPreference(s_prefZombieCounter, "ui_zombiecounter");
+		SaveIntPreference(s_prefShowDamage, "ui_showdamage");
+		SaveIntPreference(s_prefPerkLocations, "ui_perklocations");
+		SaveIntPreference(s_prefThirdPerson, "thirdPerson");
+		SaveIntPreference(s_prefZombieMode, "zombiemode");
+		SaveIntPreference(s_prefAddBots, "addBots");
+		SaveIntPreference(s_prefPartyPrivacy, "partyPrivacy");
+	}
 	static bool SetStringDvarIfChanged(const char* name, const std::string& value)
 	{
 		auto* dvar = Game::Dvar_FindVar(name);
@@ -1082,7 +1330,10 @@ namespace Components
 	void SV_SpawnServer_Com_SyncThreads_Hook()
 	{
 		s_characterRosterFrozen = true;
+		ApplyPendingZombieModeForServerStart();
 		Game::Com_SyncThreads(); // Com_SyncThreads
+		ApplyPendingZombieModeForServerStart();
+		s_zombieModeStartRestorePending = false;
 
 		// Whenever the game starts a server,
 		// RMsg_SendMessages so that everybody gets the PartyGo message!
@@ -1161,6 +1412,8 @@ namespace Components
 				Dvar::Register<const char*>("autosave_date", "", Game::DVAR_INIT, "");
 				Dvar::Register<const char*>("autosave_mapname_display", "", Game::DVAR_INIT, "");
 				Dvar::Register<bool>("autosave_load", false, Game::DVAR_INIT, "");
+				s_prefMap = Dvar::Register<const char*>("zw3_pref_ui_mapname", "mp_cod5_prototype", Game::DVAR_ARCHIVE, "Saved private-match map preference");
+				s_mapPreferenceReady = true;
 			});
 
 		PartyEnable = Dvar::Register<bool>("party_enable", Dedicated::IsEnabled(), Game::DVAR_NONE, "Enable party system");
@@ -1173,9 +1426,182 @@ namespace Components
 		Dvar::Register<int>("ui_showdamage", 1, 0, 1, Game::DVAR_CODINFO, "Toggle damage visibility");
 		Dvar::Register<int>("ui_perklocations", 0, 0, 1, Game::DVAR_CODINFO, "Toggle perk locations");
 		Dvar::Register<int>("thirdPerson", 0, 0, 1, Game::DVAR_CODINFO, "Toggle third person");
+		Dvar::Register<int>("weather", 1, 0, 2, Game::DVAR_NONE, "Select weather effects");
+		Dvar::Register<int>("dayNightCycle", 1, 0, 1, Game::DVAR_NONE, "Toggle the day and night cycle");
+		Dvar::Register<int>("bg_omnimovement", 1, 0, 1, Game::DVAR_NONE, "Toggle omnimovement");
 		Dvar::Register<int>("addBots", 0, 0, 3, Game::DVAR_CODINFO, "Change the amount of bots");
 		static const char* partyPrivacyValues[] = { "Open", "Invite-Only", "Closed", nullptr };
 		Game::Dvar_RegisterEnum("partyPrivacy", partyPrivacyValues, 0, Game::DVAR_CODINFO, "Party privacy");
+
+		s_prefHitmarker = Dvar::Register<int>("zw3_pref_ui_hitmarker", 1, 0, 1, Game::DVAR_ARCHIVE, "Saved hitmarker preference");
+		s_prefZombieCounter = Dvar::Register<int>("zw3_pref_ui_zombiecounter", 0, 0, 1, Game::DVAR_ARCHIVE, "Saved zombie counter preference");
+		s_prefShowDamage = Dvar::Register<int>("zw3_pref_ui_showdamage", 1, 0, 1, Game::DVAR_ARCHIVE, "Saved damage visibility preference");
+		s_prefPerkLocations = Dvar::Register<int>("zw3_pref_ui_perklocations", 0, 0, 1, Game::DVAR_ARCHIVE, "Saved perk location preference");
+		s_prefThirdPerson = Dvar::Register<int>("zw3_pref_thirdPerson", 0, 0, 1, Game::DVAR_ARCHIVE, "Saved third-person preference");
+		s_prefWeather = Dvar::Register<int>("zw3_pref_weather", 1, 0, 2, Game::DVAR_ARCHIVE, "Saved weather preference");
+		s_prefDayNightCycle = Dvar::Register<int>("zw3_pref_dayNightCycle", 1, 0, 1, Game::DVAR_ARCHIVE, "Saved day and night preference");
+		s_prefOmnimovement = Dvar::Register<int>("zw3_pref_bg_omnimovement", 1, 0, 1, Game::DVAR_ARCHIVE, "Saved omnimovement preference");
+		s_prefZombieMode = Dvar::Register<int>("zw3_pref_zombiemode", 0, 0, 2, Game::DVAR_ARCHIVE, "Saved zombie mode preference");
+		s_prefAddBots = Dvar::Register<int>("zw3_pref_addBots", 0, 0, 3, Game::DVAR_ARCHIVE, "Saved bot count preference");
+		s_prefPartyPrivacy = Dvar::Register<int>("zw3_pref_partyPrivacy", 0, 0, 2, Game::DVAR_ARCHIVE, "Saved party privacy preference");
+		s_customizationPreferencesReady = true;
+
+		UIScript::Add("ApplyCustomizationSettings", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+			{
+				ApplyCustomizationSettings();
+			});
+
+		UIScript::Add("SaveCustomizationSettings", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+			{
+				SaveCustomizationSettings();
+			});
+
+		UIScript::Add("SaveHitmarkerSetting", [](const UIScript::Token&, const Game::uiInfo_s*)
+			{
+				if (CanUseLocalHostPreferences())
+				{
+					SaveIntPreference(s_prefHitmarker, "ui_hitmarker");
+				}
+			});
+		UIScript::Add("SaveZombieCounterSetting", [](const UIScript::Token&, const Game::uiInfo_s*)
+			{
+				if (CanUseLocalHostPreferences())
+				{
+					SaveIntPreference(s_prefZombieCounter, "ui_zombiecounter");
+				}
+			});
+		UIScript::Add("SaveShowDamageSetting", [](const UIScript::Token&, const Game::uiInfo_s*)
+			{
+				if (CanUseLocalHostPreferences())
+				{
+					SaveIntPreference(s_prefShowDamage, "ui_showdamage");
+				}
+			});
+		UIScript::Add("SavePerkLocationsSetting", [](const UIScript::Token&, const Game::uiInfo_s*)
+			{
+				if (CanUseLocalHostPreferences())
+				{
+					SaveIntPreference(s_prefPerkLocations, "ui_perklocations");
+				}
+			});
+		UIScript::Add("SaveThirdPersonSetting", [](const UIScript::Token&, const Game::uiInfo_s*)
+			{
+				if (CanUseLocalHostPreferences())
+				{
+					SaveIntPreference(s_prefThirdPerson, "thirdPerson");
+				}
+			});
+		UIScript::Add("SaveWeatherSetting", [](const UIScript::Token&, const Game::uiInfo_s*)
+			{
+				SaveIntPreference(s_prefWeather, "weather");
+			});
+		UIScript::Add("SaveDayNightCycleSetting", [](const UIScript::Token&, const Game::uiInfo_s*)
+			{
+				SaveIntPreference(s_prefDayNightCycle, "dayNightCycle");
+			});
+		UIScript::Add("SaveOmnimovementSetting", [](const UIScript::Token&, const Game::uiInfo_s*)
+			{
+				SaveIntPreference(s_prefOmnimovement, "bg_omnimovement");
+			});
+		UIScript::Add("SaveZombieModeSetting", [](const UIScript::Token&, const Game::uiInfo_s*)
+			{
+				SaveIntPreference(s_prefZombieMode, "zombiemode");
+			});
+
+		UIScript::Add("PreparePrivateMatchStart", [](const UIScript::Token&, const Game::uiInfo_s*)
+			{
+				if (auto* autosaveLoad = Game::Dvar_FindVar("autosave_load"))
+				{
+					Dvar::Var(autosaveLoad).set(false);
+				}
+
+				s_autosaveMapLaunchPending = false;
+
+				const std::string autosavePath =
+					(*Game::fs_basepath)->current.string + "\\zw3\\core\\scriptdata\\autosave"s;
+				DeleteFileA(autosavePath.c_str());
+
+				SaveIntPreference(s_prefZombieMode, "zombiemode");
+				s_zombieModeStartValue = ClampZombieModeIndex(s_prefZombieMode.get<int>());
+				s_zombieModeStartRestorePending = true;
+				ApplyPendingZombieModeForServerStart();
+			});
+		UIScript::Add("SavePartyPrivacySetting", [](const UIScript::Token&, const Game::uiInfo_s*)
+			{
+				if (CanUseLocalHostPreferences())
+				{
+					SaveIntPreference(s_prefPartyPrivacy, "partyPrivacy");
+				}
+			});
+		UIScript::Add("SaveMapSetting", [](const UIScript::Token&, const Game::uiInfo_s*)
+			{
+				SaveSelectedMapPreference();
+			});
+		UIScript::Add("ApplyMapSetting", [](const UIScript::Token&, const Game::uiInfo_s*)
+			{
+				ApplySelectedMapPreference();
+			});
+		UIScript::Add("SaveQuitToPrivateLobby", [](const UIScript::Token&, const Game::uiInfo_s*)
+			{
+				const bool isPrivateMatchHost =
+					Dvar::Var("party_host").get<bool>() &&
+					Dvar::Var("xblive_privatematch").get<bool>();
+
+				if (!isPrivateMatchHost)
+				{
+					Command::Execute("disconnect", false);
+					return;
+				}
+
+				SaveCustomizationSettings();
+				SaveSelectedMapPreference(true);
+				Command::Execute("disconnect", false);
+
+				const auto startedAt = Game::Sys_Milliseconds();
+				Scheduler::Schedule([startedAt, disconnectedAt = -1]() mutable -> bool
+					{
+						const auto now = Game::Sys_Milliseconds();
+
+						if (Game::CL_IsCgameInitialized())
+						{
+							return (now - startedAt) > 10000;
+						}
+
+						if (disconnectedAt < 0)
+						{
+							disconnectedAt = now;
+							return false;
+						}
+
+						if ((now - disconnectedAt) < 150)
+						{
+							return false;
+						}
+
+						RecreatePrivateMatchLobby();
+						return true;
+					}, Scheduler::Pipeline::MAIN, 50ms);
+			});
+
+		Scheduler::Once([]
+			{
+				ApplyCustomizationSettings();
+			}, Scheduler::Pipeline::MAIN, 1s);
+
+		Scheduler::Loop([]
+			{
+				static bool wasUsingRemoteSettings = false;
+				const bool usingRemoteSettings =
+					!Dvar::Var("party_host").get<bool>() &&
+					Dvar::Var("xblive_privateserver").get<bool>();
+
+				if (wasUsingRemoteSettings && !usingRemoteSettings)
+				{
+					ApplyCustomizationSettings();
+				}
+
+				wasUsingRemoteSettings = usingRemoteSettings;
+			}, Scheduler::Pipeline::MAIN, 250ms);
 
 		// Kill the party migrate handler - it's not necessary and has apparently been used in the past for trickery?
 		Utils::Hook(0x46AB70, PartyMigrate_HandlePacket, HOOK_JUMP).install()->quick();
@@ -1359,6 +1785,10 @@ namespace Components
 				const int nextBots = maxBots == 0 ? 0 : (currentBots + 1) % (maxBots + 1);
 
 				Dvar::Var("addBots").set(nextBots);
+				if (s_customizationPreferencesReady)
+				{
+					s_prefAddBots.set(nextBots);
+				}
 				Dvar::Var("party_realPlayers").set(realPlayers);
 				Dvar::Var("party_currentPlayers").set(realPlayers + nextBots);
 				RandomizeCharactersForClients();
@@ -2113,7 +2543,7 @@ namespace Components
 							return;
 						}
 
-						Dvar::Var("zombiemode").set(static_cast<int>(std::strtol(info.get("zombiemode").data(), nullptr, 10)));
+						SetZombieModeIndex(static_cast<int>(std::strtol(info.get("zombiemode").data(), nullptr, 10)));
 						Dvar::Var("ui_zombiecounter").set(static_cast<int>(std::strtol(info.get("ui_zombiecounter").data(), nullptr, 10)));
 						Dvar::Var("ui_hitmarker").set(static_cast<int>(std::strtol(info.get("ui_hitmarker").data(), nullptr, 10)));
 						Dvar::Var("ui_showdamage").set(static_cast<int>(std::strtol(info.get("ui_showdamage").data(), nullptr, 10)));
@@ -2315,7 +2745,17 @@ namespace Components
 
 				bool allDvarsSuccessfullySet = true;
 
-				allDvarsSuccessfullySet &= parseAndSetDvar("zombiemode", "zombiemode");
+				const auto receivedZombieMode = info.get("zombiemode");
+				if (!receivedZombieMode.empty())
+				{
+					char* end = nullptr;
+					const long mode = std::strtol(receivedZombieMode.c_str(), &end, 10);
+					if (end != receivedZombieMode.c_str())
+					{
+						allDvarsSuccessfullySet &= SetZombieModeIndex(static_cast<int>(mode));
+					}
+				}
+
 				allDvarsSuccessfullySet &= parseAndSetDvar("ui_hitmarker", "ui_hitmarker");
 				allDvarsSuccessfullySet &= parseAndSetDvar("ui_showdamage", "ui_showdamage");
 				allDvarsSuccessfullySet &= parseAndSetDvar("ui_zombiecounter", "ui_zombiecounter");

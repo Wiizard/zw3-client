@@ -12,7 +12,8 @@ namespace Components
 		void preDestroy() override;
 
 	private:
-		static bool Initialized_;
+		static std::atomic_bool Initialized_;
+		static std::atomic_bool GameInitialized_;
 
 		static void InitializeDiscord();
 
@@ -25,6 +26,10 @@ namespace Components
 		static bool IsMainMenuOpen();
 
 		static bool IsPartyLobbyOpen();
+
+		static bool IsZWNetMatchmakingOpen();
+
+		static bool IsConnectMenuOpen();
 
 		static const char* GetHostDiscordInviteIP();
 	};

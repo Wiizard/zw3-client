@@ -2374,6 +2374,11 @@ namespace Components
 
 		if (Dedicated::IsEnabled()) return;
 
+		// The stock ASSET_TYPE_MENU clone handler copies runtime state from the existing menu to its
+		// replacement, assuming both menus have identical item layouts. Disable it to prevent state
+		// from being copied between unrelated items when the layouts differ.
+		Utils::Hook::Set<Game::DB_DynamicCloneXAssetHandler_t>(&Game::DB_DynamicCloneXAssetHandler[Game::ASSET_TYPE_MENU], nullptr);
+
 		Menus::InitializeSupportingData();
 
 		Components::Events::OnCGameInit(ReloadDiskMenus_OnCGameStart);

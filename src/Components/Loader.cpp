@@ -79,6 +79,7 @@
 #include "Modules/ZWNet.hpp"
 
 #include "Modules/BotLib/lPrecomp.hpp"
+#include "Modules/ViewModelFxSetup.hpp"
 
 #include <Utils/Leaderboard.hpp>
 
@@ -221,6 +222,8 @@ namespace Components
 
 		Register(new GSC::GSC());
 		Register(new BotLib::lPrecomp());
+
+		Register(new ViewModelFxSetup::Setup());
 
 		// Register(new Debugger::DebugSetup());
 

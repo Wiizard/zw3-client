@@ -100,6 +100,14 @@ namespace Game
 		ASSET_TYPE_INVALID = -1,
 	};
 
+	enum DB_CloneType : int
+	{
+		DB_CLONE_DEFAULT = 0x0,
+		DB_CLONE_NORMAL = 0x1,
+		DB_CLONE_SWAP = 0x2,
+		DB_CLONE_NORMAL_FROM_DEFAULT = 0x3,
+	};
+
 	enum GfxWarningType
 	{
 		R_WARN_FRONTEND_ENT_LIMIT = 0x0,
@@ -7464,6 +7472,15 @@ namespace Game
 	{
 		unsigned __int16 number;
 		unsigned __int16 infoIndex;
+	};
+
+	enum ModelType : unsigned char
+	{
+		MODELTYPE_CAPSULE = 0x0,
+		MODELTYPE_CYLINDER = 0x1,
+		MODELTYPE_DISK = 0x2,
+		MODELTYPE_TRIGGER = 0x3,
+		MODELTYPE_BRUSH = 0x4,
 	};
 
 	struct entityShared_t

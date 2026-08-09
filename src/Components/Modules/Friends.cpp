@@ -18,6 +18,7 @@
 #include "Toast.hpp"
 #include "UIFeeder.hpp"
 #include "UIScript.hpp"
+#include "ZWNet.hpp"
 
 namespace Components
 {
@@ -48,11 +49,24 @@ namespace Components
 			std::string displayName;
 		};
 
+		struct IncomingPartyInvite
+		{
+			std::string inviteId;
+			std::string partyId;
+			std::string createdAt;
+			std::string senderName;
+			int memberCount{};
+			int maxMembers{4};
+		};
+
 		std::atomic_bool SocialActive{false};
 		std::atomic_bool SocialBusy{false};
+		std::atomic_bool PartyInvitePollBusy{false};
 		std::mutex SocialMutex;
 		std::vector<SocialFriend> SocialFriends;
 		std::vector<IncomingFriendRequest> IncomingRequests;
+		std::optional<IncomingPartyInvite> CurrentPartyInvite;
+		std::string LastHandledPartyInvite;
 		unsigned int CurrentSocialFriend{};
 		unsigned int CurrentIncomingRequest{};
 
@@ -430,6 +444,95 @@ namespace Components
 			std::lock_guard lock(SocialMutex);
 			if (CurrentIncomingRequest >= IncomingRequests.size()) return std::nullopt;
 			return IncomingRequests[CurrentIncomingRequest];
+		}
+
+		std::string PartyInviteSignature(const IncomingPartyInvite& invite)
+		{
+			return invite.inviteId + ":" + invite.createdAt;
+		}
+
+		std::optional<IncomingPartyInvite> SelectedPartyInvite()
+		{
+			std::lock_guard lock(SocialMutex);
+			return CurrentPartyInvite;
+		}
+
+		void MarkPartyInviteHandled(const IncomingPartyInvite& invite)
+		{
+			std::lock_guard lock(SocialMutex);
+			LastHandledPartyInvite = PartyInviteSignature(invite);
+			if (CurrentPartyInvite && PartyInviteSignature(*CurrentPartyInvite) == LastHandledPartyInvite)
+			{
+				CurrentPartyInvite.reset();
+			}
+		}
+
+		void ClosePartyInvitePopup()
+		{
+			Scheduler::Once([]
+			{
+				if (!SocialActive) return;
+				Command::Execute("closemenu popup_social_game_invite", false);
+			}, Scheduler::Pipeline::MAIN);
+		}
+
+		void PollPartyInvites()
+		{
+			if (!SocialActive || PartyInvitePollBusy.exchange(true)) return;
+			const auto clearBusy = gsl::finally([] { PartyInvitePollBusy = false; });
+			const auto response = SocialApiRequest("GET", "/zwnet/parties/invites");
+			if (!response || !response->is_object() || !response->contains("invites")
+				|| !response->at("invites").is_array())
+			{
+				return;
+			}
+
+			for (const auto& row : response->at("invites"))
+			{
+				if (!row.is_object()) continue;
+				auto memberCount = 1;
+				auto maxMembers = 4;
+				if (const auto value = row.find("member_count"); value != row.end() && value->is_number_integer())
+				{
+					memberCount = std::clamp(value->get<int>(), 1, 4);
+				}
+				if (const auto value = row.find("max_members"); value != row.end() && value->is_number_integer())
+				{
+					maxMembers = std::clamp(value->get<int>(), 1, 4);
+				}
+				IncomingPartyInvite invite
+				{
+					JsonString(row, "invite_id"),
+					JsonString(row, "party_id"),
+					JsonString(row, "created_at"),
+					SafeSocialText(JsonString(row, "sender_name"), 48),
+					memberCount,
+					maxMembers
+				};
+				if (invite.inviteId.empty() || !IsOpaquePartyId(invite.partyId)) continue;
+				if (invite.senderName.empty()) invite.senderName = "ZW3 Friend";
+				const auto signature = PartyInviteSignature(invite);
+				{
+					std::lock_guard lock(SocialMutex);
+					if (signature == LastHandledPartyInvite
+						|| (CurrentPartyInvite && signature == PartyInviteSignature(*CurrentPartyInvite)))
+					{
+						return;
+					}
+					CurrentPartyInvite = invite;
+				}
+
+				Scheduler::Once([invite]
+				{
+					if (!SocialActive) return;
+					Dvar::Var("ui_social_game_invite_message").set(
+						std::format("{} invited you to a ZW3 lobby.", invite.senderName));
+					Dvar::Var("ui_social_game_invite_details").set(
+						std::format("{} / {} PLAYERS", invite.memberCount, invite.maxMembers));
+					Command::Execute("openmenu popup_social_game_invite", false);
+				}, Scheduler::Pipeline::MAIN);
+				return;
+			}
 		}
 	}
 
@@ -1133,6 +1236,63 @@ namespace Components
 			});
 		});
 
+		UIScript::Add("ConfirmGameInvite", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+		{
+			const auto invite = SelectedPartyInvite();
+			if (!invite)
+			{
+				ClosePartyInvitePopup();
+				return;
+			}
+			RunSocialTask("Joining the ZW3 party...", [invite]
+			{
+				const auto response = SocialApiRequest("POST", "/zwnet/parties/" + invite->partyId + "/accept",
+					nlohmann::json::object(), true);
+				if (!response || !response->is_object()) return "The party invitation could not be accepted.";
+				MarkPartyInviteHandled(*invite);
+				ZWNet::ResumeParty(*response);
+				Scheduler::Once([]
+				{
+					if (!SocialActive) return;
+					Command::Execute("closemenu popup_social_game_invite", false);
+					Command::Execute("closemenu popup_friends", false);
+					Command::Execute("openmenu zwnet_party_lobby", false);
+				}, Scheduler::Pipeline::MAIN);
+				return "Party joined.";
+			});
+		});
+
+		UIScript::Add("DeclineGameInvite", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+		{
+			const auto invite = SelectedPartyInvite();
+			if (!invite)
+			{
+				ClosePartyInvitePopup();
+				return;
+			}
+			RunSocialTask("Declining the party invitation...", [invite]
+			{
+				const auto response = SocialApiRequest("POST", "/zwnet/parties/" + invite->partyId + "/decline",
+					nlohmann::json::object(), true);
+				if (!response) return "The party invitation could not be declined.";
+				MarkPartyInviteHandled(*invite);
+				ClosePartyInvitePopup();
+				return "Party invitation declined.";
+			});
+		});
+
+		UIScript::Add("CloseGameInvitePopup", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+		{
+			const auto invite = SelectedPartyInvite();
+			if (!invite) return;
+			MarkPartyInviteHandled(*invite);
+			Scheduler::Once([invite]
+			{
+				SocialApiRequest("POST", "/zwnet/parties/" + invite->partyId + "/decline",
+					nlohmann::json::object(), true);
+			}, Scheduler::Pipeline::ASYNC);
+		});
+
 		UIScript::Add("JoinFriend", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 		{
 			std::lock_guard<std::recursive_mutex> _(Friends::Mutex);
@@ -1199,6 +1359,7 @@ namespace Components
 		UIFeeder::Add(61.0f, Friends::GetFriendCount, Friends::GetFriendText, Friends::SelectFriend);
 		UIFeeder::Add(SOCIAL_FRIEND_FEEDER, GetSocialFriendCount, GetSocialFriendText, SelectSocialFriend);
 		UIFeeder::Add(SOCIAL_REQUEST_FEEDER, GetIncomingRequestCount, GetIncomingRequestText, SelectIncomingRequest);
+		Scheduler::Loop(PollPartyInvites, Scheduler::Pipeline::ASYNC, 5s);
 
 		Scheduler::OnGameShutdown([]
 		{
@@ -1277,6 +1438,8 @@ namespace Components
 			std::lock_guard lock(SocialMutex);
 			SocialFriends.clear();
 			IncomingRequests.clear();
+			CurrentPartyInvite.reset();
+			LastHandledPartyInvite.clear();
 		}
 
 		std::lock_guard<std::recursive_mutex> _(Friends::Mutex);

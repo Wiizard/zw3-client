@@ -13,6 +13,7 @@ namespace Components
 		// Called by the trusted launcher after the identity proof/login exchange.
 		// Tokens are protected with Windows DPAPI before they touch disk.
 		static bool StoreSession(const std::string& accessToken, const std::string& refreshToken);
+		static void ResumeParty(const nlohmann::json& party);
 
 	private:
 		// Function-local storage prevents non-trivial C++ initializers from running
@@ -20,6 +21,7 @@ namespace Components
 		static std::atomic_bool& ActiveState();
 		static std::atomic_bool& SearchingState();
 		static std::atomic_bool& ClosingOnlineSessionState();
+		static std::atomic_bool& ServerJoinTransitionState();
 		static bool& LoginInFlightState();
 		static std::mutex& StateMutex();
 		static std::string& AccessTokenState();
@@ -51,6 +53,7 @@ namespace Components
 		static void StartPrivateMatch(std::string map);
 		static void VoteMap(const std::string& choice);
 		static void UpdateLobbyDvars(const nlohmann::json& party);
+		static void UpdateMatchLobbyDvars(const nlohmann::json& status);
 		static void UpdateVoteDvars(const nlohmann::json& status);
 		static void UpdateMatchmaking();
 		static void ConnectMatch(const std::string& matchId, bool relay);

@@ -308,6 +308,7 @@ namespace Game
 
 	SpawnVar* spawnVars = reinterpret_cast<SpawnVar*>(0x1A83DE8);
 	MapEnts** marMapEntsPtr = reinterpret_cast<MapEnts**>(0x112AD34);
+	clipMap_t* cm = reinterpret_cast<clipMap_t*>(0x1AA6480);
 
 	IDirect3D9** d3d9 = reinterpret_cast<IDirect3D9**>(0x66DEF84);
 	IDirect3DDevice9** dx_ptr = reinterpret_cast<IDirect3DDevice9**>(0x66DEF88);
@@ -409,6 +410,11 @@ namespace Game
 	huffman_t* msgHuff = reinterpret_cast<huffman_t*>(0x1CB9EC0);
 
 	const char* logFileName = reinterpret_cast<const char*>(0x730130);
+
+	DObjGetBoneIndex_t DObjGetBoneIndex = reinterpret_cast<DObjGetBoneIndex_t>(0x504F20);
+	Com_GetClientDObj_t Com_GetClientDObj = reinterpret_cast<Com_GetClientDObj_t>(0x41FF50);
+	CG_WeaponDObjHandle_t CG_WeaponDObjHandle = reinterpret_cast<CG_WeaponDObjHandle_t>(0x41DB70);
+	CG_StopBoltedEffect_t CG_StopBoltedEffect = reinterpret_cast<CG_StopBoltedEffect_t>(0x44C230);
 
 	const char* TableLookup(StringTable* stringtable, int row, int column)
 	{

@@ -64,6 +64,7 @@ namespace Components
 	static std::string s_hostCharacter;
 	static bool s_characterRosterFrozen = false;
 	static bool s_directLaunchRoster = false;
+	static bool s_autosaveMapLaunchPending = false;
 	const int MAX_PARTY_SLOTS = 4;
 	static bool SetStringDvarIfChanged(const char* name, const std::string& value)
 	{
@@ -1847,32 +1848,45 @@ namespace Components
 
 		UIScript::Add("LoadSaveAccepted", [](const UIScript::Token&, const Game::uiInfo_s*)
 			{
-				auto* map = Game::Dvar_FindVar("autosave_map");
+				if (s_autosaveMapLaunchPending)
+				{
+					return;
+				}
 
+				auto* map = Game::Dvar_FindVar("autosave_map");
 				if (!map || !map->current.string || !map->current.string[0])
 				{
 					return;
 				}
 
+				const std::string mapName = map->current.string;
+				const bool validMapName = mapName.size() <= 64 &&
+					std::all_of(mapName.begin(), mapName.end(), [](const unsigned char c)
+						{
+							return std::isalnum(c) || c == '_' || c == '-';
+						});
+
+				if (!validMapName)
+				{
+					return;
+				}
+
+				s_autosaveMapLaunchPending = true;
+
 				Dvar::Var("autosave_load").set(true);
 
-				Scheduler::Schedule([]() -> bool
+				Command::Execute("closemenu popup_autosave", false);
+				Scheduler::Once([mapName]
 					{
-						if (!Game::CL_IsCgameInitialized())
+						if (!s_autosaveMapLaunchPending)
 						{
-							return false;
+							return;
 						}
 
-						Scheduler::Once([]()
-							{
-								Dvar::Var("autosave_load").set(false);
-							}, Scheduler::Pipeline::MAIN, 5s);
-
-						return true;
+						const std::string command = "map "s + mapName;
+						Command::Execute(command.c_str(), false);
+						s_autosaveMapLaunchPending = false;
 					}, Scheduler::Pipeline::MAIN, 100ms);
-
-				std::string cmd = "map "s + map->current.string;
-				Command::Execute(cmd.c_str());
 			});
 
 		if (!Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled())

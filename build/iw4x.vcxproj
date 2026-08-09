@@ -199,6 +199,7 @@ tools\premake5 generate-buildinfo</Command>
     <ClInclude Include="..\src\Components\Modules\FileSystem.hpp" />
     <ClInclude Include="..\src\Components\Modules\Flags.hpp" />
     <ClInclude Include="..\src\Components\Modules\Friends.hpp" />
+    <ClInclude Include="..\src\Components\Modules\GSC\Entity.hpp" />
     <ClInclude Include="..\src\Components\Modules\GSC\Field.hpp" />
     <ClInclude Include="..\src\Components\Modules\GSC\GSC.hpp" />
     <ClInclude Include="..\src\Components\Modules\GSC\IO.hpp" />
@@ -266,6 +267,7 @@ tools\premake5 generate-buildinfo</Command>
     <ClInclude Include="..\src\Components\Modules\UIFeeder.hpp" />
     <ClInclude Include="..\src\Components\Modules\UIScript.hpp" />
     <ClInclude Include="..\src\Components\Modules\UPnP.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ViewModelFxSetup.hpp" />
     <ClInclude Include="..\src\Components\Modules\Updater.hpp" />
     <ClInclude Include="..\src\Components\Modules\VisionFile.hpp" />
     <ClInclude Include="..\src\Components\Modules\Voice.hpp" />
@@ -401,6 +403,7 @@ tools\premake5 generate-buildinfo</Command>
     <ClCompile Include="..\src\Components\Modules\FileSystem.cpp" />
     <ClCompile Include="..\src\Components\Modules\Flags.cpp" />
     <ClCompile Include="..\src\Components\Modules\Friends.cpp" />
+    <ClCompile Include="..\src\Components\Modules\GSC\Entity.cpp" />
     <ClCompile Include="..\src\Components\Modules\GSC\Field.cpp" />
     <ClCompile Include="..\src\Components\Modules\GSC\GSC.cpp" />
     <ClCompile Include="..\src\Components\Modules\GSC\IO.cpp" />
@@ -466,6 +469,7 @@ tools\premake5 generate-buildinfo</Command>
     <ClCompile Include="..\src\Components\Modules\UIFeeder.cpp" />
     <ClCompile Include="..\src\Components\Modules\UIScript.cpp" />
     <ClCompile Include="..\src\Components\Modules\UPnP.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ViewModelFx.cpp" />
     <ClCompile Include="..\src\Components\Modules\Updater.cpp" />
     <ClCompile Include="..\src\Components\Modules\VisionFile.cpp" />
     <ClCompile Include="..\src\Components\Modules\Voice.cpp" />

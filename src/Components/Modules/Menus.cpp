@@ -2644,6 +2644,7 @@ namespace Components
 		Add("ui_mp/popup_partyconnect_warning.menu");
 		Add("ui_mp/popup_autosave.menu");
 		Add("ui_mp/zw3changelog.menu");
+		Add("ui_mp/zwnet_matchmaking.menu");
 	}
 
 	void Menus::preDestroy()

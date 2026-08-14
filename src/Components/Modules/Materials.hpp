@@ -11,6 +11,7 @@ namespace Components
 		static int FormatImagePath(char* buffer, size_t size, int, int, const char* image);
 
 		static Game::Material* Create(const std::string& name, Game::GfxImage* image);
+		static void ConfigureAnimatedAtlas(Game::Material* material);
 		static void Delete(Game::Material* material, bool deleteImage = false);
 
 		static Game::GfxImage* CreateImage(const std::string& name, unsigned int width, unsigned int height, unsigned int depth, unsigned int flags, _D3DFORMAT format);

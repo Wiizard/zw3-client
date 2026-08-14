@@ -29,6 +29,8 @@ namespace Components
 
 		static bool IsZWNetMatchmakingOpen();
 
+		static bool IsZWNetPreGameState(const std::string& state);
+
 		static bool IsConnectMenuOpen();
 
 		static const char* GetHostDiscordInviteIP();

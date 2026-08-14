@@ -225,6 +225,7 @@ namespace Components
 		static std::string StripMaterialTextIcons(const std::string& in);
 		static void StripAllTextIcons(const char* in, char* out, std::size_t max);
 		static std::string StripAllTextIcons(const std::string& in);
+		static std::string EncodeUtf8ForGame(std::string_view text, std::size_t maxCharacters);
 
 		static bool IsFontIcon(const char*& text, FontIconInfo& fontIcon);
 		static float GetNormalizedFontIconWidth(const FontIconInfo& fontIcon);

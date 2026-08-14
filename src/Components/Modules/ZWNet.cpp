@@ -6,8 +6,10 @@
 #include "Command.hpp"
 #include "Events.hpp"
 #include "FileSystem.hpp"
+#include "Friends.hpp"
 #include "Party.hpp"
 #include "Scheduler.hpp"
+#include "TextRenderer.hpp"
 #include "UIScript.hpp"
 
 namespace Components
@@ -21,6 +23,136 @@ namespace Components
 
 		std::array<Game::XAssetHeader, ZWNET_MATERIAL_ENUM_CAPACITY> MaterialEnumerationAssets{};
 		std::uint32_t MaterialEnumerationCount{};
+		std::string FormatPublicGuid();
+
+		struct SharedLobbyRank
+		{
+			int level = 1;
+			int prestige = 0;
+		};
+
+		using SharedLobbyRankMap =
+			std::unordered_map<std::string, SharedLobbyRank>;
+
+		std::mutex SharedLobbyRankMutex;
+		SharedLobbyRankMap SharedLobbyRanks;
+		std::string SharedLobbyRankPartyId;
+		std::chrono::steady_clock::time_point NextRankPublishAttempt{};
+		int LastRankPublishLevel = -1;
+		int LastRankPublishPrestige = -1;
+
+		bool TryParseRankValue(const std::string& data,
+			const std::string_view field, int& value)
+		{
+			const auto fieldPosition = data.find(field);
+			if (fieldPosition == std::string::npos)
+			{
+				return false;
+			}
+
+			auto valuePosition = fieldPosition + field.size();
+			while (valuePosition < data.size() &&
+				(data[valuePosition] == ':' ||
+					data[valuePosition] == ' ' ||
+					data[valuePosition] == '\t'))
+			{
+				++valuePosition;
+			}
+
+			if (valuePosition >= data.size())
+			{
+				return false;
+			}
+
+			char* end = nullptr;
+			const auto parsed = std::strtol(
+				data.c_str() + valuePosition, &end, 10);
+			if (end == data.c_str() + valuePosition)
+			{
+				return false;
+			}
+
+			value = static_cast<int>(parsed);
+			return true;
+		}
+
+		SharedLobbyRank ReadLocalLobbyRank()
+		{
+			SharedLobbyRank rank;
+			const auto rankPath = std::filesystem::path("zw3") /
+				"core" / "scriptdata" /
+				("rank_" + FormatPublicGuid());
+			std::string data;
+			if (!Utils::IO::ReadFile(rankPath.string(), &data))
+			{
+				return rank;
+			}
+
+			int storedLevel = 0;
+			int storedPrestige = 0;
+			if (!TryParseRankValue(data, "level", storedLevel) ||
+				!TryParseRankValue(data, "prestige", storedPrestige))
+			{
+				return rank;
+			}
+
+			rank.level = std::clamp(storedLevel, 0, 53) + 1;
+			rank.prestige = std::max(storedPrestige, 0);
+			return rank;
+		}
+
+		SharedLobbyRankMap ParseSharedLobbyRanks(
+			const nlohmann::json& party)
+		{
+			SharedLobbyRankMap ranks;
+			const auto settingsIt = party.find("zombie_settings");
+			if (settingsIt == party.end() || !settingsIt->is_object())
+			{
+				return ranks;
+			}
+
+			const auto ranksIt = settingsIt->find("zwnet_player_ranks");
+			if (ranksIt == settingsIt->end() || !ranksIt->is_object())
+			{
+				return ranks;
+			}
+
+			for (const auto& [guid, value] : ranksIt->items())
+			{
+				if (guid.size() != 16 || !value.is_object())
+				{
+					continue;
+				}
+
+				SharedLobbyRank rank;
+				rank.level = std::clamp(value.value("level", 1), 1, 54);
+				rank.prestige = std::max(value.value("prestige", 0), 0);
+				ranks.emplace(guid, rank);
+			}
+
+			return ranks;
+		}
+
+		SharedLobbyRankMap CacheSharedLobbyRanks(
+			const nlohmann::json& party)
+		{
+			auto ranks = ParseSharedLobbyRanks(party);
+			const auto localGuid = FormatPublicGuid();
+			ranks[localGuid] = ReadLocalLobbyRank();
+			const auto partyId = party.value("id", std::string{});
+			{
+				std::lock_guard lock(SharedLobbyRankMutex);
+				SharedLobbyRankPartyId = partyId;
+				SharedLobbyRanks = ranks;
+			}
+			return ranks;
+		}
+
+		SharedLobbyRankMap GetCachedSharedLobbyRanks()
+		{
+			std::lock_guard lock(SharedLobbyRankMutex);
+			return SharedLobbyRanks;
+		}
 
 		void PatchMaterialEnumerationScratch()
 		{
@@ -137,6 +269,14 @@ namespace Components
 			return it != object.end() && it->is_string() ? it->get<std::string>() : std::string{fallback};
 		}
 
+		std::string SafeDisplayName(std::string value)
+		{
+			constexpr std::size_t maxLength = 48;
+			value = TextRenderer::EncodeUtf8ForGame(value, maxLength);
+			Utils::String::Trim(value);
+			return value.empty() ? "ZW3 Player" : value;
+		}
+
 		std::string ResponseErrorCode(const nlohmann::json& response)
 		{
 			if (!response.contains("error") || !response.at("error").is_object()) return {};
@@ -193,6 +333,7 @@ namespace Components
 	std::atomic_bool& ZWNet::SearchingState() { static std::atomic_bool value = false; return value; }
 	std::atomic_bool& ZWNet::ClosingOnlineSessionState() { static std::atomic_bool value = false; return value; }
 	std::atomic_bool& ZWNet::ServerJoinTransitionState() { static std::atomic_bool value = false; return value; }
+	std::atomic_bool& ZWNet::OnlineEntryPendingState() { static std::atomic_bool value = false; return value; }
 	bool& ZWNet::LoginInFlightState() { static bool value = false; return value; }
 	std::mutex& ZWNet::StateMutex() { static std::mutex value; return value; }
 	std::string& ZWNet::AccessTokenState() { static std::string value; return value; }
@@ -203,6 +344,22 @@ namespace Components
 	std::string& ZWNet::CurrentMatchIdState() { static std::string value; return value; }
 	std::mutex& ZWNet::AsyncTaskMutex() { static std::mutex value; return value; }
 	std::deque<std::function<void()>>& ZWNet::AsyncTasks() { static std::deque<std::function<void()>> value; return value; }
+
+	bool ZWNet::TryGetSharedLobbyRank(const std::string& guid, int& level, int& prestige)
+	{
+		auto normalizedGuid = guid;
+		std::ranges::transform(normalizedGuid, normalizedGuid.begin(), [](const unsigned char character)
+		{
+			return static_cast<char>(std::tolower(character));
+		});
+
+		std::lock_guard lock(SharedLobbyRankMutex);
+		const auto rank = SharedLobbyRanks.find(normalizedGuid);
+		if (rank == SharedLobbyRanks.end()) return false;
+		level = rank->second.level;
+		prestige = rank->second.prestige;
+		return true;
+	}
 
 	void ZWNet::EnqueueAsync(std::function<void()> task)
 	{
@@ -354,6 +511,7 @@ namespace Components
 			CurrentPlayerIdState() = me->at("id").get<std::string>();
 		}
 		SetState("ONLINE");
+		CompleteOnlineEntry();
 		Request("POST", "/social/presence", {{"status", "MAIN_MENU"}, {"sequence", NextPresenceSequence()}, {"joinable", false}});
 	}
 
@@ -392,7 +550,12 @@ namespace Components
 		});
 		const auto result = Request("POST", "/social/client/login", requestBody);
 		if (!ActiveState()) return;
-		if (!result || result->contains("error"))
+		if (!result)
+		{
+			SetState("ERROR", "ZWNET_REQUEST_FAILED");
+			return;
+		}
+		if (result->contains("error"))
 		{
 			SetState("LOGIN_REQUIRED", "ZWNET_ACCOUNT_LINK_REQUIRED");
 			return;
@@ -410,7 +573,62 @@ namespace Components
 			CurrentPlayerIdState() = result->at("profile").at("id").get<std::string>();
 		}
 		SetState("ONLINE");
+		CompleteOnlineEntry();
 		Request("POST", "/social/presence", {{"status", "MAIN_MENU"}, {"sequence", NextPresenceSequence()}, {"joinable", false}});
+	}
+
+	void ZWNet::BeginOnlineEntry()
+	{
+		if (!ActiveState()) return;
+		OnlineEntryPendingState() = true;
+		SetState("SIGNING_IN");
+
+		bool hasRefreshToken = false;
+		{
+			std::lock_guard lock(StateMutex());
+			hasRefreshToken = !RefreshTokenState().empty();
+		}
+		if (hasRefreshToken) EnqueueAsync([] { Refresh(); });
+		else Login();
+	}
+
+	void ZWNet::CompleteOnlineEntry()
+	{
+		Scheduler::Once([]
+		{
+			if (!ActiveState() || !OnlineEntryPendingState().exchange(false)) return;
+			if (auto* connecting = Game::Menus_FindByName(Game::uiContext, "popup_zwnet_connecting"))
+			{
+				Game::Menus_CloseRequest(Game::uiContext, connecting);
+			}
+			Game::Menus_OpenByName(Game::uiContext, "zwnet_matchmaking");
+		}, Scheduler::Pipeline::MAIN);
+	}
+
+	void ZWNet::AbandonOnlineSession()
+	{
+		SearchingState() = false;
+		ServerJoinTransitionState() = false;
+		OnlineEntryPendingState() = false;
+		{
+			std::lock_guard lock(StateMutex());
+			CurrentPartyIdState().clear();
+			CurrentProposalIdState().clear();
+			CurrentMatchIdState().clear();
+		}
+		Dvar::Var("zwnet_lobby_active").set(false);
+		Dvar::Var("zwnet_vote_active").set(false);
+		Dvar::Var("zwnet_vote_selection").set("");
+		Dvar::Var("zwnet_all_ready").set(false);
+		Dvar::Var("zwnet_start_phase").set("");
+		Dvar::Var("zwnet_start_seconds").set(0);
+		Dvar::Var("zwnet_vote_winner_id").set("");
+		Dvar::Var("zwnet_vote_winner_name").set("");
+		Dvar::Var("zwnet_vote_winner_image").set("");
+		Dvar::Var("zwnet_match_id").set("");
+		Dvar::Var("zwnet_server_endpoint").set("");
+		Dvar::Var("zwnet_server_status").set("NOT ASSIGNED");
+		Dvar::Var("zwnet_join_status").set("WAITING IN LOBBY");
 	}
 
 	void ZWNet::Register()
@@ -445,6 +663,7 @@ namespace Components
 			SetState("ERROR", "ZWNET_PARTY_FAILED");
 			return;
 		}
+		*party = PublishLocalRank(std::move(*party));
 		UpdateLobbyDvars(*party);
 		const auto partyState = party->value("state", "IDLE");
 		if (IsActiveMatchmakingState(partyState))
@@ -482,9 +701,83 @@ namespace Components
 		SearchingState() = true; SetState("SEARCHING");
 	}
 
+	nlohmann::json ZWNet::PublishLocalRank(nlohmann::json party)
+	{
+		if (!party.is_object() || party.contains("error"))
+		{
+			return party;
+		}
+
+		const auto partyId = JsonString(party, "id");
+		if (partyId.empty())
+		{
+			return party;
+		}
+
+		const auto guid = FormatPublicGuid();
+		const auto rank = ReadLocalLobbyRank();
+		auto settings = party.value(
+			"zombie_settings", nlohmann::json::object());
+		if (!settings.is_object())
+		{
+			settings = nlohmann::json::object();
+		}
+
+		auto ranks = settings.value(
+			"zwnet_player_ranks", nlohmann::json::object());
+		if (!ranks.is_object())
+		{
+			ranks = nlohmann::json::object();
+		}
+
+		const auto existingIt = ranks.find(guid);
+		if (existingIt != ranks.end() && existingIt->is_object() &&
+			existingIt->value("level", 1) == rank.level &&
+			existingIt->value("prestige", 0) == rank.prestige)
+		{
+			CacheSharedLobbyRanks(party);
+			return party;
+		}
+
+		const auto now = std::chrono::steady_clock::now();
+		{
+			std::lock_guard lock(SharedLobbyRankMutex);
+			const auto rankChanged =
+				rank.level != LastRankPublishLevel ||
+				rank.prestige != LastRankPublishPrestige;
+			if (!rankChanged && now < NextRankPublishAttempt)
+			{
+				SharedLobbyRanks[guid] = rank;
+				return party;
+			}
+
+			LastRankPublishLevel = rank.level;
+			LastRankPublishPrestige = rank.prestige;
+			NextRankPublishAttempt = now + std::chrono::seconds(30);
+		}
+
+		ranks[guid] = {
+			{"level", rank.level},
+			{"prestige", rank.prestige}
+		};
+		settings["zwnet_player_ranks"] = std::move(ranks);
+		const auto result = Request(
+			"POST",
+			"/zwnet/parties/" + partyId + "/set-zombie-settings",
+			settings);
+		if (result && result->is_object() && !result->contains("error"))
+		{
+			party = *result;
+		}
+
+		CacheSharedLobbyRanks(party);
+		return party;
+	}
+
 	void ZWNet::UpdateLobbyDvars(const nlohmann::json& party)
 	{
 		if (party.is_null() || !party.is_object()) return;
+		const auto sharedRanks = CacheSharedLobbyRanks(party);
 		const auto partyId = JsonString(party, "id");
 		const auto leaderId = JsonString(party, "leader_id");
 		const auto state = JsonString(party, "state", "IDLE");
@@ -492,13 +785,20 @@ namespace Components
 		std::string owner;
 		std::string currentPlayerId;
 		{ std::lock_guard lock(StateMutex()); currentPlayerId = CurrentPlayerIdState(); }
-		for (const auto& member : members) if (JsonString(member, "player_id") == leaderId) owner = JsonString(member, "display_name");
+		for (const auto& member : members)
+		{
+			if (JsonString(member, "player_id") == leaderId)
+			{
+				owner = SafeDisplayName(JsonString(member, "display_name"));
+				break;
+			}
+		}
 		{
 			std::lock_guard lock(StateMutex());
 			CurrentPartyIdState() = partyId;
 		}
 		const auto stateText = FriendlyStateText(state);
-		Scheduler::Once([partyId, leaderId, state, stateText, owner, members, currentPlayerId]
+		Scheduler::Once([partyId, leaderId, state, stateText, owner, members, currentPlayerId, sharedRanks]
 		{
 			if (!ActiveState()) return;
 			Dvar::Var("zwnet_lobby_active").set(true);
@@ -515,17 +815,34 @@ namespace Components
 				{
 					const auto& member = members[i];
 					const auto ready = member.value("ready", 0) == 1;
-					Dvar::Var(prefix + "_name").set(JsonString(member, "display_name"));
+					const auto isSelf = JsonString(member, "player_id") == currentPlayerId;
+					const auto displayName = SafeDisplayName(JsonString(member, "display_name"));
+					Dvar::Var(prefix + "_name").set(displayName);
+					Dvar::Var(prefix + "_guid").set(JsonString(member, "player_id"));
 					Dvar::Var(prefix + "_role").set(JsonString(member, "player_id") == leaderId ? "PARTY LEADER" : "MEMBER");
 					Dvar::Var(prefix + "_ready").set(ready);
+					Dvar::Var(prefix + "_self").set(isSelf);
+					const auto rankIt = sharedRanks.find(
+						JsonString(member, "player_id"));
+					const auto rankKnown = rankIt != sharedRanks.end();
+					Dvar::Var(prefix + "_shared_rank_known").set(rankKnown);
+					Dvar::Var(prefix + "_shared_rank_level").set(
+						rankKnown ? rankIt->second.level : 1);
+					Dvar::Var(prefix + "_shared_rank_prestige").set(
+						rankKnown ? rankIt->second.prestige : 0);
 					allReady = allReady && ready;
-					if (JsonString(member, "player_id") == currentPlayerId) selfReady = ready;
+					if (isSelf) selfReady = ready;
 				}
 				else
 				{
 					Dvar::Var(prefix + "_name").set("");
+					Dvar::Var(prefix + "_guid").set("");
 					Dvar::Var(prefix + "_role").set("");
 					Dvar::Var(prefix + "_ready").set(false);
+					Dvar::Var(prefix + "_self").set(false);
+					Dvar::Var(prefix + "_shared_rank_known").set(false);
+					Dvar::Var(prefix + "_shared_rank_level").set(1);
+					Dvar::Var(prefix + "_shared_rank_prestige").set(0);
 				}
 			}
 			Dvar::Var("zwnet_lobby_self_ready").set(selfReady);
@@ -547,6 +864,7 @@ namespace Components
 		auto party = Request("GET", "/zwnet/parties/current");
 		if (!party || party->is_null()) party = Request("POST", "/zwnet/parties/create", nlohmann::json::object());
 		if (!party || party->contains("error")) { SetState("ERROR", "ZWNET_PARTY_FAILED"); return; }
+		*party = PublishLocalRank(std::move(*party));
 		UpdateLobbyDvars(*party);
 		const auto partyId = JsonString(*party, "id");
 		if (!partyId.empty())
@@ -559,9 +877,10 @@ namespace Components
 
 	void ZWNet::RefreshLobby()
 	{
-		const auto party = Request("GET", "/zwnet/parties/current");
+		auto party = Request("GET", "/zwnet/parties/current");
 		if (party && !party->is_null() && !party->contains("error"))
 		{
+			*party = PublishLocalRank(std::move(*party));
 			UpdateLobbyDvars(*party);
 			const auto partyState = party->value("state", "IDLE");
 			if (IsActiveMatchmakingState(partyState))
@@ -570,6 +889,25 @@ namespace Components
 				SetState(partyState);
 				UpdateMatchmaking();
 			}
+		}
+	}
+
+	void ZWNet::RefreshActiveParty()
+	{
+		if (!ActiveState() || SearchingState() || ClosingOnlineSessionState()) return;
+
+		std::string partyId;
+		{
+			std::lock_guard lock(StateMutex());
+			partyId = CurrentPartyIdState();
+		}
+		if (partyId.empty()) return;
+
+		auto party = Request("GET", "/zwnet/parties/current");
+		if (party && party->is_object() && !party->contains("error"))
+		{
+			*party = PublishLocalRank(std::move(*party));
+			UpdateLobbyDvars(*party);
 		}
 	}
 
@@ -605,6 +943,9 @@ namespace Components
 			std::string displayName;
 			std::string role;
 			bool ready{};
+			bool rankKnown{};
+			int rankLevel{1};
+			int rankPrestige{};
 		};
 		std::array<LobbyMemberSnapshot, 4> members{};
 		std::size_t memberCount{};
@@ -614,8 +955,26 @@ namespace Components
 			if (!member.is_object()) continue;
 			auto& snapshot = members[memberCount++];
 			snapshot.playerId = JsonString(member, "player_id");
-			snapshot.displayName = JsonString(member, "display_name");
+			snapshot.displayName = SafeDisplayName(JsonString(member, "display_name"));
 			snapshot.role = JsonString(member, "role", "MEMBER");
+			const auto rankIt = member.find("rank");
+			if (rankIt != member.end() && rankIt->is_object())
+			{
+				snapshot.rankLevel = std::clamp(rankIt->value("level", 1), 1, 54);
+				snapshot.rankPrestige = std::max(rankIt->value("prestige", 0), 0);
+				snapshot.rankKnown = rankIt->contains("level");
+			}
+			else if (member.contains("rank_level"))
+			{
+				snapshot.rankLevel = std::clamp(member.value("rank_level", 1), 1, 54);
+				snapshot.rankPrestige = std::max(member.value("rank_prestige", 0), 0);
+				snapshot.rankKnown = true;
+			}
+			if (!snapshot.rankKnown)
+			{
+				snapshot.rankKnown = Friends::TryGetZombieRankByGuid(
+					snapshot.playerId, snapshot.rankLevel, snapshot.rankPrestige);
+			}
 			const auto readyIt = member.find("ready");
 			if (readyIt != member.end())
 			{
@@ -624,9 +983,10 @@ namespace Components
 			}
 		}
 		const auto stateText = FriendlyStateText(JsonString(status, "state", "WAITING_FOR_READY"));
+		const auto sharedRanks = GetCachedSharedLobbyRanks();
 		std::string currentPlayerId;
 		{ std::lock_guard lock(StateMutex()); currentPlayerId = CurrentPlayerIdState(); }
-		Scheduler::Once([members = std::move(members), memberCount, stateText, currentPlayerId]
+		Scheduler::Once([members = std::move(members), memberCount, stateText, currentPlayerId, sharedRanks]
 		{
 			if (!ActiveState()) return;
 			static constexpr std::array memberPrefixes
@@ -648,16 +1008,33 @@ namespace Components
 				{
 					const auto& member = members[i];
 					Dvar::Var(std::string{prefix} + "_name").set(member.displayName);
+					Dvar::Var(std::string{prefix} + "_guid").set(member.playerId);
 					Dvar::Var(std::string{prefix} + "_role").set(member.role);
 					Dvar::Var(std::string{prefix} + "_ready").set(member.ready);
+					Dvar::Var(std::string{prefix} + "_self").set(member.playerId == currentPlayerId);
+					const auto rankIt = sharedRanks.find(member.playerId);
+					const auto sharedRankKnown = rankIt != sharedRanks.end();
+					const auto rankKnown = member.rankKnown || sharedRankKnown;
+					Dvar::Var(std::string{prefix} + "_shared_rank_known").set(rankKnown);
+					Dvar::Var(std::string{prefix} + "_shared_rank_level").set(
+						member.rankKnown ? member.rankLevel :
+						sharedRankKnown ? rankIt->second.level : 1);
+					Dvar::Var(std::string{prefix} + "_shared_rank_prestige").set(
+						member.rankKnown ? member.rankPrestige :
+						sharedRankKnown ? rankIt->second.prestige : 0);
 					allReady = allReady && member.ready;
 					if (member.playerId == currentPlayerId) selfReady = member.ready;
 				}
 				else
 				{
 					Dvar::Var(std::string{prefix} + "_name").set("");
+					Dvar::Var(std::string{prefix} + "_guid").set("");
 					Dvar::Var(std::string{prefix} + "_role").set("");
 					Dvar::Var(std::string{prefix} + "_ready").set(false);
+					Dvar::Var(std::string{prefix} + "_self").set(false);
+					Dvar::Var(std::string{prefix} + "_shared_rank_known").set(false);
+					Dvar::Var(std::string{prefix} + "_shared_rank_level").set(1);
+					Dvar::Var(std::string{prefix} + "_shared_rank_prestige").set(0);
 				}
 			}
 			Dvar::Var("zwnet_lobby_self_ready").set(selfReady);
@@ -668,14 +1045,19 @@ namespace Components
 
 	void ZWNet::UpdatePresence()
 	{
-		if (!ActiveState() || ClosingOnlineSessionState()) return;
+		if (!ActiveState() || ClosingOnlineSessionState() || OnlineEntryPendingState()) return;
 		std::string matchId;
 		{
 			std::lock_guard lock(StateMutex());
 			matchId = CurrentMatchIdState();
 		}
 		const auto status = !matchId.empty() ? "CONNECTING" : SearchingState() ? "SEARCHING" : "MAIN_MENU";
-		Request("POST", "/social/presence", {{"status", status}, {"sequence", NextPresenceSequence()}, {"joinable", false}});
+		const auto result = Request("POST", "/social/presence", {{"status", status}, {"sequence", NextPresenceSequence()}, {"joinable", false}});
+		if (!result || result->contains("error"))
+		{
+			SearchingState() = false;
+			SetState("ERROR", "ZWNET_REQUEST_FAILED");
+		}
 	}
 
 	void ZWNet::ToggleReady(const bool ready)
@@ -891,9 +1273,20 @@ namespace Components
 	void ZWNet::UpdateMatchmaking()
 	{
 		if (!ActiveState() || !SearchingState()) return;
-		const auto party = Request("GET", "/zwnet/parties/current");
+		auto party = Request("GET", "/zwnet/parties/current");
+		if (party && party->is_object() && !party->contains("error"))
+		{
+			*party = PublishLocalRank(std::move(*party));
+		}
 		const auto status = Request("GET", "/zwnet/matchmaking/status");
-		if (!status || status->contains("error"))
+		if (!status)
+		{
+			SearchingState() = false;
+			if (party && !party->is_null() && !party->contains("error")) UpdateLobbyDvars(*party);
+			SetState("ERROR", "ZWNET_REQUEST_FAILED");
+			return;
+		}
+		if (status->contains("error"))
 		{
 			if (party && !party->is_null() && !party->contains("error")) UpdateLobbyDvars(*party);
 			return;
@@ -991,15 +1384,50 @@ namespace Components
 		{
 			"zwnet_lobby_member_0_role", "zwnet_lobby_member_1_role", "zwnet_lobby_member_2_role", "zwnet_lobby_member_3_role"
 		};
+		constexpr std::array memberGuids
+		{
+			"zwnet_lobby_member_0_guid", "zwnet_lobby_member_1_guid", "zwnet_lobby_member_2_guid", "zwnet_lobby_member_3_guid"
+		};
 		constexpr std::array memberReady
 		{
 			"zwnet_lobby_member_0_ready", "zwnet_lobby_member_1_ready", "zwnet_lobby_member_2_ready", "zwnet_lobby_member_3_ready"
 		};
+		constexpr std::array memberSelf
+		{
+			"zwnet_lobby_member_0_self", "zwnet_lobby_member_1_self", "zwnet_lobby_member_2_self", "zwnet_lobby_member_3_self"
+		};
+		constexpr std::array memberSharedRankKnown
+		{
+			"zwnet_lobby_member_0_shared_rank_known", "zwnet_lobby_member_1_shared_rank_known", "zwnet_lobby_member_2_shared_rank_known", "zwnet_lobby_member_3_shared_rank_known"
+		};
+		constexpr std::array memberSharedRankLevels
+		{
+			"zwnet_lobby_member_0_shared_rank_level", "zwnet_lobby_member_1_shared_rank_level", "zwnet_lobby_member_2_shared_rank_level", "zwnet_lobby_member_3_shared_rank_level"
+		};
+		constexpr std::array memberSharedRankPrestiges
+		{
+			"zwnet_lobby_member_0_shared_rank_prestige", "zwnet_lobby_member_1_shared_rank_prestige", "zwnet_lobby_member_2_shared_rank_prestige", "zwnet_lobby_member_3_shared_rank_prestige"
+		};
+		constexpr std::array memberRankIcons
+		{
+			"zwnet_lobby_member_0_rank_icon", "zwnet_lobby_member_1_rank_icon", "zwnet_lobby_member_2_rank_icon", "zwnet_lobby_member_3_rank_icon"
+		};
+		constexpr std::array memberRankLevels
+		{
+			"zwnet_lobby_member_0_rank_level", "zwnet_lobby_member_1_rank_level", "zwnet_lobby_member_2_rank_level", "zwnet_lobby_member_3_rank_level"
+		};
 		for (std::size_t i = 0; i < memberNames.size(); ++i)
 		{
 			Dvar::Register<const char*>(memberNames[i], "", Game::DVAR_NONE, "Party member name");
+			Dvar::Register<const char*>(memberGuids[i], "", Game::DVAR_NONE, "Public-lobby member GUID");
 			Dvar::Register<const char*>(memberRoles[i], "", Game::DVAR_NONE, "Party member role");
 			Dvar::Register<bool>(memberReady[i], false, Game::DVAR_NONE, "Party member ready state");
+			Dvar::Register<bool>(memberSelf[i], false, Game::DVAR_NONE, "Local public-lobby member slot");
+			Dvar::Register<bool>(memberSharedRankKnown[i], false, Game::DVAR_NONE, "Public-lobby member shared rank is available");
+			Dvar::Register<int>(memberSharedRankLevels[i], 1, 1, 54, Game::DVAR_NONE, "Public-lobby member shared rank level");
+			Dvar::Register<int>(memberSharedRankPrestiges[i], 0, 0, 255, Game::DVAR_NONE, "Public-lobby member shared rank prestige");
+			Dvar::Register<const char*>(memberRankIcons[i], "", Game::DVAR_NONE, "Public lobby member rank icon");
+			Dvar::Register<const char*>(memberRankLevels[i], "", Game::DVAR_NONE, "Public lobby member rank level");
 		}
 		Dvar::Register<bool>("zwnet_vote_active", false, Game::DVAR_NONE, "Map vote is active");
 		Dvar::Register<const char*>("zwnet_vote_proposal_id", "", Game::DVAR_NONE, "Current map vote");
@@ -1080,6 +1508,9 @@ namespace Components
 		UIScript::Add("ZWNetCancel", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { Command::Execute("zwnet_cancel", false); });
 		UIScript::Add("ZWNET_CloseOnlineSession", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { EnqueueAsync([] { CloseOnlineSession(false); }); });
 		UIScript::Add("ZWNetLogin", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { Command::Execute("zwnet_login", false); });
+		UIScript::Add("ZWNET_ConnectOnline", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { BeginOnlineEntry(); });
+		UIScript::Add("ZWNET_CancelOnlineEntry", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { OnlineEntryPendingState() = false; });
+		UIScript::Add("ZWNET_AbandonOnlineSession", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { AbandonOnlineSession(); });
 		UIScript::Add("ZWNetRegister", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { Command::Execute("zwnet_register", false); });
 		UIScript::Add("ZWNetCopyGuid", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*)
 		{
@@ -1143,6 +1574,7 @@ namespace Components
 		}, Scheduler::Pipeline::MAIN, 2s);
 		Scheduler::Loop(ProcessAsyncTasks, Scheduler::Pipeline::ASYNC, 50ms);
 		Scheduler::Loop(UpdateMatchmaking, Scheduler::Pipeline::ASYNC, 3s);
+		Scheduler::Loop(RefreshActiveParty, Scheduler::Pipeline::ASYNC, 3s);
 		Scheduler::Loop([]
 		{
 			if (!ActiveState()) return;
@@ -1165,6 +1597,7 @@ namespace Components
 		ActiveState() = false;
 		SearchingState() = false;
 		ServerJoinTransitionState() = false;
+		OnlineEntryPendingState() = false;
 		{
 			std::lock_guard lock(StateMutex());
 			LoginInFlightState() = false;

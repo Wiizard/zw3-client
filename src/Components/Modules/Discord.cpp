@@ -77,9 +77,22 @@ namespace Components
 		}
 	}
 
-	static bool IsZWNetIdleState(const std::string& state)
+	bool Discord::IsZWNetPreGameState(const std::string& state)
 	{
-		return state.empty() || state == "IDLE" || state == "IN_PARTY";
+		return state == "SEARCH_STARTING"
+			|| state == "SEARCHING"
+			|| state == "MATCH_FOUND"
+			|| state == "MAP_VOTE"
+			|| state == "READY_CHECK"
+			|| state == "WAITING_FOR_READY"
+			|| state == "RESERVING_SERVER"
+			|| state == "STARTING_SERVER"
+			|| state == "SERVER_STARTING"
+			|| state == "COUNTDOWN"
+			|| state == "CONNECTING"
+			|| state == "DIRECT_CONNECTION"
+			|| state == "RELAY_CONNECTION"
+			|| state == "IN_MATCH";
 	}
 
 	static std::string GetZWNetPresenceState(const std::string& state, const int partySize, const int partyMax)
@@ -103,7 +116,7 @@ namespace Components
 			text = "Setting up match";
 		else if (state == "COUNTDOWN")
 			text = "Starting match";
-		else if (state == "CONNECING")
+		else if (state == "CONNECTING")
 			text = "Connecting to match";
 		else if (state == "DIRECT_CONNECTION" || state == "RELAY_CONNECTION")
 			text = "Joining match";
@@ -277,12 +290,39 @@ namespace Components
 		else if (isConnectMenu)
 		{
 			const auto mapName = GetLoadingMapDisplayName();
-
-			details = "Loading map";
 			state = mapName.empty()
 				? "Preparing game..."
 				: Utils::String::Format("Loading {}...", mapName);
 			canJoinDiscordParty = false;
+
+			if (Dvar::Var("zwnet_lobby_active").get<bool>())
+			{
+				int privacy = Dvar::Var("partyPrivacy").get<int>();
+				if (privacy < 0 || privacy > 2)
+					privacy = 0;
+
+				const auto isOpen = privacy == 0;
+				const auto* privacyName = GetPartyPrivacyName(privacy);
+				const auto zwnetPartyId = Dvar::Var(
+					"zwnet_lobby_party_id").get<std::string>();
+
+				details = Utils::String::Format(
+					"In pre-game lobby ({})", privacyName);
+				partySize = std::clamp(
+					Dvar::Var("zwnet_lobby_member_count").get<int>(), 1, 4);
+				partyMax = 4;
+				partyPrivacy = isOpen
+					? DISCORD_PARTY_PUBLIC
+					: DISCORD_PARTY_PRIVATE;
+				partyId = zwnetPartyId.empty()
+					? Utils::String::Format(
+						"zwnet_pending_{}", GetDiscordNonce())
+					: Utils::String::Format("zwnet_{}", zwnetPartyId);
+			}
+			else
+			{
+				details = "Loading map";
+			}
 		}
 		else if (!isInGame)
 		{
@@ -312,9 +352,9 @@ namespace Components
 					partySize = partyMax;
 
 				partyPrivacy = isOpen ? DISCORD_PARTY_PUBLIC : DISCORD_PARTY_PRIVATE;
-				details = IsZWNetIdleState(zwnetState)
-					? Utils::String::Format("In a public party ({})", privacyName)
-					: Utils::String::Format("In pre-game lobby ({})", privacyName);
+				details = Discord::IsZWNetPreGameState(zwnetState)
+					? Utils::String::Format("In pre-game lobby ({})", privacyName)
+					: Utils::String::Format("In a public party ({})", privacyName);
 				state = GetZWNetPresenceState(zwnetState, partySize, partyMax);
 
 				if (!zwnetPartyId.empty())

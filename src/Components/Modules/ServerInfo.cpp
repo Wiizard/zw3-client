@@ -152,6 +152,33 @@ namespace Components
 			("rank_" + guid);
 	}
 
+	static bool TryReadZombieRank(const std::string& guid,
+		int& level, int& prestige)
+	{
+		if (guid.empty())
+		{
+			return false;
+		}
+
+		std::string data;
+		if (!Utils::IO::ReadFile(GetZombieRankPath(guid).string(), &data))
+		{
+			return false;
+		}
+
+		int parsedLevel = -1;
+		int parsedPrestige = 0;
+		if (!TryParseZombieRankValue(data, "level", parsedLevel) ||
+			!TryParseZombieRankValue(data, "prestige", parsedPrestige))
+		{
+			return false;
+		}
+
+		level = std::clamp(parsedLevel, 0, 53);
+		prestige = std::max(parsedPrestige, 0);
+		return true;
+	}
+
 
 	static bool TryReadZombieRank(const std::uint64_t guid,
 		int& level, int& prestige)
@@ -318,6 +345,31 @@ namespace Components
 		}
 	}
 
+	static void SetZWNetLobbyRankSlot(const int slot,
+		const std::string& icon, const std::string& level)
+	{
+		if (slot < 0 || slot >= LobbyRankSlotCount)
+		{
+			return;
+		}
+
+		Dvar::Var(Utils::String::VA(
+			"zwnet_lobby_member_%d_rank_icon",
+			slot)).set(icon.c_str());
+
+		Dvar::Var(Utils::String::VA(
+			"zwnet_lobby_member_%d_rank_level",
+			slot)).set(level.c_str());
+	}
+
+	static void ClearZWNetLobbyRankSlots()
+	{
+		for (int slot = 0; slot < LobbyRankSlotCount; ++slot)
+		{
+			SetZWNetLobbyRankSlot(slot, "", "");
+		}
+	}
+
 	static std::uint64_t FindLobbyPlayerXuid(
 		const std::string& playerName)
 	{
@@ -352,6 +404,73 @@ namespace Components
 		}
 
 		return 0;
+	}
+
+	static void RefreshZWNetLobbyRanks()
+	{
+		for (int slot = 0; slot < LobbyRankSlotCount; ++slot)
+		{
+			const auto playerName = Dvar::Var(Utils::String::VA(
+				"zwnet_lobby_member_%d_name",
+				slot)).get<std::string>();
+
+			std::string rankIcon;
+			std::string rankLevel;
+
+			if (!playerName.empty())
+			{
+				int level = 0;
+				int prestige = 0;
+				const auto isLocalPlayer = Dvar::Var(Utils::String::VA(
+					"zwnet_lobby_member_%d_self",
+					slot)).get<bool>();
+				bool rankFound = false;
+
+				if (isLocalPlayer)
+				{
+					rankFound = TryReadZombieRank(
+						Dvar::Var("ui_zwnet_guid").get<std::string>(),
+						level, prestige);
+
+					if (!rankFound)
+					{
+						rankFound = TryReadZombieRank(
+							Party::GetLocalPlayerXUID(), level, prestige);
+					}
+				}
+				else
+				{
+					const auto sharedRankKnown = Dvar::Var(
+						Utils::String::VA(
+							"zwnet_lobby_member_%d_shared_rank_known",
+							slot)).get<bool>();
+					if (sharedRankKnown)
+					{
+						level = Dvar::Var(Utils::String::VA(
+							"zwnet_lobby_member_%d_shared_rank_level",
+							slot)).get<int>();
+						prestige = Dvar::Var(Utils::String::VA(
+							"zwnet_lobby_member_%d_shared_rank_prestige",
+							slot)).get<int>();
+						rankFound = true;
+					}
+				}
+
+				if (rankFound)
+				{
+					rankIcon = GetZombieRankIcon(prestige);
+					rankLevel = std::to_string(
+						isLocalPlayer ? level + 1 : level);
+				}
+				else
+				{
+					rankIcon = GetZombieRankIcon(0);
+					rankLevel = "1";
+				}
+			}
+
+			SetZWNetLobbyRankSlot(slot, rankIcon, rankLevel);
+		}
 	}
 
 	static std::string BuildLobbyRankSnapshot()
@@ -461,6 +580,12 @@ namespace Components
 		}
 	}
 
+	static bool IsMenuVisible(const char* menuName)
+	{
+		auto* menu = Game::Menus_FindByName(Game::uiContext, menuName);
+		return menu && Game::Menu_IsVisible(Game::uiContext, menu);
+	}
+
 	static void RefreshLobbyRanks()
 	{
 		if (Dvar::Var("party_host").get<bool>())
@@ -474,19 +599,6 @@ namespace Components
 			Party::Target(),
 			"getZW3LobbyRanks");
 	}
-
-	static bool IsPrivateLobbyVisible()
-	{
-		auto* lobby = Game::Menus_FindByName(
-			Game::uiContext,
-			"menu_xboxlive_privatelobby");
-
-		return lobby &&
-			Game::Menu_IsVisible(
-				Game::uiContext,
-				lobby);
-	}
-
 
 	static void ResetClientTransientScoreboardState(const int clientNum, const int suppressMilliseconds = 1000)
 	{
@@ -1068,6 +1180,12 @@ namespace Components
 			{
 				RefreshLobbyRanks();
 			});
+		UIScript::Add("RefreshZWNetLobbyRanks",
+			[]([[maybe_unused]] const UIScript::Token& token,
+				[[maybe_unused]] const Game::uiInfo_s* info)
+			{
+				RefreshZWNetLobbyRanks();
+			});
 
 		UIFeeder::Add(13.0f, GetPlayerCount, GetPlayerText, SelectPlayer);
 
@@ -1160,13 +1278,23 @@ namespace Components
 
 		Components::Scheduler::Loop([]()
 			{
-				if (!IsPrivateLobbyVisible())
+				if (IsMenuVisible("menu_xboxlive_privatelobby"))
+				{
+					RefreshLobbyRanks();
+				}
+				else
 				{
 					ClearLobbyRankSlots();
-					return;
 				}
 
-				RefreshLobbyRanks();
+				if (IsMenuVisible("zwnet_matchmaking"))
+				{
+					RefreshZWNetLobbyRanks();
+				}
+				else
+				{
+					ClearZWNetLobbyRankSlots();
+				}
 			}, Components::Scheduler::Pipeline::MAIN, 250ms);
 
 		Network::OnClientPacket("getStatus", [](const Network::Address& address, [[maybe_unused]] const std::string& data)

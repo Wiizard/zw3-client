@@ -39,6 +39,8 @@ namespace Components
 			std::string displayName;
 			std::string status;
 			bool joinable{};
+			int rankLevel{1};
+			int rankPrestige{};
 		};
 
 		struct IncomingFriendRequest
@@ -61,6 +63,7 @@ namespace Components
 
 		std::atomic_bool SocialActive{false};
 		std::atomic_bool SocialBusy{false};
+		std::atomic_bool SocialRefreshBusy{false};
 		std::atomic_bool PartyInvitePollBusy{false};
 		std::mutex SocialMutex;
 		std::vector<SocialFriend> SocialFriends;
@@ -72,13 +75,7 @@ namespace Components
 
 		std::string SafeSocialText(std::string value, const std::size_t maxLength)
 		{
-			value = TextRenderer::StripColors(value);
-			value.erase(std::remove_if(value.begin(), value.end(), [](const unsigned char character)
-			{
-				return character < 0x20 || character == 0x7F;
-			}), value.end());
-			if (value.size() > maxLength) value.resize(maxLength);
-			return value;
+			return TextRenderer::EncodeUtf8ForGame(value, maxLength);
 		}
 
 		std::string JsonString(const nlohmann::json& object, const char* key)
@@ -97,12 +94,141 @@ namespace Components
 			return fallback;
 		}
 
+		bool JsonInteger(const nlohmann::json& object, const char* key, int& result)
+		{
+			if (!object.is_object() || !object.contains(key)) return false;
+			const auto& value = object.at(key);
+			if (value.is_number_unsigned())
+			{
+				const auto parsed = value.get<std::uint64_t>();
+				if (parsed > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) return false;
+				result = static_cast<int>(parsed);
+				return true;
+			}
+			if (value.is_number_integer())
+			{
+				const auto parsed = value.get<std::int64_t>();
+				if (parsed < std::numeric_limits<int>::min() || parsed > std::numeric_limits<int>::max()) return false;
+				result = static_cast<int>(parsed);
+				return true;
+			}
+			if (!value.is_string()) return false;
+
+			const auto& text = value.get_ref<const std::string&>();
+			if (text.empty() || text.size() > 12) return false;
+			char* end = nullptr;
+			const auto parsed = std::strtol(text.c_str(), &end, 10);
+			if (end == text.c_str() || *end != '\0') return false;
+			result = static_cast<int>(parsed);
+			return true;
+		}
+
+		bool ReadSocialRankObject(const nlohmann::json& object, const bool nested,
+			int& level, int& prestige)
+		{
+			int parsedLevel = level;
+			int parsedPrestige = prestige;
+			const auto hasLevel = JsonInteger(object, nested ? "level" : "rank_level", parsedLevel);
+			const auto hasPrestige = JsonInteger(object, nested ? "prestige" : "rank_prestige", parsedPrestige);
+			if (!hasLevel && !hasPrestige) return false;
+
+			if (hasLevel) level = std::clamp(parsedLevel, 1, 54);
+			if (hasPrestige) prestige = std::max(parsedPrestige, 0);
+			return true;
+		}
+
+		bool ReadSocialRank(const nlohmann::json& row, int& level, int& prestige)
+		{
+			if (!row.is_object()) return false;
+			bool found = ReadSocialRankObject(row, false, level, prestige);
+			if (row.contains("rank") && row.at("rank").is_object())
+			{
+				found = ReadSocialRankObject(row.at("rank"), true, level, prestige) || found;
+			}
+			if (row.contains("presence") && row.at("presence").is_object())
+			{
+				const auto& presence = row.at("presence");
+				found = ReadSocialRankObject(presence, false, level, prestige) || found;
+				if (presence.contains("rank") && presence.at("rank").is_object())
+				{
+					found = ReadSocialRankObject(presence.at("rank"), true, level, prestige) || found;
+				}
+			}
+			return found;
+		}
+
+		std::string BuildSocialRankText(const int level, const int prestige)
+		{
+			const auto iconName = prestige >= 8
+				? std::string{"skullicon"}
+				: std::format("prestige_{}", prestige + 1);
+			auto* material = Game::DB_FindXAssetHeader(Game::ASSET_TYPE_MATERIAL, iconName.c_str()).material;
+			if (!material)
+			{
+				material = Game::DB_FindXAssetDefaultHeaderInternal(Game::ASSET_TYPE_MATERIAL).material;
+			}
+
+			const auto* materialName = material && material->info.name ? material->info.name : "default";
+			std::string text;
+			text.reserve(std::strlen(materialName) + 12);
+			text.push_back('^');
+			text.push_back(2);
+			text.push_back(0x22);
+			text.push_back(0x22);
+			text.push_back(static_cast<char>(std::strlen(materialName)));
+			text.append(materialName);
+			text.append(" ");
+			text.append(std::to_string(std::clamp(level, 1, 54)));
+			return text;
+		}
+
 		bool IsPublicGuid(const std::string& value)
 		{
 			return value.size() == 16 && std::ranges::all_of(value, [](const unsigned char character)
 			{
 				return std::isxdigit(character) != 0;
 			});
+		}
+
+		bool TryParseZombieRankValue(const std::string& data,
+			const std::string_view field, int& value)
+		{
+			const auto fieldPosition = data.find(field);
+			if (fieldPosition == std::string::npos) return false;
+
+			auto valuePosition = fieldPosition + field.size();
+			while (valuePosition < data.size() &&
+				(data[valuePosition] == ':' || data[valuePosition] == ' ' ||
+					data[valuePosition] == '\t'))
+			{
+				++valuePosition;
+			}
+
+			if (valuePosition >= data.size()) return false;
+			char* end = nullptr;
+			const auto parsed = std::strtol(data.c_str() + valuePosition, &end, 10);
+			if (end == data.c_str() + valuePosition) return false;
+			value = static_cast<int>(parsed);
+			return true;
+		}
+
+		std::pair<int, int> ReadLocalZombieRank()
+		{
+			const auto guid = std::format("{:016x}", Auth::GetKeyHash());
+			const auto rankPath = std::filesystem::path("zw3") / "core" /
+				"scriptdata" / ("rank_" + guid);
+			std::string data;
+			int storedLevel = 0;
+			int prestige = 0;
+			if (!Utils::IO::ReadFile(rankPath.string(), &data) ||
+				!TryParseZombieRankValue(data, "level", storedLevel) ||
+				!TryParseZombieRankValue(data, "prestige", prestige))
+			{
+				return {1, 0};
+			}
+
+			return {std::clamp(storedLevel, 0, 53) + 1,
+				std::max(prestige, 0)};
 		}
 
 		bool IsOpaquePartyId(const std::string& value)
@@ -253,6 +379,13 @@ namespace Components
 				auto displayName = SafeSocialText(JsonString(row, "display_name"), 48);
 				if (displayName.empty()) displayName = SafeSocialText(JsonString(row, "player_name"), 48);
 				if (displayName.empty()) displayName = "ZW3 Player";
+				int rankLevel = 1;
+				int rankPrestige = 0;
+				if (!ReadSocialRank(row, rankLevel, rankPrestige) &&
+					!ZWNet::TryGetSharedLobbyRank(id, rankLevel, rankPrestige))
+				{
+					Friends::TryGetZombieRankByGuid(id, rankLevel, rankPrestige);
+				}
 				updated.push_back(
 				{
 					SafeSocialText(id, 80),
@@ -260,7 +393,9 @@ namespace Components
 					SafeSocialText(JsonString(row, "discord_user_id"), 32),
 					std::move(displayName),
 					SafeSocialText(status, 32),
-					joinable
+					joinable,
+					std::clamp(rankLevel, 1, 54),
+					std::max(rankPrestige, 0)
 				});
 			}
 
@@ -387,9 +522,10 @@ namespace Components
 				const auto& user = SocialFriends[index];
 				switch (column)
 				{
-				case 0: value = ""; break;
+				case 0: value = BuildSocialRankText(user.rankLevel, user.rankPrestige); break;
 				case 1: value = user.displayName; break;
-				case 2: value = user.status + (user.joinable ? " / JOINABLE" : ""); break;
+				case 2: value = std::format("PRESTIGE {}", user.rankPrestige); break;
+				case 3: value = user.status + (user.joinable ? " / JOINABLE" : ""); break;
 				default: return "";
 				}
 			}
@@ -615,11 +751,19 @@ namespace Components
 		std::string name = Friends::GetPresence(user, "iw4x_name");
 		std::string experience = Friends::GetPresence(user, "iw4x_experience");
 		std::string prestige = Friends::GetPresence(user, "iw4x_prestige");
+		const auto zombieRankLevel = Friends::GetPresence(user, "zw3_zombie_rank_level");
+		const auto zombieRankPrestige = Friends::GetPresence(user, "zw3_zombie_rank_prestige");
 
 		if (!guid.empty()) entry->guid.bits = strtoull(guid.data(), nullptr, 16);
 		if (!name.empty()) entry->playerName = name;
 		if (!experience.empty()) entry->experience = atoi(experience.data());
 		if (!prestige.empty()) entry->prestige = atoi(prestige.data());
+		if (!zombieRankLevel.empty())
+		{
+			entry->zombieRankKnown = true;
+			entry->zombieRankLevel = std::clamp(atoi(zombieRankLevel.data()), 1, 54);
+			entry->zombieRankPrestige = std::max(atoi(zombieRankPrestige.data()), 0);
+		}
 
 		std::string server = Friends::GetPresence(user, "iw4x_server");
 		Network::Address oldAddress = entry->server;
@@ -826,6 +970,42 @@ namespace Components
 			Friends::SetPresence("iw4x_prestige", Utils::String::VA("%d", prestige));
 			Friends::UpdateState();
 		}
+	}
+
+	void Friends::UpdateZombieRankPresence()
+	{
+		if (!Steam::Enabled() || !Steam::Proxy::ClientFriends ||
+			!Steam::Proxy::SteamUtils)
+		{
+			return;
+		}
+
+		static std::optional<std::pair<int, int>> lastRank;
+		const auto rank = ReadLocalZombieRank();
+		if (lastRank && *lastRank == rank) return;
+		lastRank = rank;
+
+		Friends::SetPresence("zw3_zombie_rank_level", std::to_string(rank.first));
+		Friends::SetPresence("zw3_zombie_rank_prestige", std::to_string(rank.second));
+		Friends::UpdateState();
+	}
+
+	bool Friends::TryGetZombieRankByGuid(const std::string& guid,
+		int& level, int& prestige)
+	{
+		if (!IsPublicGuid(guid)) return false;
+		const auto guidValue = std::strtoull(guid.c_str(), nullptr, 16);
+		std::lock_guard<std::recursive_mutex> _(Friends::Mutex);
+		const auto entry = std::ranges::find_if(Friends::FriendsList,
+			[guidValue](const Friend& candidate)
+			{
+				return candidate.guid.bits == guidValue && candidate.zombieRankKnown;
+			});
+		if (entry == Friends::FriendsList.end()) return false;
+
+		level = entry->zombieRankLevel;
+		prestige = entry->zombieRankPrestige;
+		return true;
 	}
 
 	void Friends::UpdateFriends()
@@ -1320,10 +1500,17 @@ namespace Components
 			static Utils::Time::Interval timeInterval;
 			static Utils::Time::Interval sortInterval;
 			static Utils::Time::Interval stateInterval;
+			static Utils::Time::Interval zombieRankInterval;
 
 			if (*reinterpret_cast<bool*>(0x1AD5690)) // LiveStorage_DoWeHaveStats
 			{
 				Friends::UpdateRank();
+			}
+
+			if (zombieRankInterval.elapsed(2s))
+			{
+				zombieRankInterval.update();
+				Friends::UpdateZombieRankPresence();
 			}
 
 			if (timeInterval.elapsed(2min))
@@ -1359,6 +1546,20 @@ namespace Components
 		UIFeeder::Add(61.0f, Friends::GetFriendCount, Friends::GetFriendText, Friends::SelectFriend);
 		UIFeeder::Add(SOCIAL_FRIEND_FEEDER, GetSocialFriendCount, GetSocialFriendText, SelectSocialFriend);
 		UIFeeder::Add(SOCIAL_REQUEST_FEEDER, GetIncomingRequestCount, GetIncomingRequestText, SelectIncomingRequest);
+		Scheduler::Loop([]
+		{
+			if (!SocialActive || SocialBusy) return;
+			auto* menu = Game::Menus_FindByName(Game::uiContext, "popup_friends");
+			if (!menu || !Game::Menu_IsVisible(Game::uiContext, menu) || SocialRefreshBusy.exchange(true)) return;
+
+			Scheduler::Once([]
+			{
+				const auto clearBusy = gsl::finally([] { SocialRefreshBusy = false; });
+				if (!SocialActive) return;
+				RefreshSocialFriends();
+				RefreshIncomingRequests();
+			}, Scheduler::Pipeline::ASYNC);
+		}, Scheduler::Pipeline::MAIN, 15s);
 		Scheduler::Loop(PollPartyInvites, Scheduler::Pipeline::ASYNC, 5s);
 
 		Scheduler::OnGameShutdown([]
@@ -1417,6 +1618,7 @@ namespace Components
 
 			Friends::UpdateTimeStamp();
 			Friends::UpdateName();
+			Friends::UpdateZombieRankPresence();
 			Friends::UpdateState();
 
 			Friends::UpdateFriends();

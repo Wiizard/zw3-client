@@ -22,6 +22,7 @@ namespace Components
 		static std::atomic_bool& SearchingState();
 		static std::atomic_bool& ClosingOnlineSessionState();
 		static std::atomic_bool& ServerJoinTransitionState();
+		static std::atomic_bool& InGameState();
 		static bool& LoginInFlightState();
 		static std::mutex& StateMutex();
 		static std::string& AccessTokenState();

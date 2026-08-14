@@ -334,6 +334,7 @@ namespace Components
 	std::atomic_bool& ZWNet::ClosingOnlineSessionState() { static std::atomic_bool value = false; return value; }
 	std::atomic_bool& ZWNet::ServerJoinTransitionState() { static std::atomic_bool value = false; return value; }
 	std::atomic_bool& ZWNet::OnlineEntryPendingState() { static std::atomic_bool value = false; return value; }
+	std::atomic_bool& ZWNet::InGameState() { static std::atomic_bool value = false; return value; }
 	bool& ZWNet::LoginInFlightState() { static bool value = false; return value; }
 	std::mutex& ZWNet::StateMutex() { static std::mutex value; return value; }
 	std::string& ZWNet::AccessTokenState() { static std::string value; return value; }
@@ -1051,7 +1052,7 @@ namespace Components
 			std::lock_guard lock(StateMutex());
 			matchId = CurrentMatchIdState();
 		}
-		const auto status = !matchId.empty() ? "CONNECTING" : SearchingState() ? "SEARCHING" : "MAIN_MENU";
+		const auto status = !matchId.empty() ? (InGameState() ? "IN_MATCH" : "CONNECTING") : SearchingState() ? "SEARCHING" : "MAIN_MENU";
 		const auto result = Request("POST", "/social/presence", {{"status", status}, {"sequence", NextPresenceSequence()}, {"joinable", false}});
 		if (!result || result->contains("error"))
 		{
@@ -1141,6 +1142,7 @@ namespace Components
 		if (!ActiveState() || ClosingOnlineSessionState().exchange(true)) return;
 		const auto closingGuard = gsl::finally([] { ClosingOnlineSessionState() = false; });
 		ServerJoinTransitionState() = false;
+		InGameState() = false;
 		std::string matchId;
 		{
 			std::lock_guard lock(StateMutex());
@@ -1538,6 +1540,7 @@ namespace Components
 		UIScript::Add("ZWNET_VoteRandom", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { EnqueueAsync([] { VoteMap("RANDOM"); }); });
 		Events::OnCLDisconnected([](const bool wasConnected)
 		{
+			InGameState() = false;
 			// CL_ConnectFromParty performs an internal CL_Disconnect while moving
 			// from the ZWNET lobby into the assigned dedicated server. That planned
 			// transition must not revoke the match and reset the server underneath
@@ -1557,6 +1560,13 @@ namespace Components
 		Events::OnCGameInit([]
 		{
 			ServerJoinTransitionState() = false;
+			bool hasMatch = false;
+			{
+				std::lock_guard lock(StateMutex());
+				hasMatch = !CurrentMatchIdState().empty();
+			}
+			InGameState() = hasMatch;
+			if (hasMatch) EnqueueAsync([] { UpdatePresence(); });
 		});
 		Scheduler::OnGameInitialized([]
 		{
@@ -1598,6 +1608,7 @@ namespace Components
 		SearchingState() = false;
 		ServerJoinTransitionState() = false;
 		OnlineEntryPendingState() = false;
+		InGameState() = false;
 		{
 			std::lock_guard lock(StateMutex());
 			LoginInFlightState() = false;

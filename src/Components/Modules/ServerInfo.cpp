@@ -701,6 +701,13 @@ namespace Components
 		info.set("aimAssist", (Gamepad::sv_allowAimAssist.get<bool>() ? "1" : "0"));
 		info.set("voiceChat", (Voice::SV_VoiceEnabled() ? "1" : "0"));
 
+		if (Dedicated::IsRunning())
+		{
+			info.set("zwnet_selected_map", Dvar::Var("zwnet_selected_map").get<std::string>());
+			info.set("g_gametype", Dvar::Var("g_gametype").get<std::string>());
+			info.set("zwnet_round", Dvar::Var("round").get<std::string>());
+		}
+
 		if (info.get("mapname").empty())
 		{
 			info.set("mapname", (*Game::ui_mapname)->current.string);

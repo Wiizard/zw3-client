@@ -776,6 +776,18 @@ namespace Components
 		const std::string name = menu->window.name;
 		DebugPrint("AfterLoadedMenuFromDisk: Loaded menu '{}' at {:X}.", name, (unsigned int)menu);
 
+		if (name == "zwnet_matchmaking")
+		{
+			for (int itemIndex = 0; itemIndex < menu->itemCount; ++itemIndex)
+			{
+				auto* item = menu->items[itemIndex];
+				if (item)
+				{
+					Materials::ConfigureAnimatedAtlas(item->window.background);
+				}
+			}
+		}
+
 		Game::menuDef_t* existingGameMenu = nullptr;
 		bool foundExistingInContext = false;
 
@@ -2644,6 +2656,7 @@ namespace Components
 		Add("ui_mp/popup_partyconnect_warning.menu");
 		Add("ui_mp/popup_autosave.menu");
 		Add("ui_mp/zw3changelog.menu");
+		Add("ui_mp/popup_zwnet_connecting.menu");
 		Add("ui_mp/zwnet_matchmaking.menu");
 	}
 

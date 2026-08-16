@@ -10,6 +10,7 @@ namespace Components
 
 		static void UpdateFriends();
 		static void UpdateRank();
+		static bool TryGetZombieRankByGuid(const std::string& guid, int& level, int& prestige);
 		static void UpdateServer(Network::Address server, const std::string& hostname, const std::string& mapname);
 		static void UpdateName();
 
@@ -65,6 +66,9 @@ namespace Components
 			unsigned int lastTime;
 			int experience;
 			int prestige;
+			bool zombieRankKnown{};
+			int zombieRankLevel{1};
+			int zombieRankPrestige{};
 		};
 
 		static bool LoggedOn;
@@ -91,6 +95,7 @@ namespace Components
 		static void SelectFriend(unsigned int index);
 
 		static void UpdateTimeStamp();
+		static void UpdateZombieRankPresence();
 
 		static bool IsOnline(unsigned __int64 timeStamp);
 

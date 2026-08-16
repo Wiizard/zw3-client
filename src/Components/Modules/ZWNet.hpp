@@ -14,6 +14,7 @@ namespace Components
 		// Tokens are protected with Windows DPAPI before they touch disk.
 		static bool StoreSession(const std::string& accessToken, const std::string& refreshToken);
 		static void ResumeParty(const nlohmann::json& party);
+		static bool TryGetSharedLobbyRank(const std::string& guid, int& level, int& prestige);
 
 	private:
 		// Function-local storage prevents non-trivial C++ initializers from running
@@ -22,6 +23,7 @@ namespace Components
 		static std::atomic_bool& SearchingState();
 		static std::atomic_bool& ClosingOnlineSessionState();
 		static std::atomic_bool& ServerJoinTransitionState();
+		static std::atomic_bool& OnlineEntryPendingState();
 		static std::atomic_bool& InGameState();
 		static bool& LoginInFlightState();
 		static std::mutex& StateMutex();
@@ -41,12 +43,16 @@ namespace Components
 		static void Refresh();
 		static void Login();
 		static void CompleteLogin(nlohmann::json requestBody);
+		static void BeginOnlineEntry();
+		static void CompleteOnlineEntry();
+		static void AbandonOnlineSession();
 		static void Register();
 		static void SetState(const std::string& state, const std::string& error = {});
 		static void StartQuickPlay();
 		static void CancelSearch();
 		static void CloseOnlineSession(bool shuttingDown);
 		static void UpdatePresence();
+		static nlohmann::json PublishLocalRank(nlohmann::json party);
 		static void EnterLobby(std::string map);
 		static void RefreshLobby();
 		static void LeaveParty();
@@ -56,6 +62,7 @@ namespace Components
 		static void UpdateLobbyDvars(const nlohmann::json& party);
 		static void UpdateMatchLobbyDvars(const nlohmann::json& status);
 		static void UpdateVoteDvars(const nlohmann::json& status);
+		static void RefreshActiveParty();
 		static void UpdateMatchmaking();
 		static void ConnectMatch(const std::string& matchId, bool relay);
 		static void InitializeDvars();

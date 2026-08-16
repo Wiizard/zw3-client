@@ -48,6 +48,43 @@ namespace Components
 
 		ULONG_PTR GdiPlusToken = 0;
 
+		void Process2DTextureCoordsForAnimatedAtlases(const Game::Material* material,
+			float* s0, float* s1, float* t0, float* t1)
+		{
+			if (!material || !material->info.name ||
+				_stricmp(material->info.name, "searching_for_player"))
+			{
+				Game::Material_Process2DTextureCoordsForAtlasing(
+					material, s0, s1, t0, t1);
+				return;
+			}
+
+			constexpr auto columnCount = 8u;
+			constexpr auto rowCount = 4u;
+			constexpr auto frameCount = 30u;
+
+			const auto* atlasState = *reinterpret_cast<const unsigned char**>(0x69F0DF4);
+			const auto frameRate = atlasState
+				? std::max(*reinterpret_cast<const int*>(atlasState + 0x10), 1)
+				: 15;
+			const auto frame = static_cast<unsigned int>(
+				(static_cast<std::uint64_t>(timeGetTime()) * frameRate / 1000u) % frameCount);
+			const auto column = frame % columnCount;
+			const auto row = frame / columnCount;
+
+			const auto sourceS0 = *s0;
+			const auto sourceS1 = *s1;
+			const auto sourceT0 = *t0;
+			const auto sourceT1 = *t1;
+			const auto cellWidth = 1.0f / static_cast<float>(columnCount);
+			const auto cellHeight = 1.0f / static_cast<float>(rowCount);
+
+			*s0 = (static_cast<float>(column) + sourceS0) * cellWidth;
+			*s1 = (static_cast<float>(column) + sourceS1) * cellWidth;
+			*t0 = (static_cast<float>(row) + sourceT0) * cellHeight;
+			*t1 = (static_cast<float>(row) + sourceT1) * cellHeight;
+		}
+
 		bool EnsureGdiPlusStarted()
 		{
 			if (GdiPlusToken)
@@ -391,6 +428,7 @@ namespace Components
 		material->info.sortKey = baseMaterial->info.sortKey;
 		material->info.textureAtlasColumnCount = 1;
 		material->info.textureAtlasRowCount = 1;
+		Materials::ConfigureAnimatedAtlas(material);
 
 		material->textureCount = 1;
 		material->textureTable = Utils::Memory::GetAllocator()->allocate<Game::MaterialTextureDef>();
@@ -407,6 +445,20 @@ namespace Components
 		AssetHandler::ExposeTemporaryAssets(true);
 
 		return material;
+	}
+
+	void Materials::ConfigureAnimatedAtlas(Game::Material* material)
+	{
+		if (!material || !material->info.name)
+		{
+			return;
+		}
+
+		if (!_stricmp(material->info.name, "searching_for_player"))
+		{
+			material->info.textureAtlasRowCount = 4;
+			material->info.textureAtlasColumnCount = 8;
+		}
 	}
 
 
@@ -993,6 +1045,15 @@ namespace Components
 
 		Utils::Hook::Set<void*>(0x523894, Materials::MaterialComparePrint);
 
+		// The stock atlas renderer assumes every grid cell is populated. This
+		// spinner contains 30 frames in an 8x4 sheet, so select its cells with
+		// the real frame count while retaining the engine's atlas frame rate.
+		Utils::Hook(0x441462, Process2DTextureCoordsForAnimatedAtlases, HOOK_CALL).install()->quick();
+		Utils::Hook(0x46524A, Process2DTextureCoordsForAnimatedAtlases, HOOK_CALL).install()->quick();
+		Utils::Hook(0x4BFF2A, Process2DTextureCoordsForAnimatedAtlases, HOOK_CALL).install()->quick();
+		Utils::Hook(0x4FC13A, Process2DTextureCoordsForAnimatedAtlases, HOOK_CALL).install()->quick();
+		Utils::Hook(0x5061A8, Process2DTextureCoordsForAnimatedAtlases, HOOK_CALL).install()->quick();
+
 		AssetHandler::ExposeTemporaryAssets(true);
 
 		AssetHandler::OnFind(Game::ASSET_TYPE_MATERIAL, [](Game::XAssetType, const std::string& filename)
@@ -1003,6 +1064,15 @@ namespace Components
 				}
 
 				return Game::XAssetHeader{ nullptr };
+			});
+
+		AssetHandler::OnLoad([](Game::XAssetType type, Game::XAssetHeader asset,
+			const std::string&, bool*)
+			{
+				if (type == Game::ASSET_TYPE_MATERIAL)
+				{
+					Materials::ConfigureAnimatedAtlas(asset.material);
+				}
 			});
 
 		AssetHandler::OnFind(Game::ASSET_TYPE_IMAGE, [](Game::XAssetType, const std::string& filename)

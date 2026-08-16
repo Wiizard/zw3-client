@@ -265,15 +265,14 @@ namespace Components
 			return;
 		}
 
-		Dvar::Var("weather").set(s_prefWeather.get<int>());
-		Dvar::Var("dayNightCycle").set(s_prefDayNightCycle.get<int>());
-		Dvar::Var("bg_omnimovement").set(s_prefOmnimovement.get<int>());
-
 		if (!CanUseLocalHostPreferences())
 		{
 			return;
 		}
 
+		Dvar::Var("weather").set(s_prefWeather.get<int>());
+		Dvar::Var("dayNightCycle").set(s_prefDayNightCycle.get<int>());
+		Dvar::Var("bg_omnimovement").set(s_prefOmnimovement.get<int>());
 		Dvar::Var("ui_hitmarker").set(s_prefHitmarker.get<int>());
 		Dvar::Var("ui_zombiecounter").set(s_prefZombieCounter.get<int>());
 		Dvar::Var("ui_showdamage").set(s_prefShowDamage.get<int>());
@@ -296,15 +295,14 @@ namespace Components
 			return;
 		}
 
-		SaveIntPreference(s_prefWeather, "weather");
-		SaveIntPreference(s_prefDayNightCycle, "dayNightCycle");
-		SaveIntPreference(s_prefOmnimovement, "bg_omnimovement");
-
 		if (!CanUseLocalHostPreferences())
 		{
 			return;
 		}
 
+		SaveIntPreference(s_prefWeather, "weather");
+		SaveIntPreference(s_prefDayNightCycle, "dayNightCycle");
+		SaveIntPreference(s_prefOmnimovement, "bg_omnimovement");
 		SaveIntPreference(s_prefHitmarker, "ui_hitmarker");
 		SaveIntPreference(s_prefZombieCounter, "ui_zombiecounter");
 		SaveIntPreference(s_prefShowDamage, "ui_showdamage");
@@ -621,6 +619,9 @@ namespace Components
 		int zombieCounterVal = Dvar::Var("ui_zombiecounter").get<int>();
 		int perkLocationsVal = Dvar::Var("ui_perklocations").get<int>();
 		int thirdPersonVal = Dvar::Var("thirdPerson").get<int>();
+		int weatherVal = Dvar::Var("weather").get<int>();
+		int dayNightCycleVal = Dvar::Var("dayNightCycle").get<int>();
+		int omnimovementVal = Dvar::Var("bg_omnimovement").get<int>();
 		int addBotsVal = Dvar::Var("addBots").get<int>();
 		int partyPrivacyVal = Dvar::Var("partyPrivacy").get<int>();
 		std::string character1Val = Dvar::Var("character_1").get<std::string>();
@@ -634,6 +635,9 @@ namespace Components
 		info.set("ui_zombiecounter", std::to_string(zombieCounterVal));
 		info.set("ui_perklocations", std::to_string(perkLocationsVal));
 		info.set("thirdPerson", std::to_string(thirdPersonVal));
+		info.set("weather", std::to_string(weatherVal));
+		info.set("dayNightCycle", std::to_string(dayNightCycleVal));
+		info.set("bg_omnimovement", std::to_string(omnimovementVal));
 		info.set("addBots", std::to_string(addBotsVal));
 		info.set("partyPrivacy", std::to_string(partyPrivacyVal));
 		info.set("character_1", character1Val);
@@ -1493,15 +1497,24 @@ namespace Components
 			});
 		UIScript::Add("SaveWeatherSetting", [](const UIScript::Token&, const Game::uiInfo_s*)
 			{
-				SaveIntPreference(s_prefWeather, "weather");
+				if (CanUseLocalHostPreferences())
+				{
+					SaveIntPreference(s_prefWeather, "weather");
+				}
 			});
 		UIScript::Add("SaveDayNightCycleSetting", [](const UIScript::Token&, const Game::uiInfo_s*)
 			{
-				SaveIntPreference(s_prefDayNightCycle, "dayNightCycle");
+				if (CanUseLocalHostPreferences())
+				{
+					SaveIntPreference(s_prefDayNightCycle, "dayNightCycle");
+				}
 			});
 		UIScript::Add("SaveOmnimovementSetting", [](const UIScript::Token&, const Game::uiInfo_s*)
 			{
-				SaveIntPreference(s_prefOmnimovement, "bg_omnimovement");
+				if (CanUseLocalHostPreferences())
+				{
+					SaveIntPreference(s_prefOmnimovement, "bg_omnimovement");
+				}
 			});
 		UIScript::Add("SaveZombieModeSetting", [](const UIScript::Token&, const Game::uiInfo_s*)
 			{
@@ -2434,6 +2447,9 @@ namespace Components
 				hostResponseInfo.set("ui_showdamage", std::to_string(Dvar::Var("ui_showdamage").get<int>()));
 				hostResponseInfo.set("ui_perklocations", std::to_string(Dvar::Var("ui_perklocations").get<int>()));
 				hostResponseInfo.set("thirdPerson", std::to_string(Dvar::Var("thirdPerson").get<int>()));
+				hostResponseInfo.set("weather", std::to_string(Dvar::Var("weather").get<int>()));
+				hostResponseInfo.set("dayNightCycle", std::to_string(Dvar::Var("dayNightCycle").get<int>()));
+				hostResponseInfo.set("bg_omnimovement", std::to_string(Dvar::Var("bg_omnimovement").get<int>()));
 				hostResponseInfo.set("addBots", std::to_string(Dvar::Var("addBots").get<int>()));
 				hostResponseInfo.set("partyPrivacy", std::to_string(Dvar::Var("partyPrivacy").get<int>()));
 				auto currentHostName = Dvar::Var("party_currentHost").get<std::string>();
@@ -2549,6 +2565,21 @@ namespace Components
 						Dvar::Var("ui_showdamage").set(static_cast<int>(std::strtol(info.get("ui_showdamage").data(), nullptr, 10)));
 						Dvar::Var("ui_perklocations").set(static_cast<int>(std::strtol(info.get("ui_perklocations").data(), nullptr, 10)));
 						Dvar::Var("thirdPerson").set(static_cast<int>(std::strtol(info.get("thirdPerson").data(), nullptr, 10)));
+						const auto weatherValue = info.get("weather");
+						const auto dayNightCycleValue = info.get("dayNightCycle");
+						const auto omnimovementValue = info.get("bg_omnimovement");
+						if (!weatherValue.empty())
+						{
+							Dvar::Var("weather").set(static_cast<int>(std::strtol(weatherValue.data(), nullptr, 10)));
+						}
+						if (!dayNightCycleValue.empty())
+						{
+							Dvar::Var("dayNightCycle").set(static_cast<int>(std::strtol(dayNightCycleValue.data(), nullptr, 10)));
+						}
+						if (!omnimovementValue.empty())
+						{
+							Dvar::Var("bg_omnimovement").set(static_cast<int>(std::strtol(omnimovementValue.data(), nullptr, 10)));
+						}
 						Dvar::Var("addBots").set(static_cast<int>(std::strtol(info.get("addBots").data(), nullptr, 10)));
 						Dvar::Var("partyPrivacy").set(static_cast<int>(std::strtol(info.get("partyPrivacy").data(), nullptr, 10)));
 
@@ -2761,6 +2792,9 @@ namespace Components
 				allDvarsSuccessfullySet &= parseAndSetDvar("ui_zombiecounter", "ui_zombiecounter");
 				allDvarsSuccessfullySet &= parseAndSetDvar("ui_perklocations", "ui_perklocations");
 				allDvarsSuccessfullySet &= parseAndSetDvar("thirdPerson", "thirdPerson");
+				allDvarsSuccessfullySet &= parseAndSetDvar("weather", "weather");
+				allDvarsSuccessfullySet &= parseAndSetDvar("dayNightCycle", "dayNightCycle");
+				allDvarsSuccessfullySet &= parseAndSetDvar("bg_omnimovement", "bg_omnimovement");
 				allDvarsSuccessfullySet &= parseAndSetDvar("addBots", "addBots");
 				allDvarsSuccessfullySet &= parseAndSetDvar("partyPrivacy", "partyPrivacy");
 				const auto currentPlayersValue = info.get("party_currentPlayers");
@@ -2785,7 +2819,7 @@ namespace Components
 
 		if (!Dedicated::IsEnabled())
 		{
-			static int s_lastDvarValues[8] = { -1, -1, -1, -1, -1, -1, -1, -1 };
+			static int s_lastDvarValues[11] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
 
 			Scheduler::Loop([]()
 				{
@@ -2794,19 +2828,29 @@ namespace Components
 					static bool s_wasHostingLastFrame = false;
 					static int s_lastRealPlayers = 0;
 					static int s_lastBotsToAdd = 0;
+					const bool isCurrentlyHosting = Dvar::Var("party_host").get<bool>();
+					const bool startedHosting = isCurrentlyHosting && !s_wasHostingLastFrame;
 
-					int currentDvarValues[8] = {
+					if (startedHosting)
+					{
+						ApplyCustomizationSettings();
+					}
+
+					int currentDvarValues[11] = {
 						Dvar::Var("zombiemode").get<int>(),
 						Dvar::Var("ui_hitmarker").get<int>(),
 						Dvar::Var("ui_showdamage").get<int>(),
 						Dvar::Var("ui_zombiecounter").get<int>(),
 						Dvar::Var("ui_perklocations").get<int>(),
 						Dvar::Var("thirdPerson").get<int>(),
+						Dvar::Var("weather").get<int>(),
+						Dvar::Var("dayNightCycle").get<int>(),
+						Dvar::Var("bg_omnimovement").get<int>(),
 						Dvar::Var("addBots").get<int>(),
 						Dvar::Var("partyPrivacy").get<int>()
 					};
 
-					for (int i = 0; i < 8; i++)
+					for (int i = 0; i < 11; i++)
 					{
 						if (currentDvarValues[i] != s_lastDvarValues[i])
 						{
@@ -2814,9 +2858,6 @@ namespace Components
 							needsBroadcast = true;
 						}
 					}
-
-					bool isCurrentlyHosting = Dvar::Var("party_host").get<bool>();
-					const bool startedHosting = isCurrentlyHosting && !s_wasHostingLastFrame;
 
 					if (startedHosting && !s_directLaunchRoster)
 					{

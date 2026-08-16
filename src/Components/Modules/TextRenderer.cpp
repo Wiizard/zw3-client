@@ -1,5 +1,14 @@
 #include "TextRenderer.hpp"
 #include "Events.hpp"
+#include "Materials.hpp"
+#include "Renderer.hpp"
+
+#pragma warning(push)
+#pragma warning(disable: 4005)
+#include <dwrite.h>
+#pragma warning(pop)
+
+#pragma comment(lib, "dwrite.lib")
 
 namespace Game
 {
@@ -8,6 +17,566 @@ namespace Game
 
 namespace Components
 {
+	namespace
+	{
+		constexpr char UNICODE_GLYPH_ESCAPE = '\x03';
+		constexpr std::size_t UNICODE_GLYPH_HEX_LENGTH = 6;
+		constexpr char UNICODE_RUN_ESCAPE = '\x04';
+		constexpr std::size_t UNICODE_RUN_ID_HEX_LENGTH = 8;
+		constexpr float UNICODE_RUN_RASTER_HEIGHT = 64.0f;
+		constexpr unsigned int UNICODE_RUN_BITMAP_PADDING = 64;
+		constexpr unsigned int UNICODE_RUN_TEXTURE_PADDING = 2;
+		constexpr unsigned int MAX_UNICODE_RUN_BITMAP_DIMENSION = 4096;
+		constexpr float UNICODE_GLYPH_BASELINE_OFFSET = -2.0f;
+		constexpr std::size_t MAX_RUNTIME_UNICODE_GLYPHS = 512;
+		constexpr std::size_t MAX_RUNTIME_UNICODE_RUNS = 512;
+		constexpr std::size_t MAX_UNICODE_GLYPHS_PER_FRAME = 8;
+		constexpr std::size_t MAX_UNICODE_RUNS_PER_FRAME = 4;
+
+		struct RuntimeUnicodeRun
+		{
+			Game::Material* material{};
+			float bearingX{};
+			float bearingY{};
+			float width{};
+			float height{};
+			float advance{};
+		};
+
+		struct UnicodeRunDefinition
+		{
+			std::wstring text;
+			std::size_t characterCount{};
+		};
+
+		bool RasterizeUnicodeRun(const std::string& materialName, const std::wstring& text,
+			RuntimeUnicodeRun& run);
+
+		std::mutex UnicodeRunMutex;
+		std::unordered_map<std::wstring, std::uint32_t> UnicodeRunIds;
+		std::unordered_map<std::uint32_t, UnicodeRunDefinition> UnicodeRunDefinitions;
+		std::unordered_map<std::uint32_t, RuntimeUnicodeRun> UnicodeGlyphCache;
+		std::unordered_set<std::uint32_t> PendingUnicodeGlyphs;
+		std::unordered_map<std::uint32_t, RuntimeUnicodeRun> UnicodeRunCache;
+		std::unordered_set<std::uint32_t> PendingUnicodeRuns;
+		std::uint32_t NextUnicodeRunId = 1;
+
+		int HexDigitValue(const char character)
+		{
+			if (character >= '0' && character <= '9') return character - '0';
+			if (character >= 'A' && character <= 'F') return character - 'A' + 10;
+			if (character >= 'a' && character <= 'f') return character - 'a' + 10;
+			return -1;
+		}
+
+		bool ParseUnicodeGlyphEscape(const char*& text, std::uint32_t& codepoint)
+		{
+			if (!text || *text != UNICODE_GLYPH_ESCAPE) return false;
+
+			std::uint32_t value{};
+			for (std::size_t index = 0; index < UNICODE_GLYPH_HEX_LENGTH; ++index)
+			{
+				const auto character = text[index + 1];
+				if (character == '\0') return false;
+				const auto digit = HexDigitValue(character);
+				if (digit < 0) return false;
+				value = (value << 4) | static_cast<std::uint32_t>(digit);
+			}
+
+			if (value > 0x10FFFF || (value >= 0xD800 && value <= 0xDFFF)) return false;
+			text += UNICODE_GLYPH_HEX_LENGTH + 1;
+			codepoint = value;
+			return true;
+		}
+
+		bool ParseUnicodeRunEscape(const char*& text, std::uint32_t& runId)
+		{
+			if (!text || *text != UNICODE_RUN_ESCAPE) return false;
+
+			std::uint32_t value{};
+			for (std::size_t index = 0; index < UNICODE_RUN_ID_HEX_LENGTH; ++index)
+			{
+				const auto character = text[index + 1];
+				if (character == '\0') return false;
+				const auto digit = HexDigitValue(character);
+				if (digit < 0) return false;
+				value = (value << 4) | static_cast<std::uint32_t>(digit);
+			}
+
+			if (value == 0) return false;
+			text += UNICODE_RUN_ID_HEX_LENGTH + 1;
+			runId = value;
+			return true;
+		}
+
+		std::uint32_t RegisterUnicodeRun(const std::wstring& text, const std::size_t characterCount)
+		{
+			std::lock_guard lock(UnicodeRunMutex);
+			if (const auto entry = UnicodeRunIds.find(text); entry != UnicodeRunIds.end())
+			{
+				return entry->second;
+			}
+
+			auto runId = NextUnicodeRunId++;
+			while (runId == 0 || UnicodeRunDefinitions.contains(runId))
+			{
+				runId = NextUnicodeRunId++;
+			}
+
+			UnicodeRunIds.emplace(text, runId);
+			UnicodeRunDefinitions.emplace(runId, UnicodeRunDefinition{text, characterCount});
+			return runId;
+		}
+
+		std::size_t GetUnicodeRunCharacterCount(const std::uint32_t runId)
+		{
+			std::lock_guard lock(UnicodeRunMutex);
+			if (const auto entry = UnicodeRunDefinitions.find(runId); entry != UnicodeRunDefinitions.end())
+			{
+				return entry->second.characterCount;
+			}
+			return 1;
+		}
+
+		std::optional<RuntimeUnicodeRun> GetUnicodeGlyph(const std::uint32_t codepoint)
+		{
+			std::lock_guard lock(UnicodeRunMutex);
+			if (const auto entry = UnicodeGlyphCache.find(codepoint); entry != UnicodeGlyphCache.end())
+			{
+				if (entry->second.material) return entry->second;
+				return std::nullopt;
+			}
+
+			if (UnicodeGlyphCache.size() + PendingUnicodeGlyphs.size() < MAX_RUNTIME_UNICODE_GLYPHS)
+			{
+				PendingUnicodeGlyphs.insert(codepoint);
+			}
+			return std::nullopt;
+		}
+
+		std::optional<RuntimeUnicodeRun> GetUnicodeRun(const std::uint32_t runId)
+		{
+			std::lock_guard lock(UnicodeRunMutex);
+			if (const auto entry = UnicodeRunCache.find(runId); entry != UnicodeRunCache.end())
+			{
+				if (entry->second.material) return entry->second;
+				return std::nullopt;
+			}
+
+			if (UnicodeRunDefinitions.contains(runId)
+				&& UnicodeRunCache.size() + PendingUnicodeRuns.size() < MAX_RUNTIME_UNICODE_RUNS)
+			{
+				PendingUnicodeRuns.insert(runId);
+			}
+			return std::nullopt;
+		}
+
+		bool RasterizeUnicodeGlyph(const std::uint32_t codepoint, RuntimeUnicodeRun& glyph)
+		{
+			if (codepoint > 0xFFFF) return false;
+
+			const auto deviceContext = CreateCompatibleDC(nullptr);
+			if (!deviceContext) return false;
+			const auto deleteDeviceContext = gsl::finally([deviceContext] { DeleteDC(deviceContext); });
+
+			static constexpr std::array fontNames
+			{
+				L"Segoe UI Symbol",
+				L"Segoe UI",
+				L"Arial",
+				L"Tahoma",
+			};
+
+			GLYPHMETRICS metrics{};
+			std::vector<unsigned char> bitmap;
+			bool found = false;
+			for (const auto* fontName : fontNames)
+			{
+				const auto font = CreateFontW(-static_cast<int>(UNICODE_RUN_RASTER_HEIGHT), 0, 0, 0, FW_NORMAL,
+					FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+					ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, fontName);
+				if (!font) continue;
+
+				const auto previousFont = SelectObject(deviceContext, font);
+				const auto restoreFont = gsl::finally([deviceContext, previousFont, font]
+				{
+					SelectObject(deviceContext, previousFont);
+					DeleteObject(font);
+				});
+
+				const auto character = static_cast<wchar_t>(codepoint);
+				WORD glyphIndex{};
+				if (GetGlyphIndicesW(deviceContext, &character, 1, &glyphIndex,
+					GGI_MARK_NONEXISTING_GLYPHS) == GDI_ERROR || glyphIndex == 0xFFFF)
+				{
+					continue;
+				}
+
+				MAT2 transform{};
+				transform.eM11.value = 1;
+				transform.eM22.value = 1;
+				const auto bitmapSize = GetGlyphOutlineW(deviceContext, glyphIndex,
+					GGO_GRAY8_BITMAP | GGO_GLYPH_INDEX, &metrics, 0, nullptr, &transform);
+				if (bitmapSize == GDI_ERROR || metrics.gmBlackBoxX == 0 || metrics.gmBlackBoxY == 0) continue;
+
+				bitmap.resize(bitmapSize);
+				if (GetGlyphOutlineW(deviceContext, glyphIndex, GGO_GRAY8_BITMAP | GGO_GLYPH_INDEX,
+					&metrics, bitmapSize, bitmap.data(), &transform) == GDI_ERROR)
+				{
+					bitmap.clear();
+					continue;
+				}
+
+				found = true;
+				break;
+			}
+
+			if (!found)
+			{
+				return RasterizeUnicodeRun(std::format("runtime_unicode_glyph_fallback_{:06X}", codepoint),
+					std::wstring(1, static_cast<wchar_t>(codepoint)), glyph);
+			}
+
+			const auto width = static_cast<unsigned int>(metrics.gmBlackBoxX);
+			const auto height = static_cast<unsigned int>(metrics.gmBlackBoxY);
+			if (width > 256 || height > 256) return false;
+			const auto name = std::format("runtime_unicode_glyph_{:06X}", codepoint);
+			auto* image = Materials::CreateImage(name, width, height, 1, 0x1000003, D3DFMT_A8R8G8B8);
+			if (!image || !image->texture.map) return false;
+
+			D3DLOCKED_RECT lockedRect{};
+			if (FAILED(image->texture.map->LockRect(0, &lockedRect, nullptr, 0))) return false;
+			const auto unlockTexture = gsl::finally([image] { image->texture.map->UnlockRect(0); });
+			const auto sourcePitch = (width + 3u) & ~3u;
+			for (auto y = 0u; y < height; ++y)
+			{
+				const auto* source = bitmap.data() + static_cast<std::size_t>(y) * sourcePitch;
+				auto* destination = static_cast<unsigned char*>(lockedRect.pBits)
+					+ static_cast<std::size_t>(y) * lockedRect.Pitch;
+				for (auto x = 0u; x < width; ++x)
+				{
+					const auto alpha = static_cast<unsigned char>(std::min(255u,
+						static_cast<unsigned int>(source[x]) * 255u / 64u));
+					destination[x * 4 + 0] = 255;
+					destination[x * 4 + 1] = 255;
+					destination[x * 4 + 2] = 255;
+					destination[x * 4 + 3] = alpha;
+				}
+			}
+
+			glyph.material = Materials::Create(name, image);
+			glyph.bearingX = static_cast<float>(metrics.gmptGlyphOrigin.x) / UNICODE_RUN_RASTER_HEIGHT;
+			glyph.bearingY = -static_cast<float>(metrics.gmptGlyphOrigin.y) / UNICODE_RUN_RASTER_HEIGHT;
+			glyph.width = static_cast<float>(width) / UNICODE_RUN_RASTER_HEIGHT;
+			glyph.height = static_cast<float>(height) / UNICODE_RUN_RASTER_HEIGHT;
+			glyph.advance = static_cast<float>(std::max<LONG>(1, metrics.gmCellIncX)) / UNICODE_RUN_RASTER_HEIGHT;
+			return glyph.material != nullptr;
+		}
+
+		class UnicodeRunTextRenderer final : public IDWriteTextRenderer
+		{
+		public:
+			UnicodeRunTextRenderer(IDWriteBitmapRenderTarget* target, IDWriteRenderingParams* renderingParams)
+				: target_(target), renderingParams_(renderingParams)
+			{
+			}
+
+			HRESULT STDMETHODCALLTYPE QueryInterface(const IID& iid, void** object) override
+			{
+				if (!object) return E_POINTER;
+				if (iid == __uuidof(IUnknown) || iid == __uuidof(IDWritePixelSnapping)
+					|| iid == __uuidof(IDWriteTextRenderer))
+				{
+					*object = this;
+					AddRef();
+					return S_OK;
+				}
+				*object = nullptr;
+				return E_NOINTERFACE;
+			}
+
+			ULONG STDMETHODCALLTYPE AddRef() override
+			{
+				return 1;
+			}
+
+			ULONG STDMETHODCALLTYPE Release() override
+			{
+				return 1;
+			}
+
+			HRESULT STDMETHODCALLTYPE IsPixelSnappingDisabled(void*, BOOL* disabled) override
+			{
+				if (!disabled) return E_POINTER;
+				*disabled = FALSE;
+				return S_OK;
+			}
+
+			HRESULT STDMETHODCALLTYPE GetCurrentTransform(void*, DWRITE_MATRIX* transform) override
+			{
+				if (!transform) return E_POINTER;
+				*transform = DWRITE_MATRIX{1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+				return S_OK;
+			}
+
+			HRESULT STDMETHODCALLTYPE GetPixelsPerDip(void*, FLOAT* pixelsPerDip) override
+			{
+				if (!pixelsPerDip) return E_POINTER;
+				*pixelsPerDip = 1.0f;
+				return S_OK;
+			}
+
+			HRESULT STDMETHODCALLTYPE DrawGlyphRun(void*, const FLOAT baselineOriginX,
+				const FLOAT baselineOriginY, const DWRITE_MEASURING_MODE measuringMode,
+				const DWRITE_GLYPH_RUN* glyphRun, const DWRITE_GLYPH_RUN_DESCRIPTION*, IUnknown*) override
+			{
+				return target_->DrawGlyphRun(baselineOriginX, baselineOriginY, measuringMode,
+					glyphRun, renderingParams_, RGB(255, 255, 255));
+			}
+
+			HRESULT STDMETHODCALLTYPE DrawUnderline(void*, FLOAT, FLOAT, const DWRITE_UNDERLINE*, IUnknown*) override
+			{
+				return S_OK;
+			}
+
+			HRESULT STDMETHODCALLTYPE DrawStrikethrough(void*, FLOAT, FLOAT,
+				const DWRITE_STRIKETHROUGH*, IUnknown*) override
+			{
+				return S_OK;
+			}
+
+			HRESULT STDMETHODCALLTYPE DrawInlineObject(void*, FLOAT, FLOAT, IDWriteInlineObject*,
+				BOOL, BOOL, IUnknown*) override
+			{
+				return S_OK;
+			}
+
+		private:
+			IDWriteBitmapRenderTarget* target_;
+			IDWriteRenderingParams* renderingParams_;
+		};
+
+		template <typename T>
+		void ReleaseComObject(T*& object)
+		{
+			if (object)
+			{
+				object->Release();
+				object = nullptr;
+			}
+		}
+
+		bool RasterizeUnicodeRun(const std::string& materialName, const std::wstring& text,
+			RuntimeUnicodeRun& run)
+		{
+			if (text.empty() || text.size() > static_cast<std::size_t>(std::numeric_limits<UINT32>::max()))
+			{
+				return false;
+			}
+
+			IDWriteFactory* factory{};
+			IDWriteTextFormat* textFormat{};
+			IDWriteTextLayout* textLayout{};
+			IDWriteGdiInterop* gdiInterop{};
+			IDWriteBitmapRenderTarget* bitmapTarget{};
+			IDWriteRenderingParams* renderingParams{};
+			const auto releaseObjects = gsl::finally([&]
+			{
+				ReleaseComObject(renderingParams);
+				ReleaseComObject(bitmapTarget);
+				ReleaseComObject(gdiInterop);
+				ReleaseComObject(textLayout);
+				ReleaseComObject(textFormat);
+				ReleaseComObject(factory);
+			});
+
+			if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+				reinterpret_cast<IUnknown**>(&factory))) || !factory)
+			{
+				return false;
+			}
+
+			if (FAILED(factory->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
+				DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, UNICODE_RUN_RASTER_HEIGHT,
+				L"", &textFormat)) || !textFormat)
+			{
+				return false;
+			}
+			textFormat->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+			textFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+			textFormat->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+
+			if (FAILED(factory->CreateTextLayout(text.data(), static_cast<UINT32>(text.size()), textFormat,
+				static_cast<FLOAT>(MAX_UNICODE_RUN_BITMAP_DIMENSION - 2 * UNICODE_RUN_BITMAP_PADDING),
+				static_cast<FLOAT>(MAX_UNICODE_RUN_BITMAP_DIMENSION - 2 * UNICODE_RUN_BITMAP_PADDING),
+				&textLayout)) || !textLayout)
+			{
+				return false;
+			}
+
+			DWRITE_TEXT_METRICS textMetrics{};
+			if (FAILED(textLayout->GetMetrics(&textMetrics))) return false;
+			UINT32 lineCount{};
+			textLayout->GetLineMetrics(nullptr, 0, &lineCount);
+			if (lineCount == 0) return false;
+			std::vector<DWRITE_LINE_METRICS> lineMetrics(lineCount);
+			if (FAILED(textLayout->GetLineMetrics(lineMetrics.data(), lineCount, &lineCount))) return false;
+
+			const auto bitmapWidth = static_cast<unsigned int>(std::ceil(textMetrics.widthIncludingTrailingWhitespace))
+				+ 2 * UNICODE_RUN_BITMAP_PADDING;
+			const auto bitmapHeight = static_cast<unsigned int>(std::ceil(textMetrics.height))
+				+ 2 * UNICODE_RUN_BITMAP_PADDING;
+			if (bitmapWidth == 0 || bitmapHeight == 0 || bitmapWidth > MAX_UNICODE_RUN_BITMAP_DIMENSION
+				|| bitmapHeight > MAX_UNICODE_RUN_BITMAP_DIMENSION)
+			{
+				return false;
+			}
+
+			if (FAILED(factory->GetGdiInterop(&gdiInterop)) || !gdiInterop
+				|| FAILED(gdiInterop->CreateBitmapRenderTarget(nullptr, bitmapWidth, bitmapHeight, &bitmapTarget))
+				|| !bitmapTarget || FAILED(factory->CreateRenderingParams(&renderingParams)) || !renderingParams)
+			{
+				return false;
+			}
+
+			const auto memoryDc = bitmapTarget->GetMemoryDC();
+			if (!memoryDc || !PatBlt(memoryDc, 0, 0, bitmapWidth, bitmapHeight, BLACKNESS)) return false;
+
+			UnicodeRunTextRenderer renderer(bitmapTarget, renderingParams);
+			if (FAILED(textLayout->Draw(nullptr, &renderer, static_cast<FLOAT>(UNICODE_RUN_BITMAP_PADDING),
+				static_cast<FLOAT>(UNICODE_RUN_BITMAP_PADDING))))
+			{
+				return false;
+			}
+
+			const auto bitmap = static_cast<HBITMAP>(GetCurrentObject(memoryDc, OBJ_BITMAP));
+			DIBSECTION bitmapInfo{};
+			if (!bitmap || GetObjectW(bitmap, sizeof(bitmapInfo), &bitmapInfo) != sizeof(bitmapInfo)
+				|| !bitmapInfo.dsBm.bmBits || bitmapInfo.dsBm.bmBitsPixel != 32)
+			{
+				return false;
+			}
+
+			const auto* pixels = static_cast<const unsigned char*>(bitmapInfo.dsBm.bmBits);
+			auto minX = bitmapWidth;
+			auto minY = bitmapHeight;
+			auto maxX = 0u;
+			auto maxY = 0u;
+			for (auto y = 0u; y < bitmapHeight; ++y)
+			{
+				const auto* row = pixels + static_cast<std::size_t>(y) * bitmapInfo.dsBm.bmWidthBytes;
+				for (auto x = 0u; x < bitmapWidth; ++x)
+				{
+					const auto* pixel = row + static_cast<std::size_t>(x) * 4;
+					if (std::max({pixel[0], pixel[1], pixel[2]}) == 0) continue;
+					minX = std::min(minX, x);
+					minY = std::min(minY, y);
+					maxX = std::max(maxX, x);
+					maxY = std::max(maxY, y);
+				}
+			}
+
+			if (minX > maxX || minY > maxY) return false;
+			const auto inkWidth = maxX - minX + 1;
+			const auto inkHeight = maxY - minY + 1;
+			const auto width = inkWidth + 2 * UNICODE_RUN_TEXTURE_PADDING;
+			const auto height = inkHeight + 2 * UNICODE_RUN_TEXTURE_PADDING;
+
+			auto* image = Materials::CreateImage(materialName, width, height, 1, 0x1000003, D3DFMT_A8R8G8B8);
+			if (!image || !image->texture.map) return false;
+
+			D3DLOCKED_RECT lockedRect{};
+			if (FAILED(image->texture.map->LockRect(0, &lockedRect, nullptr, 0))) return false;
+			const auto unlockTexture = gsl::finally([image] { image->texture.map->UnlockRect(0); });
+			for (auto y = 0u; y < height; ++y)
+			{
+				auto* destination = static_cast<unsigned char*>(lockedRect.pBits)
+					+ static_cast<std::size_t>(y) * lockedRect.Pitch;
+				std::memset(destination, 0, static_cast<std::size_t>(width) * 4);
+			}
+			for (auto y = 0u; y < inkHeight; ++y)
+			{
+				const auto* source = pixels + static_cast<std::size_t>(y + minY) * bitmapInfo.dsBm.bmWidthBytes
+					+ static_cast<std::size_t>(minX) * 4;
+				auto* destination = static_cast<unsigned char*>(lockedRect.pBits)
+					+ static_cast<std::size_t>(y + UNICODE_RUN_TEXTURE_PADDING) * lockedRect.Pitch
+					+ static_cast<std::size_t>(UNICODE_RUN_TEXTURE_PADDING) * 4;
+				for (auto x = 0u; x < inkWidth; ++x)
+				{
+					const auto* sourcePixel = source + static_cast<std::size_t>(x) * 4;
+					const auto alpha = std::max({sourcePixel[0], sourcePixel[1], sourcePixel[2]});
+					destination[x * 4 + 0] = 255;
+					destination[x * 4 + 1] = 255;
+					destination[x * 4 + 2] = 255;
+					destination[x * 4 + 3] = alpha;
+				}
+			}
+
+			run.material = Materials::Create(materialName, image);
+			run.bearingX = (static_cast<float>(minX) - static_cast<float>(UNICODE_RUN_BITMAP_PADDING))
+				/ UNICODE_RUN_RASTER_HEIGHT
+				- static_cast<float>(UNICODE_RUN_TEXTURE_PADDING) / UNICODE_RUN_RASTER_HEIGHT;
+			run.bearingY = (static_cast<float>(minY) - static_cast<float>(UNICODE_RUN_BITMAP_PADDING)
+				- lineMetrics[0].baseline - static_cast<float>(UNICODE_RUN_TEXTURE_PADDING))
+				/ UNICODE_RUN_RASTER_HEIGHT;
+			run.width = static_cast<float>(width) / UNICODE_RUN_RASTER_HEIGHT;
+			run.height = static_cast<float>(height) / UNICODE_RUN_RASTER_HEIGHT;
+			run.advance = std::max(1.0f, textMetrics.widthIncludingTrailingWhitespace)
+				/ UNICODE_RUN_RASTER_HEIGHT;
+			return run.material != nullptr;
+		}
+
+		void BuildPendingUnicodeGlyphs([[maybe_unused]] IDirect3DDevice9* device)
+		{
+			std::vector<std::uint32_t> pending;
+			{
+				std::lock_guard lock(UnicodeRunMutex);
+				while (!PendingUnicodeGlyphs.empty() && pending.size() < MAX_UNICODE_GLYPHS_PER_FRAME)
+				{
+					const auto entry = PendingUnicodeGlyphs.begin();
+					pending.push_back(*entry);
+					PendingUnicodeGlyphs.erase(entry);
+				}
+				for (const auto codepoint : pending) UnicodeGlyphCache.try_emplace(codepoint);
+			}
+
+			for (const auto codepoint : pending)
+			{
+				RuntimeUnicodeRun glyph{};
+				RasterizeUnicodeGlyph(codepoint, glyph);
+				std::lock_guard lock(UnicodeRunMutex);
+				UnicodeGlyphCache[codepoint] = glyph;
+			}
+		}
+
+		void BuildPendingUnicodeRuns([[maybe_unused]] IDirect3DDevice9* device)
+		{
+			std::vector<std::pair<std::uint32_t, std::wstring>> pending;
+			{
+				std::lock_guard lock(UnicodeRunMutex);
+				while (!PendingUnicodeRuns.empty() && pending.size() < MAX_UNICODE_RUNS_PER_FRAME)
+				{
+					const auto entry = PendingUnicodeRuns.begin();
+					const auto definition = UnicodeRunDefinitions.find(*entry);
+					if (definition != UnicodeRunDefinitions.end())
+					{
+						pending.emplace_back(*entry, definition->second.text);
+						UnicodeRunCache.try_emplace(*entry);
+					}
+					PendingUnicodeRuns.erase(entry);
+				}
+			}
+
+			for (const auto& [runId, text] : pending)
+			{
+				RuntimeUnicodeRun run{};
+				RasterizeUnicodeRun(std::format("runtime_unicode_run_{:08X}", runId), text, run);
+				std::lock_guard lock(UnicodeRunMutex);
+				UnicodeRunCache[runId] = run;
+			}
+		}
+	}
+
 	unsigned TextRenderer::colorTableDefault[TEXT_COLOR_COUNT]
 	{
 		ColorRgb(0, 0, 0),          // TEXT_COLOR_BLACK
@@ -1131,6 +1700,90 @@ namespace Components
 					continue;
 				}
 
+				if (letter == '^')
+				{
+					const char* unicodeEnd = curText;
+					std::optional<RuntimeUnicodeRun> unicodeText;
+					std::size_t tokenLength{};
+					bool isUnicodeGlyph = false;
+					std::uint32_t value{};
+					if (ParseUnicodeGlyphEscape(unicodeEnd, value))
+					{
+						unicodeText = GetUnicodeGlyph(value);
+						tokenLength = UNICODE_GLYPH_HEX_LENGTH + 2;
+						isUnicodeGlyph = true;
+					}
+					else
+					{
+						unicodeEnd = curText;
+						if (ParseUnicodeRunEscape(unicodeEnd, value))
+						{
+							unicodeText = GetUnicodeRun(value);
+							tokenLength = UNICODE_RUN_ID_HEX_LENGTH + 2;
+						}
+					}
+
+					if (tokenLength != 0)
+					{
+						curText = unicodeEnd;
+						if (!unicodeText)
+						{
+							letter = '?';
+							count += static_cast<int>(tokenLength - 1);
+						}
+						else
+						{
+							const auto fontHeight = static_cast<float>(font->pixelHeight);
+							const auto runWidth = unicodeText->width * fontHeight * xScale;
+							const auto runHeight = unicodeText->height * fontHeight * yScale;
+							const auto xAdj = unicodeText->bearingX * fontHeight * xScale;
+							const auto yAdj = unicodeText->bearingY * fontHeight * yScale
+								+ (isUnicodeGlyph ? UNICODE_GLYPH_BASELINE_OFFSET * yScale : 0.0f);
+							const auto drawRun = [&](const float xOffset, const float yOffset, const unsigned packedColor)
+							{
+								RotateXY(cosAngle, sinAngle, startX, startY, xa + xAdj + xOffset,
+									xy + yAdj + yOffset, &xRot, &yRot);
+								Game::RB_DrawStretchPicRotate(unicodeText->material, xRot, yRot, runWidth, runHeight,
+									0.0f, 0.0f, 1.0f, 1.0f, sinAngle, cosAngle, packedColor);
+							};
+
+							if (passes[passIndex] == Game::FONTPASS_NORMAL)
+							{
+								if (renderFlags & Game::TEXT_RENDERFLAG_DROPSHADOW)
+								{
+									const auto offset = (renderFlags & Game::TEXT_RENDERFLAG_DROPSHADOW_EXTRA) ? 2.0f : 1.0f;
+									drawRun(offset, offset, dropShadowColor.packed);
+								}
+								drawRun(0.0f, 0.0f, finalColor.packed);
+							}
+							else if (passes[passIndex] == Game::FONTPASS_OUTLINE)
+							{
+								const auto outlineSize = (renderFlags & Game::TEXT_RENDERFLAG_OUTLINE_EXTRA) ? 1.3f : 1.0f;
+								for (const auto offset : MY_OFFSETS)
+								{
+									drawRun(outlineSize * offset[0], outlineSize * offset[1], dropShadowColor.packed);
+								}
+							}
+							else if (passes[passIndex] == Game::FONTPASS_GLOW
+								&& ((renderFlags & Game::TEXT_RENDERFLAG_SUBTITLETEXT) == 0 || subtitleAllowGlow))
+							{
+								GlowColor(&finalColor, finalColor, glowForcedColor, renderFlags);
+								for (const auto offset : MY_OFFSETS)
+								{
+									drawRun(2.0f * offset[0] * xScale, 2.0f * offset[1] * yScale, finalColor.packed);
+								}
+							}
+
+							if (forceMonospace) xa += monospaceWidth * xScale;
+							else xa += unicodeText->advance * fontHeight * xScale;
+							if (renderFlags & Game::TEXT_RENDERFLAG_PADDING) xa += xScale * padding;
+							count += static_cast<int>(tokenLength);
+							--maxLengthRemaining;
+							continue;
+						}
+					}
+				}
+
 				if (letter == FONT_ICON_SEPARATOR_CHARACTER)
 				{
 					FontIconInfo fontIconInfo{};
@@ -1326,6 +1979,36 @@ namespace Components
 						}
 						continue;
 					}
+
+					const char* unicodeEnd = text;
+					std::optional<RuntimeUnicodeRun> unicodeText;
+					std::uint32_t value{};
+					if (ParseUnicodeGlyphEscape(unicodeEnd, value))
+					{
+						unicodeText = GetUnicodeGlyph(value);
+					}
+					else
+					{
+						unicodeEnd = text;
+						if (ParseUnicodeRunEscape(unicodeEnd, value)) unicodeText = GetUnicodeRun(value);
+						else unicodeEnd = nullptr;
+					}
+					if (unicodeEnd)
+					{
+						text = unicodeEnd;
+						if (unicodeText)
+						{
+							lineWidth += static_cast<int>(std::roundf(unicodeText->advance
+								* static_cast<float>(font->pixelHeight)));
+						}
+						else
+						{
+							lineWidth += R_GetCharacterGlyph(font, '?')->dx;
+						}
+						maxWidth = std::max(maxWidth, lineWidth);
+						++count;
+						continue;
+					}
 				}
 
 				if (letter == FONT_ICON_SEPARATOR_CHARACTER)
@@ -1395,6 +2078,253 @@ namespace Components
 		char buffer[1024]{}; // 1024 is a lucky number in the engine
 		StripColors(in.data(), buffer, sizeof(buffer));
 		return std::string{ buffer };
+	}
+
+	std::string TextRenderer::EncodeUtf8ForGame(const std::string_view text, const std::size_t maxCharacters)
+	{
+		if (text.empty() || maxCharacters == 0
+			|| text.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+		{
+			return {};
+		}
+
+		const auto textLength = static_cast<int>(text.size());
+		const auto wideLength = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), textLength, nullptr, 0);
+		if (wideLength <= 0) return {};
+
+		std::wstring wideText(static_cast<std::size_t>(wideLength), L'\0');
+		if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), textLength,
+			wideText.data(), wideLength) != wideLength)
+		{
+			return {};
+		}
+
+		const auto effectiveMaxCharacters = std::min(maxCharacters,
+			static_cast<std::size_t>(STRING_BUFFER_SIZE_BIG / 8));
+		std::vector<std::uint32_t> codepoints;
+		codepoints.reserve(std::min(wideText.size(), effectiveMaxCharacters));
+		std::size_t characterCount{};
+		for (std::size_t index = 0; index < wideText.size() && characterCount < effectiveMaxCharacters;)
+		{
+			std::uint32_t codepoint = static_cast<std::uint16_t>(wideText[index]);
+			int codeUnitCount = 1;
+			if (codepoint >= 0xD800 && codepoint <= 0xDBFF && index + 1 < wideText.size())
+			{
+				const auto trailing = static_cast<std::uint32_t>(wideText[index + 1]);
+				if (trailing >= 0xDC00 && trailing <= 0xDFFF)
+				{
+					codepoint = 0x10000 + ((codepoint - 0xD800) << 10) + (trailing - 0xDC00);
+					codeUnitCount = 2;
+				}
+			}
+
+			index += static_cast<std::size_t>(codeUnitCount);
+			if (codepoint < 0x20 || (codepoint >= 0x7F && codepoint <= 0x9F)
+				|| (codepoint >= 0x202A && codepoint <= 0x202E)
+				|| (codepoint >= 0x2066 && codepoint <= 0x2069))
+			{
+				continue;
+			}
+
+			codepoints.push_back(codepoint);
+			++characterCount;
+		}
+
+		// User-controlled names must not be able to inject the game's color codes.
+		std::vector<std::uint32_t> sanitizedCodepoints;
+		sanitizedCodepoints.reserve(codepoints.size());
+		for (std::size_t index = 0; index < codepoints.size(); ++index)
+		{
+			if (codepoints[index] == '^' && index + 1 < codepoints.size()
+				&& codepoints[index + 1] >= static_cast<std::uint32_t>(COLOR_FIRST_CHAR)
+				&& codepoints[index + 1] <= static_cast<std::uint32_t>(COLOR_LAST_CHAR))
+			{
+				++index;
+				continue;
+			}
+			sanitizedCodepoints.push_back(codepoints[index]);
+		}
+		if (sanitizedCodepoints.empty()) return {};
+
+		const auto isWhitespace = [](const std::uint32_t codepoint)
+		{
+			return codepoint == 0x20 || codepoint == 0xA0 || codepoint == 0x1680
+				|| (codepoint >= 0x2000 && codepoint <= 0x200A) || codepoint == 0x2028
+				|| codepoint == 0x2029 || codepoint == 0x202F || codepoint == 0x205F
+				|| codepoint == 0x3000;
+		};
+
+		const auto appendUtf16 = [](std::wstring& output, const std::uint32_t codepoint)
+		{
+			if (codepoint <= 0xFFFF)
+			{
+				output.push_back(static_cast<wchar_t>(codepoint));
+			}
+			else
+			{
+				const auto value = codepoint - 0x10000;
+				output.push_back(static_cast<wchar_t>(0xD800 + (value >> 10)));
+				output.push_back(static_cast<wchar_t>(0xDC00 + (value & 0x3FF)));
+			}
+		};
+
+		const auto convertToWindows1252 = [&](const std::uint32_t codepoint, char& converted)
+		{
+			wchar_t utf16[2]{};
+			int utf16Length = 1;
+			if (codepoint <= 0xFFFF)
+			{
+				utf16[0] = static_cast<wchar_t>(codepoint);
+			}
+			else
+			{
+				const auto value = codepoint - 0x10000;
+				utf16[0] = static_cast<wchar_t>(0xD800 + (value >> 10));
+				utf16[1] = static_cast<wchar_t>(0xDC00 + (value & 0x3FF));
+				utf16Length = 2;
+			}
+
+			BOOL usedDefaultCharacter = FALSE;
+			return WideCharToMultiByte(1252, WC_NO_BEST_FIT_CHARS, utf16, utf16Length,
+				&converted, 1, nullptr, &usedDefaultCharacter) == 1 && !usedDefaultCharacter;
+		};
+
+		for (auto& codepoint : sanitizedCodepoints)
+		{
+			if (isWhitespace(codepoint)) codepoint = 0x20;
+		}
+
+		std::wstring completeText;
+		for (const auto codepoint : sanitizedCodepoints) appendUtf16(completeText, codepoint);
+
+		bool requiresRightToLeftLayout = false;
+		std::vector<WORD> characterTypes(completeText.size());
+		if (!completeText.empty() && GetStringTypeW(CT_CTYPE2, completeText.data(),
+			static_cast<int>(completeText.size()), characterTypes.data()))
+		{
+			requiresRightToLeftLayout = std::ranges::any_of(characterTypes,
+				[](const WORD type) { return type == C2_RIGHTTOLEFT; });
+		}
+
+		const auto appendRunToken = [](std::string& output, const std::uint32_t runId)
+		{
+			output.push_back('^');
+			output.push_back(UNICODE_RUN_ESCAPE);
+			output.append(std::format("{:08X}", runId));
+		};
+		const auto appendGlyphToken = [](std::string& output, const std::uint32_t codepoint)
+		{
+			output.push_back('^');
+			output.push_back(UNICODE_GLYPH_ESCAPE);
+			output.append(std::format("{:06X}", codepoint));
+		};
+
+		if (requiresRightToLeftLayout)
+		{
+			std::string result;
+			appendRunToken(result, RegisterUnicodeRun(completeText, sanitizedCodepoints.size()));
+			return result;
+		}
+
+		const auto isGraphemeExtend = [&](const std::uint32_t codepoint)
+		{
+			if (codepoint == 0x200C || codepoint == 0x200D
+				|| (codepoint >= 0xFE00 && codepoint <= 0xFE0F)
+				|| (codepoint >= 0x1F3FB && codepoint <= 0x1F3FF)
+				|| (codepoint >= 0xE0020 && codepoint <= 0xE007F)
+				|| (codepoint >= 0xE0100 && codepoint <= 0xE01EF))
+			{
+				return true;
+			}
+
+			std::wstring utf16;
+			appendUtf16(utf16, codepoint);
+			WORD types[2]{};
+			if (!GetStringTypeW(CT_CTYPE3, utf16.data(), static_cast<int>(utf16.size()), types))
+			{
+				return false;
+			}
+
+			for (std::size_t index = 0; index < utf16.size(); ++index)
+			{
+				if (types[index] & (C3_NONSPACING | C3_DIACRITIC | C3_VOWELMARK)) return true;
+			}
+			return false;
+		};
+
+		const auto getClusterEnd = [&](const std::size_t start)
+		{
+			auto end = start + 1;
+			while (end < sanitizedCodepoints.size())
+			{
+				if (isGraphemeExtend(sanitizedCodepoints[end])
+					|| sanitizedCodepoints[end - 1] == 0x200D)
+				{
+					++end;
+					continue;
+				}
+				break;
+			}
+			return end;
+		};
+
+		const auto clusterToWindows1252 = [&](const std::size_t start, const std::size_t end,
+			std::string& convertedText)
+		{
+			convertedText.clear();
+			for (auto index = start; index < end; ++index)
+			{
+				char converted{};
+				if (!convertToWindows1252(sanitizedCodepoints[index], converted)) return false;
+				convertedText.push_back(converted);
+			}
+			return true;
+		};
+
+		std::string result;
+		result.reserve(std::min(text.size(), effectiveMaxCharacters) * 2);
+		for (std::size_t start = 0; start < sanitizedCodepoints.size();)
+		{
+			const auto clusterEnd = getClusterEnd(start);
+			std::string windows1252Text;
+			if (clusterToWindows1252(start, clusterEnd, windows1252Text))
+			{
+				result.append(windows1252Text);
+				start = clusterEnd;
+				continue;
+			}
+			if (clusterEnd == start + 1 && sanitizedCodepoints[start] <= 0xFFFF)
+			{
+				appendGlyphToken(result, sanitizedCodepoints[start]);
+				start = clusterEnd;
+				continue;
+			}
+
+			std::wstring runText;
+			auto runEnd = clusterEnd;
+			for (auto index = start; index < runEnd; ++index)
+			{
+				appendUtf16(runText, sanitizedCodepoints[index]);
+			}
+
+			// Keep adjacent unsupported clusters together so DirectWrite can shape
+			// scripts and emoji sequences, without replacing native game-font text.
+			while (runEnd < sanitizedCodepoints.size())
+			{
+				const auto nextClusterEnd = getClusterEnd(runEnd);
+				if (clusterToWindows1252(runEnd, nextClusterEnd, windows1252Text)) break;
+				for (auto index = runEnd; index < nextClusterEnd; ++index)
+				{
+					appendUtf16(runText, sanitizedCodepoints[index]);
+				}
+				runEnd = nextClusterEnd;
+			}
+
+			appendRunToken(result, RegisterUnicodeRun(runText, runEnd - start));
+			start = runEnd;
+		}
+
+		return result;
 	}
 
 	void TextRenderer::StripMaterialTextIcons(const char* in, char* out, std::size_t max)
@@ -1533,6 +2463,29 @@ namespace Components
 		{
 			const auto c = Game::SEH_ReadCharFromString(&curText, nullptr);
 			lenWithInvisibleTail = len;
+			if (c == '^')
+			{
+				const char* unicodeEnd = curText;
+				std::uint32_t value{};
+				if (ParseUnicodeGlyphEscape(unicodeEnd, value))
+				{
+					curText = unicodeEnd;
+					++len;
+					count += static_cast<int>(UNICODE_GLYPH_HEX_LENGTH + 2);
+					lenWithInvisibleTail = len;
+					continue;
+				}
+
+				unicodeEnd = curText;
+				if (ParseUnicodeRunEscape(unicodeEnd, value))
+				{
+					curText = unicodeEnd;
+					len += static_cast<int>(GetUnicodeRunCharacterCount(value));
+					count += static_cast<int>(UNICODE_RUN_ID_HEX_LENGTH + 2);
+					lenWithInvisibleTail = len;
+					continue;
+				}
+			}
 
 			if (c == '^' && *curText >= COLOR_FIRST_CHAR && *curText <= COLOR_LAST_CHAR && !(cursorPos > count && cursorPos < count + 2))
 			{
@@ -1720,6 +2673,16 @@ namespace Components
 
 		// Initialize font icons when initializing UI
 		Components::Events::AfterUIInit(InitFontIcons);
+		Renderer::OnBackendFrame(BuildPendingUnicodeGlyphs);
+		Renderer::OnBackendFrame(BuildPendingUnicodeRuns);
+		Renderer::OnDeviceRecoveryBegin([]
+		{
+			std::lock_guard lock(UnicodeRunMutex);
+			UnicodeGlyphCache.clear();
+			PendingUnicodeGlyphs.clear();
+			UnicodeRunCache.clear();
+			PendingUnicodeRuns.clear();
+		});
 
 		// Replace vanilla text drawing function with a reimplementation with extensions
 		Utils::Hook(0x535410, DrawText2D, HOOK_JUMP).install()->quick();

@@ -20,6 +20,7 @@
 namespace Components
 {
 	Dvar::Var UPnP::NetUPnP;
+	Dvar::Var UPnP::NetUPnPPrompted;
 	std::atomic_bool UPnP::MappingActive{ false };
 	std::atomic_bool UPnP::MappingInProgress{ false };
 	std::atomic_bool UPnP::LobbyMappingTriggered{ false };
@@ -295,7 +296,7 @@ namespace Components
 
 	void UPnP::StartMapping()
 	{
-		if (!NetUPnP.get<bool>() || MappingInProgress)
+		if (!NetUPnP.get<bool>() || !NetUPnPPrompted.get<bool>() || MappingInProgress)
 		{
 			return;
 		}
@@ -361,6 +362,17 @@ namespace Components
 		const auto shouldHaveMapping = isPartyHost || isPrivateLobbyOpen;
 
 		if (!shouldHaveMapping)
+		{
+			if (LobbyMappingTriggered)
+			{
+				RemoveMapping();
+				LobbyMappingTriggered = false;
+			}
+
+			return;
+		}
+
+		if (!NetUPnP.get<bool>() || !NetUPnPPrompted.get<bool>())
 		{
 			if (LobbyMappingTriggered)
 			{
@@ -470,7 +482,8 @@ namespace Components
 
 	UPnP::UPnP()
 	{
-		NetUPnP = Dvar::Register<bool>("net_upnp", false, Game::DVAR_ARCHIVE, "UPnP port mapping for automatic port forwarding. Firewall rules will be requested by the client.");
+		NetUPnP = Dvar::Register<bool>("net_upnp", false, Game::DVAR_ARCHIVE, "Use UPnP to automatically forward the game's UDP port while hosting. Requires router support and Windows Firewall permission.");
+		NetUPnPPrompted = Dvar::Register<bool>("net_upnp_prompted", false, Game::DVAR_ARCHIVE, "Whether the UPnP setup explanation has been acknowledged.");
 
 		Events::OnSVInit([]()
 			{

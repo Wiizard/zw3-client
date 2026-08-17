@@ -2658,6 +2658,7 @@ namespace Components
 		Add("ui_mp/zw3changelog.menu");
 		Add("ui_mp/popup_zwnet_connecting.menu");
 		Add("ui_mp/zwnet_matchmaking.menu");
+		Add("ui_mp/popup_upnp.menu");
 	}
 
 	void Menus::preDestroy()

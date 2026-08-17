@@ -10,6 +10,7 @@ namespace Components
 
 	private:
 		static Dvar::Var NetUPnP;
+		static Dvar::Var NetUPnPPrompted;
 		static std::atomic_bool MappingActive;
 		static std::atomic_bool MappingInProgress;
 		static std::atomic_bool LobbyMappingTriggered;

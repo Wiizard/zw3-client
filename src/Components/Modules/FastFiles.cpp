@@ -155,13 +155,19 @@ namespace Components
 
 		std::vector<Game::XZoneInfo> data;
 		Utils::Merge(&data, zoneInfo, zoneCount);
+		const auto hasZW3Common = HasZW3CommonZone();
 
 		for (auto& info : data)
 		{
-			if (info.name && std::strcmp(info.name, "common_mp") == 0)
+			if (hasZW3Common && info.name &&
+				std::strcmp(info.name, "common_mp") == 0)
 			{
 				info.name = "zw3_common";
 			}
+		}
+		if (!hasZW3Common)
+		{
+			Logger::Print("zw3_common.ff is unavailable; using common_mp.ff\n");
 		}
 
 		if (FastFiles::Exists("iw4x_patch_mp"))
@@ -179,18 +185,6 @@ namespace Components
 		}
 
 		const char* basepath = (*Game::fs_basepath)->current.string;
-		const auto zw3Common = std::string(basepath) + "\\zw3\\zw3_common.ff";
-		if (!Utils::IO::FileExists(zw3Common))
-		{
-			MessageBoxA(nullptr,
-				Utils::String::Format(
-					"Missing 'zw3_common.ff':\n{}\n\nPlease run the Zombie Warfare 3 Launcher to verify game files or place it inside the zw3 folder.",
-					zw3Common.c_str()),
-				"Error",
-				MB_OK | MB_ICONERROR);
-			std::exit(EXIT_FAILURE);
-		}
-
 		const auto zw3Patch = std::string(basepath) + "\\zw3\\zw3.ff";
 		//const auto zw3Patch = std::format("{}\\zw3\\zw3.ff", basepath);
 		if (Flags::HasFlag("dev"))
@@ -310,6 +304,18 @@ namespace Components
 		}
 
 		return Utils::IO::FileExists(path);
+	}
+
+	bool FastFiles::HasZW3CommonZone()
+	{
+		const auto* basepath = (*Game::fs_basepath)->current.string;
+		if (!basepath || !basepath[0]) return false;
+		const auto path = std::filesystem::path(basepath) /
+			"zw3" / "zw3_common.ff";
+		std::error_code error;
+		if (!std::filesystem::is_regular_file(path, error) || error) return false;
+		const auto size = std::filesystem::file_size(path, error);
+		return !error && size > ZW3_ZONE_NONCE_SIZE;
 	}
 
 	bool FastFiles::Ready()

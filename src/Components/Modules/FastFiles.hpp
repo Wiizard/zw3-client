@@ -11,6 +11,7 @@ namespace Components
 		static std::string Current();
 		static bool Ready();
 		static bool Exists(const std::string& file);
+		static bool HasZW3CommonZone();
 		static bool IsZombieZoneName(std::string_view zoneName);
 		static bool ShouldProtectZone(std::string_view zoneName);
 		static void ProtectZoneBuffer(std::string& buffer);

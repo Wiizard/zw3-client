@@ -14,6 +14,7 @@
 #include "Events.hpp"
 #include "Bots.hpp"
 #include "CharacterAssignments.hpp"
+#include "ZWNet.hpp"
 #include <version.hpp>
 #include <unordered_set>
 #include <unordered_map>
@@ -46,6 +47,7 @@ namespace Components
 		DWORD joinTime;
 		bool valid;
 		bool downloadOnly;
+		bool requireUnmanagedProof;
 		MatchType matchType;
 
 		Utils::InfoString info;
@@ -448,7 +450,8 @@ namespace Components
 		return Container.target;
 	}
 
-	void Party::Connect(Network::Address target, bool downloadOnly)
+	void Party::Connect(Network::Address target, bool downloadOnly,
+		bool requireUnmanagedProof)
 	{
 		Node::Add(target);
 
@@ -458,6 +461,7 @@ namespace Components
 		Container.target = target;
 		Container.challenge = Utils::Cryptography::Rand::GenerateChallenge();
 		Container.downloadOnly = downloadOnly;
+		Container.requireUnmanagedProof = requireUnmanagedProof;
 
 		Dvar::Var("party_roster_loading").set(true);
 
@@ -1748,7 +1752,12 @@ namespace Components
 				}
 				else
 				{
-					Connect(Network::Address(params->get(1)));
+					const Network::Address target(params->get(1));
+					if (!target.isValid() ||
+						!ZWNet::BeginEndpointJoin(target.getString()))
+					{
+						Connect(target);
+					}
 				}
 			});
 
@@ -2484,6 +2493,14 @@ namespace Components
 				if (Dedicated::IsEnabled())
 				{
 					hostResponseInfo.set("sv_motd", Dedicated::SVMOTD.get<std::string>());
+					hostResponseInfo.set("zwnet_show_in_server_browser",
+						Dedicated::ZWNetShowInServerBrowser.get<std::string>() == "0" ? "0" : "1");
+					const auto* matchId = Game::Dvar_FindVar("zwnet_match_id");
+					const auto managedSession = matchId && matchId->type == Game::DVAR_TYPE_STRING &&
+						matchId->current.string && matchId->current.string[0] != '\0' &&
+						std::strcmp(matchId->current.string,
+							"00000000-0000-0000-0000-000000000000") != 0;
+					hostResponseInfo.set("zwnet_managed_session", managedSession ? "1" : "0");
 				}
 				bool partyHost = Dvar::Var("party_host").get<bool>();
 				if (partyHost)
@@ -2523,6 +2540,12 @@ namespace Components
 					{
 						Container.valid = false;
 						Container.info = info;
+						if (Container.requireUnmanagedProof &&
+							info.get("zwnet_managed_session") == "1")
+						{
+							ConnectError("ZWNET matchmaking authorization is unavailable.");
+							return;
+						}
 
 						Container.matchType = static_cast<JoinContainer::MatchType>(std::strtol(info.get("matchtype").data(), nullptr, 10));
 						if (!Dedicated::IsEnabled() && !Dedicated::IsRunning() && Container.matchType == JoinContainer::MatchType::PRIVATE_PARTY)

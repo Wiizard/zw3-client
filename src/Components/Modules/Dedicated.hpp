@@ -9,6 +9,10 @@ namespace Components
 
 		static SteamID PlayerGuids[18][2];
 		static Dvar::Var SVLanOnly;
+		static Dvar::Var ZWNetShowInServerBrowser;
+		static Dvar::Var ZWNetMatchEnded;
+		static Dvar::Var ZWNetMatchId;
+		static Dvar::Var ZWNetSelectedMap;
 		static Dvar::Var SVMOTD;
 		static Dvar::Var COMLogFilter;
 

@@ -14,6 +14,9 @@ namespace Components
 		// Tokens are protected with Windows DPAPI before they touch disk.
 		static bool StoreSession(const std::string& accessToken, const std::string& refreshToken);
 		static void ResumeParty(const nlohmann::json& party);
+		static void JoinParty(const std::string& partyId);
+		static void JoinCapability(const std::string& capability);
+		static bool BeginEndpointJoin(const std::string& endpoint);
 		static bool TryGetSharedLobbyRank(const std::string& guid, int& level, int& prestige);
 
 	private:
@@ -49,8 +52,13 @@ namespace Components
 		static void Register();
 		static void SetState(const std::string& state, const std::string& error = {});
 		static void StartQuickPlay();
+		static std::optional<nlohmann::json> ApplyPartyVisibility(nlohmann::json party);
+		static void RefreshPartyVisibility();
+		static void CapturePartyPrivacy();
 		static void CancelSearch();
-		static void CloseOnlineSession(bool shuttingDown);
+		static void CloseOnlineSession(bool shuttingDown, bool terminal);
+		static void HandleServerDisconnect(bool terminal);
+		static bool ReturnToMatchmakingLobby();
 		static void UpdatePresence();
 		static nlohmann::json PublishLocalRank(nlohmann::json party);
 		static void EnterLobby(std::string map);

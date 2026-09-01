@@ -11,6 +11,10 @@ namespace Components
 		static void UpdateFriends();
 		static void UpdateRank();
 		static bool TryGetZombieRankByGuid(const std::string& guid, int& level, int& prestige);
+		static std::string GetLobbyPlayerRelationship(const std::string& guid);
+		static void AuthorizeDiscordPartyJoin(const std::string& discordUserId,
+			const std::string& partyId,
+			std::function<void(std::optional<std::string>)> completion);
 		static void UpdateServer(Network::Address server, const std::string& hostname, const std::string& mapname);
 		static void UpdateName();
 

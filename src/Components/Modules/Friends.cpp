@@ -38,6 +38,7 @@ namespace Components
 			std::string discordId;
 			std::string displayName;
 			std::string status;
+			std::string zwnetPartyId;
 			bool joinable{};
 			int rankLevel{1};
 			int rankPrestige{};
@@ -68,6 +69,7 @@ namespace Components
 		std::mutex SocialMutex;
 		std::vector<SocialFriend> SocialFriends;
 		std::vector<IncomingFriendRequest> IncomingRequests;
+		std::unordered_set<std::string> PendingOutgoingFriends;
 		std::optional<IncomingPartyInvite> CurrentPartyInvite;
 		std::string LastHandledPartyInvite;
 		unsigned int CurrentSocialFriend{};
@@ -239,6 +241,13 @@ namespace Components
 			});
 		}
 
+		const char* PartyVisibilityName(const int privacy)
+		{
+			if (privacy == 1) return "INVITE_ONLY";
+			if (privacy == 2) return "CLOSED";
+			return "OPEN";
+		}
+
 		void SetSocialUi(const std::string& status, const bool busy)
 		{
 			Scheduler::Once([status, busy]
@@ -364,12 +373,15 @@ namespace Components
 
 				auto status = JsonString(row, "status");
 				bool joinable = JsonBool(row, "joinable");
+				auto zwnetPartyId = JsonString(row, "zwnet_party_id");
 				if (row.contains("presence") && row.at("presence").is_object())
 				{
 					const auto& presence = row.at("presence");
 					if (status.empty()) status = JsonString(presence, "state");
 					joinable = JsonBool(presence, "joinable", joinable);
+					if (zwnetPartyId.empty()) zwnetPartyId = JsonString(presence, "zwnet_party_id");
 				}
+				if (!IsOpaquePartyId(zwnetPartyId) || !zwnetPartyId.starts_with("pty_")) zwnetPartyId.clear();
 				if (status.empty()) status = JsonBool(row, "online") ? "ONLINE" : "OFFLINE";
 				std::ranges::transform(status, status.begin(), [](const unsigned char character)
 				{
@@ -393,6 +405,7 @@ namespace Components
 					SafeSocialText(JsonString(row, "discord_user_id"), 32),
 					std::move(displayName),
 					SafeSocialText(status, 32),
+					SafeSocialText(zwnetPartyId, 80),
 					joinable,
 					std::clamp(rankLevel, 1, 54),
 					std::max(rankPrestige, 0)
@@ -401,6 +414,11 @@ namespace Components
 
 			std::lock_guard lock(SocialMutex);
 			SocialFriends = std::move(updated);
+			for (const auto& user : SocialFriends)
+			{
+				PendingOutgoingFriends.erase(user.id);
+				PendingOutgoingFriends.erase(user.guid);
+			}
 			CurrentSocialFriend = SocialFriends.empty() ? 0 : std::min<unsigned int>(CurrentSocialFriend,
 				static_cast<unsigned int>(SocialFriends.size() - 1));
 			return true;
@@ -582,6 +600,36 @@ namespace Components
 			return IncomingRequests[CurrentIncomingRequest];
 		}
 
+		std::string LobbyPlayerRelationship(const std::string& target)
+		{
+			if (target == std::format("{:016x}", Auth::GetKeyHash())) return "SELF";
+			std::lock_guard lock(SocialMutex);
+			if (std::ranges::any_of(SocialFriends, [&target](const SocialFriend& user)
+			{
+				return user.id == target || user.guid == target;
+			})) return "FRIEND";
+			if (std::ranges::any_of(IncomingRequests, [&target](const IncomingFriendRequest& request)
+			{
+				return request.senderId == target || request.guid == target;
+			})) return "INCOMING_REQUEST";
+			if (PendingOutgoingFriends.contains(target)) return "PENDING";
+			return "AVAILABLE";
+		}
+
+		void SetLobbyPlayerRelationship(const std::string& target, const std::string& relationship)
+		{
+			Scheduler::Once([target, relationship]
+			{
+				auto selected = Dvar::Var("zwnet_selected_player_guid").get<std::string>();
+				std::ranges::transform(selected, selected.begin(), [](const unsigned char character)
+				{
+					return static_cast<char>(std::tolower(character));
+				});
+				if (!SocialActive || selected != target) return;
+				Dvar::Var("zwnet_selected_player_relationship").set(relationship);
+			}, Scheduler::Pipeline::MAIN);
+		}
+
 		std::string PartyInviteSignature(const IncomingPartyInvite& invite)
 		{
 			return invite.inviteId + ":" + invite.createdAt;
@@ -684,6 +732,76 @@ namespace Components
 	Dvar::Var Friends::UIStreamFriendly;
 	Dvar::Var Friends::CLAnonymous;
 	Dvar::Var Friends::CLNotifyFriendState;
+
+	void Friends::AuthorizeDiscordPartyJoin(const std::string& discordUserId,
+		const std::string& partyId,
+		std::function<void(std::optional<std::string>)> completion)
+	{
+		auto completeOnMain = [completion = std::move(completion)](
+			std::optional<std::string> joinSecret) mutable
+		{
+			Scheduler::Once([completion = std::move(completion),
+				joinSecret = std::move(joinSecret)]() mutable
+			{
+				if (completion) completion(std::move(joinSecret));
+			}, Scheduler::Pipeline::MAIN);
+		};
+
+		if (discordUserId.empty() || discordUserId.size() > 32
+			|| !std::ranges::all_of(discordUserId, [](const unsigned char character)
+			{
+				return std::isdigit(character) != 0;
+			})
+			|| !IsOpaquePartyId(partyId) || !partyId.starts_with("pty_"))
+		{
+			completeOnMain(std::nullopt);
+			return;
+		}
+
+		Scheduler::Once([discordUserId, partyId,
+			completeOnMain = std::move(completeOnMain)]() mutable
+		{
+			std::optional<std::string> joinSecret;
+			if (SocialActive && RefreshSocialFriends())
+			{
+				std::string playerId;
+				{
+					std::lock_guard lock(SocialMutex);
+					const auto found = std::ranges::find_if(SocialFriends,
+						[&discordUserId](const SocialFriend& candidate)
+						{
+							return candidate.discordId == discordUserId;
+						});
+					if (found != SocialFriends.end()) playerId = found->id;
+				}
+
+				if (IsPublicGuid(playerId))
+				{
+					const auto response = SocialApiRequest("POST",
+						"/zwnet/parties/" + partyId + "/join-capability",
+						{{"player_id", playerId}});
+					if (response && response->is_object())
+					{
+						auto candidate = JsonString(*response, "join_secret");
+						constexpr std::string_view prefix{"zwnet-cap:"};
+						if (candidate.starts_with(prefix) &&
+							candidate.size() == prefix.size() + 43 &&
+							std::ranges::all_of(candidate.substr(prefix.size()),
+								[](const unsigned char character)
+								{
+									return std::isalnum(character) != 0 ||
+										character == '-' || character == '_';
+								}))
+						{
+							joinSecret = std::move(candidate);
+						}
+					}
+				}
+			}
+
+			completeOnMain(std::move(joinSecret));
+		}, Scheduler::Pipeline::ASYNC);
+	}
 
 	void Friends::SortIndividualList(std::vector<Friends::Friend>* list)
 	{
@@ -1006,6 +1124,17 @@ namespace Components
 		level = entry->zombieRankLevel;
 		prestige = entry->zombieRankPrestige;
 		return true;
+	}
+
+	std::string Friends::GetLobbyPlayerRelationship(const std::string& guid)
+	{
+		auto normalized = guid;
+		std::ranges::transform(normalized, normalized.begin(), [](const unsigned char character)
+		{
+			return static_cast<char>(std::tolower(character));
+		});
+		if (!IsPublicGuid(normalized)) return "UNAVAILABLE";
+		return LobbyPlayerRelationship(normalized);
 	}
 
 	void Friends::UpdateFriends()
@@ -1347,6 +1476,100 @@ namespace Components
 			});
 		});
 
+		UIScript::Add("RefreshSelectedLobbyPlayer", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+		{
+			auto target = Dvar::Var("zwnet_selected_player_guid").get<std::string>();
+			std::ranges::transform(target, target.begin(), [](const unsigned char character)
+			{
+				return static_cast<char>(std::tolower(character));
+			});
+			if (!IsPublicGuid(target))
+			{
+				Dvar::Var("zwnet_selected_player_relationship").set("UNAVAILABLE");
+				return;
+			}
+
+			const auto cachedRelationship = LobbyPlayerRelationship(target);
+			Dvar::Var("zwnet_selected_player_relationship").set(cachedRelationship);
+			if (cachedRelationship == "SELF") return;
+
+			Scheduler::Once([target, cachedRelationship]
+			{
+				const auto friendsOk = RefreshSocialFriends();
+				const auto requestsOk = RefreshIncomingRequests();
+				if (!friendsOk && !requestsOk && cachedRelationship == "AVAILABLE")
+				{
+					SetLobbyPlayerRelationship(target, "UNAVAILABLE");
+					return;
+				}
+				const auto relationship = LobbyPlayerRelationship(target);
+				SetLobbyPlayerRelationship(target, relationship);
+			}, Scheduler::Pipeline::ASYNC);
+		});
+
+		UIScript::Add("AddSelectedLobbyPlayer", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+		{
+			auto target = Dvar::Var("zwnet_selected_player_guid").get<std::string>();
+			std::ranges::transform(target, target.begin(), [](const unsigned char character)
+			{
+				return static_cast<char>(std::tolower(character));
+			});
+			if (!IsPublicGuid(target))
+			{
+				SetSocialUi("The selected player identity is unavailable.", false);
+				return;
+			}
+
+			const auto relationship = LobbyPlayerRelationship(target);
+			Dvar::Var("zwnet_selected_player_relationship").set(relationship);
+			if (relationship == "SELF")
+			{
+				SetSocialUi("You cannot add your own profile.", false);
+				return;
+			}
+			if (relationship == "FRIEND")
+			{
+				SetSocialUi("This player is already your friend.", false);
+				return;
+			}
+			if (relationship == "INCOMING_REQUEST")
+			{
+				SetSocialUi("This player already sent you a friend request.", false);
+				return;
+			}
+			if (relationship == "PENDING")
+			{
+				SetSocialUi("Your friend request is already pending.", false);
+				return;
+			}
+			if (SocialBusy.load())
+			{
+				SetSocialUi("A social request is already running.", true);
+				return;
+			}
+
+			Dvar::Var("zwnet_selected_player_relationship").set("PENDING");
+			RunSocialTask("Sending friend request...", [target]
+			{
+				const auto response = SocialApiRequest("POST", "/social/friends/request", {{"guid", target}}, true);
+				if (!response)
+				{
+					{
+						std::lock_guard lock(SocialMutex);
+						PendingOutgoingFriends.erase(target);
+					}
+					SetLobbyPlayerRelationship(target, "AVAILABLE");
+					return std::string{"The friend request could not be sent."};
+				}
+				{
+					std::lock_guard lock(SocialMutex);
+					PendingOutgoingFriends.insert(target);
+				}
+				SetLobbyPlayerRelationship(target, "PENDING");
+				return std::string{"Friend request sent."};
+			});
+		});
+
 		UIScript::Add("AcceptFriendRequest", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 		{
 			const auto request = SelectedIncomingRequest();
@@ -1388,6 +1611,39 @@ namespace Components
 			});
 		});
 
+		UIScript::Add("JoinSelectedFriend", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+		{
+			const auto user = SelectedSocialFriend();
+			if (!user)
+			{
+				SetSocialUi("Select a ZW3 friend first.", false);
+				return;
+			}
+			if (!user->joinable || !IsOpaquePartyId(user->zwnetPartyId) ||
+				!user->zwnetPartyId.starts_with("pty_"))
+			{
+				SetSocialUi("This friend's ZW3 party is not currently joinable.", false);
+				return;
+			}
+
+			RunSocialTask("Joining friend's ZW3 party...", [user]
+			{
+				const auto response = SocialApiRequest("POST",
+					"/zwnet/parties/join-friend",
+					{{"player_id", user->id}}, true);
+				if (!response || !response->is_object() || response->contains("error"))
+				{
+					return "The friend's ZW3 party could not be joined.";
+				}
+				ZWNet::ResumeParty(*response);
+				Scheduler::Once([]
+				{
+					if (SocialActive) Command::Execute("closemenu popup_friends", false);
+				}, Scheduler::Pipeline::MAIN);
+				return "Friend's party joined.";
+			});
+		});
+
 		UIScript::Add("InviteSelectedFriend", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 		{
 			const auto user = SelectedSocialFriend();
@@ -1396,17 +1652,33 @@ namespace Components
 				SetSocialUi("Select a ZW3 friend first.", false);
 				return;
 			}
-			RunSocialTask("Preparing party invitation...", [user]
+			const auto visibility = std::string{PartyVisibilityName(
+				std::clamp(Dvar::Var("partyPrivacy").get<int>(), 0, 2))};
+			RunSocialTask("Preparing party invitation...", [user, visibility]
 			{
 				auto party = SocialApiRequest("GET", "/zwnet/parties/current");
 				if (!party || party->is_null())
 				{
-					party = SocialApiRequest("POST", "/zwnet/parties/create", nlohmann::json::object(), true);
+					party = SocialApiRequest("POST", "/zwnet/parties/create",
+						{{"visibility", visibility}}, true);
 				}
 				if (!party || !party->is_object()) return "A party could not be created or loaded.";
 				auto partyId = JsonString(*party, "id");
 				if (partyId.empty()) partyId = JsonString(*party, "partyId");
 				if (!IsOpaquePartyId(partyId)) return "The party response was invalid.";
+				auto currentVisibility = JsonString(*party, "visibility");
+				if (currentVisibility.empty()) currentVisibility = "OPEN";
+				if (currentVisibility != visibility)
+				{
+					const auto updated = SocialApiRequest("POST",
+						"/zwnet/parties/" + partyId + "/set-visibility",
+						{{"visibility", visibility}}, true);
+					if (!updated || !updated->is_object() || updated->contains("error"))
+					{
+						return "The party privacy setting could not be synchronized.";
+					}
+					party = updated;
+				}
 
 				const auto response = SocialApiRequest("POST", "/zwnet/parties/" + partyId + "/invite",
 					{{"player_id", user->id}}, true);
@@ -1436,7 +1708,6 @@ namespace Components
 					if (!SocialActive) return;
 					Command::Execute("closemenu popup_social_game_invite", false);
 					Command::Execute("closemenu popup_friends", false);
-					Command::Execute("openmenu zwnet_party_lobby", false);
 				}, Scheduler::Pipeline::MAIN);
 				return "Party joined.";
 			});
@@ -1475,14 +1746,50 @@ namespace Components
 
 		UIScript::Add("JoinFriend", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 		{
-			std::lock_guard<std::recursive_mutex> _(Friends::Mutex);
-			if (Friends::CurrentFriend >= Friends::FriendsList.size()) return;
-
-			auto& user = Friends::FriendsList[Friends::CurrentFriend];
-
-			if (user.online && user.server.getType() != Game::NA_BAD)
+			std::string selectedGuid;
+			std::optional<Network::Address> legacyServer;
 			{
-				const auto server = user.server;
+				std::lock_guard<std::recursive_mutex> _(Friends::Mutex);
+				if (Friends::CurrentFriend >= Friends::FriendsList.size()) return;
+				const auto& selected = Friends::FriendsList[Friends::CurrentFriend];
+				selectedGuid = Utils::String::VA("%016llx", selected.guid.bits);
+				if (selected.online && selected.server.getType() != Game::NA_BAD)
+				{
+					legacyServer = selected.server;
+				}
+			}
+
+			std::optional<SocialFriend> socialUser;
+			{
+				std::lock_guard lock(SocialMutex);
+				const auto found = std::ranges::find_if(SocialFriends,
+					[&selectedGuid](const SocialFriend& candidate)
+					{
+						return candidate.guid == selectedGuid;
+					});
+				if (found != SocialFriends.end()) socialUser = *found;
+			}
+			if (socialUser && IsOpaquePartyId(socialUser->zwnetPartyId) &&
+				socialUser->zwnetPartyId.starts_with("pty_"))
+			{
+				RunSocialTask("Joining friend's ZW3 party...", [socialUser]
+				{
+					const auto response = SocialApiRequest("POST",
+						"/zwnet/parties/join-friend",
+						{{"player_id", socialUser->id}}, true);
+					if (!response || !response->is_object() || response->contains("error"))
+					{
+						return "The friend's ZW3 party could not be joined.";
+					}
+					ZWNet::ResumeParty(*response);
+					return "Friend's party joined.";
+				});
+				return;
+			}
+
+			if (legacyServer)
+			{
+				const auto server = *legacyServer;
 				Scheduler::Once([server]
 				{
 					if (!SocialActive) return;
@@ -1640,6 +1947,7 @@ namespace Components
 			std::lock_guard lock(SocialMutex);
 			SocialFriends.clear();
 			IncomingRequests.clear();
+			PendingOutgoingFriends.clear();
 			CurrentPartyInvite.reset();
 			LastHandledPartyInvite.clear();
 		}

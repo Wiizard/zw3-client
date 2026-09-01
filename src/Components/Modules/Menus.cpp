@@ -2706,6 +2706,8 @@ namespace Components
 		Add("ui_mp/zw3changelog.menu");
 		Add("ui_mp/popup_zwnet_connecting.menu");
 		Add("ui_mp/zwnet_matchmaking.menu");
+		Add("ui_mp/popup_zwnet_player_card.menu");
+		Add("ui_mp/menu_quest_challenges.menu");
 		Add("ui_mp/popup_upnp.menu");
 	}
 

@@ -216,7 +216,7 @@ namespace Components
 
 
 		// TODO: Since all of the following is zonebuilder-only code, move it to IW4OF or IStructuredDataDefSet.cpp
-		AssetHandler::OnLoad([](Game::XAssetType type, Game::XAssetHeader asset, const std::string& filename, bool* /*restrict*/)
+		AssetHandler::OnLoad(Game::ASSET_TYPE_STRUCTURED_DATA_DEF, [](Game::XAssetType type, Game::XAssetHeader asset, const std::string_view filename, bool* /*restrict*/)
 			{
 				if (ZoneBuilder::IsDumpingZone()) {
 					return;

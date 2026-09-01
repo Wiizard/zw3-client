@@ -4,6 +4,7 @@
 
 #include "Materials.hpp"
 #include "AssetHandler.hpp"
+#include "FastFiles.hpp"
 
 #pragma push_macro("min")
 #pragma push_macro("max")
@@ -526,6 +527,40 @@ namespace Components
 		AssetHandler::StoreTemporaryAsset(Game::ASSET_TYPE_IMAGE, { image });
 		AssetHandler::ExposeTemporaryAssets(true);
 
+		return image;
+	}
+
+	Game::GfxImage* Materials::LoadPreviewImage(const std::string& name)
+	{
+		auto* allocator = Utils::Memory::GetAllocator();
+		auto* image = allocator->allocate<Game::GfxImage>();
+		// Only query the resident table when the database is idle. A regular
+		// DB_FindXAssetHeader miss can wait for the entire incoming map to load.
+		auto* entry = FastFiles::Ready() ? Game::DB_FindXAssetEntry(Game::ASSET_TYPE_IMAGE, name.c_str()) : nullptr;
+		if (entry && entry->asset.header.image && !entry->asset.header.image->delayLoadPixels && entry->asset.header.image->texture.basemap)
+		{
+			*image = *entry->asset.header.image;
+			image->texture.basemap->AddRef();
+			// The original image owns the engine's allocation accounting; this
+			// header owns only an extra COM reference to the same GPU allocation.
+			image->cardMemory = {};
+			image->name = allocator->duplicateString(name);
+		}
+		else
+		{
+			image->name = allocator->duplicateString(name);
+			image->semantic = Game::TS_COLOR_MAP;
+			image->category = Game::IMG_CATEGORY_LOAD_FROM_FILE;
+			image->noPicmip = true;
+			if (!Game::Image_LoadFromFileWithReader(image, Game::FS_FOpenFileReadCurrentThread))
+			{
+				if (image->texture.basemap) Game::Image_Release(image);
+				allocator->free(image->name);
+				allocator->free(image);
+				return nullptr;
+			}
+		}
+		ImageTable.push_back(image);
 		return image;
 	}
 
@@ -1066,8 +1101,8 @@ namespace Components
 				return Game::XAssetHeader{ nullptr };
 			});
 
-		AssetHandler::OnLoad([](Game::XAssetType type, Game::XAssetHeader asset,
-			const std::string&, bool*)
+		AssetHandler::OnLoad(Game::ASSET_TYPE_MATERIAL, [](Game::XAssetType type, Game::XAssetHeader asset,
+			const std::string_view, bool*)
 			{
 				if (type == Game::ASSET_TYPE_MATERIAL)
 				{

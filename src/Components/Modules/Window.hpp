@@ -21,6 +21,7 @@ namespace Components
 		static bool IsCursorWithin(HWND window);
 
 		static HWND GetWindow();
+		static double StartupElapsedMilliseconds();
 
 		static void OnWndMessage(UINT Msg, Utils::Slot<WndProcCallback> callback);
 		static void OnDeviceChange(Utils::Slot<DeviceChangeCallback> callback);

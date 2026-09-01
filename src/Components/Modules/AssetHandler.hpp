@@ -17,13 +17,14 @@ namespace Components
 		};
 
 		typedef Game::XAssetHeader(Callback)(Game::XAssetType type, const std::string& name);
-		typedef void(RestrictCallback)(Game::XAssetType type, Game::XAssetHeader asset, const std::string& name, bool* restrict);
+		typedef void(RestrictCallback)(Game::XAssetType type, Game::XAssetHeader asset, std::string_view name, bool* restrict);
 
 		AssetHandler();
 		~AssetHandler();
 
 		static void OnFind(Game::XAssetType type, Utils::Slot<Callback> callback);
 		static std::function<void()> OnLoad(Utils::Slot<RestrictCallback> callback);
+		static std::function<void()> OnLoad(Game::XAssetType type, Utils::Slot<RestrictCallback> callback);
 
 		static void ClearRelocations();
 		static void Relocate(void* start, void* to, DWORD size = 4);
@@ -36,6 +37,7 @@ namespace Components
 
 		static void ClearTemporaryAssets();
 		static void StoreTemporaryAsset(Game::XAssetType type, Game::XAssetHeader asset);
+		static void RemoveTemporaryAsset(Game::XAssetType type, const char* name);
 
 		static void ResetBypassState();
 
@@ -48,12 +50,16 @@ namespace Components
 	private:
 		static thread_local int BypassState;
 		static bool ShouldSearchTempAssets;
+		static bool LogAssetEntries;
 
 		static std::map<std::string, Game::XAssetHeader> TemporaryAssets[Game::XAssetType::ASSET_TYPE_COUNT];
 
 		static std::map<Game::XAssetType, IAsset*> AssetInterfaces;
 		static std::map<Game::XAssetType, Utils::Slot<Callback>> TypeCallbacks;
 		static Utils::Signal<RestrictCallback> RestrictSignal;
+		static Utils::Signal<RestrictCallback> TypeRestrictSignals[Game::XAssetType::ASSET_TYPE_COUNT];
+		static std::atomic_bool HasRestrictCallbacks;
+		static std::atomic<std::uint64_t> TypeRestrictCallbackMask;
 
 		static std::map<void*, void*> Relocations;
 
@@ -69,7 +75,7 @@ namespace Components
 		static void StoreEmptyAsset(Game::XAssetType type, const char* name);
 		static void StoreEmptyAssetStub();
 
-		static void ModifyAsset(Game::XAssetType type, Game::XAssetHeader asset, const std::string& name);
+		static void ModifyAsset(Game::XAssetType type, Game::XAssetHeader asset, std::string_view name);
 
 		static int HasThreadBypass();
 		static void SetBypassState(bool value);

@@ -126,6 +126,68 @@ namespace Components
 		}
 	}
 
+	bool Bots::SynchronizeBotIdentity(const int clientNum,
+		const bool refreshClientInfo)
+	{
+		if (clientNum < 0 || clientNum >= Game::MAX_CLIENTS)
+		{
+			return false;
+		}
+
+		auto& client = Game::svs_clients[clientNum];
+		if (client.header.state < Game::CS_CONNECTED || !client.bIsTestClient)
+		{
+			return false;
+		}
+
+		const auto character =
+			CharacterAssignments::GetClientCharacterId(clientNum);
+		if (!CharacterAssignments::IsValid(character))
+		{
+			return false;
+		}
+
+		const std::string characterName =
+			CharacterAssignments::ToString(character);
+		const std::string displayName = Utils::String::VA(
+			"[BOT] %s", characterName.c_str());
+
+		BotDisplayNames[clientNum] = displayName;
+		BotIcons[clientNum] = characterName;
+
+		Utils::InfoString info(client.userinfo);
+		const bool identityChanged =
+			_stricmp(info.get("name").c_str(), displayName.c_str()) != 0 ||
+			_stricmp(info.get("zw3char").c_str(), characterName.c_str()) != 0 ||
+			_stricmp(client.name, displayName.c_str()) != 0;
+
+		if (!identityChanged)
+		{
+			return false;
+		}
+
+		info.set("name", displayName);
+		info.set("zw3char", characterName);
+		const auto userinfo = info.build();
+		Game::I_strncpyz(client.userinfo, userinfo.c_str(),
+			sizeof(client.userinfo));
+
+		if (refreshClientInfo && client.header.state >= Game::CS_ACTIVE &&
+			client.gentity && client.gentity->client)
+		{
+			// Rebuild the player configstring so overhead names receive the
+			// resolved character identity on every connected client.
+			Game::ClientUserinfoChanged(clientNum);
+		}
+		else
+		{
+			Game::I_strncpyz(client.name, displayName.c_str(),
+				sizeof(client.name));
+		}
+
+		return true;
+	}
+
 	struct BotAction
 	{
 		std::string action;
@@ -1011,6 +1073,7 @@ namespace Components
 						BotDisplayNames[clientNum] = Utils::String::VA(
 							"[BOT] %s", characterName.c_str());
 						BotIcons[clientNum] = characterName;
+						SynchronizeBotIdentity(clientNum, false);
 					}
 
 					ClearPendingBotCharacter(qport);
@@ -1027,6 +1090,15 @@ namespace Components
 				Dvar::Var(Utils::String::VA(
 					"zw3_sb_down_progress_%d", clientNum)).set(0.0f);
 			});
+
+		Scheduler::Loop([]
+			{
+				for (int clientNum = 0; clientNum < Game::MAX_CLIENTS;
+					++clientNum)
+				{
+					SynchronizeBotIdentity(clientNum, true);
+				}
+			}, Scheduler::Pipeline::SERVER, 250ms);
 
 		Events::OnClientDisconnect([](const int clientNum)
 			{

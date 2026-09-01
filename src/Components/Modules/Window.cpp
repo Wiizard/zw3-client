@@ -4,6 +4,11 @@
 
 namespace Components
 {
+	namespace
+	{
+		std::atomic<std::int64_t> FirstWindowCreatedNanoseconds = 0;
+	}
+
 	Dvar::Var Window::NoBorder;
 	Dvar::Var Window::NativeCursor;
 
@@ -69,6 +74,15 @@ namespace Components
 	HWND Window::GetWindow()
 	{
 		return Window::MainWindow;
+	}
+
+	double Window::StartupElapsedMilliseconds()
+	{
+		const auto created = FirstWindowCreatedNanoseconds.load(std::memory_order_acquire);
+		if (!created) return -1.0;
+		const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+		return static_cast<double>(now - created) / 1'000'000.0;
 	}
 
 	void Window::OnWndMessage(UINT Msg, Utils::Slot<Window::WndProcCallback> callback)
@@ -141,8 +155,20 @@ namespace Components
 	HWND WINAPI Window::CreateMainWindow(DWORD dwExStyle, LPCSTR lpClassName, LPCSTR lpWindowName, DWORD dwStyle, int X, int Y, int nWidth, int nHeight, HWND hWndParent, HMENU hMenu, HINSTANCE hInstance, LPVOID lpParam)
 	{
 		Window::MainWindow = CreateWindowExA(dwExStyle, lpClassName, lpWindowName, dwStyle, X, Y, nWidth, nHeight, hWndParent, hMenu, hInstance, lpParam);
+		const auto profile = Flags::HasFlag("startupProfile");
+		if (profile && Window::MainWindow)
+		{
+			std::int64_t unset = 0;
+			const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+				std::chrono::steady_clock::now().time_since_epoch()).count();
+			FirstWindowCreatedNanoseconds.compare_exchange_strong(unset, now, std::memory_order_release);
+		}
 
 		CreateSignals();
+		if (profile)
+		{
+			Logger::Print(Game::CON_CHANNEL_SYSTEM, "Startup profile: window-created callbacks finished at {:.2f} ms.\n", StartupElapsedMilliseconds());
+		}
 
 		return Window::MainWindow;
 	}

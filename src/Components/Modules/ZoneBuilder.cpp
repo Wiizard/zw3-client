@@ -1527,11 +1527,11 @@ namespace Components
 
 			ZoneBuilder::zb_sp_to_mp = Game::Dvar_RegisterBool("zb_sp_to_mp", false, Game::DVAR_ARCHIVE, "Attempt to convert singleplayer assets to multiplayer format whenever possible");
 
-			AssetHandler::OnLoad([](Game::XAssetType type, Game::XAssetHeader /* asset*/, const std::string& name, bool* /*restrict*/)
+			AssetHandler::OnLoad([](Game::XAssetType type, Game::XAssetHeader /* asset*/, const std::string_view name, bool* /*restrict*/)
 				{
 					if (!ZoneBuilder::TraceZone.empty() && ZoneBuilder::TraceZone == FastFiles::Current())
 					{
-						ZoneBuilder::TraceAssets.push_back({ type, name });
+						ZoneBuilder::TraceAssets.push_back({ type, std::string(name) });
 					}
 				});
 
@@ -1608,7 +1608,7 @@ namespace Components
 					}
 				});
 
-			AssetHandler::OnLoad([](Game::XAssetType type, Game::XAssetHeader asset, [[maybe_unused]] const std::string& name, [[maybe_unused]] bool* restrict)
+			AssetHandler::OnLoad(Game::ASSET_TYPE_SOUND, [](Game::XAssetType type, Game::XAssetHeader asset, [[maybe_unused]] const std::string_view name, [[maybe_unused]] bool* restrict)
 				{
 					if (type != Game::ASSET_TYPE_SOUND)
 					{

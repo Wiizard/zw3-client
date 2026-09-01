@@ -2,6 +2,9 @@
 #include "Materials.hpp"
 #include "Party.hpp"
 #include "Events.hpp"
+#include "FastFiles.hpp"
+#include "Window.hpp"
+#include "SPLoadscreens.hpp"
 #include <Utils/WebIO.hpp>
 #include <filesystem>
 // Ensure you have includes for AssetHandler, if it's a separate component.
@@ -12,6 +15,10 @@
 
 namespace Components
 {
+	namespace
+	{
+		bool InitialDiskMenusComplete = false;
+	}
 
 	// NO LONGER NEEDED: decltype(&Game::DB_FindXAssetHeader) Menus::DB_FindXAssetHeader_Original = nullptr;
 
@@ -1113,6 +1120,7 @@ namespace Components
 
 	void Menus::FreeMenuOnly(Game::menuDef_t* menu)
 	{
+		if (menu) SPLoadscreens::OnMenuFreed(menu);
 		DebugPrint("Freeing only menu {} at {:X}",
 			menu->window.name,
 			(unsigned int)menu
@@ -1452,6 +1460,9 @@ namespace Components
 
 	void Menus::ReloadDiskMenus(bool preserveConnect)
 	{
+		const auto reloadStarted = std::chrono::steady_clock::now();
+		const bool initialDiskReload = !preserveConnect && !InitialDiskMenusComplete;
+
 		const auto connectionState = *reinterpret_cast<Game::connstate_t*>(0xB2C540);
 
 		const bool allowStrayMenus = connectionState > Game::connstate_t::CA_DISCONNECTED
@@ -1459,22 +1470,27 @@ namespace Components
 
 		DebugPrint("Reloading disk menus... preserveConnect={}", preserveConnect);
 
-		const auto listsFromDisk = MenuListsFromDisk;
-		for (const auto& menuList : listsFromDisk)
+		while (!MenuListsFromDisk.empty())
 		{
-			FreeMenuListOnly(menuList.second);
-			MenuListsFromDisk.erase(menuList.first);
+			const auto entry = MenuListsFromDisk.begin();
+			auto* menuList = entry->second;
+			MenuListsFromDisk.erase(entry);
+			FreeMenuListOnly(menuList);
 		}
 
-		const auto menusFromDisk = MenusFromDisk;
-		for (const auto& element : menusFromDisk)
+		std::vector<std::string> menusToUnload;
+		menusToUnload.reserve(MenusFromDisk.size());
+		for (const auto& [name, menu] : MenusFromDisk)
 		{
-			if (preserveConnect && !_stricmp(element.first.c_str(), "connect"))
+			if (preserveConnect && !_stricmp(name.c_str(), "connect"))
 			{
 				continue;
 			}
-
-			UnloadMenuFromDisk(element.first);
+			menusToUnload.push_back(name);
+		}
+		for (const auto& name : menusToUnload)
+		{
+			UnloadMenuFromDisk(name);
 		}
 
 		if (!OverridenMenus.empty())
@@ -1491,50 +1507,48 @@ namespace Components
 			}
 		}
 
+		std::size_t menuFiles = 0;
+		const auto menus = FileSystem::GetFileList("ui_mp", "menu", Game::FS_LIST_ALL);
+
+		for (const auto& filename : menus)
 		{
-			const auto menus = FileSystem::GetFileList("ui_mp", "menu", Game::FS_LIST_ALL);
-
-			for (const auto& filename : menus)
+			if (preserveConnect && !_stricmp(filename.c_str(), "connect.menu"))
 			{
-				if (preserveConnect && !_stricmp(filename.c_str(), "connect.menu"))
-				{
-					continue;
-				}
-
-				const std::string fullPath = std::format("ui_mp\\{}", filename);
-				LoadScriptMenu(fullPath.c_str(), allowStrayMenus);
+				continue;
 			}
 
-			if (allowStrayMenus)
-			{
-				const auto scriptmenus = FileSystem::GetFileList("ui_mp\\scriptmenus", "menu", Game::FS_LIST_ALL);
+			const auto fullPath = std::format("ui_mp\\{}", filename);
+			LoadScriptMenu(fullPath.c_str(), allowStrayMenus);
+			++menuFiles;
+		}
 
-				for (const auto& filename : scriptmenus)
-				{
-					const std::string fullPath = std::format("ui_mp\\scriptmenus\\{}", filename);
-					LoadScriptMenu(fullPath.c_str(), allowStrayMenus);
-				}
+		if (allowStrayMenus)
+		{
+			const auto scriptmenus = FileSystem::GetFileList("ui_mp\\scriptmenus", "menu", Game::FS_LIST_ALL);
+			for (const auto& filename : scriptmenus)
+			{
+				const auto fullPath = std::format("ui_mp\\scriptmenus\\{}", filename);
+				LoadScriptMenu(fullPath.c_str(), true);
+				++menuFiles;
 			}
 		}
 
+		const auto menuLists = FileSystem::GetFileList("ui_mp", "txt", Game::FS_LIST_ALL);
+		for (const auto& filename : menuLists)
 		{
-			const auto menuLists = FileSystem::GetFileList("ui_mp", "txt", Game::FS_LIST_ALL);
+			const auto fullPath = std::format("ui_mp\\{}", filename);
+			LoadScriptMenu(fullPath.c_str(), true);
+			++menuFiles;
+		}
 
-			for (const auto& filename : menuLists)
+		for (const auto& menuName : CustomIW4xMenus)
+		{
+			if (preserveConnect && !_stricmp(menuName.c_str(), "ui_mp/connect.menu"))
 			{
-				const std::string fullPath = std::format("ui_mp\\{}", filename);
-				LoadScriptMenu(fullPath.c_str(), true);
+				continue;
 			}
-
-			for (const auto& menuName : CustomIW4xMenus)
-			{
-				if (preserveConnect && !_stricmp(menuName.c_str(), "ui_mp/connect.menu"))
-				{
-					continue;
-				}
-
-				LoadScriptMenu(menuName.c_str(), true);
-			}
+			LoadScriptMenu(menuName.c_str(), true);
+			++menuFiles;
 		}
 
 		if (preserveConnect)
@@ -1543,6 +1557,25 @@ namespace Components
 		}
 
 		CheckMenus();
+
+		if (initialDiskReload)
+		{
+			InitialDiskMenusComplete = true;
+			if (Flags::HasFlag("startupProfile"))
+			{
+				const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+					std::chrono::steady_clock::now() - reloadStarted).count();
+				Logger::Print(Game::CON_CHANNEL_SYSTEM,
+					"Startup profile: synchronous disk menus {} ms ({} files).\n",
+					elapsed, menuFiles);
+			}
+		}
+	}
+
+	Game::menuDef_t* Menus::FindDiskMenu(const std::string& name)
+	{
+		const auto entry = MenusFromDisk.find(name);
+		return entry == MenusFromDisk.end() ? nullptr : entry->second;
 	}
 
 	bool Menus::IsMenuVisible(Game::UiContext* dc, Game::menuDef_t* menu)
@@ -1559,7 +1592,15 @@ namespace Components
 			return false;
 		}
 
-		return Game::Menu_IsVisible(dc, menu);
+		const auto visible = Game::Menu_IsVisible(dc, menu);
+		static const bool profile = Flags::HasFlag("startupProfile");
+		static bool mainMenuReported = false;
+		if (profile && !mainMenuReported && visible && menu && menu->window.name && !_stricmp(menu->window.name, "main_text"))
+		{
+			mainMenuReported = true;
+			Logger::Print(Game::CON_CHANNEL_SYSTEM, "Startup profile: window -> first main_text paint {:.2f} ms.\n", Window::StartupElapsedMilliseconds());
+		}
+		return visible;
 	}
 
 	void Menus::ForceOnlyCustomConnectMenu()
@@ -1686,7 +1727,7 @@ namespace Components
 		return 1.0f - std::pow(1.0f - value, 4.0f);
 	}
 
-	void Menus::OpenCustomConnectMenu()
+	void Menus::OpenLoadingScreen()
 	{
 		const auto custom = MenusFromDisk.find("connect");
 		if (custom == MenusFromDisk.end() || !custom->second)
@@ -2390,6 +2431,13 @@ namespace Components
 		// replacement, assuming both menus have identical item layouts. Disable it to prevent state
 		// from being copied between unrelated items when the layouts differ.
 		Utils::Hook::Set<Game::DB_DynamicCloneXAssetHandler_t>(&Game::DB_DynamicCloneXAssetHandler[Game::ASSET_TYPE_MENU], nullptr);
+
+		if (FastFiles::UseExperimentalStartup())
+		{
+			// Menu parsing creates and replaces many small allocations. Indexed
+			// ownership avoids a full pool scan and vector shift on every free.
+			Menus::Allocator.enableIndexedTracking();
+		}
 
 		Menus::InitializeSupportingData();
 

@@ -57,7 +57,6 @@
 #include "Modules/Session.hpp"
 #include "Modules/SlowMotion.hpp"
 #include "Modules/StartupMessages.hpp"
-#include "Modules/ZW3StartupSplash.hpp"
 #include "Modules/Stats.hpp"
 #include "Modules/StringTable.hpp"
 #include "Modules/StructuredData.hpp"
@@ -111,16 +110,9 @@ namespace Components
 		Postgame = false;
 		Uninitializing = false;
 		Utils::Memory::GetAllocator()->clear();
-
 		// High priority
 		Register(new Singleton());
 		Register(new Scheduler());
-
-		const auto showStartupSplash = Singleton::IsFirstInstance();
-		if (showStartupSplash)
-		{
-			ZW3StartupSplash::Start();
-		}
 
 		Register(new Auth());
 		Register(new Command());
@@ -230,11 +222,6 @@ namespace Components
 		Register(new Leaderboard());
 
 		Pregame = false;
-
-		if (showStartupSplash)
-		{
-			Scheduler::Once(StartupSplash::Stop, Scheduler::Pipeline::ASYNC);
-		}
 
 		Scheduler::OnGameShutdown(PreDestroy);
 	}

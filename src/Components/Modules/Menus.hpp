@@ -18,6 +18,8 @@ namespace Components
 		static std::vector<Game::menuDef_t*> LoadMenuByName_Recursive(const std::string& menu);
 
 		static bool IsMenuVisible(Game::UiContext* dc, Game::menuDef_t* menu);
+		static Game::menuDef_t* FindDiskMenu(const std::string& name);
+		static void OpenLoadingScreen();
 
 		static void RemoveMenuFromContext(Game::UiContext* dc, Game::menuDef_t* menuToRemove);
 
@@ -157,7 +159,6 @@ namespace Components
 
 		static void RemoveMenuNameFromContext(Game::UiContext* dc, const std::string& name, Game::menuDef_t* keepMenu);
 		static void ForceOnlyCustomConnectMenu();
-		static void OpenCustomConnectMenu();
 
 		template <typename... Args>
 		static void DebugPrint(const std::string_view& fmt, Args&&... args)

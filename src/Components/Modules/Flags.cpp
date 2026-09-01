@@ -10,7 +10,7 @@ namespace Components
 
 		for (const auto& entry : EnabledFlags)
 		{
-			if (Utils::String::ToLower(entry) == Utils::String::ToLower(flag))
+			if (!_stricmp(entry.c_str(), flag.c_str()))
 			{
 				return true;
 			}

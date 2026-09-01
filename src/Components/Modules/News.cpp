@@ -42,10 +42,11 @@ namespace Components
 		return std::nullopt;
 	}
 
-	void News::ProcessPopmenus(const rapidjson::Document& document)
+	std::vector<std::pair<std::string, std::string>> News::CollectPopmenus(const rapidjson::Document& document)
 	{
+		std::vector<std::pair<std::string, std::string>> messages;
 		if (!document.HasMember("popmenu") || !document["popmenu"].IsArray())
-			return;
+			return messages;
 
 		for (const auto& menuItem : document["popmenu"].GetArray())
 		{
@@ -54,8 +55,9 @@ namespace Components
 				continue;
 
 			if (ShouldShowForRevision(menuItem["revisions"]))
-				StartupMessages::AddMessage(item->second, item->first);
+				messages.push_back(std::move(*item));
 		}
+		return messages;
 	}
 
 	std::optional<std::pair<std::string, std::string>> News::ExtractPopmenuItem(const rapidjson::Value& menuItem)
@@ -122,6 +124,7 @@ namespace Components
 
 		Localization::Set("MPUI_CHANGELOG_TEXT", "Loading...");
 		Localization::Set("MPUI_MOTD_TEXT", NEWS_MOTD_DEFAULT);
+		Changelog::SetChangelog("Changelog not available.");
 
 		// make newsfeed (ticker) menu items not cut off based on safe area
 		Utils::Hook::Nop(0x63892D, 5);
@@ -130,32 +133,27 @@ namespace Components
 		Utils::Hook::Nop(0x6388BB, 2); // skip the "if (item->text[0] == '@')" localize check
 		Utils::Hook(0x6388C1, GetNewsText, HOOK_CALL).install()->quick();
 
-		const auto result = Utils::Cache::GetFile("/info");
-		if (result.empty())
-			return;
+		// A cache miss can block in WinINet for several seconds. Defaults and
+		// locally registered UI are ready immediately; only the remote refresh
+		// runs on the existing async scheduler.
+		Scheduler::Once([]
+		{
+			const auto result = Utils::Cache::GetFile("/info");
+			if (result.empty()) return;
 
-		rapidjson::Document jsonDocument{};
-		const rapidjson::ParseResult parseResult = jsonDocument.Parse(result);
+			rapidjson::Document jsonDocument{};
+			const rapidjson::ParseResult parseResult = jsonDocument.Parse(result);
+			if (!parseResult || !jsonDocument.IsObject()) return;
 
-		if (!parseResult || !jsonDocument.IsObject())
-			return;
-
-		/*auto motd = ExtractStringByMemberName(jsonDocument, "motd");
-		auto changelog = ExtractStringByMemberName(jsonDocument, "changelog");
-
-		if (!motd.has_value())
-			motd = NEWS_MOTD_DEFAULT;
-
-		if (!changelog.has_value())
-			changelog = "Changelog could not be retrieved.";*/
-
-		//Localization::Set("MPUI_MOTD_TEXT", motd.value());
-		//Changelog::SetChangelog(changelog.value());
-
-		Localization::Set("MPUI_MOTD_TEXT", NEWS_MOTD_DEFAULT);
-		Changelog::SetChangelog("Changelog not available.");
-
-		ProcessPopmenus(jsonDocument);
+			auto messages = CollectPopmenus(jsonDocument);
+			if (messages.empty()) return;
+			Scheduler::Once([messages = std::move(messages)]
+			{
+				for (const auto& [title, body] : messages)
+					StartupMessages::AddMessage(body, title);
+				StartupMessages::Show();
+			}, Scheduler::Pipeline::MAIN);
+		}, Scheduler::Pipeline::ASYNC);
 	}
 
 	void News::preDestroy()

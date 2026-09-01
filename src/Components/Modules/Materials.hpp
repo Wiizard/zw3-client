@@ -16,6 +16,8 @@ namespace Components
 
 		static Game::GfxImage* CreateImage(const std::string& name, unsigned int width, unsigned int height, unsigned int depth, unsigned int flags, _D3DFORMAT format);
 		static void DeleteImage(Game::GfxImage* image);
+		// Own a preview independently of map-zone lifetimes. Returns null on miss.
+		static Game::GfxImage* LoadPreviewImage(const std::string& name);
 
 		static bool IsValid(Game::Material* material);
 

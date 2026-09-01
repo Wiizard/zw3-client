@@ -89,14 +89,20 @@ namespace Utils
 	class Signal
 	{
 	public:
-		Signal() = default;
+		using SlotList = std::vector<Slot<T>>;
+
+		// Registrations are rare while dispatches can happen once per loaded
+		// asset. Keep an immutable snapshot so dispatch does not copy every
+		// std::function on each invocation.
+		Signal()
+			: slots(std::make_shared<const SlotList>())
+		{
+		}
 
 		Signal(Signal& obj) : Signal()
 		{
-			std::lock_guard<std::recursive_mutex> _(this->mutex);
-			std::lock_guard<std::recursive_mutex> __(obj.mutex);
-
-			Utils::Merge(&this->slots, obj.getSlots());
+			std::lock_guard<std::recursive_mutex> _(obj.mutex);
+			this->slots.store(obj.slots.load(std::memory_order_acquire), std::memory_order_release);
 		}
 
 		void disconnect(const Slot<T> slot)
@@ -105,10 +111,11 @@ namespace Utils
 
 			if (slot)
 			{
-				this->slots.erase(
+				auto updatedSlots = std::make_shared<SlotList>(*this->slots.load(std::memory_order_acquire));
+				updatedSlots->erase(
 					std::remove_if(
-						this->slots.begin(),
-						this->slots.end(),
+						updatedSlots->begin(),
+						updatedSlots->end(),
 						[&](std::function<T>& a)
 						{
 							if (a.template target<T>() == slot.template target<T>())
@@ -119,8 +126,10 @@ namespace Utils
 							return false;
 						}
 
-					), this->slots.end()
+					), updatedSlots->end()
 				);
+
+				this->slots.store(std::move(updatedSlots), std::memory_order_release);
 			}
 		}
 
@@ -130,7 +139,9 @@ namespace Utils
 
 			if (slot)
 			{
-				this->slots.emplace_back(slot);
+				auto updatedSlots = std::make_shared<SlotList>(*this->slots.load(std::memory_order_acquire));
+				updatedSlots->emplace_back(slot);
+				this->slots.store(std::move(updatedSlots), std::memory_order_release);
 			}
 		}
 
@@ -138,23 +149,15 @@ namespace Utils
 		{
 			std::lock_guard<std::recursive_mutex> _(this->mutex);
 
-			this->slots.clear();
-		}
-
-		std::vector<Slot<T>>& getSlots()
-		{
-			return this->slots;
+			this->slots.store(std::make_shared<const SlotList>(), std::memory_order_release);
 		}
 
 		template <class ...Args>
 		void operator()(Args&&... args) const
 		{
-			std::lock_guard<std::recursive_mutex> _(this->mutex);
+			const auto currentSlots = this->slots.load(std::memory_order_acquire);
 
-			std::vector<Slot<T>> copiedSlots;
-			Utils::Merge(&copiedSlots, this->slots);
-
-			for (auto& slot : copiedSlots)
+			for (const auto& slot : *currentSlots)
 			{
 				if (slot)
 				{
@@ -165,6 +168,6 @@ namespace Utils
 
 	private:
 		mutable std::recursive_mutex mutex;
-		std::vector<Slot<T>> slots;
+		std::atomic<std::shared_ptr<const SlotList>> slots;
 	};
 }

@@ -9,6 +9,71 @@
 
 namespace Components
 {
+	namespace
+	{
+		constexpr std::size_t USERMAP_HASH_BUFFER_SIZE = 1024 * 1024;
+
+		struct UserMapFileStamp
+		{
+			std::uintmax_t size{};
+			std::filesystem::file_time_type modified{};
+
+			bool operator==(const UserMapFileStamp&) const = default;
+		};
+
+		struct UserMapFileHash
+		{
+			UserMapFileStamp stamp;
+			std::string hash;
+		};
+
+		std::mutex UserMapHashMutex;
+		std::unordered_map<std::string, UserMapFileHash> UserMapHashCache;
+
+		std::optional<UserMapFileStamp> GetUserMapFileStamp(const std::filesystem::path& path)
+		{
+			std::error_code error;
+			const auto size = std::filesystem::file_size(path, error);
+			if (error)
+			{
+				return std::nullopt;
+			}
+
+			const auto modified = std::filesystem::last_write_time(path, error);
+			if (error)
+			{
+				return std::nullopt;
+			}
+
+			return UserMapFileStamp{ size, modified };
+		}
+
+		std::string HashUserMapFile(const std::filesystem::path& path)
+		{
+			hash_state state{};
+			sha256_init(&state);
+
+			const auto file = CreateFileW(path.c_str(), GENERIC_READ,
+				FILE_SHARE_READ, nullptr,
+				OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+			if (file != INVALID_HANDLE_VALUE)
+			{
+				std::vector<unsigned char> buffer(USERMAP_HASH_BUFFER_SIZE);
+				DWORD bytesRead = 0;
+				while (ReadFile(file, buffer.data(), static_cast<DWORD>(buffer.size()), &bytesRead, nullptr) && bytesRead > 0)
+				{
+					sha256_process(&state, buffer.data(), bytesRead);
+				}
+
+				CloseHandle(file);
+			}
+
+			std::array<unsigned char, 32> digest{};
+			sha256_done(&state, digest.data());
+			return { reinterpret_cast<const char*>(digest.data()), digest.size() };
+		}
+	}
+
 	Maps::UserMapContainer Maps::UserMap;
 	std::string Maps::CurrentMainZone;
 	std::vector<std::pair<std::string, std::string>> Maps::DependencyList;
@@ -31,6 +96,17 @@ namespace Components
 	Maps::UserMapContainer* Maps::GetUserMap()
 	{
 		return &Maps::UserMap;
+	}
+
+	unsigned int Maps::UserMapContainer::getHash()
+	{
+		if (!this->hashComputed && this->isValid())
+		{
+			this->hash = Maps::GetUsermapHash(this->mapname);
+			this->hashComputed = true;
+		}
+
+		return this->hash;
 	}
 
 	void Maps::UserMapContainer::loadIwd()
@@ -214,20 +290,30 @@ namespace Components
 		Game::DB_EnumXAssets_Internal(Game::XAssetType::ASSET_TYPE_CLIPMAP_SP, callback, ents, true);
 	}
 
-	void Maps::LoadAssetRestrict(Game::XAssetType type, Game::XAssetHeader asset, const std::string& name, bool* restrict)
+	void Maps::LoadAssetRestrict(Game::XAssetType type, Game::XAssetHeader asset, const std::string_view name, bool* restrict)
 	{
-		if (std::find(Maps::CurrentDependencies.begin(), Maps::CurrentDependencies.end(), FastFiles::Current()) != Maps::CurrentDependencies.end()) // Shipment is a special case
+		bool dependencyWorldAsset = false;
+		switch (type)
 		{
-			switch (type)
+		case Game::XAssetType::ASSET_TYPE_CLIPMAP_MP:
+		case Game::XAssetType::ASSET_TYPE_CLIPMAP_SP:
+		case Game::XAssetType::ASSET_TYPE_GAMEWORLD_SP:
+		case Game::XAssetType::ASSET_TYPE_GAMEWORLD_MP:
+		case Game::XAssetType::ASSET_TYPE_GFXWORLD:
+		case Game::XAssetType::ASSET_TYPE_MAP_ENTS:
+		case Game::XAssetType::ASSET_TYPE_COMWORLD:
+		case Game::XAssetType::ASSET_TYPE_FXWORLD:
+			dependencyWorldAsset = true;
+			break;
+		}
+
+		// Dependency zones may contribute shared assets, but never their own world.
+		// Gate this lookup by type because this hook runs for every asset in a map.
+		if (dependencyWorldAsset && !Maps::CurrentDependencies.empty())
+		{
+			const auto currentZone = FastFiles::Current();
+			if (std::find(Maps::CurrentDependencies.begin(), Maps::CurrentDependencies.end(), currentZone) != Maps::CurrentDependencies.end()) // Shipment is a special case
 			{
-			case Game::XAssetType::ASSET_TYPE_CLIPMAP_MP:
-			case Game::XAssetType::ASSET_TYPE_CLIPMAP_SP:
-			case Game::XAssetType::ASSET_TYPE_GAMEWORLD_SP:
-			case Game::XAssetType::ASSET_TYPE_GAMEWORLD_MP:
-			case Game::XAssetType::ASSET_TYPE_GFXWORLD:
-			case Game::XAssetType::ASSET_TYPE_MAP_ENTS:
-			case Game::XAssetType::ASSET_TYPE_COMWORLD:
-			case Game::XAssetType::ASSET_TYPE_FXWORLD:
 				*restrict = true;
 				return;
 			}
@@ -241,7 +327,7 @@ namespace Components
 
 		if (type == Game::XAssetType::ASSET_TYPE_WEAPON)
 		{
-			if ((!strstr(name.data(), "_mp") && name != "none" && name != "destructible_car") || Zones::Version() >= VERSION_ALPHA2)
+			if ((name.find("_mp") == std::string_view::npos && name != "none" && name != "destructible_car") || Zones::Version() >= VERSION_ALPHA2)
 			{
 				*restrict = true;
 				return;
@@ -265,7 +351,7 @@ namespace Components
 			}
 
 			static std::string mapEntities;
-			FileSystem::File ents(name + ".ents", Game::FS_THREAD_DATABASE);
+			FileSystem::File ents(std::string(name).append(".ents"), Game::FS_THREAD_DATABASE);
 			if (ents.exists())
 			{
 				mapEntities = ents.getBuffer();
@@ -479,6 +565,8 @@ namespace Components
 		{
 			Maps::UserMap = Maps::UserMapContainer(mapname);
 			Maps::UserMap.loadIwd();
+			// The preview may exist only in this newly mounted archive.
+			SPLoadscreens::SetLoadingMap(mapname);
 		}
 		else
 		{
@@ -490,16 +578,34 @@ namespace Components
 
 	unsigned int Maps::GetUsermapHash(const std::string& map)
 	{
-		if (Utils::IO::DirectoryExists(std::format("usermaps/{}", map)))
+		const std::filesystem::path mapDirectory = std::filesystem::path("usermaps") / map;
+		if (Utils::IO::DirectoryExists(mapDirectory))
 		{
 			std::string hash;
+			hash.reserve(ARRAYSIZE(Maps::UserMapFiles) * 32);
+			std::lock_guard lock(UserMapHashMutex);
 
 			for (std::size_t i = 0; i < ARRAYSIZE(Maps::UserMapFiles); ++i)
 			{
-				auto filePath = std::format("usermaps/{}/{}{}", map, map, Maps::UserMapFiles[i]);
-				if (Utils::IO::FileExists(filePath))
+				const auto filePath = mapDirectory / std::format("{}{}", map, Maps::UserMapFiles[i]);
+				if (Utils::IO::FileExists(filePath.string()))
 				{
-					hash.append(Utils::Cryptography::SHA256::Compute(Utils::IO::ReadFile(filePath)));
+					const auto stamp = GetUserMapFileStamp(filePath);
+					const auto cacheKey = Utils::String::ToLower(filePath.lexically_normal().generic_string());
+					const auto cached = UserMapHashCache.find(cacheKey);
+
+					if (stamp && cached != UserMapHashCache.end() && cached->second.stamp == *stamp)
+					{
+						hash.append(cached->second.hash);
+						continue;
+					}
+
+					auto fileHash = HashUserMapFile(filePath);
+					hash.append(fileHash);
+					if (stamp)
+					{
+						UserMapHashCache.insert_or_assign(cacheKey, UserMapFileHash{ *stamp, std::move(fileHash) });
+					}
 				}
 			}
 
@@ -856,7 +962,26 @@ namespace Components
 		//Utils::Hook::Set<BYTE>(0x541E40, 0xC3);
 
 		// Restrict asset loading
-		AssetHandler::OnLoad(Maps::LoadAssetRestrict);
+		constexpr Game::XAssetType restrictedAssetTypes[] =
+		{
+			Game::ASSET_TYPE_CLIPMAP_MP,
+			Game::ASSET_TYPE_CLIPMAP_SP,
+			Game::ASSET_TYPE_GAMEWORLD_SP,
+			Game::ASSET_TYPE_GAMEWORLD_MP,
+			Game::ASSET_TYPE_GFXWORLD,
+			Game::ASSET_TYPE_MAP_ENTS,
+			Game::ASSET_TYPE_COMWORLD,
+			Game::ASSET_TYPE_FXWORLD,
+			Game::ASSET_TYPE_ADDON_MAP_ENTS,
+			Game::ASSET_TYPE_WEAPON,
+			Game::ASSET_TYPE_STRINGTABLE,
+			Game::ASSET_TYPE_MENU,
+			Game::ASSET_TYPE_MENULIST,
+		};
+		for (const auto type : restrictedAssetTypes)
+		{
+			AssetHandler::OnLoad(type, Maps::LoadAssetRestrict);
+		}
 
 		// hunk size (was 300 MiB)
 		Utils::Hook::Set<DWORD>(0x64A029, 0x1C200000); // 450 MiB

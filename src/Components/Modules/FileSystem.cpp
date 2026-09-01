@@ -1,4 +1,5 @@
 #include "FileSystem.hpp"
+#include "D3D9Ex.hpp"
 #include <windows.h>
 #include <commctrl.h>
 #include <string>
@@ -894,7 +895,7 @@ namespace Components
 	int FileSystem::LoadTextureSync(Game::GfxImageLoadDef** loadDef, Game::GfxImage* image)
 	{
 		std::lock_guard _(FSMutex);
-		return Game::Load_Texture(loadDef, image);
+		return D3D9Ex::LoadTexture(loadDef, image);
 	}
 
 	void FileSystem::IwdFreeStub(Game::iwd_t* iwd)

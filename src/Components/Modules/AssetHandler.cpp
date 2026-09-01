@@ -42,9 +42,13 @@ namespace Components
 {
 	thread_local int AssetHandler::BypassState = 0;
 	bool AssetHandler::ShouldSearchTempAssets = false;
+	bool AssetHandler::LogAssetEntries = false;
 	std::map<Game::XAssetType, AssetHandler::IAsset*> AssetHandler::AssetInterfaces;
 	std::map<Game::XAssetType, Utils::Slot<AssetHandler::Callback>> AssetHandler::TypeCallbacks;
 	Utils::Signal<AssetHandler::RestrictCallback> AssetHandler::RestrictSignal;
+	Utils::Signal<AssetHandler::RestrictCallback> AssetHandler::TypeRestrictSignals[Game::XAssetType::ASSET_TYPE_COUNT];
+	std::atomic_bool AssetHandler::HasRestrictCallbacks{ false };
+	std::atomic<std::uint64_t> AssetHandler::TypeRestrictCallbackMask{ 0 };
 
 	std::map<void*, void*> AssetHandler::Relocations;
 
@@ -85,6 +89,16 @@ namespace Components
 	void AssetHandler::StoreTemporaryAsset(Game::XAssetType type, Game::XAssetHeader asset)
 	{
 		AssetHandler::TemporaryAssets[type][Game::DB_GetXAssetNameHandlers[type](&asset)] = asset;
+	}
+
+	void AssetHandler::RemoveTemporaryAsset(const Game::XAssetType type, const char* name)
+	{
+		if (type < 0 || type >= Game::ASSET_TYPE_COUNT || !name)
+		{
+			return;
+		}
+
+		AssetHandler::TemporaryAssets[type].erase(name);
 	}
 
 	Game::XAssetHeader AssetHandler::FindAsset(Game::XAssetType type, const char* filename)
@@ -225,12 +239,12 @@ namespace Components
 		}
 	}
 
-	void AssetHandler::ModifyAsset(Game::XAssetType type, Game::XAssetHeader asset, const std::string& name)
+	void AssetHandler::ModifyAsset(Game::XAssetType type, Game::XAssetHeader asset, const std::string_view name)
 	{
-
-		if (*Game::com_developer && (*Game::com_developer)->current.enabled)
+		switch (type)
 		{
-			if (type == Game::XAssetType::ASSET_TYPE_IMAGE && name[0] != ',')
+		case Game::ASSET_TYPE_IMAGE:
+			if (*Game::com_developer && (*Game::com_developer)->current.enabled && !name.empty() && name[0] != ',')
 			{
 				const auto image = asset.image;
 				const auto cat = static_cast<Game::ImageCategory>(image->category);
@@ -239,46 +253,55 @@ namespace Components
 					Logger::Warning(Game::CON_CHANNEL_GFX, "Image {} has wrong category IMG_CATEGORY_UNKNOWN, this is an IMPORTANT ISSUE that should be fixed!\n", name);
 				}
 			}
-		}
+			break;
 
-		if (type == Game::ASSET_TYPE_MATERIAL && (name == "gfx_distortion_knife_trail" || name == "gfx_distortion_heat_far" || name == "gfx_distortion_ring_light" || name == "gfx_distortion_heat") && asset.material->info.sortKey >= 43)
-		{
+		case Game::ASSET_TYPE_MATERIAL:
+			if ((name == "gfx_distortion_knife_trail" || name == "gfx_distortion_heat_far" || name == "gfx_distortion_ring_light" || name == "gfx_distortion_heat") && asset.material->info.sortKey >= 43)
+			{
+				if (Zones::Version() >= VERSION_ALPHA2)
+				{
+					asset.material->info.sortKey = 44;
+				}
+				else
+				{
+					asset.material->info.sortKey = 43;
+				}
+			}
+
+			if (name == "wc/codo_ui_viewer_black_decal3" || name == "wc/codo_ui_viewer_black_decal2" || name == "wc/hint_arrows01" || name == "wc/hint_arrows02")
+			{
+				asset.material->info.sortKey = 0xE;
+			}
+			break;
+
+		case Game::ASSET_TYPE_VEHICLE:
 			if (Zones::Version() >= VERSION_ALPHA2)
 			{
-				asset.material->info.sortKey = 44;
+				asset.vehDef->turretWeapon = nullptr;
 			}
-			else
+			break;
+
+		case Game::ASSET_TYPE_TECHNIQUE_SET:
 			{
-				asset.material->info.sortKey = 43;
-			}
-		}
-
-		if (type == Game::ASSET_TYPE_MATERIAL && (name == "wc/codo_ui_viewer_black_decal3" || name == "wc/codo_ui_viewer_black_decal2" || name == "wc/hint_arrows01" || name == "wc/hint_arrows02"))
-		{
-			asset.material->info.sortKey = 0xE;
-		}
-
-		if (type == Game::ASSET_TYPE_VEHICLE && Zones::Version() >= VERSION_ALPHA2)
-		{
-			asset.vehDef->turretWeapon = nullptr;
-		}
-
-		// Fix shader const stuff
-		if (type == Game::ASSET_TYPE_TECHNIQUE_SET && Zones::Version() >= 359 && Zones::Version() < 448)
-		{
-			for (int i = 0; i < 48; ++i)
-			{
-				if (asset.techniqueSet->techniques[i])
+				const auto version = Zones::Version();
+				if (version < 359 || version >= 448)
 				{
-					for (int j = 0; j < asset.techniqueSet->techniques[i]->passCount; ++j)
-					{
-						Game::MaterialPass* pass = &asset.techniqueSet->techniques[i]->passArray[j];
+					break;
+				}
 
-						for (int k = 0; k < (pass->perPrimArgCount + pass->perObjArgCount + pass->stableArgCount); ++k)
+				// Fix shader const stuff
+				for (int i = 0; i < 48; ++i)
+				{
+					if (asset.techniqueSet->techniques[i])
+					{
+						for (int j = 0; j < asset.techniqueSet->techniques[i]->passCount; ++j)
 						{
-							if (pass->args[k].type == Game::MaterialShaderArgumentType::MTL_ARG_LITERAL_PIXEL_CONST)
+							Game::MaterialPass* pass = &asset.techniqueSet->techniques[i]->passArray[j];
+
+							for (int k = 0; k < (pass->perPrimArgCount + pass->perObjArgCount + pass->stableArgCount); ++k)
 							{
-								if (pass->args[k].u.codeConst.index == -28132)
+								if (pass->args[k].type == Game::MaterialShaderArgumentType::MTL_ARG_LITERAL_PIXEL_CONST &&
+									pass->args[k].u.codeConst.index == -28132)
 								{
 									pass->args[k].u.codeConst.index = 2644;
 								}
@@ -287,13 +310,16 @@ namespace Components
 					}
 				}
 			}
-		}
+			break;
 
-		if (type == Game::ASSET_TYPE_GFXWORLD && Zones::Version() >= 316)
-		{
-			asset.gfxWorld->sortKeyEffectDecal = 39;
-			asset.gfxWorld->sortKeyEffectAuto = 48;
-			asset.gfxWorld->sortKeyDistortion = 43;
+		case Game::ASSET_TYPE_GFXWORLD:
+			if (Zones::Version() >= 316)
+			{
+				asset.gfxWorld->sortKeyEffectDecal = 39;
+				asset.gfxWorld->sortKeyEffectAuto = 48;
+				asset.gfxWorld->sortKeyDistortion = 43;
+			}
+			break;
 		}
 	}
 
@@ -302,6 +328,7 @@ namespace Components
 		const char* name = Game::DB_GetXAssetNameHandlers[type](asset);
 
 		if (!name) return false;
+		const std::string_view assetName(name);
 
 		for (auto i = AssetHandler::EmptyAssets.begin(); i != AssetHandler::EmptyAssets.end();)
 		{
@@ -315,17 +342,26 @@ namespace Components
 			}
 		}
 
-		if (Flags::HasFlag("entries"))
+		if (AssetHandler::LogAssetEntries)
 		{
 			OutputDebugStringA(Utils::String::VA("%s: %d: %s\n", FastFiles::Current().data(), type, name));
 		}
 
 		bool restrict = false;
-		AssetHandler::RestrictSignal(type, *asset, name, &restrict);
+		if (AssetHandler::HasRestrictCallbacks.load(std::memory_order_acquire))
+		{
+			AssetHandler::RestrictSignal(type, *asset, assetName, &restrict);
+		}
+
+		const auto typeBit = std::uint64_t{ 1 } << static_cast<unsigned int>(type);
+		if (AssetHandler::TypeRestrictCallbackMask.load(std::memory_order_acquire) & typeBit)
+		{
+			AssetHandler::TypeRestrictSignals[type](type, *asset, assetName, &restrict);
+		}
 
 		if (!restrict)
 		{
-			AssetHandler::ModifyAsset(type, *asset, name);
+			AssetHandler::ModifyAsset(type, *asset, assetName);
 		}
 
 		// If no slot restricts the loading, we can load the asset
@@ -370,9 +406,26 @@ namespace Components
 	std::function<void()> AssetHandler::OnLoad(Utils::Slot<AssetHandler::RestrictCallback> callback)
 	{
 		AssetHandler::RestrictSignal.connect(callback);
+		AssetHandler::HasRestrictCallbacks.store(true, std::memory_order_release);
 
 		return [callback]() {
 			AssetHandler::RestrictSignal.disconnect(callback);
+			};
+	}
+
+	std::function<void()> AssetHandler::OnLoad(const Game::XAssetType type, Utils::Slot<AssetHandler::RestrictCallback> callback)
+	{
+		if (type < 0 || type >= Game::XAssetType::ASSET_TYPE_COUNT)
+		{
+			return [] {};
+		}
+
+		AssetHandler::TypeRestrictSignals[type].connect(callback);
+		AssetHandler::TypeRestrictCallbackMask.fetch_or(
+			std::uint64_t{ 1 } << static_cast<unsigned int>(type), std::memory_order_release);
+
+		return [type, callback]() {
+			AssetHandler::TypeRestrictSignals[type].disconnect(callback);
 			};
 	}
 
@@ -569,6 +622,7 @@ namespace Components
 
 	AssetHandler::AssetHandler()
 	{
+		AssetHandler::LogAssetEntries = Flags::HasFlag("entries");
 		this->reallocateEntryPool();
 
 		Dvar::Register<bool>("r_noVoid", false, Game::DVAR_ARCHIVE, "Disable void model (red fx)");
@@ -604,9 +658,9 @@ namespace Components
 				}
 			}, Scheduler::Pipeline::MAIN);
 
-		AssetHandler::OnLoad([](Game::XAssetType type, Game::XAssetHeader asset, std::string name, bool*)
+		AssetHandler::OnLoad(Game::ASSET_TYPE_XMODEL, [](Game::XAssetType type, Game::XAssetHeader asset, const std::string_view name, bool*)
 			{
-				if (Dvar::Var("r_noVoid").get<bool>() && type == Game::ASSET_TYPE_XMODEL && name == "void")
+				if (type == Game::ASSET_TYPE_XMODEL && name == "void" && Dvar::Var("r_noVoid").get<bool>())
 				{
 					asset.model->numLods = 0;
 				}
@@ -714,6 +768,12 @@ namespace Components
 		AssetHandler::Relocations.clear();
 		AssetHandler::AssetInterfaces.clear();
 		AssetHandler::RestrictSignal.clear();
+		AssetHandler::HasRestrictCallbacks.store(false, std::memory_order_release);
+		for (auto& signal : AssetHandler::TypeRestrictSignals)
+		{
+			signal.clear();
+		}
+		AssetHandler::TypeRestrictCallbackMask.store(0, std::memory_order_release);
 		AssetHandler::TypeCallbacks.clear();
 	}
 }

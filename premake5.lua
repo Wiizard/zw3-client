@@ -207,7 +207,10 @@ workspace "iw4x"
 	filter {}
 
 	filter "configurations:Release"
-		optimize "Size"
+		-- Startup and map loading spend substantial time in our decoding,
+		-- allocation, and asset-routing code. Prefer execution speed here;
+		-- the small DLL size increase is not on the loading critical path.
+		optimize "Speed"
 		buildoptions {"/GL"}
 		linkoptions {"/IGNORE:4702", "/LTCG"}
 		defines {"NDEBUG"}

@@ -8,11 +8,11 @@ namespace Components
 		class UserMapContainer
 		{
 		public:
-			UserMapContainer() : wasFreed(false), hash(0) {}
-			UserMapContainer(const std::string& _mapname) : wasFreed(false), mapname(_mapname)
+			UserMapContainer() : wasFreed(false), hash(0), hashComputed(false) {}
+			UserMapContainer(const std::string& _mapname)
+				: wasFreed(false), hash(0), hashComputed(false), mapname(_mapname)
 			{
 				ZeroMemory(&this->searchPath, sizeof(this->searchPath));
-				this->hash = Maps::GetUsermapHash(this->mapname);
 				Maps::ForceRefreshArenas();
 			}
 
@@ -22,13 +22,17 @@ namespace Components
 				this->clear();
 			}
 
-			unsigned int getHash() { return this->hash; }
-			std::string getName() { return this->mapname; }
-			bool isValid() { return !this->mapname.empty(); }
+			// Map hashes are only needed for network compatibility checks. Keep
+			// them out of the normal local map-loading path until first requested.
+			unsigned int getHash();
+			const std::string& getName() const { return this->mapname; }
+			bool isValid() const { return !this->mapname.empty(); }
 			void clear()
 			{
 				bool wasValid = this->isValid();
 				this->mapname.clear();
+				this->hash = 0;
+				this->hashComputed = false;
 				if (wasValid)
 				{
 					Maps::ForceRefreshArenas();
@@ -45,6 +49,7 @@ namespace Components
 		private:
 			bool wasFreed;
 			unsigned int hash;
+			bool hashComputed;
 			std::string mapname;
 			Game::searchpath_s searchPath;
 		};
@@ -101,7 +106,7 @@ namespace Components
 		static void ForceRefreshArenas();
 
 		static void GetBSPName(char* buffer, size_t size, const char* format, const char* mapname);
-		static void LoadAssetRestrict(Game::XAssetType type, Game::XAssetHeader asset, const std::string& name, bool* restrict);
+		static void LoadAssetRestrict(Game::XAssetType type, Game::XAssetHeader asset, std::string_view name, bool* restrict);
 		static void LoadMapZones(Game::XZoneInfo *zoneInfo, unsigned int zoneCount, int sync);
 		static void UnloadMapZones(Game::XZoneInfo *zoneInfo, unsigned int zoneCount, int sync);
 

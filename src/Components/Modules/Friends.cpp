@@ -69,6 +69,7 @@ namespace Components
 		std::mutex SocialMutex;
 		std::vector<SocialFriend> SocialFriends;
 		std::vector<IncomingFriendRequest> IncomingRequests;
+		std::unordered_set<std::string> PendingOutgoingFriends;
 		std::optional<IncomingPartyInvite> CurrentPartyInvite;
 		std::string LastHandledPartyInvite;
 		unsigned int CurrentSocialFriend{};
@@ -413,6 +414,11 @@ namespace Components
 
 			std::lock_guard lock(SocialMutex);
 			SocialFriends = std::move(updated);
+			for (const auto& user : SocialFriends)
+			{
+				PendingOutgoingFriends.erase(user.id);
+				PendingOutgoingFriends.erase(user.guid);
+			}
 			CurrentSocialFriend = SocialFriends.empty() ? 0 : std::min<unsigned int>(CurrentSocialFriend,
 				static_cast<unsigned int>(SocialFriends.size() - 1));
 			return true;
@@ -592,6 +598,36 @@ namespace Components
 			std::lock_guard lock(SocialMutex);
 			if (CurrentIncomingRequest >= IncomingRequests.size()) return std::nullopt;
 			return IncomingRequests[CurrentIncomingRequest];
+		}
+
+		std::string LobbyPlayerRelationship(const std::string& target)
+		{
+			if (target == std::format("{:016x}", Auth::GetKeyHash())) return "SELF";
+			std::lock_guard lock(SocialMutex);
+			if (std::ranges::any_of(SocialFriends, [&target](const SocialFriend& user)
+			{
+				return user.id == target || user.guid == target;
+			})) return "FRIEND";
+			if (std::ranges::any_of(IncomingRequests, [&target](const IncomingFriendRequest& request)
+			{
+				return request.senderId == target || request.guid == target;
+			})) return "INCOMING_REQUEST";
+			if (PendingOutgoingFriends.contains(target)) return "PENDING";
+			return "AVAILABLE";
+		}
+
+		void SetLobbyPlayerRelationship(const std::string& target, const std::string& relationship)
+		{
+			Scheduler::Once([target, relationship]
+			{
+				auto selected = Dvar::Var("zwnet_selected_player_guid").get<std::string>();
+				std::ranges::transform(selected, selected.begin(), [](const unsigned char character)
+				{
+					return static_cast<char>(std::tolower(character));
+				});
+				if (!SocialActive || selected != target) return;
+				Dvar::Var("zwnet_selected_player_relationship").set(relationship);
+			}, Scheduler::Pipeline::MAIN);
 		}
 
 		std::string PartyInviteSignature(const IncomingPartyInvite& invite)
@@ -1090,6 +1126,17 @@ namespace Components
 		return true;
 	}
 
+	std::string Friends::GetLobbyPlayerRelationship(const std::string& guid)
+	{
+		auto normalized = guid;
+		std::ranges::transform(normalized, normalized.begin(), [](const unsigned char character)
+		{
+			return static_cast<char>(std::tolower(character));
+		});
+		if (!IsPublicGuid(normalized)) return "UNAVAILABLE";
+		return LobbyPlayerRelationship(normalized);
+	}
+
 	void Friends::UpdateFriends()
 	{
 		std::lock_guard<std::recursive_mutex> _(Friends::Mutex);
@@ -1426,6 +1473,100 @@ namespace Components
 				}, Scheduler::Pipeline::MAIN);
 				RefreshIncomingRequests();
 				return "Friend request sent.";
+			});
+		});
+
+		UIScript::Add("RefreshSelectedLobbyPlayer", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+		{
+			auto target = Dvar::Var("zwnet_selected_player_guid").get<std::string>();
+			std::ranges::transform(target, target.begin(), [](const unsigned char character)
+			{
+				return static_cast<char>(std::tolower(character));
+			});
+			if (!IsPublicGuid(target))
+			{
+				Dvar::Var("zwnet_selected_player_relationship").set("UNAVAILABLE");
+				return;
+			}
+
+			const auto cachedRelationship = LobbyPlayerRelationship(target);
+			Dvar::Var("zwnet_selected_player_relationship").set(cachedRelationship);
+			if (cachedRelationship == "SELF") return;
+
+			Scheduler::Once([target, cachedRelationship]
+			{
+				const auto friendsOk = RefreshSocialFriends();
+				const auto requestsOk = RefreshIncomingRequests();
+				if (!friendsOk && !requestsOk && cachedRelationship == "AVAILABLE")
+				{
+					SetLobbyPlayerRelationship(target, "UNAVAILABLE");
+					return;
+				}
+				const auto relationship = LobbyPlayerRelationship(target);
+				SetLobbyPlayerRelationship(target, relationship);
+			}, Scheduler::Pipeline::ASYNC);
+		});
+
+		UIScript::Add("AddSelectedLobbyPlayer", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+		{
+			auto target = Dvar::Var("zwnet_selected_player_guid").get<std::string>();
+			std::ranges::transform(target, target.begin(), [](const unsigned char character)
+			{
+				return static_cast<char>(std::tolower(character));
+			});
+			if (!IsPublicGuid(target))
+			{
+				SetSocialUi("The selected player identity is unavailable.", false);
+				return;
+			}
+
+			const auto relationship = LobbyPlayerRelationship(target);
+			Dvar::Var("zwnet_selected_player_relationship").set(relationship);
+			if (relationship == "SELF")
+			{
+				SetSocialUi("You cannot add your own profile.", false);
+				return;
+			}
+			if (relationship == "FRIEND")
+			{
+				SetSocialUi("This player is already your friend.", false);
+				return;
+			}
+			if (relationship == "INCOMING_REQUEST")
+			{
+				SetSocialUi("This player already sent you a friend request.", false);
+				return;
+			}
+			if (relationship == "PENDING")
+			{
+				SetSocialUi("Your friend request is already pending.", false);
+				return;
+			}
+			if (SocialBusy.load())
+			{
+				SetSocialUi("A social request is already running.", true);
+				return;
+			}
+
+			Dvar::Var("zwnet_selected_player_relationship").set("PENDING");
+			RunSocialTask("Sending friend request...", [target]
+			{
+				const auto response = SocialApiRequest("POST", "/social/friends/request", {{"guid", target}}, true);
+				if (!response)
+				{
+					{
+						std::lock_guard lock(SocialMutex);
+						PendingOutgoingFriends.erase(target);
+					}
+					SetLobbyPlayerRelationship(target, "AVAILABLE");
+					return std::string{"The friend request could not be sent."};
+				}
+				{
+					std::lock_guard lock(SocialMutex);
+					PendingOutgoingFriends.insert(target);
+				}
+				SetLobbyPlayerRelationship(target, "PENDING");
+				return std::string{"Friend request sent."};
 			});
 		});
 
@@ -1806,6 +1947,7 @@ namespace Components
 			std::lock_guard lock(SocialMutex);
 			SocialFriends.clear();
 			IncomingRequests.clear();
+			PendingOutgoingFriends.clear();
 			CurrentPartyInvite.reset();
 			LastHandledPartyInvite.clear();
 		}

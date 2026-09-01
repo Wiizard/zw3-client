@@ -1,4 +1,5 @@
 #include <Utils/WebIO.hpp>
+#include <Utils/CSV.hpp>
 #include <wincrypt.h>
 
 #include "ZWNet.hpp"
@@ -29,6 +30,71 @@ namespace Components
 		{
 			int level = 1;
 			int prestige = 0;
+		};
+
+		struct LocalBarracksRank
+		{
+			int level = 1;
+			int prestige = 0;
+			int experience = 0;
+			int experienceTarget = 50;
+		};
+
+		struct LocalChallengeProgress
+		{
+			int progress = 0;
+			int tier = 0;
+		};
+
+		struct LocalBarracksChallenges
+		{
+			std::unordered_map<std::string, LocalChallengeProgress> entries;
+			int zombieKills = 0;
+			int zombieDeaths = 0;
+			int zombieRevives = 0;
+		};
+
+		struct ChallengeDefinition
+		{
+			std::string id;
+			std::array<int, 4> targets{};
+			std::array<int, 4> rewards{};
+		};
+
+		constexpr std::array ChallengeSlotProgressDvars
+		{
+			"zw3_ch_slot_0_progress", "zw3_ch_slot_1_progress", "zw3_ch_slot_2_progress",
+			"zw3_ch_slot_3_progress", "zw3_ch_slot_4_progress"
+		};
+		constexpr std::array ChallengeSlotTargetDvars
+		{
+			"zw3_ch_slot_0_target", "zw3_ch_slot_1_target", "zw3_ch_slot_2_target",
+			"zw3_ch_slot_3_target", "zw3_ch_slot_4_target"
+		};
+		constexpr std::array ChallengeSlotTierDvars
+		{
+			"zw3_ch_slot_0_tier", "zw3_ch_slot_1_tier", "zw3_ch_slot_2_tier",
+			"zw3_ch_slot_3_tier", "zw3_ch_slot_4_tier"
+		};
+		constexpr std::array ChallengeSlotTierCountDvars
+		{
+			"zw3_ch_slot_0_tier_count", "zw3_ch_slot_1_tier_count", "zw3_ch_slot_2_tier_count",
+			"zw3_ch_slot_3_tier_count", "zw3_ch_slot_4_tier_count"
+		};
+		constexpr std::array ChallengeSlotRewardDvars
+		{
+			"zw3_ch_slot_0_reward", "zw3_ch_slot_1_reward", "zw3_ch_slot_2_reward",
+			"zw3_ch_slot_3_reward", "zw3_ch_slot_4_reward"
+		};
+		constexpr std::array ChallengeSlotPercentDvars
+		{
+			"zw3_ch_slot_0_percent", "zw3_ch_slot_1_percent", "zw3_ch_slot_2_percent",
+			"zw3_ch_slot_3_percent", "zw3_ch_slot_4_percent"
+		};
+		constexpr std::array ChallengeSlotCompleteDvars
+		{
+			"zw3_ch_slot_0_complete", "zw3_ch_slot_1_complete", "zw3_ch_slot_2_complete",
+			"zw3_ch_slot_3_complete", "zw3_ch_slot_4_complete"
 		};
 
 		using SharedLobbyRankMap =
@@ -278,6 +344,270 @@ namespace Components
 			}
 
 			return SharedLobbyRank{storedLevel + 1, storedPrestige};
+		}
+
+		std::optional<LocalBarracksRank> ReadLocalBarracksRank()
+		{
+			const auto rankPath = std::filesystem::path("zw3") /
+				"core" / "scriptdata" /
+				("rank_" + FormatPublicGuid());
+			std::string data;
+			if (!Utils::IO::ReadFile(rankPath.string(), &data))
+			{
+				return std::nullopt;
+			}
+
+			int storedLevel = 0;
+			int storedPrestige = 0;
+			int storedExperience = 0;
+			if (!TryParseRankValue(data, "level", storedLevel) ||
+				!TryParseRankValue(data, "prestige", storedPrestige) ||
+				!TryParseRankValue(data, "experience", storedExperience) ||
+				storedLevel < 0 || storedLevel > 53 ||
+				storedPrestige < 0 || storedPrestige > 255 ||
+				storedExperience < 0)
+			{
+				return std::nullopt;
+			}
+
+			int experienceTarget = 50;
+			switch (storedLevel)
+			{
+			case 0: experienceTarget = 50; break;
+			case 1: experienceTarget = 125; break;
+			case 2: experienceTarget = 200; break;
+			case 3: experienceTarget = 300; break;
+			case 4: experienceTarget = 450; break;
+			case 5: experienceTarget = 650; break;
+			default: experienceTarget = 650 + ((storedLevel - 5) * 250); break;
+			}
+
+			return LocalBarracksRank{storedLevel + 1, storedPrestige, storedExperience, experienceTarget};
+		}
+
+		std::string ZombiePrestigeIcon(const int prestige)
+		{
+			const auto iconLevel = prestige + 1;
+			return iconLevel > 8 ? "skullicon" : std::format("prestige_{}", iconLevel);
+		}
+
+		bool TryParseChallengeEntry(const std::string& data,
+			const std::string_view id, LocalChallengeProgress& entry)
+		{
+			const auto needle = std::string(id) + ":";
+			auto position = data.find(needle);
+			while (position != std::string::npos && position > 0 && data[position - 1] != ';')
+			{
+				position = data.find(needle, position + 1);
+			}
+			if (position == std::string::npos)
+			{
+				return false;
+			}
+
+			const auto* progressStart = data.c_str() + position + needle.size();
+			char* progressEnd = nullptr;
+			const auto progress = std::strtol(progressStart, &progressEnd, 10);
+			if (progressEnd == progressStart || *progressEnd != ':')
+			{
+				return false;
+			}
+
+			const auto* tierStart = progressEnd + 1;
+			char* tierEnd = nullptr;
+			const auto tier = std::strtol(tierStart, &tierEnd, 10);
+			if (tierEnd == tierStart || *tierEnd != ';' ||
+				progress < 0 || progress > std::numeric_limits<int>::max() ||
+				tier < 0 || tier > std::numeric_limits<int>::max())
+			{
+				return false;
+			}
+
+			entry.progress = static_cast<int>(progress);
+			entry.tier = static_cast<int>(tier);
+			return true;
+		}
+
+		std::vector<ChallengeDefinition> ReadChallengeDefinitions()
+		{
+			Utils::CSV table("zw3/core/mp/zw3_challenge_ui.csv", true, false);
+			std::vector<ChallengeDefinition> definitions;
+			if (!table.isValid())
+			{
+				return definitions;
+			}
+
+			definitions.reserve(table.getRows());
+			for (std::size_t row = 0; row < table.getRows(); ++row)
+			{
+				ChallengeDefinition definition;
+				definition.id = table.getElementAt(row, 0);
+				if (definition.id.empty())
+				{
+					continue;
+				}
+
+				for (std::size_t tier = 0; tier < definition.targets.size(); ++tier)
+				{
+					const auto targetText = table.getElementAt(row, 4 + tier * 2);
+					const auto rewardText = table.getElementAt(row, 5 + tier * 2);
+					if (targetText.empty())
+					{
+						break;
+					}
+
+					char* targetEnd = nullptr;
+					char* rewardEnd = nullptr;
+					const auto target = std::strtol(targetText.c_str(), &targetEnd, 10);
+					const auto reward = std::strtol(rewardText.c_str(), &rewardEnd, 10);
+					if (targetEnd == targetText.c_str() || *targetEnd != '\0' || target <= 0 ||
+						target > std::numeric_limits<int>::max() ||
+						rewardEnd == rewardText.c_str() || *rewardEnd != '\0' || reward < 0 ||
+						reward > std::numeric_limits<int>::max())
+					{
+						break;
+					}
+
+					definition.targets[tier] = static_cast<int>(target);
+					definition.rewards[tier] = static_cast<int>(reward);
+				}
+
+				if (definition.targets[0] > 0)
+				{
+					definitions.emplace_back(std::move(definition));
+				}
+			}
+
+			return definitions;
+		}
+
+		LocalBarracksChallenges ReadLocalBarracksChallenges(
+			const std::vector<ChallengeDefinition>& definitions)
+		{
+			LocalBarracksChallenges challenges;
+			const auto challengePath = std::filesystem::path("zw3") /
+				"core" / "scriptdata" /
+				("challenges_" + FormatPublicGuid());
+			std::string data;
+			if (!Utils::IO::ReadFile(challengePath.string(), &data))
+			{
+				return challenges;
+			}
+
+			for (const auto& definition : definitions)
+			{
+				LocalChallengeProgress entry;
+				if (TryParseChallengeEntry(data, definition.id, entry))
+				{
+					challenges.entries.emplace(definition.id, entry);
+				}
+			}
+
+			LocalChallengeProgress value;
+			const auto hasKills = TryParseChallengeEntry(data, "stat_zw3_zombie_kills", value);
+			if (hasKills) challenges.zombieKills = value.progress;
+			const auto hasDeaths = TryParseChallengeEntry(data, "stat_zw3_zombie_deaths", value);
+			if (hasDeaths) challenges.zombieDeaths = value.progress;
+			const auto hasRevives = TryParseChallengeEntry(data, "stat_zw3_zombie_revives", value);
+			if (hasRevives) challenges.zombieRevives = value.progress;
+
+			// Older or briefly out-of-sync challenge files retain the largest known
+			// value. Lifetime counters can exceed the final challenge milestone.
+			if (const auto it = challenges.entries.find("ch_zw3_zombie_killer"); it != challenges.entries.end())
+			{
+				challenges.zombieKills = std::max(challenges.zombieKills, it->second.progress);
+			}
+			if (const auto it = challenges.entries.find("ch_zw3_reviver"); it != challenges.entries.end())
+			{
+				challenges.zombieRevives = std::max(challenges.zombieRevives, it->second.progress);
+			}
+
+			return challenges;
+		}
+
+		void RefreshChallengeCategory(const int startIndex)
+		{
+			const auto definitions = ReadChallengeDefinitions();
+			const auto challenges = ReadLocalBarracksChallenges(definitions);
+			for (std::size_t slot = 0; slot < ChallengeSlotProgressDvars.size(); ++slot)
+			{
+				int progress = 0;
+				int target = 0;
+				int tier = 0;
+				int tierCount = 0;
+				int reward = 0;
+				int percent = 0;
+				bool complete = false;
+
+				const auto definitionIndex = startIndex + static_cast<int>(slot);
+				if (definitionIndex >= 0 && definitionIndex < static_cast<int>(definitions.size()))
+				{
+					const auto& definition = definitions[definitionIndex];
+					tierCount = static_cast<int>(std::ranges::count_if(definition.targets,
+						[](const int value) { return value > 0; }));
+					if (const auto it = challenges.entries.find(definition.id); it != challenges.entries.end())
+					{
+						progress = std::max(it->second.progress, 0);
+						tier = std::clamp(it->second.tier, 0, tierCount);
+					}
+
+					complete = tierCount > 0 && tier >= tierCount;
+					const auto targetTier = complete ? tierCount - 1 : tier;
+					if (targetTier >= 0)
+					{
+						target = definition.targets[targetTier];
+						reward = complete ? 0 : definition.rewards[targetTier];
+					}
+					if (complete)
+					{
+						percent = 100;
+					}
+					else if (target > 0)
+					{
+						percent = std::clamp(static_cast<int>(
+							(static_cast<std::int64_t>(progress) * 100) / target), 0, 100);
+					}
+				}
+
+				Dvar::Var(ChallengeSlotProgressDvars[slot]).set(progress);
+				Dvar::Var(ChallengeSlotTargetDvars[slot]).set(target);
+				Dvar::Var(ChallengeSlotTierDvars[slot]).set(tier);
+				Dvar::Var(ChallengeSlotTierCountDvars[slot]).set(tierCount);
+				Dvar::Var(ChallengeSlotRewardDvars[slot]).set(reward);
+				Dvar::Var(ChallengeSlotPercentDvars[slot]).set(percent);
+				Dvar::Var(ChallengeSlotCompleteDvars[slot]).set(complete);
+			}
+		}
+
+		void RefreshBarracksProfile()
+		{
+			const auto rank = ReadLocalBarracksRank();
+			Dvar::Var("zw3_barracks_rank_known").set(rank.has_value());
+			if (!rank)
+			{
+				Dvar::Var("zw3_barracks_rank_level").set(1);
+				Dvar::Var("zw3_barracks_rank_prestige").set(0);
+				Dvar::Var("zw3_barracks_rank_experience").set(0);
+				Dvar::Var("zw3_barracks_rank_experience_target").set(50);
+				Dvar::Var("zw3_barracks_rank_experience_percent").set(0);
+				Dvar::Var("zw3_barracks_rank_icon").set("prestige_1");
+			}
+			else
+			{
+				Dvar::Var("zw3_barracks_rank_level").set(rank->level);
+				Dvar::Var("zw3_barracks_rank_prestige").set(rank->prestige);
+				Dvar::Var("zw3_barracks_rank_experience").set(rank->experience);
+				Dvar::Var("zw3_barracks_rank_experience_target").set(rank->experienceTarget);
+				Dvar::Var("zw3_barracks_rank_experience_percent").set(std::clamp(static_cast<int>(
+					(static_cast<std::int64_t>(rank->experience) * 100) / rank->experienceTarget), 0, 100));
+				Dvar::Var("zw3_barracks_rank_icon").set(ZombiePrestigeIcon(rank->prestige));
+			}
+
+			const auto definitions = ReadChallengeDefinitions();
+			const auto challenges = ReadLocalBarracksChallenges(definitions);
+			Dvar::Var("zw3_barracks_zombie_kills").set(challenges.zombieKills);
+			Dvar::Var("zw3_barracks_zombie_deaths").set(challenges.zombieDeaths);
+			Dvar::Var("zw3_barracks_zombie_revives").set(challenges.zombieRevives);
 		}
 
 		SharedLobbyRankMap ParseSharedLobbyRanks(
@@ -811,15 +1141,42 @@ namespace Components
 
 	void ZWNet::CompleteOnlineEntry()
 	{
-		Scheduler::Once([]
+		EnqueueAsync([]
 		{
-			if (!ActiveState() || !OnlineEntryPendingState().exchange(false)) return;
-			if (auto* connecting = Game::Menus_FindByName(Game::uiContext, "popup_zwnet_connecting"))
+			if (!ActiveState() || !OnlineEntryPendingState()) return;
+
+			auto party = Request("GET", "/zwnet/parties/current");
+			if (!party || party->is_null())
 			{
-				Game::Menus_CloseRequest(Game::uiContext, connecting);
+				party = Request("POST", "/zwnet/parties/create",
+					{{"visibility", PartyVisibilityName(DesiredPartyPrivacy().load())}});
 			}
-			Game::Menus_OpenByName(Game::uiContext, "zwnet_matchmaking");
-		}, Scheduler::Pipeline::MAIN);
+
+			if (!party || party->is_null() || party->contains("error"))
+			{
+				SetState("ERROR", "ZWNET_PARTY_FAILED");
+			}
+			else
+			{
+				*party = PublishLocalRank(std::move(*party));
+				UpdateLobbyDvars(*party);
+				const auto partyState = party->value("state", "IDLE");
+				const auto activeMatchmaking = IsActiveMatchmakingState(partyState);
+				SearchingState() = activeMatchmaking;
+				SetState(activeMatchmaking ? partyState : "IN_PARTY");
+				if (activeMatchmaking) UpdateMatchmaking();
+			}
+
+			Scheduler::Once([]
+			{
+				if (!ActiveState() || !OnlineEntryPendingState().exchange(false)) return;
+				if (auto* connecting = Game::Menus_FindByName(Game::uiContext, "popup_zwnet_connecting"))
+				{
+					Game::Menus_CloseRequest(Game::uiContext, connecting);
+				}
+				Game::Menus_OpenByName(Game::uiContext, "zwnet_matchmaking");
+			}, Scheduler::Pipeline::MAIN);
+		});
 	}
 
 	void ZWNet::AbandonOnlineSession()
@@ -1568,8 +1925,19 @@ namespace Components
 	{
 		std::string partyId;
 		{ std::lock_guard lock(StateMutex()); partyId = CurrentPartyIdState(); }
-		if (partyId.empty()) return;
+		if (partyId.empty())
+		{
+			Scheduler::Once([]
+			{
+				if (ActiveState()) Dvar::Var("zwnet_ready_pending").set(false);
+			}, Scheduler::Pipeline::MAIN);
+			return;
+		}
 		const auto result = Request("POST", "/zwnet/parties/" + partyId + (ready ? "/unready" : "/ready"));
+		Scheduler::Once([]
+		{
+			if (ActiveState()) Dvar::Var("zwnet_ready_pending").set(false);
+		}, Scheduler::Pipeline::MAIN);
 		if (result && !result->contains("error"))
 		{
 			Scheduler::Once([ready]
@@ -1954,6 +2322,7 @@ namespace Components
 		Dvar::Register<const char*>("zwnet_lobby_status_text", "IDLE", Game::DVAR_NONE, "Current party state");
 		Dvar::Register<bool>("zwnet_lobby_can_start", false, Game::DVAR_NONE, "Private match can start");
 		Dvar::Register<bool>("zwnet_lobby_self_ready", false, Game::DVAR_NONE, "Local party ready state");
+		Dvar::Register<bool>("zwnet_ready_pending", false, Game::DVAR_NONE, "A ready-state update is in flight");
 		Dvar::Register<bool>("zwnet_all_ready", false, Game::DVAR_NONE, "All active match players are ready");
 		Dvar::Register<const char*>("zwnet_start_phase", "", Game::DVAR_NONE, "Server start phase");
 		Dvar::Register<int>("zwnet_start_seconds", 0, 0, 300, Game::DVAR_NONE, "Server start phase time remaining");
@@ -2035,6 +2404,47 @@ namespace Components
 		Dvar::Register<const char*>("zwnet_server_status", "NOT ASSIGNED", Game::DVAR_NONE, "ZW3 server assignment status");
 		Dvar::Register<const char*>("zwnet_join_status", "WAITING IN LOBBY", Game::DVAR_NONE, "ZW3 join status");
 		Dvar::Register<int>("zwnet_join_countdown", 0, 0, 30, Game::DVAR_NONE, "Synchronized ZW3 join countdown");
+		Dvar::Register<const char*>("zwnet_selected_player_guid", "", Game::DVAR_NONE, "Selected public-lobby player GUID");
+		Dvar::Register<const char*>("zwnet_selected_player_name", "", Game::DVAR_NONE, "Selected public-lobby player name");
+		Dvar::Register<const char*>("zwnet_selected_player_role", "", Game::DVAR_NONE, "Selected public-lobby player role");
+		Dvar::Register<int>("zwnet_selected_player_rank", 1, 1, 54, Game::DVAR_NONE, "Selected public-lobby player rank");
+		Dvar::Register<int>("zwnet_selected_player_prestige", 0, 0, 255, Game::DVAR_NONE, "Selected public-lobby player prestige");
+		Dvar::Register<const char*>("zwnet_selected_player_rank_icon", "prestige_1", Game::DVAR_NONE, "Selected public-lobby player prestige icon");
+		Dvar::Register<bool>("zwnet_selected_player_self", false, Game::DVAR_NONE, "Selected public-lobby player is local");
+		Dvar::Register<const char*>("zwnet_selected_player_relationship", "UNAVAILABLE", Game::DVAR_NONE, "Selected public-lobby player friend state");
+		Dvar::Register<bool>("zwnet_barracks_compare_active", false, Game::DVAR_NONE, "Barracks was opened for a lobby comparison");
+		Dvar::Register<bool>("zw3_barracks_rank_known", false, Game::DVAR_NONE, "Local ZW3 Barracks rank data is available");
+		Dvar::Register<int>("zw3_barracks_rank_level", 1, 1, 54, Game::DVAR_NONE, "Local ZW3 Barracks rank level");
+		Dvar::Register<int>("zw3_barracks_rank_prestige", 0, 0, 255, Game::DVAR_NONE, "Local ZW3 Barracks prestige");
+		Dvar::Register<int>("zw3_barracks_rank_experience", 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Local ZW3 Barracks experience");
+		Dvar::Register<int>("zw3_barracks_rank_experience_target", 50, 1, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Current ZW3 Barracks level XP target");
+		Dvar::Register<int>("zw3_barracks_rank_experience_percent", 0, 0, 100, Game::DVAR_NONE, "Current ZW3 Barracks level XP completion percent");
+		Dvar::Register<const char*>("zw3_barracks_rank_icon", "prestige_1", Game::DVAR_NONE, "Local ZW3 Barracks prestige icon");
+		Dvar::Register<int>("zw3_barracks_zombie_kills", 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Lifetime ZW3 zombie kills");
+		Dvar::Register<int>("zw3_barracks_zombie_deaths", 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Lifetime ZW3 zombie deaths");
+		Dvar::Register<int>("zw3_barracks_zombie_revives", 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Lifetime ZW3 teammate revives");
+		for (std::size_t slot = 0; slot < ChallengeSlotProgressDvars.size(); ++slot)
+		{
+			Dvar::Register<int>(ChallengeSlotProgressDvars[slot], 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Current ZW3 challenge progress");
+			Dvar::Register<int>(ChallengeSlotTargetDvars[slot], 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Current ZW3 challenge target");
+			Dvar::Register<int>(ChallengeSlotTierDvars[slot], 0, 0, 4, Game::DVAR_NONE, "Completed ZW3 challenge tiers");
+			Dvar::Register<int>(ChallengeSlotTierCountDvars[slot], 0, 0, 4, Game::DVAR_NONE, "Available ZW3 challenge tiers");
+			Dvar::Register<int>(ChallengeSlotRewardDvars[slot], 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Next ZW3 challenge XP reward");
+			Dvar::Register<int>(ChallengeSlotPercentDvars[slot], 0, 0, 100, Game::DVAR_NONE, "Current ZW3 challenge completion percent");
+			Dvar::Register<bool>(ChallengeSlotCompleteDvars[slot], false, Game::DVAR_NONE, "ZW3 challenge is complete");
+		}
+		constexpr std::array questChallengeDvars
+		{
+			"zw3_quest_mp_factory_sh", "zw3_quest_mp_asylum_sh", "zw3_quest_mp_prototype_sh",
+			"zw3_quest_mp_sumpf_sh", "zw3_quest_mp_za_island", "zw3_quest_mp_deathmarch_chap4_a",
+			"zw3_quest_mp_deathmarch_chap4_b", "zw3_quest_mp_surv_town", "zw3_quest_mp_burg",
+			"zw3_quest_mp_lambeth"
+		};
+		for (const auto* challengeDvar : questChallengeDvars)
+		{
+			Dvar::Register<int>(challengeDvar, 0, 0, 10, Game::DVAR_ARCHIVE,
+				"Completed tiers for a repeatable ZW3 questline");
+		}
 		{
 			std::lock_guard lock(StateMutex());
 			// Reading an engine-owned string Dvar here also establishes that the
@@ -2051,6 +2461,7 @@ namespace Components
 			(void)CurrentMatchIdState();
 		}
 		ActiveState() = true;
+		RefreshBarracksProfile();
 	}
 
 	ZWNet::ZWNet()
@@ -2118,8 +2529,39 @@ namespace Components
 		UIScript::Add("ZWNET_LeaveParty", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { EnqueueAsync([] { LeaveParty(); }); });
 		UIScript::Add("ZWNET_ToggleReady", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*)
 		{
+			if (Dvar::Var("zwnet_ready_pending").get<bool>()) return;
 			const auto ready = Dvar::Var("zwnet_lobby_self_ready").get<bool>();
+			Dvar::Var("zwnet_ready_pending").set(true);
 			EnqueueAsync([ready] { ToggleReady(ready); });
+		});
+		UIScript::Add("ZWNET_SelectLobbyPlayer", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s*)
+		{
+			const auto index = token.get<int>();
+			if (index < 0 || index >= 4) return;
+			const auto prefix = std::format("zwnet_lobby_member_{}", index);
+			auto guid = Dvar::Var(prefix + "_guid").get<std::string>();
+			const auto name = Dvar::Var(prefix + "_name").get<std::string>();
+			if (guid.empty() || name.empty()) return;
+			std::ranges::transform(guid, guid.begin(), [](const unsigned char character)
+			{
+				return static_cast<char>(std::tolower(character));
+			});
+			Dvar::Var("zwnet_selected_player_guid").set(guid);
+			Dvar::Var("zwnet_selected_player_name").set(name);
+			Dvar::Var("zwnet_selected_player_role").set(Dvar::Var(prefix + "_role").get<std::string>());
+			Dvar::Var("zwnet_selected_player_rank").set(Dvar::Var(prefix + "_shared_rank_level").get<int>());
+			Dvar::Var("zwnet_selected_player_prestige").set(Dvar::Var(prefix + "_shared_rank_prestige").get<int>());
+			Dvar::Var("zwnet_selected_player_rank_icon").set(Dvar::Var(prefix + "_rank_icon").get<std::string>());
+			Dvar::Var("zwnet_selected_player_self").set(Dvar::Var(prefix + "_self").get<bool>());
+			Dvar::Var("zwnet_selected_player_relationship").set(Friends::GetLobbyPlayerRelationship(guid));
+		});
+		UIScript::Add("ZWNET_RefreshBarracksProfile", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*)
+		{
+			RefreshBarracksProfile();
+		});
+		UIScript::Add("ZWNET_RefreshChallengeCategory", [](const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s*)
+		{
+			RefreshChallengeCategory(token.get<int>());
 		});
 		UIScript::Add("ZWNET_StartPrivateMatch", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*)
 		{

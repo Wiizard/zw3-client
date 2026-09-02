@@ -1,42 +1,16 @@
-namespace
-{
-	double ProcessAgeMilliseconds()
-	{
-		FILETIME created{}, exited{}, kernel{}, user{}, now{};
-		if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) return 0.0;
-		GetSystemTimeAsFileTime(&now);
-		ULARGE_INTEGER start{}, current{};
-		start.LowPart = created.dwLowDateTime;
-		start.HighPart = created.dwHighDateTime;
-		current.LowPart = now.dwLowDateTime;
-		current.HighPart = now.dwHighDateTime;
-		return static_cast<double>(current.QuadPart - start.QuadPart) / 10000.0;
-	}
-}
-
 namespace Main
 {
 	void Initialize()
 	{
-		const bool profile = Components::Flags::HasFlag("startupProfile");
-		const auto stage = [profile](const char* name)
-		{
-			if (profile) printf("Startup profile: process -> %s %.2f ms.\n", name, ProcessAgeMilliseconds());
-		};
-		stage("client entry");
 		std::srand(std::uint32_t(std::time(nullptr)) ^ ~(GetTickCount() * GetCurrentProcessId()));
 
 		Utils::SetEnvironment();
 		Steam::Proxy::RunMod();
-		stage("environment ready");
 
 		Utils::Cryptography::Initialize();
-		stage("crypto ready");
 
 		Components::FileSystem::CleanupZw3Files();
-		stage("cleanup complete");
 		Components::Loader::Initialize();
-		stage("components ready");
 	}
 
 	void Uninitialize()

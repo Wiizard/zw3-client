@@ -7,20 +7,14 @@ namespace Components
 	namespace
 	{
 		std::atomic<bool> StartupTextureUploads{true};
-		std::atomic<unsigned int> StagedTextureCount{0};
-		std::atomic<unsigned int> TextureUploadFallbacks{0};
-		std::atomic<long long> TextureUploadNanoseconds{0};
 		std::atomic<bool> MapTextureUploads{false};
-		std::string ProfileMap;
-		std::chrono::steady_clock::time_point MapLoadStart;
-		unsigned int MapTextureStart = 0;
+		std::string LoadingMap;
 		bool MapSawConnection = false;
 
 		bool UseStagedUploads()
 		{
-			static const bool mapUploads = !Flags::HasFlag("legacyMapTextures");
-			return (StartupTextureUploads.load(std::memory_order_relaxed) && FastFiles::UseExperimentalStartup())
-				|| (MapTextureUploads.load(std::memory_order_relaxed) && mapUploads);
+			return StartupTextureUploads.load(std::memory_order_relaxed)
+				|| MapTextureUploads.load(std::memory_order_relaxed);
 		}
 
 		struct ImageUploadScope;
@@ -41,14 +35,9 @@ namespace Components
 			{
 				CurrentImageUpload = previous;
 				if (!upload.Pending()) return;
-				const auto start = std::chrono::steady_clock::now();
 				const auto result = upload.Finish();
-				TextureUploadNanoseconds.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(
-					std::chrono::steady_clock::now() - start).count(), std::memory_order_relaxed);
-				if (upload.UsedFallback()) TextureUploadFallbacks.fetch_add(1, std::memory_order_relaxed);
 				if (FAILED(result))
 					Logger::Error(Game::ERR_FATAL, "Could not upload image '{}' (HRESULT {:08X}).", image->name, static_cast<unsigned int>(result));
-				if (result == D3D_OK) StagedTextureCount.fetch_add(1, std::memory_order_relaxed);
 			}
 		};
 	}
@@ -58,13 +47,10 @@ namespace Components
 	void D3D9Ex::BeginMapLoading(const std::string& map)
 	{
 		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled() || map.empty()) return;
-		if (MapTextureUploads.load(std::memory_order_relaxed) && ProfileMap == map) return;
-		ProfileMap = map;
-		MapLoadStart = std::chrono::steady_clock::now();
-		MapTextureStart = StagedTextureCount.load(std::memory_order_relaxed);
+		if (MapTextureUploads.load(std::memory_order_relaxed) && LoadingMap == map) return;
+		LoadingMap = map;
 		MapSawConnection = false;
 		MapTextureUploads.store(true, std::memory_order_relaxed);
-		if (Flags::HasFlag("mapProfile")) Logger::Print("Map profile: begin {}.\n", map);
 	}
 
 	int D3D9Ex::LoadTexture(Game::GfxImageLoadDef** loadDef, Game::GfxImage* image)
@@ -855,23 +841,12 @@ namespace Components
 			if (MapSawConnection && (state == Game::CA_ACTIVE || (state == Game::CA_DISCONNECTED && FastFiles::Ready())))
 			{
 				MapTextureUploads.store(false, std::memory_order_relaxed);
-				if (Flags::HasFlag("mapProfile"))
-					Logger::Print("Map profile: {} {} in {:.2f} ms; {} staged textures.\n", ProfileMap,
-						state == Game::CA_ACTIVE ? "active" : "aborted",
-						std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - MapLoadStart).count(),
-						StagedTextureCount.load(std::memory_order_relaxed) - MapTextureStart);
+				LoadingMap.clear();
 			}
 		}, Scheduler::Pipeline::MAIN);
 		Scheduler::OnGameInitialized([]
 		{
 			StartupTextureUploads.store(false, std::memory_order_relaxed);
-			if (Flags::HasFlag("startupProfile"))
-			{
-				Logger::Print(Game::CON_CHANNEL_SYSTEM,
-					"Startup profile: staged {} textures; GPU upload {:.2f} ms; {} fallbacks.\n",
-					StagedTextureCount.load(), static_cast<double>(TextureUploadNanoseconds.load()) / 1'000'000.0,
-					TextureUploadFallbacks.load());
-			}
 		}, Scheduler::Pipeline::MAIN);
 	}
 }

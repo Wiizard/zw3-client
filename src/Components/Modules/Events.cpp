@@ -1,5 +1,4 @@
 #include "Events.hpp"
-#include "Window.hpp"
 
 namespace Components
 {
@@ -337,10 +336,7 @@ namespace Components
 
 	void Events::UI_Init_Hk(int localClientNum)
 	{
-		const auto profile = Flags::HasFlag("startupProfile");
-		const auto started = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		Utils::Hook::Call<void(int)>(0x4A57D0)(localClientNum); // CAll UI_INIT
-		const auto nativeReady = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
 		UIInitTasks_.access([](Callback& tasks)
 		{
@@ -349,14 +345,6 @@ namespace Components
 				func();
 			}
 		});
-		if (profile)
-		{
-			Logger::Print(Game::CON_CHANNEL_SYSTEM,
-				"Startup profile: native UI_Init {:.2f} ms; UI callbacks {:.2f} ms; window -> complete UI {:.2f} ms.\n",
-				std::chrono::duration<double, std::milli>(nativeReady - started).count(),
-				std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - nativeReady).count(),
-				Window::StartupElapsedMilliseconds());
-		}
 	}
 
 	__declspec(naked) void Events::NET_OpenSocks_Hk()

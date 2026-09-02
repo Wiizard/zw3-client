@@ -1,14 +1,10 @@
 
 #include "FastFiles.hpp"
+#include "RawMouse.hpp"
 #include "Window.hpp"
 
 namespace Components
 {
-	namespace
-	{
-		std::atomic<std::int64_t> FirstWindowCreatedNanoseconds = 0;
-	}
-
 	Dvar::Var Window::NoBorder;
 	Dvar::Var Window::NativeCursor;
 
@@ -62,13 +58,11 @@ namespace Components
 
 	bool Window::IsCursorWithin(HWND window)
 	{
-		RECT rect;
-		POINT point;
-		Window::Dimension(window, &rect);
-
-		GetCursorPos(&point);
-
-		return ((point.x - rect.left) > 0 && (point.y - rect.top) > 0 && (rect.right - point.x) > 0 && (rect.bottom - point.y) > 0);
+		if (!window || !IsWindowVisible(window) || IsIconic(window)) return false;
+		RECT rect{};
+		POINT point{};
+		return GetClientRect(window, &rect) && GetCursorPos(&point)
+			&& ScreenToClient(window, &point) && PtInRect(&rect, point);
 	}
 
 	HWND Window::GetWindow()
@@ -76,13 +70,10 @@ namespace Components
 		return Window::MainWindow;
 	}
 
-	double Window::StartupElapsedMilliseconds()
+	bool Window::HasFocus()
 	{
-		const auto created = FirstWindowCreatedNanoseconds.load(std::memory_order_acquire);
-		if (!created) return -1.0;
-		const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
-			std::chrono::steady_clock::now().time_since_epoch()).count();
-		return static_cast<double>(now - created) / 1'000'000.0;
+		return MainWindow && IsWindowVisible(MainWindow) && !IsIconic(MainWindow)
+			&& GetForegroundWindow() == MainWindow;
 	}
 
 	void Window::OnWndMessage(UINT Msg, Utils::Slot<Window::WndProcCallback> callback)
@@ -136,7 +127,7 @@ namespace Components
 
 	int WINAPI Window::ShowCursorHook(BOOL show)
 	{
-		if (Window::NativeCursor.get<bool>() && IsWindow(Window::MainWindow) && GetForegroundWindow() == Window::MainWindow && Window::IsCursorWithin(Window::MainWindow))
+		if (Window::NativeCursor.get<bool>() && Window::HasFocus() && Window::IsCursorWithin(Window::MainWindow))
 		{
 			static int count = 0;
 			(show ? ++count : --count);
@@ -155,20 +146,7 @@ namespace Components
 	HWND WINAPI Window::CreateMainWindow(DWORD dwExStyle, LPCSTR lpClassName, LPCSTR lpWindowName, DWORD dwStyle, int X, int Y, int nWidth, int nHeight, HWND hWndParent, HMENU hMenu, HINSTANCE hInstance, LPVOID lpParam)
 	{
 		Window::MainWindow = CreateWindowExA(dwExStyle, lpClassName, lpWindowName, dwStyle, X, Y, nWidth, nHeight, hWndParent, hMenu, hInstance, lpParam);
-		const auto profile = Flags::HasFlag("startupProfile");
-		if (profile && Window::MainWindow)
-		{
-			std::int64_t unset = 0;
-			const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
-				std::chrono::steady_clock::now().time_since_epoch()).count();
-			FirstWindowCreatedNanoseconds.compare_exchange_strong(unset, now, std::memory_order_release);
-		}
-
 		CreateSignals();
-		if (profile)
-		{
-			Logger::Print(Game::CON_CHANNEL_SYSTEM, "Startup profile: window-created callbacks finished at {:.2f} ms.\n", StartupElapsedMilliseconds());
-		}
 
 		return Window::MainWindow;
 	}
@@ -181,6 +159,13 @@ namespace Components
 
 	BOOL WINAPI Window::MessageHandler(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
 	{
+		if ((Msg == WM_ACTIVATE && (LOWORD(wParam) == WA_INACTIVE || HIWORD(wParam)))
+			|| (Msg == WM_ACTIVATEAPP && !wParam)
+			|| (Msg == WM_SIZE && wParam == SIZE_MINIMIZED))
+		{
+			RawMouse::SuspendMouseInput();
+		}
+
 		// Handle raw input device change events.
 		//
 		// Note that we delegate handling to DeviceChangeSignals(), which interprets
@@ -224,7 +209,7 @@ namespace Components
 		// Draw the cursor if necessary
 		Scheduler::Loop([]
 		{
-			if (Window::NativeCursor.get<bool>() && IsWindow(Window::MainWindow) && GetForegroundWindow() == Window::MainWindow && Window::IsCursorWithin(Window::MainWindow))
+			if (Window::NativeCursor.get<bool>() && Window::HasFocus() && Window::IsCursorWithin(Window::MainWindow))
 			{
 				int value = 0;
 				Window::ApplyCursor();
@@ -250,8 +235,12 @@ namespace Components
 		// Use custom message handler
 		Utils::Hook::Set(0x64D298, Window::MessageHandler);
 
-		Window::OnWndMessage(WM_SETCURSOR, [](WPARAM, LPARAM)
+		Window::OnWndMessage(WM_SETCURSOR, [](WPARAM lParam, LPARAM wParam)
 		{
+			if (!Window::HasFocus() || !Window::IsCursorWithin(Window::MainWindow))
+			{
+				return static_cast<BOOL>(DefWindowProcA(Window::MainWindow, WM_SETCURSOR, wParam, lParam));
+			}
 			Window::ApplyCursor();
 			return TRUE;
 		});

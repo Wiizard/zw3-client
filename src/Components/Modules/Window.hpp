@@ -19,9 +19,9 @@ namespace Components
 		static void Dimension(HWND window, RECT* rect);
 
 		static bool IsCursorWithin(HWND window);
+		static bool HasFocus();
 
 		static HWND GetWindow();
-		static double StartupElapsedMilliseconds();
 
 		static void OnWndMessage(UINT Msg, Utils::Slot<WndProcCallback> callback);
 		static void OnDeviceChange(Utils::Slot<DeviceChangeCallback> callback);

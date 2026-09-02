@@ -35,6 +35,7 @@ namespace Components
 		bool TransitionPending = false;
 		bool SawLoadingState = false;
 		unsigned int MapCommandDepth = 0;
+		void (*NativeDevmapCommand)() = nullptr;
 
 		void RestoreMenus(Game::menuDef_t* only = nullptr)
 		{
@@ -106,14 +107,6 @@ namespace Components
 
 					window.background = preview->material;
 					window.foreColor[3] = 1.0f;
-
-					if (Flags::HasFlag("mapProfile"))
-					{
-						Logger::Print(
-							"SP menu preview: {} -> {}.\n",
-							material ? material->info.name : "none",
-							preview->map);
-					}
 				};
 
 			patchWindow(menu->window);
@@ -146,6 +139,15 @@ namespace Components
 
 			Utils::Hook::Call<void()>(0x4256F0)();
 		}
+
+		void RunDevmapCommand()
+		{
+			Command::ClientParams params;
+			++MapCommandDepth;
+			const auto guard = gsl::finally([] { --MapCommandDepth; });
+			if (params.size() > 1) SPLoadscreens::SetLoadingMap(params[1]);
+			NativeDevmapCommand();
+		}
 	}
 
 	void SPLoadscreens::OnMenuFreed(Game::menuDef_t* menu)
@@ -160,6 +162,7 @@ namespace Components
 		const auto map = Utils::MapPreview::Normalize(name);
 
 		D3D9Ex::BeginMapLoading(map);
+		FastFiles::PrefetchZone(map);
 
 		if (map.empty() || Utils::MapPreview::IsMultiplayer(map))
 		{
@@ -202,8 +205,6 @@ namespace Components
 
 		if (map.empty() || Utils::MapPreview::IsMultiplayer(map)) return;
 
-		const auto start = std::chrono::steady_clock::now();
-
 		Game::GfxImage* image = nullptr;
 
 		for (const auto& variant : Utils::MapPreview::ImageNames(map))
@@ -242,16 +243,6 @@ namespace Components
 				PatchConnectMenu();
 			}
 		}
-
-		if (Flags::HasFlag("mapProfile"))
-		{
-			Logger::Print(
-				"SP preview: {} -> {} in {:.2f} ms.\n",
-				map,
-				image ? image->name : "unavailable",
-				std::chrono::duration<double, std::milli>(
-					std::chrono::steady_clock::now() - start).count());
-		}
 	}
 
 	SPLoadscreens::SPLoadscreens()
@@ -259,6 +250,17 @@ namespace Components
 		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled()) return;
 
 		Utils::Hook(0x609666, RunMapCommand, HOOK_CALL).install()->quick();
+		Scheduler::OnGameInitialized([]
+		{
+			// Unlike map, devmap can use a direct client handler rather than the
+			// server-command dispatch path above. Select its preview before teardown.
+			const auto command = Command::Find("devmap");
+			if (command && command->function && command->function != Game::Cbuf_AddServerText_f)
+			{
+				NativeDevmapCommand = command->function;
+				command->function = RunDevmapCommand;
+			}
+		}, Scheduler::Pipeline::MAIN);
 
 		Events::OnCLDisconnected([](bool)
 			{

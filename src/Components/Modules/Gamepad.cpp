@@ -1826,6 +1826,7 @@ namespace Components
 
 	int Gamepad::CL_MouseEvent_Hk(const int x, const int y, const int dx, const int dy)
 	{
+		if (!Window::HasFocus()) return 0;
 		/*if (IntroInputBlocked.load(std::memory_order_relaxed))
 		{
 			return 0;

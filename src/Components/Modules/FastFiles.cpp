@@ -1,4 +1,6 @@
 #include <zlib.h>
+#include <condition_variable>
+#include <deque>
 #include <Utils/BufferedAesCtr.hpp>
 #include <Utils/IW4xZoneDecoder.hpp>
 
@@ -19,18 +21,49 @@ namespace Components
 		constexpr std::size_t ZW3_ZONE_NONCE_SIZE = 16;
 		Utils::Cryptography::BufferedAesCtr ZW3BatchedCtr;
 		bool UseBatchedZW3Ctr = false;
-		std::atomic_bool InitialStartupLoadPending = false;
-		std::chrono::steady_clock::time_point InitialStartupLoadStart;
-		std::atomic<std::uint64_t> ProfiledZW3Bytes = 0;
-		std::atomic<std::int64_t> ProfiledZW3DecryptNanoseconds = 0;
-		std::atomic_bool ProfileUsedBatchedZW3Ctr = false;
-		std::atomic<std::uint64_t> ProfiledIW4xBytes = 0;
-		std::atomic<std::int64_t> ProfiledIW4xDecodeNanoseconds = 0;
 
-		bool StartupProfilingEnabled()
+		constexpr DWORD FASTFILE_PREFETCH_BUFFER_SIZE = 4u * 1024u * 1024u;
+		std::mutex FastFilePrefetchMutex;
+		std::condition_variable_any FastFilePrefetchCondition;
+		std::deque<std::filesystem::path> FastFilePrefetchQueue;
+		std::unordered_set<std::string> ScheduledFastFilePrefetches;
+		std::jthread FastFilePrefetchThread;
+
+		void RunFastFilePrefetch(const std::stop_token stopToken)
 		{
-			static const bool enabled = Flags::HasFlag("startupProfile");
-			return enabled;
+			std::vector<std::byte> buffer(FASTFILE_PREFETCH_BUFFER_SIZE);
+
+			while (!stopToken.stop_requested())
+			{
+				std::filesystem::path path;
+				{
+					std::unique_lock lock(FastFilePrefetchMutex);
+					if (!FastFilePrefetchCondition.wait(lock, stopToken, [&]
+					{
+						return !FastFilePrefetchQueue.empty();
+					})) break;
+
+					if (stopToken.stop_requested()) break;
+					path = std::move(FastFilePrefetchQueue.front());
+					FastFilePrefetchQueue.pop_front();
+				}
+
+				const auto file = CreateFileW(path.c_str(), GENERIC_READ,
+					FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+					FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+
+				if (file != INVALID_HANDLE_VALUE)
+				{
+					DWORD bytesRead = 0;
+					while (!stopToken.stop_requested() &&
+						ReadFile(file, buffer.data(), static_cast<DWORD>(buffer.size()), &bytesRead, nullptr) && bytesRead > 0)
+					{
+						// The shared file cache retains the data; no per-zone copy is kept.
+					}
+
+					CloseHandle(file);
+				}
+			}
 		}
 	}
 
@@ -169,13 +202,6 @@ namespace Components
 	void FastFiles::LoadInitialZones(Game::XZoneInfo* zoneInfo, unsigned int zoneCount, int sync)
 	{
 		g_loadingInitialZones.set(true);
-		InitialStartupLoadPending.store(true, std::memory_order_release);
-		InitialStartupLoadStart = std::chrono::steady_clock::now();
-		ProfiledZW3Bytes.store(0, std::memory_order_relaxed);
-		ProfiledZW3DecryptNanoseconds.store(0, std::memory_order_relaxed);
-		ProfileUsedBatchedZW3Ctr.store(false, std::memory_order_relaxed);
-		ProfiledIW4xBytes.store(0, std::memory_order_relaxed);
-		ProfiledIW4xDecodeNanoseconds.store(0, std::memory_order_relaxed);
 
 		std::vector<Game::XZoneInfo> data;
 		data.reserve(zoneCount + 5);
@@ -326,28 +352,15 @@ namespace Components
 			data.push_back(info);
 		}
 
+		for (const auto& zone : data)
+		{
+			if (zone.name) PrefetchZone(zone.name);
+		}
+
 		Game::DB_LoadXAssets(data.data(), data.size(), sync);
 
 		Scheduler::OnGameInitialized([]
 		{
-			if (InitialStartupLoadPending.exchange(false, std::memory_order_acq_rel))
-			{
-				if (StartupProfilingEnabled())
-				{
-					const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-						std::chrono::steady_clock::now() - InitialStartupLoadStart).count();
-					const auto decryptMs = static_cast<double>(ProfiledZW3DecryptNanoseconds.load(std::memory_order_relaxed)) / 1'000'000.0;
-					const auto decryptMiB = static_cast<double>(ProfiledZW3Bytes.load(std::memory_order_relaxed)) / (1024.0 * 1024.0);
-					Logger::Print(Game::CON_CHANNEL_SYSTEM,
-						"Startup profile: initial zones {} ms; protected decrypt {:.2f} MiB in {:.2f} ms ({}).\n",
-						elapsed, decryptMiB, decryptMs, ProfileUsedBatchedZW3Ctr.load(std::memory_order_relaxed) ? "batched CNG" : "legacy CTR");
-					Logger::Print(Game::CON_CHANNEL_SYSTEM,
-						"Startup profile: IW4x decode {:.2f} MiB in {:.2f} ms ({}).\n",
-						static_cast<double>(ProfiledIW4xBytes.load(std::memory_order_relaxed)) / (1024.0 * 1024.0),
-						static_cast<double>(ProfiledIW4xDecodeNanoseconds.load(std::memory_order_relaxed)) / 1'000'000.0,
-						FastFiles::UseExperimentalStartup() ? "block decoder" : "legacy decoder");
-				}
-			}
 			g_loadingInitialZones.set(false);
 		}, Scheduler::Pipeline::MAIN);
 	}
@@ -381,13 +394,6 @@ namespace Components
 	bool FastFiles::Ready()
 	{
 		return (Game::Sys_IsDatabaseReady() && Game::Sys_IsDatabaseReady2());
-	}
-
-	bool FastFiles::UseExperimentalStartup()
-	{
-		// One switch restores the previous startup path for quick A/B testing.
-		static const bool enabled = !Flags::HasFlag("legacyStartup");
-		return enabled;
 	}
 
 	const char* FastFiles::GetZoneLocation(const char* file)
@@ -450,6 +456,75 @@ namespace Components
 	void FastFiles::AddZonePath(const std::string& path)
 	{
 		FastFiles::ZonePaths.push_back(path);
+	}
+
+	void FastFiles::PrefetchZone(const std::string& zoneName)
+	{
+		if (zoneName.empty() || Dedicated::IsEnabled() || ZoneBuilder::IsEnabled()) return;
+
+		auto fileName = zoneName;
+		if (Utils::String::EndsWith(fileName, ".ff"))
+		{
+			fileName.resize(fileName.size() - 3);
+		}
+
+		const auto fastFileName = std::filesystem::path(fileName + ".ff");
+		std::vector<std::filesystem::path> relativeDirectories;
+		if (*Game::fs_gameDirVar && *Game::fs_basepath)
+		{
+			relativeDirectories.emplace_back(GetZoneLocation(fileName.c_str()));
+		}
+		else
+		{
+			// Component construction runs before the game's filesystem dvars exist.
+			// Search the same high-priority install directories directly so initial
+			// read-ahead can begin at client entry rather than at window creation.
+			relativeDirectories =
+			{
+				"zone\\patch", "zone\\dlc", "zw3",
+			};
+		}
+
+		const std::array<const char*, 2> roots =
+		{
+			FileSystem::Sys_DefaultInstallPath_Hk(),
+			FileSystem::Sys_HomePath_Hk(),
+		};
+
+		std::filesystem::path resolvedPath;
+		for (const auto* root : roots)
+		{
+			if (!root || !*root) continue;
+
+			for (const auto& relativeDirectory : relativeDirectories)
+			{
+				auto candidate = (std::filesystem::path(root) / relativeDirectory / fastFileName).lexically_normal();
+				std::error_code error;
+				if (std::filesystem::is_regular_file(candidate, error) && !error)
+				{
+					resolvedPath = std::move(candidate);
+					break;
+				}
+			}
+
+			if (!resolvedPath.empty()) break;
+		}
+
+		if (resolvedPath.empty()) return;
+
+		const auto identity = Utils::String::ToLower(resolvedPath.string());
+		{
+			std::lock_guard lock(FastFilePrefetchMutex);
+			if (!ScheduledFastFilePrefetches.emplace(identity).second) return;
+
+			FastFilePrefetchQueue.push_back(std::move(resolvedPath));
+			if (!FastFilePrefetchThread.joinable())
+			{
+				FastFilePrefetchThread = std::jthread(RunFastFilePrefetch);
+			}
+		}
+
+		FastFilePrefetchCondition.notify_one();
 	}
 
 	std::string_view FastFiles::Current()
@@ -539,6 +614,13 @@ namespace Components
 	void FastFiles::InitZW3Crypto(const unsigned char* nonce)
 	{
 		FastFiles::ResetZW3Crypto();
+		if (ZW3BatchedCtr.initialize(nonce, ZW3_ZONE_KEY.data(), static_cast<ULONG>(ZW3_ZONE_KEY.size())))
+		{
+			UseBatchedZW3Ctr = true;
+			return;
+		}
+
+		// Retain a compatibility fallback if the platform's CNG provider is unavailable.
 		register_cipher(&aes_desc);
 		const auto aes = find_cipher("aes");
 		if (aes < 0 || ctr_start(aes, nonce, ZW3_ZONE_KEY.data(), static_cast<int>(ZW3_ZONE_KEY.size()), 0, 0, &FastFiles::ZW3CTR) != CRYPT_OK)
@@ -547,42 +629,6 @@ namespace Components
 		}
 
 		FastFiles::ZW3CTRInitialized = true;
-
-		if (FastFiles::UseExperimentalStartup() && ZW3BatchedCtr.initialize(nonce, ZW3_ZONE_KEY.data(), static_cast<ULONG>(ZW3_ZONE_KEY.size())))
-		{
-			// Validate CNG's batched ECB/CTR adapter against the exact legacy
-			// implementation, including a deliberately split final block.
-			std::array<unsigned char, 79> reference{};
-			for (std::size_t i = 0; i < reference.size(); ++i)
-			{
-				reference[i] = static_cast<unsigned char>((i * 37u) ^ 0xA5u);
-			}
-
-			auto accelerated = reference;
-			symmetric_CTR validationCtr{};
-			const auto validationStarted = ctr_start(aes, nonce, ZW3_ZONE_KEY.data(), static_cast<int>(ZW3_ZONE_KEY.size()), 0, 0, &validationCtr) == CRYPT_OK;
-			const auto referenceValid = validationStarted &&
-				ctr_decrypt(reference.data(), reference.data(), 7, &validationCtr) == CRYPT_OK &&
-				ctr_decrypt(reference.data() + 7, reference.data() + 7, static_cast<unsigned long>(reference.size() - 7), &validationCtr) == CRYPT_OK;
-			const auto acceleratedValid = ZW3BatchedCtr.decrypt(accelerated.data(), 7) &&
-				ZW3BatchedCtr.decrypt(accelerated.data() + 7, accelerated.size() - 7);
-
-			if (validationStarted)
-			{
-				ctr_done(&validationCtr);
-			}
-
-			if (referenceValid && acceleratedValid && reference == accelerated &&
-				ZW3BatchedCtr.restart(nonce))
-			{
-				UseBatchedZW3Ctr = true;
-			}
-			else
-			{
-				ZW3BatchedCtr.reset();
-				Logger::Print(Game::CON_CHANNEL_SYSTEM, "FastFiles: protected-zone acceleration validation failed; using legacy CTR.\n");
-			}
-		}
 	}
 
 	void FastFiles::ReadXFileHeader(void* buffer, int size)
@@ -777,21 +823,9 @@ namespace Components
 				Logger::Error(Game::ERR_FATAL, "Invalid protected ZW3 zone read size");
 			}
 
-			const auto profile = StartupProfilingEnabled() && InitialStartupLoadPending.load(std::memory_order_acquire);
-			const auto started = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			const auto decrypted = UseBatchedZW3Ctr
 				? ZW3BatchedCtr.decrypt(reinterpret_cast<unsigned char*>(buffer), static_cast<std::size_t>(size))
 				: FastFiles::ZW3CTRInitialized && ctr_decrypt(reinterpret_cast<unsigned char*>(buffer), reinterpret_cast<unsigned char*>(buffer), static_cast<unsigned long>(size), &FastFiles::ZW3CTR) == CRYPT_OK;
-			if (profile)
-			{
-				ProfiledZW3Bytes.fetch_add(static_cast<std::uint64_t>(size), std::memory_order_relaxed);
-				ProfiledZW3DecryptNanoseconds.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(
-					std::chrono::steady_clock::now() - started).count(), std::memory_order_relaxed);
-				if (UseBatchedZW3Ctr)
-				{
-					ProfileUsedBatchedZW3Ctr.store(true, std::memory_order_relaxed);
-				}
-			}
 			if (!decrypted)
 			{
 				Logger::Error(Game::ERR_FATAL, "Unable to decrypt ZW3 zone data");
@@ -799,30 +833,11 @@ namespace Components
 		}
 		else if (FastFiles::IsIW4xZone)
 		{
-			const auto profile = StartupProfilingEnabled() && InitialStartupLoadPending.load(std::memory_order_acquire);
-			const auto started = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-			if (FastFiles::UseExperimentalStartup() && size > 0)
+			if (size > 0)
 			{
 				auto previous = static_cast<unsigned char>(FastFiles::LastByteRead);
 				Utils::DecodeIW4xZone(reinterpret_cast<unsigned char*>(buffer), static_cast<std::size_t>(size), previous);
 				FastFiles::LastByteRead = static_cast<char>(previous);
-			}
-			else
-			{
-				for (int i = 0; i < size; ++i)
-				{
-					buffer[i] ^= FastFiles::LastByteRead;
-					Utils::RotLeft(buffer[i], 4);
-					buffer[i] ^= -1;
-					Utils::RotRight(buffer[i], 6);
-					FastFiles::LastByteRead = buffer[i];
-				}
-			}
-			if (profile && size > 0)
-			{
-				ProfiledIW4xBytes.fetch_add(static_cast<std::uint64_t>(size), std::memory_order_relaxed);
-				ProfiledIW4xDecodeNanoseconds.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(
-					std::chrono::steady_clock::now() - started).count(), std::memory_order_relaxed);
 			}
 		}
 	}
@@ -990,6 +1005,23 @@ namespace Components
 		FastFiles::AddZonePath("zone\\dlc\\");
 		FastFiles::AddZonePath("zw3\\");
 
+		// Start the predictable initial-zone reads while the engine is still
+		// completing renderer/UI setup. The normal database loader remains the
+		// authority; this only populates Windows' shared file cache ahead of it.
+		if (!Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled())
+		{
+			constexpr std::array initialZones =
+			{
+				"zw3_common", "iw4x_patch_mp", "zw3",
+			};
+
+			for (const auto* zone : initialZones)
+			{
+				if (Flags::HasFlag("dev") && std::strcmp(zone, "zw3") == 0) continue;
+				PrefetchZone(zone);
+			}
+		}
+
 		if (!Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled())
 		{
 			Scheduler::Loop([]
@@ -1025,6 +1057,7 @@ namespace Components
 			info.allocFlags = 1;//0x01000000;
 			info.freeFlags = 0;
 
+			FastFiles::PrefetchZone(info.name);
 			Game::DB_LoadXAssets(&info, 1, true);
 		});
 
@@ -1033,5 +1066,19 @@ namespace Components
 			Logger::Print("Waiting for database...\n");
 			while (!Game::Sys_IsDatabaseReady()) std::this_thread::sleep_for(100ms);
 		});
+	}
+
+	void FastFiles::preDestroy()
+	{
+		if (FastFilePrefetchThread.joinable())
+		{
+			FastFilePrefetchThread.request_stop();
+			FastFilePrefetchCondition.notify_all();
+			FastFilePrefetchThread.join();
+		}
+
+		std::lock_guard lock(FastFilePrefetchMutex);
+		FastFilePrefetchQueue.clear();
+		ScheduledFastFilePrefetches.clear();
 	}
 }

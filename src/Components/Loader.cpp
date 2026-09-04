@@ -72,6 +72,7 @@
 #include "Modules/Vote.hpp"
 #include "Modules/Weapon.hpp"
 #include "Modules/Window.hpp"
+#include "Modules/ZoneConverter.hpp"
 #include "Modules/Sound.hpp"
 #include "Modules/SPLoadscreens.hpp"
 #include "Modules/ZW3Changelog.hpp"
@@ -128,6 +129,7 @@ namespace Components
 		Register(new IPCPipe());
 		Register(new Network());
 		Register(new Logger());
+		Register(new ZoneConverter());
 		Register(new UIScript());
 		Register(new ZoneBuilder());
 

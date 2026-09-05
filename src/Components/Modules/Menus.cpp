@@ -13,6 +13,36 @@
 
 namespace Components
 {
+	namespace
+	{
+		const char EmptyPlayerPerk[] = "";
+
+		// OP_GET_PLAYER_PERK is evaluated by menu expressions every frame,
+		// including loading/disconnect transitions with no cgame. Its stock
+		// implementation reports an error on every such evaluation. Defer the
+		// query until cgame exists, using the same empty-string operand as the
+		// engine's unavailable-player result. Active-match evaluation is intact.
+		__declspec(naked) void EvaluatePlayerPerkWhenReady()
+		{
+			__asm
+			{
+				pushad
+				push eax
+				mov eax, 43EB20h
+				call eax
+				add esp, 4
+				test eax, eax
+				popad
+				jnz ready
+				mov dword ptr [esi], 2
+				mov dword ptr [esi + 4], offset EmptyPlayerPerk
+				retn
+			ready:
+				push 62AA10h
+				retn
+			}
+		}
+	}
 	// NO LONGER NEEDED: decltype(&Game::DB_FindXAssetHeader) Menus::DB_FindXAssetHeader_Original = nullptr;
 
 	// As of now it is not sure whether supporting data needs to be reallocated
@@ -2368,6 +2398,8 @@ namespace Components
 		}
 
 		if (Dedicated::IsEnabled()) return;
+
+		Utils::Hook(0x46E21B, EvaluatePlayerPerkWhenReady, HOOK_CALL).install()->quick();
 
 		// The stock ASSET_TYPE_MENU clone handler copies runtime state from the existing menu to its
 		// replacement, assuming both menus have identical item layouts. Disable it to prevent state

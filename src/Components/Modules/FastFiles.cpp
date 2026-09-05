@@ -1084,6 +1084,9 @@ namespace Components
 		FastFiles::AddZonePath("zone\\dlc\\");
 		FastFiles::AddZonePath("zw3\\");
 
+		FastFiles::PrefetchZone("zw3_common");
+		if (!Flags::HasFlag("dev")) FastFiles::PrefetchZone("zw3");
+
 		// Register this before the main-menu module so a frame where the
 		// database becomes ready and main_text opens cannot lose the phase edge.
 		Scheduler::Loop([]

@@ -1,5 +1,6 @@
 #include "D3D9Ex.hpp"
 #include "FastFiles.hpp"
+#include "Window.hpp"
 #include <Utils/StagedTextureUpload.hpp>
 
 namespace Components
@@ -13,8 +14,12 @@ namespace Components
 
 		bool UseStagedUploads()
 		{
-			return StartupTextureUploads.load(std::memory_order_relaxed)
-				|| MapTextureUploads.load(std::memory_order_relaxed);
+			// Staging is only useful for the D3D9Ex upload path.  On the normal
+			// D3D9 path it adds an extra system-memory texture and UpdateTexture
+			// for every image, which needlessly duplicates startup/map I/O.
+			return D3D9Ex::IsD3D9ExEnabled()
+				&& (StartupTextureUploads.load(std::memory_order_relaxed)
+				|| MapTextureUploads.load(std::memory_order_relaxed));
 		}
 
 		struct ImageUploadScope;
@@ -53,8 +58,14 @@ namespace Components
 		MapTextureUploads.store(true, std::memory_order_relaxed);
 	}
 
+	bool D3D9Ex::IsD3D9ExEnabled()
+	{
+		return RUseD3D9Ex.get<bool>();
+	}
+
 	int D3D9Ex::LoadTexture(Game::GfxImageLoadDef** loadDef, Game::GfxImage* image)
 	{
+		Window::PumpLoadingEvents();
 		if (!UseStagedUploads())
 			return Game::Load_Texture(loadDef, image);
 		ImageUploadScope upload(image);
@@ -63,6 +74,7 @@ namespace Components
 
 	bool D3D9Ex::LoadImageWithReader(Game::GfxImage* image, Game::Reader_t reader)
 	{
+		Window::PumpLoadingEvents();
 		if (!UseStagedUploads())
 			return Game::Image_LoadFromFileWithReader(image, reader);
 		ImageUploadScope upload(image);

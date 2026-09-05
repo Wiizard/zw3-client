@@ -375,6 +375,12 @@ namespace Components
 
 	QuickPatch::QuickPatch()
 	{
+		// The stock renderer compares the machine against its old hardware
+		// recommendation and opens the "run with optimized settings" prompt.
+		// That check is stale for this client and can repeatedly interrupt startup
+		// after renderer/config changes, so disable the prompt for clients too.
+		Utils::Hook::Nop(0x60BC52, 0x15);
+
 		// Filtering any mapents that is intended for Spec:Ops gamemode (CODO) and prevent them from spawning
 		Utils::Hook(0x5FBD6E, QuickPatch::IsDynClassname_Stub, HOOK_CALL).install()->quick();
 

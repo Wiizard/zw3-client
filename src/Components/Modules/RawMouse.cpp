@@ -61,7 +61,7 @@ namespace Components
 	void
 		ClampMousePos(POINT& p)
 	{
-		if (!Window::HasFocus()) return;
+		if (!Window::HasFocus() || Window::IsLoadingScreenMovable() || Window::IsDragging()) return;
 		tagRECT rc;
 		if (GetWindowRect(Window::GetWindow(), &rc) != TRUE)
 			return;
@@ -408,7 +408,9 @@ namespace Components
 	bool
 		RawMouse::ToggleRawInput(bool e)
 	{
-		e = e && Window::HasFocus();
+		// RIDEV_NOLEGACY suppresses the button/motion messages needed to drag
+		// a loading window. Keep the OS mouse available until loading finishes.
+		e = e && Window::HasFocus() && !Window::IsLoadingScreenMovable() && !Window::IsDragging();
 		// If the Dvar is off, force disable regardless of requested state. We
 		// don't want to enable raw input if the user explicitly turned it off in
 		// the config.
@@ -489,6 +491,12 @@ namespace Components
 	void
 		RawMouse::IN_Frame()
 	{
+		if (Window::IsLoadingScreenMovable() || Window::IsDragging())
+		{
+			SuspendMouseInput();
+			Window::PumpLoadingEvents();
+			return;
+		}
 		// Only toggle raw input on if the mouse is actually inside our window,
 		// otherwise we steal input from the rest of the OS.
 		//
@@ -503,7 +511,7 @@ namespace Components
 	BOOL
 		RawMouse::IN_ClipCursor()
 	{
-		if (!Window::HasFocus())
+		if (!Window::HasFocus() || Window::IsLoadingScreenMovable() || Window::IsDragging())
 		{
 			ReleaseMouseCursor();
 			return FALSE;
@@ -538,7 +546,7 @@ namespace Components
 	void
 		RawMouse::IN_MouseMove()
 	{
-		if (!Window::HasFocus())
+		if (!Window::HasFocus() || Window::IsLoadingScreenMovable() || Window::IsDragging())
 		{
 			SuspendMouseInput();
 			return;

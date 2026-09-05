@@ -8,6 +8,7 @@ namespace Components
 		D3D9Ex();
 		static int LoadTexture(Game::GfxImageLoadDef** loadDef, Game::GfxImage* image);
 		static void BeginMapLoading(const std::string& map);
+		static bool IsD3D9ExEnabled();
 
 	private:
 		class D3D9Device : public IDirect3DDevice9

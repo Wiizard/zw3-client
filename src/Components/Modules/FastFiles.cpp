@@ -5,6 +5,7 @@
 #include <Utils/IW4xZoneDecoder.hpp>
 
 #include "FastFiles.hpp"
+#include "Renderer.hpp"
 
 namespace Components
 {
@@ -21,6 +22,9 @@ namespace Components
 		constexpr std::size_t ZW3_ZONE_NONCE_SIZE = 16;
 		Utils::Cryptography::BufferedAesCtr ZW3BatchedCtr;
 		bool UseBatchedZW3Ctr = false;
+		std::atomic<std::int64_t> InitialLoadStart{};
+		std::atomic_bool InitialDatabaseReadyLogged = false;
+		std::atomic_bool MainMenuReached = false;
 
 		constexpr DWORD FASTFILE_PREFETCH_BUFFER_SIZE = 4u * 1024u * 1024u;
 		std::mutex FastFilePrefetchMutex;
@@ -202,6 +206,10 @@ namespace Components
 	void FastFiles::LoadInitialZones(Game::XZoneInfo* zoneInfo, unsigned int zoneCount, int sync)
 	{
 		g_loadingInitialZones.set(true);
+		MainMenuReached.store(false, std::memory_order_release);
+		InitialLoadStart.store(std::chrono::duration_cast<std::chrono::nanoseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_release);
+		InitialDatabaseReadyLogged.store(false, std::memory_order_release);
 
 		std::vector<Game::XZoneInfo> data;
 		data.reserve(zoneCount + 5);
@@ -266,6 +274,14 @@ namespace Components
 		}
 
 		FastFiles::LoadDLCUIZones(data.data(), data.size(), sync);
+
+		const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+		const auto message = Utils::String::Format(
+			"Startup timing: initial zones returned in {:.2f} ms.\n",
+			static_cast<double>(now - InitialLoadStart.load(std::memory_order_acquire)) / 1'000'000.0);
+		Logger::Print(Game::CON_CHANNEL_SYSTEM, "{}", message);
+		Utils::IO::WriteFile("zw3/logs/load_timings.log", message, true);
 
 		if (loadDevModSeparately)
 		{
@@ -361,8 +377,58 @@ namespace Components
 
 		Scheduler::OnGameInitialized([]
 		{
+			const auto started = InitialLoadStart.load(std::memory_order_acquire);
+			if (started && !InitialDatabaseReadyLogged.exchange(true, std::memory_order_acq_rel))
+			{
+				const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+					std::chrono::steady_clock::now().time_since_epoch()).count();
+				Logger::Print(Game::CON_CHANNEL_SYSTEM,
+					"Startup timing: initial database ready in {:.2f} ms.\n",
+					static_cast<double>(now - started) / 1'000'000.0);
+			}
+
 			g_loadingInitialZones.set(false);
 		}, Scheduler::Pipeline::MAIN);
+
+	}
+
+	void FastFiles::MarkMainMenuReady()
+	{
+		if (!InitialLoadStart.load(std::memory_order_acquire) || !Ready()) return;
+		const auto started = InitialLoadStart.exchange(0, std::memory_order_acq_rel);
+		MainMenuReached.store(true, std::memory_order_release);
+		if (!started) return;
+
+		const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+		const auto message = Utils::String::Format(
+			"Startup timing: main_text reached in {:.2f} ms.\n",
+			static_cast<double>(now - started) / 1'000'000.0);
+		Logger::Print(Game::CON_CHANNEL_SYSTEM, "{}", message);
+		Utils::IO::WriteFile("zw3/logs/load_timings.log", message, true);
+		FILETIME created{}, exited{}, kernel{}, user{}, current{};
+		if (GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user))
+		{
+			GetSystemTimeAsFileTime(&current);
+			ULARGE_INTEGER begin{}, end{};
+			begin.LowPart = created.dwLowDateTime;
+			begin.HighPart = created.dwHighDateTime;
+			end.LowPart = current.dwLowDateTime;
+			end.HighPart = current.dwHighDateTime;
+			static bool loggedProcessStartup = false;
+			if (!loggedProcessStartup)
+			{
+				loggedProcessStartup = true;
+				Utils::IO::WriteFile("zw3/logs/load_timings.log", Utils::String::Format(
+					"Startup timing: process to main_text in {:.2f} ms.\n", (end.QuadPart - begin.QuadPart) / 10'000.0), true);
+			}
+		}
+		Renderer::FinishLoading();
+	}
+
+	bool FastFiles::MainMenuReady()
+	{
+		return MainMenuReached.load(std::memory_order_acquire);
 	}
 
 	// Name is a bit weird, due to FasFileS and ExistS :P
@@ -512,19 +578,32 @@ namespace Components
 
 		if (resolvedPath.empty()) return;
 
-		const auto identity = Utils::String::ToLower(resolvedPath.string());
+		auto enqueue = [](const std::filesystem::path& path)
 		{
+			const auto identity = Utils::String::ToLower(path.string());
 			std::lock_guard lock(FastFilePrefetchMutex);
-			if (!ScheduledFastFilePrefetches.emplace(identity).second) return;
+			if (!ScheduledFastFilePrefetches.emplace(identity).second) return false;
 
-			FastFilePrefetchQueue.push_back(std::move(resolvedPath));
+			FastFilePrefetchQueue.push_back(path);
 			if (!FastFilePrefetchThread.joinable())
 			{
 				FastFilePrefetchThread = std::jthread(RunFastFilePrefetch);
 			}
+			return true;
+		};
+
+		bool queued = enqueue(resolvedPath);
+		// Usermap assets are commonly split between the zone and a same-named
+		// IWD. Warm that archive as well; it is otherwise invisible to the zone
+		// prefetcher and can dominate large MW3 conversion load times.
+		const auto usermapArchive = resolvedPath.parent_path() / (resolvedPath.stem().string() + ".iwd");
+		std::error_code archiveError;
+		if (std::filesystem::is_regular_file(usermapArchive, archiveError) && !archiveError)
+		{
+			queued = enqueue(usermapArchive) || queued;
 		}
 
-		FastFilePrefetchCondition.notify_one();
+		if (queued) FastFilePrefetchCondition.notify_one();
 	}
 
 	std::string_view FastFiles::Current()
@@ -1005,22 +1084,25 @@ namespace Components
 		FastFiles::AddZonePath("zone\\dlc\\");
 		FastFiles::AddZonePath("zw3\\");
 
-		// Start the predictable initial-zone reads while the engine is still
-		// completing renderer/UI setup. The normal database loader remains the
-		// authority; this only populates Windows' shared file cache ahead of it.
-		if (!Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled())
+		// Register this before the main-menu module so a frame where the
+		// database becomes ready and main_text opens cannot lose the phase edge.
+		Scheduler::Loop([]
 		{
-			constexpr std::array initialZones =
-			{
-				"zw3_common", "iw4x_patch_mp", "zw3",
-			};
+			const auto started = InitialLoadStart.load(std::memory_order_acquire);
+			if (!started || InitialDatabaseReadyLogged.load(std::memory_order_acquire)
+				|| !Game::Sys_IsDatabaseReady2()) return;
 
-			for (const auto* zone : initialZones)
+			const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+				std::chrono::steady_clock::now().time_since_epoch()).count();
+			if (!InitialDatabaseReadyLogged.exchange(true, std::memory_order_acq_rel))
 			{
-				if (Flags::HasFlag("dev") && std::strcmp(zone, "zw3") == 0) continue;
-				PrefetchZone(zone);
+				const auto message = Utils::String::Format(
+					"Startup timing: database ready in {:.2f} ms.\n",
+					static_cast<double>(now - started) / 1'000'000.0);
+				Logger::Print(Game::CON_CHANNEL_SYSTEM, "{}", message);
+				Utils::IO::WriteFile("zw3/logs/load_timings.log", message, true);
 			}
-		}
+		}, Scheduler::Pipeline::MAIN);
 
 		if (!Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled())
 		{

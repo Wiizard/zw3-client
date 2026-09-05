@@ -36,6 +36,26 @@ namespace Components
 		bool SawLoadingState = false;
 		unsigned int MapCommandDepth = 0;
 		void (*NativeDevmapCommand)() = nullptr;
+		std::chrono::steady_clock::time_point MapLoadStart{};
+		std::string TimedMap;
+		bool MapTimingActive = false;
+		bool MapTimingSawLoadingState = false;
+
+		bool IsMainMenuOpen()
+		{
+			if (!Game::uiContext) return false;
+
+			for (int i = 0; i < Game::uiContext->openMenuCount; ++i)
+			{
+				const auto* menu = Game::uiContext->menuStack[i];
+				if (menu && menu->window.name && Utils::String::Compare(menu->window.name, "main_text"))
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
 
 		void RestoreMenus(Game::menuDef_t* only = nullptr)
 		{
@@ -160,9 +180,25 @@ namespace Components
 		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled()) return;
 
 		const auto map = Utils::MapPreview::Normalize(name);
+		if (!map.empty() && (!MapTimingActive || TimedMap != map))
+		{
+			TimedMap = map;
+			MapLoadStart = std::chrono::steady_clock::now();
+			MapTimingActive = true;
+			MapTimingSawLoadingState = false;
+		}
 
 		D3D9Ex::BeginMapLoading(map);
 		FastFiles::PrefetchZone(map);
+		// The engine loads the lightweight *_load zone before the main map
+		// zone.  Start both reads as soon as map/devmap is issued so large
+		// maps (notably the MW3 conversions) can warm the file cache in
+		// parallel with the disconnect/loading-screen transition.
+		if (!map.empty() && !map.ends_with("_load"))
+		{
+			FastFiles::PrefetchZone(map + "_load");
+			FastFiles::PrefetchZone("patch_" + map);
+		}
 
 		if (map.empty() || Utils::MapPreview::IsMultiplayer(map))
 		{
@@ -304,10 +340,44 @@ namespace Components
 
 		Scheduler::Loop([]
 			{
-				if (!TransitionPending) return;
+			if (IsMainMenuOpen())
+			{
+				FastFiles::MarkMainMenuReady();
+			}
 
 				const auto state =
 					*reinterpret_cast<Game::connstate_t*>(0xB2C540);
+
+				// This is intentionally independent of the SP load-screen state:
+				// multiplayer map loads clear the custom preview immediately, but
+				// still need the same end-to-end timing measurement.
+				if (MapTimingActive)
+				{
+					if (state >= Game::CA_CONNECTING && state < Game::CA_ACTIVE)
+					{
+						MapTimingSawLoadingState = true;
+					}
+
+					if (MapTimingSawLoadingState && state == Game::CA_ACTIVE)
+					{
+						const auto message = Utils::String::Format(
+							"Map timing: {} reached active in {:.2f} ms.\n",
+							TimedMap,
+							std::chrono::duration<double, std::milli>(
+								std::chrono::steady_clock::now() - MapLoadStart).count());
+						Logger::Print(Game::CON_CHANNEL_SYSTEM, "{}", message);
+						Utils::IO::WriteFile("zw3/logs/load_timings.log", message, true);
+						MapTimingActive = false;
+					}
+					else if (MapTimingSawLoadingState && state == Game::CA_DISCONNECTED)
+					{
+						Logger::Print(Game::CON_CHANNEL_SYSTEM,
+							"Map timing: {} load aborted before active.\n", TimedMap);
+						MapTimingActive = false;
+					}
+				}
+
+				if (!TransitionPending) return;
 
 				if (state >= Game::CA_CONNECTING && state < Game::CA_ACTIVE)
 				{

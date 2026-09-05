@@ -13,6 +13,8 @@ namespace Components
 
 		static int Width();
 		static int Height();
+		static bool IsDeviceRecoveryActive();
+		static void FinishLoading();
 
 		static void OnBackendFrame(Utils::Slot<BackendCallback> callback);
 		static void OnNextBackendFrame(Utils::Slot<BackendCallback> callback);

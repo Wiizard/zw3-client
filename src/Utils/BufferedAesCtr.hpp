@@ -19,7 +19,10 @@ namespace Utils::Cryptography
 	{
 	public:
 		static constexpr std::size_t BlockSize = 16;
-		static constexpr std::size_t BatchSize = 64 * 1024;
+		// Fastfiles are read in many small chunks. A larger keystream batch
+		// reduces BCrypt calls and counter-generation overhead without changing
+		// the stream position or output semantics.
+		static constexpr std::size_t BatchSize = 1024 * 1024;
 
 		BufferedAesCtr() = default;
 		BufferedAesCtr(const BufferedAesCtr&) = delete;

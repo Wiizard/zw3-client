@@ -12,6 +12,8 @@ namespace Components
 		static void PrefetchZone(const std::string& zoneName);
 		static std::string_view Current();
 		static bool Ready();
+		static void MarkMainMenuReady();
+		static bool MainMenuReady();
 		static bool Exists(const std::string& file);
 		static bool HasZW3CommonZone();
 		static bool IsZombieZoneName(std::string_view zoneName);

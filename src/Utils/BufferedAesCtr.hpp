@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <vector>
+#include <emmintrin.h>
 
 #pragma comment(lib, "Bcrypt.lib")
 
@@ -115,6 +116,12 @@ namespace Utils::Cryptography
 				const auto count = (std::min)(size, BatchSize - this->keyStreamOffset_);
 				const auto* stream = this->keyStream_.data() + this->keyStreamOffset_;
 				std::size_t i = 0;
+				for (; count - i >= 16; i += 16)
+				{
+					const auto input = _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i));
+					const auto mask = _mm_loadu_si128(reinterpret_cast<const __m128i*>(stream + i));
+					_mm_storeu_si128(reinterpret_cast<__m128i*>(data + i), _mm_xor_si128(input, mask));
+				}
 				for (; i + sizeof(std::uint64_t) <= count; i += sizeof(std::uint64_t))
 				{
 					std::uint64_t input = 0;
@@ -139,14 +146,22 @@ namespace Utils::Cryptography
 	private:
 		bool refill()
 		{
+			std::uint32_t low = 0;
+			std::memcpy(&low, this->counter_.data(), sizeof(low));
 			for (std::size_t offset = 0; offset < BatchSize; offset += BlockSize)
 			{
-				std::memcpy(this->counterBlocks_.data() + offset, this->counter_.data(), BlockSize);
-				for (auto& byte : this->counter_)
+				std::memcpy(this->counterBlocks_.data() + offset, &low, sizeof(low));
+				std::memcpy(this->counterBlocks_.data() + offset + sizeof(low),
+					this->counter_.data() + sizeof(low), BlockSize - sizeof(low));
+				if (++low == 0)
 				{
-					if (++byte != 0) break;
+					for (std::size_t byte = sizeof(low); byte < BlockSize; ++byte)
+					{
+						if (++this->counter_[byte] != 0) break;
+					}
 				}
 			}
+			std::memcpy(this->counter_.data(), &low, sizeof(low));
 
 			ULONG written = 0;
 			if (BCryptEncrypt(this->key_, this->counterBlocks_.data(), static_cast<ULONG>(BatchSize),

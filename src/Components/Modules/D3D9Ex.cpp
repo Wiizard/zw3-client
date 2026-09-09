@@ -1,5 +1,6 @@
 #include "D3D9Ex.hpp"
 #include "FastFiles.hpp"
+#include "Renderer.hpp"
 #include "Window.hpp"
 #include <Utils/StagedTextureUpload.hpp>
 
@@ -19,7 +20,8 @@ namespace Components
 			// for every image, which needlessly duplicates startup/map I/O.
 			return D3D9Ex::IsD3D9ExEnabled()
 				&& (StartupTextureUploads.load(std::memory_order_relaxed)
-				|| MapTextureUploads.load(std::memory_order_relaxed));
+				|| MapTextureUploads.load(std::memory_order_relaxed)
+				|| Renderer::IsDeviceRecoveryActive());
 		}
 
 		struct ImageUploadScope;

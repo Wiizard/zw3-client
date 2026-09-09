@@ -189,7 +189,6 @@ namespace Components
 		}
 
 		D3D9Ex::BeginMapLoading(map);
-		FastFiles::PrefetchZone(map);
 		// The engine loads the lightweight *_load zone before the main map
 		// zone.  Start both reads as soon as map/devmap is issued so large
 		// maps (notably the MW3 conversions) can warm the file cache in
@@ -197,8 +196,9 @@ namespace Components
 		if (!map.empty() && !map.ends_with("_load"))
 		{
 			FastFiles::PrefetchZone(map + "_load");
-			FastFiles::PrefetchZone("patch_" + map);
 		}
+		FastFiles::PrefetchZone(map);
+		if (!map.empty() && !map.ends_with("_load")) FastFiles::PrefetchZone("patch_" + map);
 
 		if (map.empty() || Utils::MapPreview::IsMultiplayer(map))
 		{

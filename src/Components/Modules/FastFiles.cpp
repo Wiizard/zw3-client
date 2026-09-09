@@ -35,13 +35,14 @@ namespace Components
 
 		void RunFastFilePrefetch(const std::stop_token stopToken)
 		{
-			std::vector<std::byte> buffer(FASTFILE_PREFETCH_BUFFER_SIZE);
+			std::vector<std::byte> buffer;
 
 			while (!stopToken.stop_requested())
 			{
 				std::filesystem::path path;
 				{
 					std::unique_lock lock(FastFilePrefetchMutex);
+					if (FastFilePrefetchQueue.empty()) std::vector<std::byte>().swap(buffer);
 					if (!FastFilePrefetchCondition.wait(lock, stopToken, [&]
 					{
 						return !FastFilePrefetchQueue.empty();
@@ -54,10 +55,11 @@ namespace Components
 
 				const auto file = CreateFileW(path.c_str(), GENERIC_READ,
 					FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
-					FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+					FILE_ATTRIBUTE_NORMAL | FILE_FLAG_RANDOM_ACCESS, nullptr);
 
 				if (file != INVALID_HANDLE_VALUE)
 				{
+					if (buffer.empty()) buffer.resize(FASTFILE_PREFETCH_BUFFER_SIZE);
 					DWORD bytesRead = 0;
 					while (!stopToken.stop_requested() &&
 						ReadFile(file, buffer.data(), static_cast<DWORD>(buffer.size()), &bytesRead, nullptr) && bytesRead > 0)

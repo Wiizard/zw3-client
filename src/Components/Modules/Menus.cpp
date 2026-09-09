@@ -17,6 +17,14 @@ namespace Components
 	{
 		const char EmptyPlayerPerk[] = "";
 
+		using ParsedMenuFile = std::vector<std::pair<std::string, Game::menuDef_t*>>;
+		struct MenuReloadCache
+		{
+			std::unordered_map<std::string, ParsedMenuFile> files;
+			std::unordered_set<Game::menuDef_t*> deferred;
+		};
+		thread_local MenuReloadCache* ActiveMenuReloadCache = nullptr;
+
 		// OP_GET_PLAYER_PERK is evaluated by menu expressions every frame,
 		// including loading/disconnect transitions with no cgame. Its stock
 		// implementation reports an error on every such evaluation. Defer the
@@ -331,6 +339,29 @@ namespace Components
 	std::vector<Game::menuDef_t*> Menus::LoadMenuByName_Recursive(const std::string& menu)
 	{
 		std::vector<Game::menuDef_t*> menus;
+		auto cacheKey = Utils::String::ToLower(menu);
+		std::replace(cacheKey.begin(), cacheKey.end(), '/', '\\');
+		if (ActiveMenuReloadCache)
+		{
+			const auto cached = ActiveMenuReloadCache->files.find(cacheKey);
+			if (cached != ActiveMenuReloadCache->files.end())
+			{
+				// A different file may have overridden a definition since parsing.
+				// Reuse only definitions that are still installed and owned by us.
+				for (const auto& [name, definition] : cached->second)
+				{
+					const auto installed = MenusFromDisk.find(name);
+					if (!ActiveMenuReloadCache->deferred.contains(definition)
+						&& (installed == MenusFromDisk.end() || installed->second != definition))
+					{
+						menus.clear();
+						break;
+					}
+					menus.push_back(definition);
+				}
+				if (!menus.empty()) return menus;
+			}
+		}
 		FileSystem::File menuFile(menu);
 
 		if (menuFile.exists())
@@ -374,6 +405,15 @@ namespace Components
 			}
 		}
 
+		if (ActiveMenuReloadCache && !menus.empty())
+		{
+			auto& cached = ActiveMenuReloadCache->files[cacheKey];
+			cached.clear();
+			for (auto* definition : menus)
+			{
+				cached.emplace_back(definition->window.name, definition);
+			}
+		}
 		return menus;
 	}
 
@@ -495,7 +535,14 @@ namespace Components
 				else
 				{
 					// We are not allowed to keep this one, let's free it
-					FreeMenuOnly(menus[i]);
+					// A later menu list may allow this definition. Retain it only
+					// for the current pass instead of parsing the same file twice.
+					const auto installed = MenusFromDisk.find(menuName);
+					if (installed == MenusFromDisk.end() || installed->second != menus[i])
+					{
+						if (ActiveMenuReloadCache) ActiveMenuReloadCache->deferred.insert(menus[i]);
+						else FreeMenuOnly(menus[i]);
+					}
 					menus.erase(menus.begin() + i);
 					i--;
 				}
@@ -510,8 +557,14 @@ namespace Components
 		// Tracking
 		for (const auto& loadedMenu : menus)
 		{
+			if (ActiveMenuReloadCache) ActiveMenuReloadCache->deferred.erase(loadedMenu);
 			// Unload previous loaded-from-disk versions of these menus, if we had any
 			const std::string menuName = loadedMenu->window.name;
+			const auto installed = MenusFromDisk.find(menuName);
+			if (installed != MenusFromDisk.end() && installed->second == loadedMenu)
+			{
+				continue; // Shared by another list in this reload; already installed.
+			}
 			if (MenusFromDisk.contains(menuName))
 			{
 				UnloadMenuFromDisk(menuName); // This calls PrepareToUnloadMenu which updates contexts
@@ -1143,6 +1196,19 @@ namespace Components
 
 	void Menus::FreeMenuOnly(Game::menuDef_t* menu)
 	{
+		if (ActiveMenuReloadCache)
+		{
+			// Invalidate before freeing: an allocator may reuse this address for
+			// an override with the same name later in the current reload.
+			ActiveMenuReloadCache->deferred.erase(menu);
+			std::erase_if(ActiveMenuReloadCache->files, [menu](const auto& entry)
+			{
+				return std::any_of(entry.second.begin(), entry.second.end(), [menu](const auto& definition)
+				{
+					return definition.second == menu;
+				});
+			});
+		}
 		if (menu) SPLoadscreens::OnMenuFreed(menu);
 		DebugPrint("Freeing only menu {} at {:X}",
 			menu->window.name,
@@ -1483,6 +1549,20 @@ namespace Components
 
 	void Menus::ReloadDiskMenus(bool preserveConnect)
 	{
+		// Menu lists often include files already loaded by the directory scan.
+		// Keep no cache across reloads: definitions, supporting data and assets
+		// must still be rebuilt after UI initialization or filesystem changes.
+		MenuReloadCache reloadCache;
+		auto* previousCache = ActiveMenuReloadCache;
+		ActiveMenuReloadCache = &reloadCache;
+		const auto restoreCache = gsl::finally([previousCache]
+		{
+			while (!ActiveMenuReloadCache->deferred.empty())
+			{
+				FreeMenuOnly(*ActiveMenuReloadCache->deferred.begin());
+			}
+			ActiveMenuReloadCache = previousCache;
+		});
 		const auto connectionState = *reinterpret_cast<Game::connstate_t*>(0xB2C540);
 
 		const bool allowStrayMenus = connectionState > Game::connstate_t::CA_DISCONNECTED

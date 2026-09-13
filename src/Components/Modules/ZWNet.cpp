@@ -2399,6 +2399,7 @@ namespace Components
 		Dvar::Register<const char*>("zwnet_vote_winner_name", "", Game::DVAR_NONE, "Winning ZW3 map name");
 		Dvar::Register<const char*>("zwnet_vote_winner_image", "", Game::DVAR_NONE, "Winning ZW3 map preview");
 		Dvar::Register<const char*>("zwnet_match_id", "", Game::DVAR_NONE, "Current ZW3 match id");
+		Dvar::Register<bool>("zwnet_match_return", false, Game::DVAR_NONE, "Completed ZW3 match should return to its lobby");
 		Dvar::Register<const char*>("zwnet_server_endpoint", "", Game::DVAR_NONE, "Assigned public ZW3 server endpoint");
 		Dvar::Register<const char*>("zwnet_server_hostname", "", Game::DVAR_NONE, "Connected ZW3 server hostname");
 		Dvar::Register<const char*>("zwnet_server_status", "NOT ASSIGNED", Game::DVAR_NONE, "ZW3 server assignment status");
@@ -2574,6 +2575,7 @@ namespace Components
 		Events::OnCLDisconnected([](const bool wasConnected)
 		{
 			InGameState() = false;
+			Dvar::Var("zwnet_match_return").set(false);
 			// CL_ConnectFromParty performs an internal CL_Disconnect while moving
 			// from the ZWNET lobby into the assigned dedicated server. That planned
 			// transition must not revoke the match and reset the server underneath
@@ -2637,6 +2639,20 @@ namespace Components
 				if (seconds > 0) Dvar::Var("zwnet_vote_seconds").set(seconds - 1);
 			}
 		}, Scheduler::Pipeline::MAIN, 1s);
+		Scheduler::Loop([]
+		{
+			if (!ActiveState() || !InGameState() ||
+				!Dvar::Var("zwnet_match_return").get<bool>()) return;
+			std::string matchId;
+			{
+				std::lock_guard lock(StateMutex());
+				matchId = CurrentMatchIdState();
+			}
+			Dvar::Var("zwnet_match_return").set(false);
+			if (matchId.empty()) return;
+			Logger::Print("ZWNET match complete: leaving finished server before reset\n");
+			Command::Execute("disconnect", false);
+		}, Scheduler::Pipeline::MAIN, 100ms);
 		Scheduler::Loop(UpdatePresence, Scheduler::Pipeline::ASYNC, 30s);
 		Scheduler::Loop(CapturePartyPrivacy, Scheduler::Pipeline::MAIN, 1s);
 	}

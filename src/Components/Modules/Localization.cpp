@@ -1,4 +1,5 @@
 #include "ArenaLength.hpp"
+#include "FastFiles.hpp"
 
 namespace Components
 {
@@ -75,7 +76,18 @@ namespace Components
 
 		if (!entry || !entry->value)
 		{
-			entry = Game::DB_FindXAssetHeader(Game::XAssetType::ASSET_TYPE_LOCALIZE_ENTRY, key).localize;
+			if (FastFiles::Ready())
+			{
+				entry = Game::DB_FindXAssetHeader(Game::XAssetType::ASSET_TYPE_LOCALIZE_ENTRY, key).localize;
+			}
+			else
+			{
+				const auto* assetEntry = Game::DB_FindXAssetEntry(Game::XAssetType::ASSET_TYPE_LOCALIZE_ENTRY, key);
+				if (assetEntry && assetEntry->asset.header.localize)
+				{
+					entry = assetEntry->asset.header.localize;
+				}
+			}
 		}
 
 		if (entry && entry->value)

@@ -10,6 +10,7 @@ namespace Components
 
 		static void AddZonePath(const std::string& path);
 		static void PrefetchZone(const std::string& zoneName);
+		static void PrefetchPath(const std::filesystem::path& path);
 		static std::string_view Current();
 		static bool Ready();
 		static void MarkMainMenuReady();

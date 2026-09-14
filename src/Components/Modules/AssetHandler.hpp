@@ -1,5 +1,7 @@
 #pragma once
 
+#include <unordered_set>
+
 namespace Components
 {
 	class AssetHandler : public Component
@@ -64,6 +66,7 @@ namespace Components
 		static std::map<void*, void*> Relocations;
 
 		static std::vector<std::pair<Game::XAssetType, std::string>> EmptyAssets;
+		static std::unordered_set<std::string> EmptyAssetNames[Game::ASSET_TYPE_COUNT];
 
 		static void RegisterInterface(IAsset* iAsset);
 

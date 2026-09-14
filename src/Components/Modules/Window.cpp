@@ -94,6 +94,9 @@ namespace Components
 
 	void Window::PumpLoadingEvents()
 	{
+		thread_local std::uint32_t callCounter = 0;
+		if ((++callCounter & 0x1F) != 0 && !WindowDragActive) return;
+
 		// Asset uploads can occupy the window-owning thread for seconds. Only
 		// service mouse/window messages here; never re-enter commands or loading.
 		if (!WindowThreadId || GetCurrentThreadId() != WindowThreadId) return;

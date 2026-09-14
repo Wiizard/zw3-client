@@ -347,7 +347,7 @@ namespace Components
 			if (cached != ActiveMenuReloadCache->files.end())
 			{
 				// A different file may have overridden a definition since parsing.
-				// Reuse only definitions that are still installed and owned by us.
+				// Reuse only definitions that are still installed or retained for this pass.
 				for (const auto& [name, definition] : cached->second)
 				{
 					const auto installed = MenusFromDisk.find(name);
@@ -499,6 +499,12 @@ namespace Components
 	}
 
 
+	static const std::unordered_set<std::string_view> HudMenuNames = {
+		"scorebar_hd", "scorebar_sd", "weaponbar_hd", "weaponbar_sd",
+		"xpbar_hd", "xpbar_sd", "perks_info_hd", "perks_info_sd",
+		"dpad_hd", "dpad_sd", "scoreboard", "minimap_fullscreen"
+	};
+
 	bool Menus::MenuAlreadyExists(const std::string& name)
 	{
 		for (size_t i = 0; i < ARRAYSIZE(GameUiContexts); i++)
@@ -528,13 +534,12 @@ namespace Components
 			for (int i = 0; i < static_cast<int>(menus.size()); i++)
 			{
 				const auto menuName = menus[i]->window.name;
-				if (MenuAlreadyExists(menuName))
+				if (MenuAlreadyExists(menuName) || HudMenuNames.contains(menuName))
 				{
 					// It's an override, we keep it
 				}
 				else
 				{
-					// We are not allowed to keep this one, let's free it
 					// A later menu list may allow this definition. Retain it only
 					// for the current pass instead of parsing the same file twice.
 					const auto installed = MenusFromDisk.find(menuName);
@@ -822,7 +827,8 @@ namespace Components
 
 			// 2. If this menu was an override, attempt to put the original back
 			// This is critical for game-referenced menus like 'connect'.
-			if (originalMenu && name != "connect")
+			// Never restore stock MW2 HUD menus.
+			if (originalMenu && name != "connect" && !HudMenuNames.contains(name))
 			{
 				bool foundExistingSpot = false;
 				// Check if original is already back (e.g., if another part of the game re-added it)
@@ -873,6 +879,7 @@ namespace Components
 
 		Game::menuDef_t* existingGameMenu = nullptr;
 		bool foundExistingInContext = false;
+		bool foundInCgDC = false;
 
 		// Check if a menu with the same name already exists in ANY of the game contexts.
 		// This identifies if our newly loaded menu is an override.
@@ -882,10 +889,13 @@ namespace Components
 			Game::menuDef_t* found = Game::Menus_FindByName(context, name.data());
 			if (found && found != menu) // Found an existing menu that is NOT our newly loaded one
 			{
-				existingGameMenu = found;
+				if (!existingGameMenu) existingGameMenu = found;
 				foundExistingInContext = true;
-				DebugPrint("AfterLoadedMenuFromDisk: Found existing menu '{}' ({:X}) in context {:X}. This is an override.", name, (unsigned int)existingGameMenu, (unsigned int)context);
-				break; // Only need to find one existing instance to confirm it's an override
+				if (context == Game::cgDC)
+				{
+					foundInCgDC = true;
+				}
+				DebugPrint("AfterLoadedMenuFromDisk: Found existing menu '{}' ({:X}) in context {:X}. This is an override.", name, (unsigned int)found, (unsigned int)context);
 			}
 		}
 
@@ -902,7 +912,7 @@ namespace Components
 			// This is crucial to prevent the original from lingering.
 			for (size_t contextIndex = 0; contextIndex < ARRAYSIZE(Menus::GameUiContexts); contextIndex++)
 			{
-				RemoveMenuFromContext(GameUiContexts[contextIndex], existingGameMenu);
+				RemoveMenuNameFromContext(Menus::GameUiContexts[contextIndex], name, menu);
 			}
 		}
 		else
@@ -937,6 +947,31 @@ namespace Components
 		}
 		else {
 			DebugPrint("AfterLoadedMenuFromDisk: Menu '{}' ({:X}) already present in Game::uiContext->Menus, no re-addition.", name, (unsigned int)menu);
+		}
+
+		// Also register in Game::cgDC if found in cgDC or if it's a HUD menu override
+		if (foundInCgDC || HudMenuNames.contains(name))
+		{
+			bool menuAlreadyActiveInCgDC = false;
+			for (int i = 0; i < Game::cgDC->menuCount; ++i) {
+				if (Game::cgDC->Menus[i] == menu) {
+					menuAlreadyActiveInCgDC = true;
+					break;
+				}
+			}
+
+			if (!menuAlreadyActiveInCgDC) {
+				if (Game::cgDC->menuCount < ARRAYSIZE(Game::cgDC->Menus))
+				{
+					Game::cgDC->Menus[Game::cgDC->menuCount] = menu;
+					Game::cgDC->menuCount++;
+					DebugPrint("AfterLoadedMenuFromDisk: Added menu '{}' ({:X}) to Game::cgDC->Menus[{}] (Total count: {}).",
+						name, (unsigned int)menu, Game::cgDC->menuCount - 1, Game::cgDC->menuCount);
+				}
+				else {
+					Components::Logger::PrintError(Game::CON_CHANNEL_UI, "AfterLoadedMenuFromDisk: cgDC context menu array full for adding menu {}\n", name);
+				}
+			}
 		}
 
 		if (name == "connect")
@@ -1565,8 +1600,8 @@ namespace Components
 		});
 		const auto connectionState = *reinterpret_cast<Game::connstate_t*>(0xB2C540);
 
-		const bool allowStrayMenus = connectionState > Game::connstate_t::CA_DISCONNECTED
-			&& Game::CL_IsCgameInitialized();
+		const bool allowStrayMenus = (connectionState > Game::connstate_t::CA_DISCONNECTED
+			&& Game::CL_IsCgameInitialized()) || preserveConnect;
 
 		DebugPrint("Reloading disk menus... preserveConnect={}", preserveConnect);
 
@@ -1617,7 +1652,7 @@ namespace Components
 			}
 
 			const auto fullPath = std::format("ui_mp\\{}", filename);
-			LoadScriptMenu(fullPath.c_str(), allowStrayMenus);
+			LoadScriptMenu(fullPath.c_str(), true);
 		}
 
 		if (allowStrayMenus)
@@ -2480,6 +2515,10 @@ namespace Components
 		if (Dedicated::IsEnabled()) return;
 
 		Utils::Hook(0x46E21B, EvaluatePlayerPerkWhenReady, HOOK_CALL).install()->quick();
+		// Team-field expressions are also evaluated during menu/load transitions.
+		// Keep the engine's empty-string result when cgame is unavailable, without
+		// formatting and logging the same expected condition on every frame.
+		Utils::Hook(0x62B03A, 0x62B049, HOOK_JUMP).install()->quick();
 
 		// The stock ASSET_TYPE_MENU clone handler copies runtime state from the existing menu to its
 		// replacement, assuming both menus have identical item layouts. Disable it to prevent state

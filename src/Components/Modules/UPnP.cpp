@@ -6,6 +6,7 @@
 #include "Logger.hpp"
 #include "Scheduler.hpp"
 #include "Dedicated.hpp"
+#include <thread>
 
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
@@ -497,7 +498,10 @@ namespace Components
 			{
 				Scheduler::Once([]()
 					{
-						StartMapping();
+						std::thread([]
+						{
+							StartMapping();
+						}).detach();
 					}, Scheduler::Pipeline::SERVER, 500ms);
 			});
 

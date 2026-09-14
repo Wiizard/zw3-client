@@ -199,6 +199,7 @@ namespace Components
 		}
 		FastFiles::PrefetchZone(map);
 		if (!map.empty() && !map.ends_with("_load")) FastFiles::PrefetchZone("patch_" + map);
+		FastFiles::PrefetchPath(std::filesystem::path("main") / "video" / (map + "_load.bik"));
 
 		if (map.empty() || Utils::MapPreview::IsMultiplayer(map))
 		{

@@ -67,7 +67,6 @@ namespace Utils::Cryptography
 				return false;
 			}
 
-			this->counterBlocks_.resize(BatchSize);
 			this->keyStream_.resize(BatchSize);
 			return this->restart(nonce);
 		}
@@ -93,7 +92,6 @@ namespace Utils::Cryptography
 				this->algorithm_ = nullptr;
 			}
 			this->keyObject_.clear();
-			this->counterBlocks_.clear();
 			this->keyStream_.clear();
 			this->counter_.fill(0);
 			this->keyStreamOffset_ = BatchSize;
@@ -116,6 +114,24 @@ namespace Utils::Cryptography
 				const auto count = (std::min)(size, BatchSize - this->keyStreamOffset_);
 				const auto* stream = this->keyStream_.data() + this->keyStreamOffset_;
 				std::size_t i = 0;
+				for (; count - i >= 64; i += 64)
+				{
+					const auto in0 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i));
+					const auto m0 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(stream + i));
+					_mm_storeu_si128(reinterpret_cast<__m128i*>(data + i), _mm_xor_si128(in0, m0));
+
+					const auto in1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i + 16));
+					const auto m1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(stream + i + 16));
+					_mm_storeu_si128(reinterpret_cast<__m128i*>(data + i + 16), _mm_xor_si128(in1, m1));
+
+					const auto in2 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i + 32));
+					const auto m2 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(stream + i + 32));
+					_mm_storeu_si128(reinterpret_cast<__m128i*>(data + i + 32), _mm_xor_si128(in2, m2));
+
+					const auto in3 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i + 48));
+					const auto m3 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(stream + i + 48));
+					_mm_storeu_si128(reinterpret_cast<__m128i*>(data + i + 48), _mm_xor_si128(in3, m3));
+				}
 				for (; count - i >= 16; i += 16)
 				{
 					const auto input = _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i));
@@ -148,23 +164,44 @@ namespace Utils::Cryptography
 		{
 			std::uint32_t low = 0;
 			std::memcpy(&low, this->counter_.data(), sizeof(low));
-			for (std::size_t offset = 0; offset < BatchSize; offset += BlockSize)
+			std::uint64_t high64 = 0;
+			std::uint32_t high32 = 0;
+			std::memcpy(&high64, this->counter_.data() + 4, sizeof(high64));
+			std::memcpy(&high32, this->counter_.data() + 12, sizeof(high32));
+
+			unsigned char* dest = this->keyStream_.data();
+			constexpr std::size_t NumBlocks = BatchSize / BlockSize;
+			if (low <= 0xFFFFFFFFu - static_cast<std::uint32_t>(NumBlocks))
 			{
-				std::memcpy(this->counterBlocks_.data() + offset, &low, sizeof(low));
-				std::memcpy(this->counterBlocks_.data() + offset + sizeof(low),
-					this->counter_.data() + sizeof(low), BlockSize - sizeof(low));
-				if (++low == 0)
+				for (std::size_t offset = 0; offset < BatchSize; offset += BlockSize)
 				{
-					for (std::size_t byte = sizeof(low); byte < BlockSize; ++byte)
+					*reinterpret_cast<std::uint32_t*>(dest + offset) = low++;
+					*reinterpret_cast<std::uint64_t*>(dest + offset + 4) = high64;
+					*reinterpret_cast<std::uint32_t*>(dest + offset + 12) = high32;
+				}
+			}
+			else
+			{
+				for (std::size_t offset = 0; offset < BatchSize; offset += BlockSize)
+				{
+					*reinterpret_cast<std::uint32_t*>(dest + offset) = low;
+					*reinterpret_cast<std::uint64_t*>(dest + offset + 4) = high64;
+					*reinterpret_cast<std::uint32_t*>(dest + offset + 12) = high32;
+					if (++low == 0)
 					{
-						if (++this->counter_[byte] != 0) break;
+						for (std::size_t byte = sizeof(low); byte < BlockSize; ++byte)
+						{
+							if (++this->counter_[byte] != 0) break;
+						}
+						std::memcpy(&high64, this->counter_.data() + 4, sizeof(high64));
+						std::memcpy(&high32, this->counter_.data() + 12, sizeof(high32));
 					}
 				}
 			}
 			std::memcpy(this->counter_.data(), &low, sizeof(low));
 
 			ULONG written = 0;
-			if (BCryptEncrypt(this->key_, this->counterBlocks_.data(), static_cast<ULONG>(BatchSize),
+			if (BCryptEncrypt(this->key_, this->keyStream_.data(), static_cast<ULONG>(BatchSize),
 				nullptr, nullptr, 0, this->keyStream_.data(), static_cast<ULONG>(BatchSize), &written, 0) < 0 || written != BatchSize)
 			{
 				return false;
@@ -176,7 +213,6 @@ namespace Utils::Cryptography
 		BCRYPT_ALG_HANDLE algorithm_ = nullptr;
 		BCRYPT_KEY_HANDLE key_ = nullptr;
 		std::vector<unsigned char> keyObject_;
-		std::vector<unsigned char> counterBlocks_;
 		std::vector<unsigned char> keyStream_;
 		std::array<unsigned char, BlockSize> counter_{};
 		std::size_t keyStreamOffset_ = BatchSize;

@@ -267,7 +267,7 @@ namespace Components
 			data.push_back({ patchZone.data(), zoneInfo->allocFlags, zoneInfo->freeFlags });
 		}
 
-		return FastFiles::LoadLocalizeZones(data.data(), data.size(), sync);
+		FastFiles::LoadLocalizeZones(data.data(), data.size(), sync);
 	}
 
 	void Maps::OverrideMapEnts(Game::MapEnts* ents)
@@ -370,8 +370,12 @@ namespace Components
 
 	Game::G_GlassData* Maps::GetWorldData()
 	{
-		Logger::Print("Waiting for database...\n");
-		while (!Game::Sys_IsDatabaseReady()) std::this_thread::sleep_for(10ms);
+		while (!Game::Sys_IsDatabaseReady())
+		{
+			std::this_thread::yield();
+			if (Game::Sys_IsDatabaseReady()) break;
+			std::this_thread::sleep_for(1ms);
+		}
 
 		if (!Game::DB_XAssetPool[Game::XAssetType::ASSET_TYPE_GAMEWORLD_MP].gameWorldMp || !Game::DB_XAssetPool[Game::XAssetType::ASSET_TYPE_GAMEWORLD_MP].gameWorldMp->name ||
 			!Game::DB_XAssetPool[Game::XAssetType::ASSET_TYPE_GAMEWORLD_MP].gameWorldMp->g_glassData || Maps::SPMap)

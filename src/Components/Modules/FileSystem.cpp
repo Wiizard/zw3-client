@@ -280,6 +280,10 @@ namespace Components
 
 				const auto cleanupStampPath = GetCleanupStampPath(roots);
 				std::error_code stampEc;
+				if (!cleanupStampPath.empty() && std::filesystem::exists(cleanupStampPath, stampEc) && !stampEc)
+				{
+					return;
+				}
 
 				struct CleanupTask
 				{
@@ -792,9 +796,9 @@ namespace Components
 		const std::string fs_basepath = (*Game::fs_basepath)->current.string;
 		const std::string fs_homepath = (*Game::fs_homepath)->current.string;
 
-		if (!fs_cdpath.empty())   Game::FS_AddLocalizedGameDirectory(fs_cdpath.data(), folder);
-		if (!fs_basepath.empty()) Game::FS_AddLocalizedGameDirectory(fs_basepath.data(), folder);
-		if (!fs_homepath.empty()) Game::FS_AddLocalizedGameDirectory(fs_homepath.data(), folder);
+		if (!fs_cdpath.empty()) Game::FS_AddLocalizedGameDirectory(fs_cdpath.data(), folder);
+		if (!fs_basepath.empty() && fs_basepath != fs_cdpath) Game::FS_AddLocalizedGameDirectory(fs_basepath.data(), folder);
+		if (!fs_homepath.empty() && fs_homepath != fs_basepath && fs_homepath != fs_cdpath) Game::FS_AddLocalizedGameDirectory(fs_homepath.data(), folder);
 	}
 
 	void FileSystem::RegisterFolders()
@@ -852,6 +856,47 @@ namespace Components
 		}
 	}
 
+	__declspec(naked) void FileSystem::FS_AddLocalizedGameDirectory_Stub()
+	{
+		__asm
+		{
+			push esi
+			push edi
+			mov edi, eax // dirName
+
+			// Get active language index from loc_language dvar (default 0 = english)
+			mov eax, ds:0x62C8704
+			test eax, eax
+			jz defaultLang
+			mov esi, [eax + 0x10] // current.integer
+			jmp doLocalized
+
+		defaultLang:
+			xor esi, esi
+
+		doLocalized:
+			// 1. Localized search path for active language only
+			push esi
+			push 1
+			push ebx
+			mov eax, 0x642CD0
+			call eax
+			add esp, 0x0C
+
+			// 2. Base non-localized search path
+			push 0
+			push 0
+			push ebx
+			mov eax, 0x642CD0
+			call eax
+			add esp, 0x0C
+
+			pop edi
+			pop esi
+			retn
+		}
+	}
+
 	int FileSystem::Cmd_Exec_f_Stub(const char* s0, [[maybe_unused]] const char* s1)
 	{
 		int f;
@@ -874,9 +919,29 @@ namespace Components
 	void FileSystem::FsRestartSync(int localClientNum, int checksumFeed)
 	{
 		std::lock_guard _(FSMutex);
-		Maps::GetUserMap()->freeIwd();
-		Utils::Hook::Call<void(int, int)>(0x461A50)(localClientNum, checksumFeed); // FS_Restart
-		Maps::GetUserMap()->reloadIwd();
+
+		const auto* fs_game = *reinterpret_cast<Game::dvar_t**>(0x63D0CC0);
+		const bool gameModified = fs_game && fs_game->modified;
+		const void* searchpaths = *reinterpret_cast<void**>(0x63D96E0);
+
+		if (searchpaths && !gameModified)
+		{
+			*reinterpret_cast<int*>(0x63D0CBC) = checksumFeed;
+			struct SearchPath { SearchPath* next; void* pack; };
+			for (auto* sp = static_cast<SearchPath*>(*reinterpret_cast<void**>(0x63D96E0)); sp; sp = sp->next)
+			{
+				if (sp->pack)
+				{
+					*reinterpret_cast<std::uint8_t*>(reinterpret_cast<std::uintptr_t>(sp->pack) + 0x314) = 0;
+				}
+			}
+		}
+		else
+		{
+			Maps::GetUserMap()->freeIwd();
+			Utils::Hook::Call<void(int, int)>(0x461A50)(localClientNum, checksumFeed); // FS_Restart
+			Maps::GetUserMap()->reloadIwd();
+		}
 	}
 
 	void FileSystem::FsShutdownSync(int closemfp)
@@ -1022,6 +1087,9 @@ namespace Components
 
 		// Register additional folders
 		Utils::Hook(0x482647, StartupStub, HOOK_JUMP).install()->quick();
+
+		// Bypass searching 14 non-existent foreign languages in every directory
+		Utils::Hook(0x642EF0, FS_AddLocalizedGameDirectory_Stub, HOOK_JUMP).install()->quick();
 
 		// exec whitelist removal
 		Utils::Hook::Nop(0x609685, 5);

@@ -370,6 +370,7 @@ namespace Components
 
 	Game::G_GlassData* Maps::GetWorldData()
 	{
+		Logger::Print("Waiting for database...\n");
 		while (!Game::Sys_IsDatabaseReady())
 		{
 			std::this_thread::yield();

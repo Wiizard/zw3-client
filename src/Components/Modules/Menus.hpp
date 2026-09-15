@@ -20,6 +20,7 @@ namespace Components
 		static bool IsMenuVisible(Game::UiContext* dc, Game::menuDef_t* menu);
 		static Game::menuDef_t* FindDiskMenu(const std::string& name);
 		static void OpenLoadingScreen();
+		static void UpdateLoadingProgress();
 
 		static void RemoveMenuFromContext(Game::UiContext* dc, Game::menuDef_t* menuToRemove);
 

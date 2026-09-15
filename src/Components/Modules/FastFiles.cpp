@@ -1410,6 +1410,7 @@ namespace Components
 
 		Command::Add("awaitDatabase", []()
 		{
+			Logger::Print("Waiting for database...\n");
 			while (!Game::Sys_IsDatabaseReady())
 			{
 				std::this_thread::yield();

@@ -3,6 +3,7 @@
 #include "Party.hpp"
 #include "Events.hpp"
 #include "SPLoadscreens.hpp"
+#include "FastFiles.hpp"
 #include <Utils/WebIO.hpp>
 #include <filesystem>
 // Ensure you have includes for AssetHandler, if it's a separate component.
@@ -1830,10 +1831,24 @@ namespace Components
 		Menus::SupportingData->uiStrings.strings = allocator->allocateArray<const char*>(stringListSize / sizeof(const char*));
 	}
 
-	static float EaseOutQuart(float value)
+	[[maybe_unused]] static float EaseOutQuart(float value)
 	{
 		value = std::clamp(value, 0.0f, 1.0f);
 		return 1.0f - std::pow(1.0f - value, 4.0f);
+	}
+
+	static float EaseOutCubic(float value)
+	{
+		value = std::clamp(value, 0.0f, 1.0f);
+		const float inv = 1.0f - value;
+		return 1.0f - (inv * inv * inv);
+	}
+
+	static float EaseOutQuad(float value)
+	{
+		value = std::clamp(value, 0.0f, 1.0f);
+		const float inv = 1.0f - value;
+		return 1.0f - (inv * inv);
 	}
 
 	void Menus::OpenLoadingScreen()
@@ -2503,6 +2518,177 @@ namespace Components
 		}
 	}
 
+	void Menus::UpdateLoadingProgress()
+	{
+		static auto lastConnState = Game::connstate_t::CA_DISCONNECTED;
+		static std::string lastMapName;
+		static bool wasLoading = false;
+		static bool wasConnectMenuVisible = false;
+		static int lastUpdateTime = 0;
+		static bool loadingSessionActive = false;
+		static int caLoadingStartTime = 0;
+
+		const auto now = Game::Sys_Milliseconds();
+
+		if (!lastUpdateTime)
+		{
+			lastUpdateTime = now;
+		}
+
+		const float deltaSeconds = std::clamp((now - lastUpdateTime) / 1000.0f, 0.0f, 0.1f);
+		lastUpdateTime = now;
+
+		const auto connState = *reinterpret_cast<Game::connstate_t*>(0xB2C540);
+
+		const char* mapNameRaw = Dvar::Var("mapname").get<const char*>();
+		const std::string currentMapName = mapNameRaw ? mapNameRaw : "";
+
+		const bool isLoading = connState >= Game::connstate_t::CA_CONNECTING
+			&& connState < Game::connstate_t::CA_ACTIVE;
+
+		if (isLoading || lastConnState >= Game::connstate_t::CA_CONNECTING)
+		{
+			ForceOnlyCustomConnectMenu();
+		}
+
+		auto* connectMenu = Game::Menus_FindByName(Game::uiContext, "connect");
+		const bool connectMenuVisible = connectMenu && Game::Menu_IsVisible(Game::uiContext, connectMenu);
+
+		const bool connectMenuJustOpened = !wasConnectMenuVisible && connectMenuVisible;
+		const bool startedLoading = !wasLoading && isLoading;
+		const bool isNewConnection = lastConnState < Game::connstate_t::CA_CONNECTING
+			&& connState >= Game::connstate_t::CA_CONNECTING;
+
+		const bool isMapRestart = lastConnState >= Game::connstate_t::CA_ACTIVE
+			&& connState < Game::connstate_t::CA_ACTIVE
+			&& connState > Game::connstate_t::CA_DISCONNECTED;
+
+		const bool mapChanged = !lastMapName.empty()
+			&& !currentMapName.empty()
+			&& lastMapName != currentMapName;
+
+		// Only begin a fresh loading session (and reset progress to 0) when starting a new map load,
+		// restarting the map, or changing to a different map.
+		// Never reset progress on isNewConnection or startedLoading if a session is already underway.
+		const bool shouldStartSession = (!loadingSessionActive && (connectMenuJustOpened || startedLoading))
+			|| isMapRestart
+			|| mapChanged;
+
+		if (shouldStartSession)
+		{
+			loadingSessionActive = true;
+			caLoadingStartTime = 0;
+
+			Dvar::Var("zw3_ui_loading_start_time").set(now);
+			Dvar::Var("zw3_ui_loading_progress").set(0.0f);
+			Dvar::Var("zw3_ui_loading_visible").set(true);
+
+			ForceOnlyCustomConnectMenu();
+
+			const Game::StringTable* table = nullptr;
+			Game::StringTable_GetAsset_FastFile("mp/didyouknow.csv", &table);
+
+			if (table && table->rowCount > 0)
+			{
+				static std::mt19937 rng(std::random_device{}());
+				std::uniform_int_distribution<int> dist(0, table->rowCount - 1);
+
+				const auto* tip = Game::StringTable_GetColumnValueForRow(table, dist(rng), 0);
+				if (tip && *tip)
+				{
+					Dvar::Var("didyouknow").set(tip);
+				}
+			}
+		}
+
+		if (connectMenuVisible || isLoading)
+		{
+			const auto startTime = Dvar::Var("zw3_ui_loading_start_time").get<int>();
+			const auto totalElapsed = std::max(0, now - (startTime ? startTime : now));
+			const float current = Dvar::Var("zw3_ui_loading_progress").get<float>();
+
+			float target = 0.05f;
+			float rate = 0.60f;
+
+			if (connState < Game::connstate_t::CA_CONNECTING)
+			{
+				// Progress from 0.0f to 0.28f based on elapsed server start time
+				const float serverFraction = std::clamp(static_cast<float>(totalElapsed) / 2200.0f, 0.0f, 1.0f);
+				target = EaseOutCubic(serverFraction) * 0.28f;
+				rate = 0.40f;
+			}
+			else if (connState < Game::connstate_t::CA_LOADING)
+			{
+				// Client network handshake (CA_CONNECTING, CA_CHALLENGING, CA_CONNECTED)
+				target = 0.32f;
+				rate = 1.20f;
+			}
+			else if (connState == Game::connstate_t::CA_LOADING)
+			{
+				// FastFiles & CGame initialization
+				if (!caLoadingStartTime)
+				{
+					caLoadingStartTime = now;
+				}
+
+				const auto caElapsed = std::max(0, now - caLoadingStartTime);
+				const float ffProgress = std::clamp(FastFiles::GetFullLoadedFraction(), 0.0f, 1.0f);
+				const float timeFraction = EaseOutQuad(std::clamp(static_cast<float>(caElapsed) / 4800.0f, 0.0f, 1.0f));
+
+				// Blend realtime fastfile progress with time progression
+				const float loadFraction = std::max(ffProgress, timeFraction * 0.88f);
+				target = std::clamp(0.32f + loadFraction * (0.94f - 0.32f), 0.32f, 0.94f);
+
+				const float diff = target - current;
+				rate = std::clamp(diff * 3.5f, 0.30f, 2.2f);
+			}
+			else if (connState == Game::connstate_t::CA_PRIMED)
+			{
+				// Entering game
+				target = 0.98f;
+				rate = 4.0f;
+			}
+			else if (connState >= Game::connstate_t::CA_ACTIVE)
+			{
+				// In game
+				target = 1.0f;
+				rate = 8.0f;
+			}
+
+			const float maxStep = rate * deltaSeconds;
+			const float next = current + std::clamp(target - current, 0.0f, maxStep);
+			const float finalProgress = std::clamp(std::max(current, next), 0.0f, (connState >= Game::connstate_t::CA_ACTIVE ? 1.0f : 0.995f));
+
+			Dvar::Var("zw3_ui_loading_progress").set(finalProgress);
+			Dvar::Var("zw3_ui_loading_visible").set(true);
+		}
+		else
+		{
+			loadingSessionActive = false;
+			caLoadingStartTime = 0;
+			Dvar::Var("zw3_ui_loading_progress").set(0.0f);
+			Dvar::Var("zw3_ui_loading_visible").set(false);
+		}
+
+		if (connState >= Game::connstate_t::CA_CONNECTING)
+		{
+			if (!Party::GetMotd().empty() && Party::Target() == *Game::connectedHost)
+			{
+				Dvar::Var("didyouknow").set(Party::GetMotd());
+			}
+		}
+
+		if (startedLoading || isNewConnection || isMapRestart)
+		{
+			Dvar::Var("zw3_ui_sb_survived_time").set("00:00:00");
+		}
+
+		lastConnState = connState;
+		lastMapName = currentMapName;
+		wasLoading = isLoading;
+		wasConnectMenuVisible = connectMenuVisible;
+	}
+
 	Menus::Menus()
 	{
 		menuParseKeywordHash = reinterpret_cast<Game::KeywordHashEntry<Game::menuDef_t, 128, 3523>**>(0x63AE928);
@@ -2534,9 +2720,6 @@ namespace Components
 		Components::Events::OnCGameInit(ReloadDiskMenus_OnCGameStart);
 		Components::Events::AfterUIInit(ReloadDiskMenus_OnUIInitialization);
 
-		// --- HOOK ASSET HANDLER ---
-		// These hooks were present in your OLD working code.
-		// They are the key to intercepting asset lookup calls via AssetHandler.
 		AssetHandler::OnFind(Game::ASSET_TYPE_MENU, MenuFindHook);
 		AssetHandler::OnFind(Game::ASSET_TYPE_MENULIST, MenuListFindHook);
 
@@ -2604,150 +2787,14 @@ namespace Components
 
 		Components::Scheduler::Loop([]()
 			{
-				static auto lastConnState = Game::connstate_t::CA_DISCONNECTED;
-				static std::string lastMapName;
-				static bool wasLoading = false;
-				static bool wasConnectMenuVisible = false;
-				static int lastUpdateTime = 0;
-
-				const auto now = Game::Sys_Milliseconds();
-
-				if (!lastUpdateTime)
-				{
-					lastUpdateTime = now;
-				}
-
-				const float deltaSeconds = std::clamp((now - lastUpdateTime) / 1000.0f, 0.0f, 0.1f);
-				lastUpdateTime = now;
-
-				const auto connState = *reinterpret_cast<Game::connstate_t*>(0xB2C540);
-
-				const char* mapNameRaw = Dvar::Var("mapname").get<const char*>();
-				const std::string currentMapName = mapNameRaw ? mapNameRaw : "";
-
-				const bool isLoading = connState >= Game::connstate_t::CA_CONNECTING
-					&& connState < Game::connstate_t::CA_ACTIVE;
-
-				if (isLoading || lastConnState >= Game::connstate_t::CA_CONNECTING)
-				{
-					ForceOnlyCustomConnectMenu();
-				}
-
-				auto* connectMenu = Game::Menus_FindByName(Game::uiContext, "connect");
-				const bool connectMenuVisible = connectMenu && Game::Menu_IsVisible(Game::uiContext, connectMenu);
-
-				const bool connectMenuJustOpened = !wasConnectMenuVisible && connectMenuVisible;
-
-				const bool startedLoading = !wasLoading && isLoading;
-
-				const bool isNewConnection = lastConnState < Game::connstate_t::CA_CONNECTING
-					&& connState >= Game::connstate_t::CA_CONNECTING;
-
-				const bool isMapRestart = lastConnState >= Game::connstate_t::CA_ACTIVE
-					&& connState < Game::connstate_t::CA_ACTIVE
-					&& connState > Game::connstate_t::CA_DISCONNECTED;
-
-				const bool mapChanged = !lastMapName.empty()
-					&& !currentMapName.empty()
-					&& lastMapName != currentMapName;
-
-				if (connectMenuJustOpened || startedLoading || isNewConnection || isMapRestart || mapChanged)
-				{
-					Dvar::Var("zw3_ui_loading_start_time").set(now);
-					Dvar::Var("zw3_ui_loading_progress").set(0.0f);
-					Dvar::Var("zw3_ui_loading_visible").set(true);
-
-					ForceOnlyCustomConnectMenu();
-
-					const Game::StringTable* table = nullptr;
-					Game::StringTable_GetAsset_FastFile("mp/didyouknow.csv", &table);
-
-					if (table && table->rowCount > 0)
-					{
-						static std::mt19937 rng(std::random_device{}());
-						std::uniform_int_distribution<int> dist(0, table->rowCount - 1);
-
-						const auto* tip = Game::StringTable_GetColumnValueForRow(table, dist(rng), 0);
-						if (tip && *tip)
-						{
-							Dvar::Var("didyouknow").set(tip);
-						}
-					}
-				}
-
-				if (connectMenuVisible || isLoading)
-				{
-					const auto startTime = Dvar::Var("zw3_ui_loading_start_time").get<int>();
-					const auto elapsed = std::max(0, now - startTime);
-
-					float stateTarget = 0.08f;
-
-					if (connState >= Game::connstate_t::CA_CONNECTING)
-						stateTarget = 0.22f;
-
-					if (connState >= Game::connstate_t::CA_CHALLENGING)
-						stateTarget = 0.38f;
-
-					if (connState >= Game::connstate_t::CA_CONNECTED)
-						stateTarget = 0.58f;
-
-					if (connState >= Game::connstate_t::CA_LOADING)
-						stateTarget = 0.84f;
-
-					if (connState >= Game::connstate_t::CA_PRIMED)
-						stateTarget = 0.995f;
-
-					const float timeTarget = EaseOutQuart(static_cast<float>(elapsed) / 5200.0f) * 0.985f;
-					const float target = std::clamp(std::max(stateTarget, timeTarget), 0.0f, 0.995f);
-
-					const float current = Dvar::Var("zw3_ui_loading_progress").get<float>();
-
-					float rate = 0.75f;
-
-					if (target > 0.35f)
-						rate = 0.55f;
-
-					if (target > 0.70f)
-						rate = 0.95f;
-
-					if (target > 0.88f)
-						rate = 1.8f;
-
-					if (connState >= Game::connstate_t::CA_PRIMED)
-						rate = 5.0f;
-
-					const float maxStep = rate * deltaSeconds;
-					const float next = current + std::clamp(target - current, 0.0f, maxStep);
-
-					Dvar::Var("zw3_ui_loading_progress").set(std::clamp(next, 0.0f, 0.995f));
-					Dvar::Var("zw3_ui_loading_visible").set(true);
-				}
-				else
-				{
-					Dvar::Var("zw3_ui_loading_progress").set(0.0f);
-					Dvar::Var("zw3_ui_loading_visible").set(false);
-				}
-
-				if (connState >= Game::connstate_t::CA_CONNECTING)
-				{
-					if (!Party::GetMotd().empty() && Party::Target() == *Game::connectedHost)
-					{
-						Dvar::Var("didyouknow").set(Party::GetMotd());
-					}
-				}
-
-				if (startedLoading || isNewConnection || isMapRestart)
-				{
-					Dvar::Var("zw3_ui_sb_survived_time").set("00:00:00");
-				}
-
+				UpdateLoadingProgress();
 				UpdateNewsCarousel();
-
-				lastConnState = connState;
-				lastMapName = currentMapName;
-				wasLoading = isLoading;
-				wasConnectMenuVisible = connectMenuVisible;
 			}, Components::Scheduler::Pipeline::MAIN);
+
+		Components::Scheduler::Loop([]()
+			{
+				UpdateLoadingProgress();
+			}, Components::Scheduler::Pipeline::RENDERER);
 
 		Command::Add("openmenu", [](const Command::Params* params)
 			{

@@ -1,5 +1,7 @@
 
 #include "Events.hpp"
+#include "Window.hpp"
+#include "RawMouse.hpp"
 
 namespace Components
 {
@@ -8,6 +10,8 @@ namespace Components
 
 	Utils::Signal<Renderer::Callback> Renderer::EndRecoverDeviceSignal;
 	Utils::Signal<Renderer::Callback> Renderer::BeginRecoverDeviceSignal;
+	std::atomic_bool DeviceRecoveryActive = false;
+	std::atomic_bool DeviceRecoveryComplete = true;
 
 	Dvar::Var Renderer::r_drawTriggers;
 	Dvar::Var Renderer::r_drawSceneModelCollisions;
@@ -20,6 +24,7 @@ namespace Components
 	Dvar::Var Renderer::r_listSamplers;
 	Dvar::Var Renderer::r_drawLights;
 	Dvar::Var Renderer::r_drawClipmap;
+	std::chrono::steady_clock::time_point VidRestartStart{};
 
 	float pink[4] = { 1.0f, 0.5f, 0.0f, 1.0f };
 	float cyan[4] = { 0.0f, 0.5f, 0.5f, 1.0f };
@@ -101,14 +106,43 @@ namespace Components
 		return reinterpret_cast<LPPOINT>(0x66E1C68)->y;
 	}
 
+	bool Renderer::IsDeviceRecoveryActive()
+	{
+		return DeviceRecoveryActive.load(std::memory_order_acquire);
+	}
+
 	void Renderer::PreVidRestart()
 	{
+		VidRestartStart = std::chrono::steady_clock::now();
+		DeviceRecoveryComplete.store(false, std::memory_order_release);
+		DeviceRecoveryActive.store(true, std::memory_order_release);
+		RawMouse::SuspendMouseInput();
 		Renderer::BeginRecoverDeviceSignal();
 	}
 
 	void Renderer::PostVidRestart()
 	{
 		Renderer::EndRecoverDeviceSignal();
+		// Renderer creation finishes before initial zones/UI are reloaded.
+		// Keep both the input state and timing active through main_text.
+		DeviceRecoveryComplete.store(true, std::memory_order_release);
+	}
+
+	void Renderer::FinishLoading()
+	{
+		if (!DeviceRecoveryComplete.load(std::memory_order_acquire)) return;
+		DeviceRecoveryActive.store(false, std::memory_order_release);
+
+		if (VidRestartStart.time_since_epoch().count() != 0)
+		{
+			const auto message = Utils::String::Format(
+				"vid_restart timing: main_text reached in {:.2f} ms.\n",
+				std::chrono::duration<double, std::milli>(
+					std::chrono::steady_clock::now() - VidRestartStart).count());
+			Logger::Print(Game::CON_CHANNEL_SYSTEM, "{}", message);
+			Utils::IO::WriteFile("zw3/logs/load_timings.log", message, true);
+			VidRestartStart = {};
+		}
 	}
 
 	__declspec(naked) void Renderer::PostVidRestartStub()
@@ -762,6 +796,9 @@ namespace Components
 		// Begin device recovery (not D3D9Ex)
 		Utils::Hook(0x508298, []
 		{
+			DeviceRecoveryComplete.store(false, std::memory_order_release);
+			DeviceRecoveryActive.store(true, std::memory_order_release);
+			RawMouse::SuspendMouseInput();
 			Game::DB_BeginRecoverLostDevice();
 			Renderer::BeginRecoverDeviceSignal();
 		}, HOOK_CALL).install()->quick();
@@ -771,6 +808,8 @@ namespace Components
 		{
 			Renderer::EndRecoverDeviceSignal();
 			Game::DB_EndRecoverLostDevice();
+			DeviceRecoveryComplete.store(true, std::memory_order_release);
+			DeviceRecoveryActive.store(false, std::memory_order_release);
 		}, HOOK_CALL).install()->quick();
 
 		// Begin vid_restart

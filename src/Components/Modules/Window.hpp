@@ -19,6 +19,10 @@ namespace Components
 		static void Dimension(HWND window, RECT* rect);
 
 		static bool IsCursorWithin(HWND window);
+		static bool HasFocus();
+		static bool IsLoadingScreenMovable();
+		static bool IsDragging();
+		static void PumpLoadingEvents();
 
 		static HWND GetWindow();
 
@@ -35,12 +39,14 @@ namespace Components
 		static Utils::Signal<DeviceChangeCallback> DeviceChangeSignals;
 
 		static HWND MainWindow;
+		static WNDPROC OriginalWindowProc;
 
 		static void ApplyCursor();
 
 		static int IsNoBorder();
 
 		static BOOL WINAPI MessageHandler(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam);
+		static LRESULT CALLBACK NativeWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam);
 
 		static int WINAPI ShowCursorHook(BOOL show);
 		static void DrawCursorStub(Game::ScreenPlacement* scrPlace, float x, float y, float w, float h, int horzAlign, int vertAlign, const float* color, Game::Material* material);

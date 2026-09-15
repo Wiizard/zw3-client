@@ -31,6 +31,7 @@ namespace Components
 		static std::vector<botData> LoadBotNames();
 		static int BuildConnectString(char* buffer, const char* connectString,
 			int num, int, int protocol, int checksum, int statVer, int statStuff, int port);
+		static bool SynchronizeBotIdentity(int clientNum, bool refreshClientInfo);
 		static void Spawn(unsigned int count);
 		static void GScr_isTestClient(Game::scr_entref_t entref);
 		static bool BG_HasPerk(const unsigned int* perks, unsigned int perkIndex);

@@ -6,6 +6,7 @@
 #include "Logger.hpp"
 #include "Scheduler.hpp"
 #include "Dedicated.hpp"
+#include <thread>
 
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
@@ -28,6 +29,9 @@ namespace Components
 
 	namespace
 	{
+		// An unsupported router is a normal outcome, not a reason to run COM
+		// discovery and firewall setup on every half-second lobby poll.
+		std::atomic<std::uint16_t> AttemptedPort{ 0 };
 		class BStr
 		{
 		public:
@@ -141,7 +145,7 @@ namespace Components
 			result = (*nat)->get_StaticPortMappingCollection(&mappings);
 			if (FAILED(result) || !mappings)
 			{
-				Logger::Print("UPnP: no Internet Gateway Device with port mapping support was found. Make sure UPnP is enabled on your router and Windows network discovery services are running.\n");
+				Logger::Debug("UPnP: no Internet Gateway Device with port mapping support was found.");
 				return nullptr;
 			}
 
@@ -296,7 +300,7 @@ namespace Components
 
 	void UPnP::StartMapping()
 	{
-		if (!NetUPnP.get<bool>() || !NetUPnPPrompted.get<bool>() || MappingInProgress)
+		if (!NetUPnP.get<bool>() || !NetUPnPPrompted.get<bool>())
 		{
 			return;
 		}
@@ -307,6 +311,12 @@ namespace Components
 			return;
 		}
 
+		// The server-init callback and the lobby poll can overlap. Claim the
+		// attempt atomically and release it on every return/exception path.
+		if (MappingInProgress.exchange(true)) return;
+		const auto finish = gsl::finally([] { MappingInProgress = false; });
+		if (AttemptedPort.exchange(port) == port) return;
+
 		if (MappingActive && MappedPort == port)
 		{
 			return;
@@ -316,8 +326,6 @@ namespace Components
 		{
 			RemoveMapping();
 		}
-
-		MappingInProgress = true;
 
 		try
 		{
@@ -333,7 +341,6 @@ namespace Components
 			Logger::Print("UPnP: mapping failed with an unknown error.\n");
 		}
 
-		MappingInProgress = false;
 	}
 
 	bool UPnP::IsPrivateLobbyOpen()
@@ -367,6 +374,7 @@ namespace Components
 			{
 				RemoveMapping();
 				LobbyMappingTriggered = false;
+				AttemptedPort = 0;
 			}
 
 			return;
@@ -378,6 +386,7 @@ namespace Components
 			{
 				RemoveMapping();
 				LobbyMappingTriggered = false;
+				AttemptedPort = 0;
 			}
 
 			return;
@@ -400,7 +409,7 @@ namespace Components
 		auto* mappings = GetPortMappingCollection(&nat);
 		if (!mappings)
 		{
-			Logger::Print("UPnP: mapping collection unavailable.\n");
+			Logger::Print("UPnP: automatic port mapping unavailable. Hosting may require manual port forwarding. Reopen the lobby to retry.\n");
 			if (nat) nat->Release();
 			if (shouldUninitialize) CoUninitialize();
 			return;
@@ -489,7 +498,10 @@ namespace Components
 			{
 				Scheduler::Once([]()
 					{
-						StartMapping();
+						std::thread([]
+						{
+							StartMapping();
+						}).detach();
 					}, Scheduler::Pipeline::SERVER, 500ms);
 			});
 

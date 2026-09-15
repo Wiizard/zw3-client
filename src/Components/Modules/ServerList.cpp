@@ -953,6 +953,22 @@ namespace Components
 			// Remove server from queue
 			i = RefreshContainer.servers.erase(i);
 
+			if (info.get("zwnet_show_in_server_browser") == "0")
+			{
+				std::erase_if(*l, [&address](const ServerInfo& existing)
+				{
+					return existing.addr == address;
+				});
+				if (sourceList == (*Game::ui_netSource)->current.integer)
+				{
+					Scheduler::Once([]
+					{
+						RefreshVisibleListInternal(UIScript::Token(), nullptr);
+					}, Scheduler::Pipeline::CLIENT);
+				}
+				return;
+			}
+
 			// Servers with more than 18 players or less than 0 players are faking for sure
 			// So lets ignore those
 			if (static_cast<std::size_t>(server.clients) > Game::MAX_CLIENTS || static_cast<std::size_t>(server.maxClients) > Game::MAX_CLIENTS)

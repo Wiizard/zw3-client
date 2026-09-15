@@ -1,0 +1,220 @@
+#pragma once
+
+#include <windows.h>
+#include <bcrypt.h>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <vector>
+#include <emmintrin.h>
+
+#pragma comment(lib, "Bcrypt.lib")
+
+namespace Utils::Cryptography
+{
+	// Compatible with LibTomCrypt's full-width little-endian AES-CTR mode.
+	// DB_ReadXFile often requests just a few bytes. Retain an entire batch
+	// across those reads instead of calling the crypto provider per AES block.
+	class BufferedAesCtr
+	{
+	public:
+		static constexpr std::size_t BlockSize = 16;
+		// Fastfiles are read in many small chunks. A larger keystream batch
+		// reduces BCrypt calls and counter-generation overhead without changing
+		// the stream position or output semantics.
+		static constexpr std::size_t BatchSize = 1024 * 1024;
+
+		BufferedAesCtr() = default;
+		BufferedAesCtr(const BufferedAesCtr&) = delete;
+		BufferedAesCtr& operator=(const BufferedAesCtr&) = delete;
+
+		~BufferedAesCtr()
+		{
+			this->reset();
+		}
+
+		bool initialize(const unsigned char* nonce, const unsigned char* key, const ULONG keySize)
+		{
+			this->reset();
+			if (!nonce || !key || !keySize)
+			{
+				return false;
+			}
+
+			if (BCryptOpenAlgorithmProvider(&this->algorithm_, BCRYPT_AES_ALGORITHM, nullptr, 0) < 0 ||
+				BCryptSetProperty(this->algorithm_, BCRYPT_CHAINING_MODE,
+					reinterpret_cast<PUCHAR>(const_cast<wchar_t*>(BCRYPT_CHAIN_MODE_ECB)), sizeof(BCRYPT_CHAIN_MODE_ECB), 0) < 0)
+			{
+				this->reset();
+				return false;
+			}
+
+			DWORD objectSize = 0;
+			DWORD resultSize = 0;
+			if (BCryptGetProperty(this->algorithm_, BCRYPT_OBJECT_LENGTH,
+				reinterpret_cast<PUCHAR>(&objectSize), sizeof(objectSize), &resultSize, 0) < 0 || !objectSize)
+			{
+				this->reset();
+				return false;
+			}
+
+			this->keyObject_.resize(objectSize);
+			if (BCryptGenerateSymmetricKey(this->algorithm_, &this->key_, this->keyObject_.data(), objectSize,
+				const_cast<PUCHAR>(key), keySize, 0) < 0)
+			{
+				this->reset();
+				return false;
+			}
+
+			this->keyStream_.resize(BatchSize);
+			return this->restart(nonce);
+		}
+
+		bool restart(const unsigned char* nonce)
+		{
+			if (!this->key_ || !nonce) return false;
+			std::memcpy(this->counter_.data(), nonce, this->counter_.size());
+			this->keyStreamOffset_ = BatchSize;
+			return true;
+		}
+
+		void reset()
+		{
+			if (this->key_)
+			{
+				BCryptDestroyKey(this->key_);
+				this->key_ = nullptr;
+			}
+			if (this->algorithm_)
+			{
+				BCryptCloseAlgorithmProvider(this->algorithm_, 0);
+				this->algorithm_ = nullptr;
+			}
+			this->keyObject_.clear();
+			this->keyStream_.clear();
+			this->counter_.fill(0);
+			this->keyStreamOffset_ = BatchSize;
+		}
+
+		bool decrypt(unsigned char* data, std::size_t size)
+		{
+			if (!this->key_ || (!data && size))
+			{
+				return false;
+			}
+
+			while (size)
+			{
+				if (this->keyStreamOffset_ == BatchSize && !this->refill())
+				{
+					return false;
+				}
+
+				const auto count = (std::min)(size, BatchSize - this->keyStreamOffset_);
+				const auto* stream = this->keyStream_.data() + this->keyStreamOffset_;
+				std::size_t i = 0;
+				for (; count - i >= 64; i += 64)
+				{
+					const auto in0 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i));
+					const auto m0 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(stream + i));
+					_mm_storeu_si128(reinterpret_cast<__m128i*>(data + i), _mm_xor_si128(in0, m0));
+
+					const auto in1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i + 16));
+					const auto m1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(stream + i + 16));
+					_mm_storeu_si128(reinterpret_cast<__m128i*>(data + i + 16), _mm_xor_si128(in1, m1));
+
+					const auto in2 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i + 32));
+					const auto m2 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(stream + i + 32));
+					_mm_storeu_si128(reinterpret_cast<__m128i*>(data + i + 32), _mm_xor_si128(in2, m2));
+
+					const auto in3 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i + 48));
+					const auto m3 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(stream + i + 48));
+					_mm_storeu_si128(reinterpret_cast<__m128i*>(data + i + 48), _mm_xor_si128(in3, m3));
+				}
+				for (; count - i >= 16; i += 16)
+				{
+					const auto input = _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i));
+					const auto mask = _mm_loadu_si128(reinterpret_cast<const __m128i*>(stream + i));
+					_mm_storeu_si128(reinterpret_cast<__m128i*>(data + i), _mm_xor_si128(input, mask));
+				}
+				for (; i + sizeof(std::uint64_t) <= count; i += sizeof(std::uint64_t))
+				{
+					std::uint64_t input = 0;
+					std::uint64_t mask = 0;
+					std::memcpy(&input, data + i, sizeof(input));
+					std::memcpy(&mask, stream + i, sizeof(mask));
+					input ^= mask;
+					std::memcpy(data + i, &input, sizeof(input));
+				}
+				for (; i < count; ++i)
+				{
+					data[i] ^= stream[i];
+				}
+
+				this->keyStreamOffset_ += count;
+				data += count;
+				size -= count;
+			}
+			return true;
+		}
+
+	private:
+		bool refill()
+		{
+			std::uint32_t low = 0;
+			std::memcpy(&low, this->counter_.data(), sizeof(low));
+			std::uint64_t high64 = 0;
+			std::uint32_t high32 = 0;
+			std::memcpy(&high64, this->counter_.data() + 4, sizeof(high64));
+			std::memcpy(&high32, this->counter_.data() + 12, sizeof(high32));
+
+			unsigned char* dest = this->keyStream_.data();
+			constexpr std::size_t NumBlocks = BatchSize / BlockSize;
+			if (low <= 0xFFFFFFFFu - static_cast<std::uint32_t>(NumBlocks))
+			{
+				for (std::size_t offset = 0; offset < BatchSize; offset += BlockSize)
+				{
+					*reinterpret_cast<std::uint32_t*>(dest + offset) = low++;
+					*reinterpret_cast<std::uint64_t*>(dest + offset + 4) = high64;
+					*reinterpret_cast<std::uint32_t*>(dest + offset + 12) = high32;
+				}
+			}
+			else
+			{
+				for (std::size_t offset = 0; offset < BatchSize; offset += BlockSize)
+				{
+					*reinterpret_cast<std::uint32_t*>(dest + offset) = low;
+					*reinterpret_cast<std::uint64_t*>(dest + offset + 4) = high64;
+					*reinterpret_cast<std::uint32_t*>(dest + offset + 12) = high32;
+					if (++low == 0)
+					{
+						for (std::size_t byte = sizeof(low); byte < BlockSize; ++byte)
+						{
+							if (++this->counter_[byte] != 0) break;
+						}
+						std::memcpy(&high64, this->counter_.data() + 4, sizeof(high64));
+						std::memcpy(&high32, this->counter_.data() + 12, sizeof(high32));
+					}
+				}
+			}
+			std::memcpy(this->counter_.data(), &low, sizeof(low));
+
+			ULONG written = 0;
+			if (BCryptEncrypt(this->key_, this->keyStream_.data(), static_cast<ULONG>(BatchSize),
+				nullptr, nullptr, 0, this->keyStream_.data(), static_cast<ULONG>(BatchSize), &written, 0) < 0 || written != BatchSize)
+			{
+				return false;
+			}
+			this->keyStreamOffset_ = 0;
+			return true;
+		}
+
+		BCRYPT_ALG_HANDLE algorithm_ = nullptr;
+		BCRYPT_KEY_HANDLE key_ = nullptr;
+		std::vector<unsigned char> keyObject_;
+		std::vector<unsigned char> keyStream_;
+		std::array<unsigned char, BlockSize> counter_{};
+		std::size_t keyStreamOffset_ = BatchSize;
+	};
+}

@@ -127,6 +127,7 @@ namespace Components
 
 		static void RegisterFolders();
 		static void StartupStub();
+		static void FS_AddLocalizedGameDirectory_Stub();
 		static int Cmd_Exec_f_Stub(const char* s0, const char* s1);
 
 		static void FsStartupSync(const char* a1);

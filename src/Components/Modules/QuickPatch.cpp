@@ -756,10 +756,6 @@ namespace Components
 		Utils::Hook::Set<uint32_t>(0x4D6083, 0); // party_connectTimeout default: was 1000 -> 0
 		Utils::Hook::Set<uint32_t>(0x4D61F9, 0); // party_searchPauseTime default: was 2000 -> 0
 
-		// Bypass lobby veto and match launch countdown stalls in Party_HostFrame.
-		Utils::Hook::Nop(0x4E5239, 2); // Start match immediately without veto wait
-		Utils::Hook::Nop(0x4E52B6, 2); // Launch game immediately without countdown wait
-
 		Scheduler::Once([]()
 		{
 			if (const auto dvar = Game::Dvar_FindVar("party_pregameStartTimerLength"))

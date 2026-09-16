@@ -36,10 +36,6 @@ namespace Components
 		bool SawLoadingState = false;
 		unsigned int MapCommandDepth = 0;
 		void (*NativeDevmapCommand)() = nullptr;
-		std::chrono::steady_clock::time_point MapLoadStart{};
-		std::string TimedMap;
-		bool MapTimingActive = false;
-		bool MapTimingSawLoadingState = false;
 
 		bool IsMainMenuOpen()
 		{
@@ -180,14 +176,6 @@ namespace Components
 		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled()) return;
 
 		const auto map = Utils::MapPreview::Normalize(name);
-		if (!map.empty() && (!MapTimingActive || TimedMap != map))
-		{
-			TimedMap = map;
-			MapLoadStart = std::chrono::steady_clock::now();
-			MapTimingActive = true;
-			MapTimingSawLoadingState = false;
-		}
-
 		D3D9Ex::BeginMapLoading(map);
 		// The engine loads the lightweight *_load zone before the main map
 		// zone.  Start both reads as soon as map/devmap is issued so large
@@ -348,35 +336,6 @@ namespace Components
 
 				const auto state =
 					*reinterpret_cast<Game::connstate_t*>(0xB2C540);
-
-				// This is intentionally independent of the SP load-screen state:
-				// multiplayer map loads clear the custom preview immediately, but
-				// still need the same end-to-end timing measurement.
-				if (MapTimingActive)
-				{
-					if (state >= Game::CA_CONNECTING && state < Game::CA_ACTIVE)
-					{
-						MapTimingSawLoadingState = true;
-					}
-
-					if (MapTimingSawLoadingState && state == Game::CA_ACTIVE)
-					{
-						const auto message = Utils::String::Format(
-							"Map timing: {} reached active in {:.2f} ms.\n",
-							TimedMap,
-							std::chrono::duration<double, std::milli>(
-								std::chrono::steady_clock::now() - MapLoadStart).count());
-						Logger::Print(Game::CON_CHANNEL_SYSTEM, "{}", message);
-						Utils::IO::WriteFile("zw3/logs/load_timings.log", message, true);
-						MapTimingActive = false;
-					}
-					else if (MapTimingSawLoadingState && state == Game::CA_DISCONNECTED)
-					{
-						Logger::Print(Game::CON_CHANNEL_SYSTEM,
-							"Map timing: {} load aborted before active.\n", TimedMap);
-						MapTimingActive = false;
-					}
-				}
 
 				if (!TransitionPending) return;
 

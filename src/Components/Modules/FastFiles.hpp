@@ -6,11 +6,17 @@ namespace Components
 	{
 	public:
 		FastFiles();
+		void preDestroy() override;
 
 		static void AddZonePath(const std::string& path);
-		static std::string Current();
+		static void PrefetchZone(const std::string& zoneName);
+		static void PrefetchPath(const std::filesystem::path& path);
+		static std::string_view Current();
 		static bool Ready();
+		static void MarkMainMenuReady();
+		static bool MainMenuReady();
 		static bool Exists(const std::string& file);
+		static bool HasZW3CommonZone();
 		static bool IsZombieZoneName(std::string_view zoneName);
 		static bool ShouldProtectZone(std::string_view zoneName);
 		static void ProtectZoneBuffer(std::string& buffer);

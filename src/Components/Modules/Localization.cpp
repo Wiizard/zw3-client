@@ -1,4 +1,5 @@
 #include "ArenaLength.hpp"
+#include "FastFiles.hpp"
 
 namespace Components
 {
@@ -75,7 +76,18 @@ namespace Components
 
 		if (!entry || !entry->value)
 		{
-			entry = Game::DB_FindXAssetHeader(Game::XAssetType::ASSET_TYPE_LOCALIZE_ENTRY, key).localize;
+			if (FastFiles::Ready())
+			{
+				entry = Game::DB_FindXAssetHeader(Game::XAssetType::ASSET_TYPE_LOCALIZE_ENTRY, key).localize;
+			}
+			else
+			{
+				const auto* assetEntry = Game::DB_FindXAssetEntry(Game::XAssetType::ASSET_TYPE_LOCALIZE_ENTRY, key);
+				if (assetEntry && assetEntry->asset.header.localize)
+				{
+					entry = assetEntry->asset.header.localize;
+				}
+			}
 		}
 
 		if (entry && entry->value)
@@ -379,11 +391,11 @@ namespace Components
 		UseLocalization = Dvar::Register<bool>("ui_localize", true, Game::DVAR_NONE, "Use localization strings");
 
 		// Generate localized entries for custom classes above 10
-		AssetHandler::OnLoad([](Game::XAssetType type, Game::XAssetHeader asset, const std::string& name, bool* /*restrict*/)
+		AssetHandler::OnLoad(Game::ASSET_TYPE_LOCALIZE_ENTRY, [](Game::XAssetType type, Game::XAssetHeader asset, const std::string_view name, bool* /*restrict*/)
 		{
 			if (type != Game::XAssetType::ASSET_TYPE_LOCALIZE_ENTRY) return;
 
-			if (name == "CLASS_SLOT1"s)
+			if (name == "CLASS_SLOT1")
 			{
 				for (int i = 11; i <= NUM_CUSTOM_CLASSES; ++i)
 				{

@@ -464,8 +464,10 @@ namespace Components
 				}
 				else
 				{
-					rankIcon = GetZombieRankIcon(0);
-					rankLevel = "1";
+					// Unknown remote progression is not rank 1. Leave both fields
+					// empty until the authenticated lobby snapshot publishes it.
+					rankIcon.clear();
+					rankLevel.clear();
 				}
 			}
 

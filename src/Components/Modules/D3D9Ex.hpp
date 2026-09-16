@@ -6,6 +6,9 @@ namespace Components
 	{
 	public:
 		D3D9Ex();
+		static int LoadTexture(Game::GfxImageLoadDef** loadDef, Game::GfxImage* image);
+		static void BeginMapLoading(const std::string& map);
+		static bool IsD3D9ExEnabled();
 
 	private:
 		class D3D9Device : public IDirect3DDevice9
@@ -169,5 +172,6 @@ namespace Components
 		static Dvar::Var RUseD3D9Ex;
 
 		static IDirect3D9* CALLBACK Direct3DCreate9Stub(UINT sdk);
+		static bool LoadImageWithReader(Game::GfxImage* image, Game::Reader_t reader);
 	};
 }

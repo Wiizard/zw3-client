@@ -385,12 +385,12 @@ namespace Components::CharacterAssignments
 
 		if (xuid == 0)
 		{
-			if (client.bIsTestClient || IsValid(existing))
+			if (IsValid(existing))
 			{
 				return existing;
 			}
 
-			if (client.header.state >= Game::CS_CONNECTED)
+			if (client.header.state >= Game::CS_CONNECTED || client.bIsTestClient)
 			{
 				std::scoped_lock lock(StateMutex);
 				const auto character = FirstFreeCharacterLocked(0, clientNum,
@@ -398,6 +398,10 @@ namespace Components::CharacterAssignments
 				if (IsValid(character))
 				{
 					SetClientCharacter(clientNum, character);
+					if (client.bIsTestClient)
+					{
+						SetBotReserved(clientNum, true);
+					}
 				}
 				return character;
 			}

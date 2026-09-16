@@ -1,6 +1,7 @@
 
 #include "Theatre.hpp"
 #include "UIFeeder.hpp"
+#include <thread>
 
 namespace Components
 {
@@ -341,27 +342,29 @@ namespace Components
 	{
 		if (CLAutoRecord.get<bool>() && !Game::clientConnections->demoplaying)
 		{
-			std::vector<std::string> files;
-			auto demos = FileSystem::GetFileList("demos/", "dm_13");
-
-			for (auto& demo : demos)
+			const auto keepCount = CLDemosKeep.get<int>();
+			std::thread([keepCount]()
 			{
-				if (Utils::String::StartsWith(demo, "auto_"))
+				auto demos = FileSystem::GetFileList("demos/", "dm_13");
+				std::vector<std::string> files;
+				for (auto& demo : demos)
 				{
-					files.push_back(demo);
+					if (Utils::String::StartsWith(demo, "auto_"))
+					{
+						files.push_back(demo);
+					}
 				}
-			}
 
-			auto numDel = static_cast<int>(files.size()) - CLDemosKeep.get<int>();
+				auto numDel = static_cast<int>(files.size()) - keepCount;
+				for (auto i = 0; i < numDel; ++i)
+				{
+					Logger::Print("Deleting old demo {}\n", files[i]);
+					FileSystem::_DeleteFile("demos", files[i]);
+					FileSystem::_DeleteFile("demos", std::format("{}.json", files[i]));
+				}
+			}).detach();
 
-			for (auto i = 0; i < numDel; ++i)
-			{
-				Logger::Print("Deleting old demo {}\n", files[i]);
-				FileSystem::_DeleteFile("demos", files[i]);
-				FileSystem::_DeleteFile("demos", std::format("{}.json", files[i]));
-			}
-
-			Command::Execute(Utils::String::VA("record auto_%lld", std::time(nullptr)), true);
+			Command::Execute(Utils::String::VA("record auto_%lld", std::time(nullptr)), false);
 		}
 
 		return Utils::Hook::Call<int()>(0x42BBB0)(); // DB_GetLoadedFlags

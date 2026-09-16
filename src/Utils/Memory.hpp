@@ -20,6 +20,16 @@ namespace Utils
 				this->clear();
 			}
 
+			// Opt in for workloads with many individual frees (e.g. UI parsing).
+			// Other allocators retain their existing compact vector bookkeeping.
+			void enableIndexedTracking()
+			{
+				std::lock_guard _(this->mutex);
+				this->indexedPool.insert(this->pool.begin(), this->pool.end());
+				this->pool.clear();
+				this->indexedTracking = true;
+			}
+
 			void clear()
 			{
 				std::lock_guard _(this->mutex);
@@ -40,6 +50,11 @@ namespace Utils
 				}
 
 				this->pool.clear();
+				for (const auto& data : this->indexedPool)
+				{
+					Free(data);
+				}
+				this->indexedPool.clear();
 			}
 
 			void free(void* data)
@@ -51,6 +66,15 @@ namespace Utils
 				{
 					i->second(i->first);
 					this->refMemory.erase(i);
+				}
+
+				if (this->indexedTracking)
+				{
+					if (this->indexedPool.erase(data))
+					{
+						Free(data);
+					}
+					return;
 				}
 
 				auto j = std::find(this->pool.begin(), this->pool.end(), data);
@@ -78,7 +102,7 @@ namespace Utils
 				std::lock_guard _(this->mutex);
 
 				void* data = Allocate(length);
-				this->pool.push_back(data);
+				this->track(data);
 				return data;
 			}
 
@@ -94,7 +118,7 @@ namespace Utils
 
 			bool empty() const
 			{
-				return (this->pool.empty() && this->refMemory.empty());
+				return (this->pool.empty() && this->indexedPool.empty() && this->refMemory.empty());
 			}
 
 			char* duplicateString(const std::string& string)
@@ -102,7 +126,7 @@ namespace Utils
 				std::lock_guard _(this->mutex);
 
 				char* data = DuplicateString(string);
-				this->pool.push_back(data);
+				this->track(data);
 				return data;
 			}
 
@@ -127,8 +151,22 @@ namespace Utils
 			}
 
 		private:
+			void track(void* data)
+			{
+				if (this->indexedTracking)
+				{
+					this->indexedPool.insert(data);
+				}
+				else
+				{
+					this->pool.push_back(data);
+				}
+			}
+
 			std::mutex mutex;
 			std::vector<void*> pool;
+			std::unordered_set<void*> indexedPool;
+			bool indexedTracking = false;
 			std::unordered_map<void*, void*> ptrMap;
 			std::unordered_map<void*, FreeCallback> refMemory;
 		};

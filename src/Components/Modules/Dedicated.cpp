@@ -4,6 +4,7 @@
 #include "CardTitles.hpp"
 #include "ClanTags.hpp"
 #include "Events.hpp"
+#include "FastFiles.hpp"
 #include "Party.hpp"
 #include "ServerCommands.hpp"
 
@@ -12,6 +13,10 @@ namespace Components
 	SteamID Dedicated::PlayerGuids[18][2];
 
 	Dvar::Var Dedicated::SVLanOnly;
+	Dvar::Var Dedicated::ZWNetShowInServerBrowser;
+	Dvar::Var Dedicated::ZWNetMatchEnded;
+	Dvar::Var Dedicated::ZWNetMatchId;
+	Dvar::Var Dedicated::ZWNetSelectedMap;
 	Dvar::Var Dedicated::SVMOTD;
 	Dvar::Var Dedicated::COMLogFilter;
 
@@ -37,13 +42,16 @@ namespace Components
 
 	void Dedicated::InitDedicatedServer()
 	{
-		static const char* fastfiles[7] =
+		const auto* commonZone = FastFiles::HasZW3CommonZone()
+			? "zw3_common"
+			: "common_mp";
+		const char* fastfiles[7] =
 		{
 			"code_post_gfx_mp",
 			"localized_code_post_gfx_mp",
 			"ui_mp",
 			"localized_ui_mp",
-			"zw3_common",
+			commonZone,
 			"localized_common_mp",
 			"patch_mp"
 		};
@@ -161,8 +169,9 @@ namespace Components
 
 	void Dedicated::Heartbeat()
 	{
-		// Do not send a heartbeat if sv_lanOnly is set to true
-		if (SVLanOnly.get<bool>())
+		// A matchmaking-managed server remains directly reachable while being
+		// excluded from normal master-server advertisement.
+		if (SVLanOnly.get<bool>() || ZWNetShowInServerBrowser.get<std::string>() == "0")
 		{
 			return;
 		}
@@ -268,6 +277,25 @@ namespace Components
 						Game::Dvar_SetVariant(const_cast<Game::dvar_t*>(com_dedicated), value, Game::DVAR_SOURCE_INTERNAL);
 					}
 				});
+
+				// Matchmaking status is not needed while the initial zones and the
+				// base Dvar table are loading. Register it on the database-ready main
+				// thread so the generated cfg always writes the same string type.
+				Scheduler::OnGameInitialized([]
+				{
+					ZWNetShowInServerBrowser = Dvar::Register<const char*>(
+						"zwnet_show_in_server_browser", "1", Game::DVAR_SERVERINFO,
+						"Advertise this server in the normal server browser");
+					ZWNetMatchEnded = Dvar::Register<const char*>(
+						"zwnet_match_ended", "0", Game::DVAR_SERVERINFO,
+						"The assigned ZWNET match reached its authoritative end state");
+					ZWNetMatchId = Dvar::Register<const char*>(
+						"zwnet_match_id", "", Game::DVAR_SERVERINFO,
+						"The backend-assigned ZWNET match identifier");
+					ZWNetSelectedMap = Dvar::Register<const char*>(
+						"zwnet_selected_map", "", Game::DVAR_SERVERINFO,
+						"The backend-assigned ZWNET map identifier");
+				}, Scheduler::Pipeline::MAIN);
 
 				// Post initialization point
 				Utils::Hook(0x60BFBF, PostInitializationStub, HOOK_JUMP).install()->quick();

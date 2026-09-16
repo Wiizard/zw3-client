@@ -1,8 +1,87 @@
 #include "D3D9Ex.hpp"
+#include "FastFiles.hpp"
+#include "Renderer.hpp"
+#include "Window.hpp"
+#include <Utils/StagedTextureUpload.hpp>
 
 namespace Components
 {
+	namespace
+	{
+		std::atomic<bool> StartupTextureUploads{true};
+		std::atomic<bool> MapTextureUploads{false};
+		std::string LoadingMap;
+		bool MapSawConnection = false;
+
+		bool UseStagedUploads()
+		{
+			// Staging is only useful for the D3D9Ex upload path.  On the normal
+			// D3D9 path it adds an extra system-memory texture and UpdateTexture
+			// for every image, which needlessly duplicates startup/map I/O.
+			return D3D9Ex::IsD3D9ExEnabled()
+				&& (StartupTextureUploads.load(std::memory_order_relaxed)
+				|| MapTextureUploads.load(std::memory_order_relaxed)
+				|| Renderer::IsDeviceRecoveryActive());
+		}
+
+		struct ImageUploadScope;
+		thread_local ImageUploadScope* CurrentImageUpload = nullptr;
+
+		struct ImageUploadScope
+		{
+			Game::GfxImage* image;
+			ImageUploadScope* previous;
+			Utils::StagedTextureUpload upload;
+
+			explicit ImageUploadScope(Game::GfxImage* target) : image(target), previous(CurrentImageUpload)
+			{
+				CurrentImageUpload = this;
+			}
+
+			~ImageUploadScope()
+			{
+				CurrentImageUpload = previous;
+				if (!upload.Pending()) return;
+				const auto result = upload.Finish();
+				if (FAILED(result))
+					Logger::Error(Game::ERR_FATAL, "Could not upload image '{}' (HRESULT {:08X}).", image->name, static_cast<unsigned int>(result));
+			}
+		};
+	}
+
 	Dvar::Var D3D9Ex::RUseD3D9Ex;
+
+	void D3D9Ex::BeginMapLoading(const std::string& map)
+	{
+		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled() || map.empty()) return;
+		if (MapTextureUploads.load(std::memory_order_relaxed) && LoadingMap == map) return;
+		LoadingMap = map;
+		MapSawConnection = false;
+		MapTextureUploads.store(true, std::memory_order_relaxed);
+	}
+
+	bool D3D9Ex::IsD3D9ExEnabled()
+	{
+		return RUseD3D9Ex.get<bool>();
+	}
+
+	int D3D9Ex::LoadTexture(Game::GfxImageLoadDef** loadDef, Game::GfxImage* image)
+	{
+		Window::PumpLoadingEvents();
+		if (!UseStagedUploads())
+			return Game::Load_Texture(loadDef, image);
+		ImageUploadScope upload(image);
+		return Game::Load_Texture(loadDef, image);
+	}
+
+	bool D3D9Ex::LoadImageWithReader(Game::GfxImage* image, Game::Reader_t reader)
+	{
+		Window::PumpLoadingEvents();
+		if (!UseStagedUploads())
+			return Game::Image_LoadFromFileWithReader(image, reader);
+		ImageUploadScope upload(image);
+		return Game::Image_LoadFromFileWithReader(image, reader);
+	}
 
 #pragma region D3D9Device
 
@@ -129,6 +208,16 @@ namespace Components
 
 	HRESULT D3D9Ex::D3D9Device::CreateTexture(UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9** ppTexture, HANDLE* pSharedHandle)
 	{
+		// Only intercept the image currently being synchronously initialized. No
+		// render targets, procedural textures, cube maps, or persistent staging cache.
+		if (Pool == D3DPOOL_MANAGED && Usage == 0 && !pSharedHandle && CurrentImageUpload
+			&& CurrentImageUpload->image && ppTexture == &CurrentImageUpload->image->texture.map
+			&& UseStagedUploads()
+			&& CurrentImageUpload->upload.Begin(m_pIDirect3DDevice9, Width, Height, Levels, Format, ppTexture))
+		{
+			return D3D_OK;
+		}
+
 		if (Pool == D3DPOOL_MANAGED) { Pool = D3DPOOL_DEFAULT; Usage |= D3DUSAGE_DYNAMIC; }
 
 		return m_pIDirect3DDevice9->CreateTexture(Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);
@@ -752,5 +841,26 @@ namespace Components
 
 		// Hook Interface creation
 		Utils::Hook::Set(0x6D74D0, Direct3DCreate9Stub);
+
+		// These encompass full loose-image mip chains, including delayed images.
+		Utils::Hook(0x51F486, LoadImageWithReader, HOOK_CALL).install()->quick();
+		Utils::Hook(0x51F595, LoadImageWithReader, HOOK_CALL).install()->quick();
+		Utils::Hook(0x51F809, LoadImageWithReader, HOOK_CALL).install()->quick();
+		Utils::Hook(0x51F896, LoadImageWithReader, HOOK_CALL).install()->quick();
+		Scheduler::Loop([]
+		{
+			if (!MapTextureUploads.load(std::memory_order_relaxed)) return;
+			const auto state = *reinterpret_cast<Game::connstate_t*>(0xB2C540);
+			if (state >= Game::CA_CONNECTING && state < Game::CA_ACTIVE) MapSawConnection = true;
+			if (MapSawConnection && (state == Game::CA_ACTIVE || (state == Game::CA_DISCONNECTED && FastFiles::Ready())))
+			{
+				MapTextureUploads.store(false, std::memory_order_relaxed);
+				LoadingMap.clear();
+			}
+		}, Scheduler::Pipeline::MAIN);
+		Scheduler::OnGameInitialized([]
+		{
+			StartupTextureUploads.store(false, std::memory_order_relaxed);
+		}, Scheduler::Pipeline::MAIN);
 	}
 }

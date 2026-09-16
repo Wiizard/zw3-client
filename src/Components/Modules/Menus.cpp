@@ -2,6 +2,8 @@
 #include "Materials.hpp"
 #include "Party.hpp"
 #include "Events.hpp"
+#include "SPLoadscreens.hpp"
+#include "FastFiles.hpp"
 #include <Utils/WebIO.hpp>
 #include <filesystem>
 // Ensure you have includes for AssetHandler, if it's a separate component.
@@ -12,7 +14,44 @@
 
 namespace Components
 {
+	namespace
+	{
+		const char EmptyPlayerPerk[] = "";
 
+		using ParsedMenuFile = std::vector<std::pair<std::string, Game::menuDef_t*>>;
+		struct MenuReloadCache
+		{
+			std::unordered_map<std::string, ParsedMenuFile> files;
+			std::unordered_set<Game::menuDef_t*> deferred;
+		};
+		thread_local MenuReloadCache* ActiveMenuReloadCache = nullptr;
+
+		// OP_GET_PLAYER_PERK is evaluated by menu expressions every frame,
+		// including loading/disconnect transitions with no cgame. Its stock
+		// implementation reports an error on every such evaluation. Defer the
+		// query until cgame exists, using the same empty-string operand as the
+		// engine's unavailable-player result. Active-match evaluation is intact.
+		__declspec(naked) void EvaluatePlayerPerkWhenReady()
+		{
+			__asm
+			{
+				pushad
+				push eax
+				mov eax, 43EB20h
+				call eax
+				add esp, 4
+				test eax, eax
+				popad
+				jnz ready
+				mov dword ptr [esi], 2
+				mov dword ptr [esi + 4], offset EmptyPlayerPerk
+				retn
+			ready:
+				push 62AA10h
+				retn
+			}
+		}
+	}
 	// NO LONGER NEEDED: decltype(&Game::DB_FindXAssetHeader) Menus::DB_FindXAssetHeader_Original = nullptr;
 
 	// As of now it is not sure whether supporting data needs to be reallocated
@@ -301,6 +340,29 @@ namespace Components
 	std::vector<Game::menuDef_t*> Menus::LoadMenuByName_Recursive(const std::string& menu)
 	{
 		std::vector<Game::menuDef_t*> menus;
+		auto cacheKey = Utils::String::ToLower(menu);
+		std::replace(cacheKey.begin(), cacheKey.end(), '/', '\\');
+		if (ActiveMenuReloadCache)
+		{
+			const auto cached = ActiveMenuReloadCache->files.find(cacheKey);
+			if (cached != ActiveMenuReloadCache->files.end())
+			{
+				// A different file may have overridden a definition since parsing.
+				// Reuse only definitions that are still installed or retained for this pass.
+				for (const auto& [name, definition] : cached->second)
+				{
+					const auto installed = MenusFromDisk.find(name);
+					if (!ActiveMenuReloadCache->deferred.contains(definition)
+						&& (installed == MenusFromDisk.end() || installed->second != definition))
+					{
+						menus.clear();
+						break;
+					}
+					menus.push_back(definition);
+				}
+				if (!menus.empty()) return menus;
+			}
+		}
 		FileSystem::File menuFile(menu);
 
 		if (menuFile.exists())
@@ -344,6 +406,15 @@ namespace Components
 			}
 		}
 
+		if (ActiveMenuReloadCache && !menus.empty())
+		{
+			auto& cached = ActiveMenuReloadCache->files[cacheKey];
+			cached.clear();
+			for (auto* definition : menus)
+			{
+				cached.emplace_back(definition->window.name, definition);
+			}
+		}
 		return menus;
 	}
 
@@ -429,6 +500,12 @@ namespace Components
 	}
 
 
+	static const std::unordered_set<std::string_view> HudMenuNames = {
+		"scorebar_hd", "scorebar_sd", "weaponbar_hd", "weaponbar_sd",
+		"xpbar_hd", "xpbar_sd", "perks_info_hd", "perks_info_sd",
+		"dpad_hd", "dpad_sd", "scoreboard", "minimap_fullscreen"
+	};
+
 	bool Menus::MenuAlreadyExists(const std::string& name)
 	{
 		for (size_t i = 0; i < ARRAYSIZE(GameUiContexts); i++)
@@ -458,14 +535,20 @@ namespace Components
 			for (int i = 0; i < static_cast<int>(menus.size()); i++)
 			{
 				const auto menuName = menus[i]->window.name;
-				if (MenuAlreadyExists(menuName))
+				if (MenuAlreadyExists(menuName) || HudMenuNames.contains(menuName))
 				{
 					// It's an override, we keep it
 				}
 				else
 				{
-					// We are not allowed to keep this one, let's free it
-					FreeMenuOnly(menus[i]);
+					// A later menu list may allow this definition. Retain it only
+					// for the current pass instead of parsing the same file twice.
+					const auto installed = MenusFromDisk.find(menuName);
+					if (installed == MenusFromDisk.end() || installed->second != menus[i])
+					{
+						if (ActiveMenuReloadCache) ActiveMenuReloadCache->deferred.insert(menus[i]);
+						else FreeMenuOnly(menus[i]);
+					}
 					menus.erase(menus.begin() + i);
 					i--;
 				}
@@ -480,8 +563,14 @@ namespace Components
 		// Tracking
 		for (const auto& loadedMenu : menus)
 		{
+			if (ActiveMenuReloadCache) ActiveMenuReloadCache->deferred.erase(loadedMenu);
 			// Unload previous loaded-from-disk versions of these menus, if we had any
 			const std::string menuName = loadedMenu->window.name;
+			const auto installed = MenusFromDisk.find(menuName);
+			if (installed != MenusFromDisk.end() && installed->second == loadedMenu)
+			{
+				continue; // Shared by another list in this reload; already installed.
+			}
 			if (MenusFromDisk.contains(menuName))
 			{
 				UnloadMenuFromDisk(menuName); // This calls PrepareToUnloadMenu which updates contexts
@@ -739,7 +828,8 @@ namespace Components
 
 			// 2. If this menu was an override, attempt to put the original back
 			// This is critical for game-referenced menus like 'connect'.
-			if (originalMenu && name != "connect")
+			// Never restore stock MW2 HUD menus.
+			if (originalMenu && name != "connect" && !HudMenuNames.contains(name))
 			{
 				bool foundExistingSpot = false;
 				// Check if original is already back (e.g., if another part of the game re-added it)
@@ -790,6 +880,7 @@ namespace Components
 
 		Game::menuDef_t* existingGameMenu = nullptr;
 		bool foundExistingInContext = false;
+		bool foundInCgDC = false;
 
 		// Check if a menu with the same name already exists in ANY of the game contexts.
 		// This identifies if our newly loaded menu is an override.
@@ -799,10 +890,13 @@ namespace Components
 			Game::menuDef_t* found = Game::Menus_FindByName(context, name.data());
 			if (found && found != menu) // Found an existing menu that is NOT our newly loaded one
 			{
-				existingGameMenu = found;
+				if (!existingGameMenu) existingGameMenu = found;
 				foundExistingInContext = true;
-				DebugPrint("AfterLoadedMenuFromDisk: Found existing menu '{}' ({:X}) in context {:X}. This is an override.", name, (unsigned int)existingGameMenu, (unsigned int)context);
-				break; // Only need to find one existing instance to confirm it's an override
+				if (context == Game::cgDC)
+				{
+					foundInCgDC = true;
+				}
+				DebugPrint("AfterLoadedMenuFromDisk: Found existing menu '{}' ({:X}) in context {:X}. This is an override.", name, (unsigned int)found, (unsigned int)context);
 			}
 		}
 
@@ -819,7 +913,7 @@ namespace Components
 			// This is crucial to prevent the original from lingering.
 			for (size_t contextIndex = 0; contextIndex < ARRAYSIZE(Menus::GameUiContexts); contextIndex++)
 			{
-				RemoveMenuFromContext(GameUiContexts[contextIndex], existingGameMenu);
+				RemoveMenuNameFromContext(Menus::GameUiContexts[contextIndex], name, menu);
 			}
 		}
 		else
@@ -854,6 +948,31 @@ namespace Components
 		}
 		else {
 			DebugPrint("AfterLoadedMenuFromDisk: Menu '{}' ({:X}) already present in Game::uiContext->Menus, no re-addition.", name, (unsigned int)menu);
+		}
+
+		// Also register in Game::cgDC if found in cgDC or if it's a HUD menu override
+		if (foundInCgDC || HudMenuNames.contains(name))
+		{
+			bool menuAlreadyActiveInCgDC = false;
+			for (int i = 0; i < Game::cgDC->menuCount; ++i) {
+				if (Game::cgDC->Menus[i] == menu) {
+					menuAlreadyActiveInCgDC = true;
+					break;
+				}
+			}
+
+			if (!menuAlreadyActiveInCgDC) {
+				if (Game::cgDC->menuCount < ARRAYSIZE(Game::cgDC->Menus))
+				{
+					Game::cgDC->Menus[Game::cgDC->menuCount] = menu;
+					Game::cgDC->menuCount++;
+					DebugPrint("AfterLoadedMenuFromDisk: Added menu '{}' ({:X}) to Game::cgDC->Menus[{}] (Total count: {}).",
+						name, (unsigned int)menu, Game::cgDC->menuCount - 1, Game::cgDC->menuCount);
+				}
+				else {
+					Components::Logger::PrintError(Game::CON_CHANNEL_UI, "AfterLoadedMenuFromDisk: cgDC context menu array full for adding menu {}\n", name);
+				}
+			}
 		}
 
 		if (name == "connect")
@@ -1113,6 +1232,20 @@ namespace Components
 
 	void Menus::FreeMenuOnly(Game::menuDef_t* menu)
 	{
+		if (ActiveMenuReloadCache)
+		{
+			// Invalidate before freeing: an allocator may reuse this address for
+			// an override with the same name later in the current reload.
+			ActiveMenuReloadCache->deferred.erase(menu);
+			std::erase_if(ActiveMenuReloadCache->files, [menu](const auto& entry)
+			{
+				return std::any_of(entry.second.begin(), entry.second.end(), [menu](const auto& definition)
+				{
+					return definition.second == menu;
+				});
+			});
+		}
+		if (menu) SPLoadscreens::OnMenuFreed(menu);
 		DebugPrint("Freeing only menu {} at {:X}",
 			menu->window.name,
 			(unsigned int)menu
@@ -1452,29 +1585,48 @@ namespace Components
 
 	void Menus::ReloadDiskMenus(bool preserveConnect)
 	{
+		// Menu lists often include files already loaded by the directory scan.
+		// Keep no cache across reloads: definitions, supporting data and assets
+		// must still be rebuilt after UI initialization or filesystem changes.
+		MenuReloadCache reloadCache;
+		auto* previousCache = ActiveMenuReloadCache;
+		ActiveMenuReloadCache = &reloadCache;
+		const auto restoreCache = gsl::finally([previousCache]
+		{
+			while (!ActiveMenuReloadCache->deferred.empty())
+			{
+				FreeMenuOnly(*ActiveMenuReloadCache->deferred.begin());
+			}
+			ActiveMenuReloadCache = previousCache;
+		});
 		const auto connectionState = *reinterpret_cast<Game::connstate_t*>(0xB2C540);
 
-		const bool allowStrayMenus = connectionState > Game::connstate_t::CA_DISCONNECTED
-			&& Game::CL_IsCgameInitialized();
+		const bool allowStrayMenus = (connectionState > Game::connstate_t::CA_DISCONNECTED
+			&& Game::CL_IsCgameInitialized()) || preserveConnect;
 
 		DebugPrint("Reloading disk menus... preserveConnect={}", preserveConnect);
 
-		const auto listsFromDisk = MenuListsFromDisk;
-		for (const auto& menuList : listsFromDisk)
+		while (!MenuListsFromDisk.empty())
 		{
-			FreeMenuListOnly(menuList.second);
-			MenuListsFromDisk.erase(menuList.first);
+			const auto entry = MenuListsFromDisk.begin();
+			auto* menuList = entry->second;
+			MenuListsFromDisk.erase(entry);
+			FreeMenuListOnly(menuList);
 		}
 
-		const auto menusFromDisk = MenusFromDisk;
-		for (const auto& element : menusFromDisk)
+		std::vector<std::string> menusToUnload;
+		menusToUnload.reserve(MenusFromDisk.size());
+		for (const auto& [name, menu] : MenusFromDisk)
 		{
-			if (preserveConnect && !_stricmp(element.first.c_str(), "connect"))
+			if (preserveConnect && !_stricmp(name.c_str(), "connect"))
 			{
 				continue;
 			}
-
-			UnloadMenuFromDisk(element.first);
+			menusToUnload.push_back(name);
+		}
+		for (const auto& name : menusToUnload)
+		{
+			UnloadMenuFromDisk(name);
 		}
 
 		if (!OverridenMenus.empty())
@@ -1491,50 +1643,43 @@ namespace Components
 			}
 		}
 
+		const auto menus = FileSystem::GetFileList("ui_mp", "menu", Game::FS_LIST_ALL);
+
+		for (const auto& filename : menus)
 		{
-			const auto menus = FileSystem::GetFileList("ui_mp", "menu", Game::FS_LIST_ALL);
-
-			for (const auto& filename : menus)
+			if (preserveConnect && !_stricmp(filename.c_str(), "connect.menu"))
 			{
-				if (preserveConnect && !_stricmp(filename.c_str(), "connect.menu"))
-				{
-					continue;
-				}
-
-				const std::string fullPath = std::format("ui_mp\\{}", filename);
-				LoadScriptMenu(fullPath.c_str(), allowStrayMenus);
+				continue;
 			}
 
-			if (allowStrayMenus)
-			{
-				const auto scriptmenus = FileSystem::GetFileList("ui_mp\\scriptmenus", "menu", Game::FS_LIST_ALL);
+			const auto fullPath = std::format("ui_mp\\{}", filename);
+			LoadScriptMenu(fullPath.c_str(), true);
+		}
 
-				for (const auto& filename : scriptmenus)
-				{
-					const std::string fullPath = std::format("ui_mp\\scriptmenus\\{}", filename);
-					LoadScriptMenu(fullPath.c_str(), allowStrayMenus);
-				}
+		if (allowStrayMenus)
+		{
+			const auto scriptmenus = FileSystem::GetFileList("ui_mp\\scriptmenus", "menu", Game::FS_LIST_ALL);
+			for (const auto& filename : scriptmenus)
+			{
+				const auto fullPath = std::format("ui_mp\\scriptmenus\\{}", filename);
+				LoadScriptMenu(fullPath.c_str(), true);
 			}
 		}
 
+		const auto menuLists = FileSystem::GetFileList("ui_mp", "txt", Game::FS_LIST_ALL);
+		for (const auto& filename : menuLists)
 		{
-			const auto menuLists = FileSystem::GetFileList("ui_mp", "txt", Game::FS_LIST_ALL);
+			const auto fullPath = std::format("ui_mp\\{}", filename);
+			LoadScriptMenu(fullPath.c_str(), true);
+		}
 
-			for (const auto& filename : menuLists)
+		for (const auto& menuName : CustomIW4xMenus)
+		{
+			if (preserveConnect && !_stricmp(menuName.c_str(), "ui_mp/connect.menu"))
 			{
-				const std::string fullPath = std::format("ui_mp\\{}", filename);
-				LoadScriptMenu(fullPath.c_str(), true);
+				continue;
 			}
-
-			for (const auto& menuName : CustomIW4xMenus)
-			{
-				if (preserveConnect && !_stricmp(menuName.c_str(), "ui_mp/connect.menu"))
-				{
-					continue;
-				}
-
-				LoadScriptMenu(menuName.c_str(), true);
-			}
+			LoadScriptMenu(menuName.c_str(), true);
 		}
 
 		if (preserveConnect)
@@ -1543,6 +1688,12 @@ namespace Components
 		}
 
 		CheckMenus();
+	}
+
+	Game::menuDef_t* Menus::FindDiskMenu(const std::string& name)
+	{
+		const auto entry = MenusFromDisk.find(name);
+		return entry == MenusFromDisk.end() ? nullptr : entry->second;
 	}
 
 	bool Menus::IsMenuVisible(Game::UiContext* dc, Game::menuDef_t* menu)
@@ -1680,13 +1831,27 @@ namespace Components
 		Menus::SupportingData->uiStrings.strings = allocator->allocateArray<const char*>(stringListSize / sizeof(const char*));
 	}
 
-	static float EaseOutQuart(float value)
+	[[maybe_unused]] static float EaseOutQuart(float value)
 	{
 		value = std::clamp(value, 0.0f, 1.0f);
 		return 1.0f - std::pow(1.0f - value, 4.0f);
 	}
 
-	void Menus::OpenCustomConnectMenu()
+	static float EaseOutCubic(float value)
+	{
+		value = std::clamp(value, 0.0f, 1.0f);
+		const float inv = 1.0f - value;
+		return 1.0f - (inv * inv * inv);
+	}
+
+	static float EaseOutQuad(float value)
+	{
+		value = std::clamp(value, 0.0f, 1.0f);
+		const float inv = 1.0f - value;
+		return 1.0f - (inv * inv);
+	}
+
+	void Menus::OpenLoadingScreen()
 	{
 		const auto custom = MenusFromDisk.find("connect");
 		if (custom == MenusFromDisk.end() || !custom->second)
@@ -1696,32 +1861,10 @@ namespace Components
 
 		ForceOnlyCustomConnectMenu();
 
-		auto* menu = custom->second;
-
 		for (size_t contextIndex = 0; contextIndex < ARRAYSIZE(Menus::GameUiContexts); ++contextIndex)
 		{
 			auto* dc = Menus::GameUiContexts[contextIndex];
-
-			if (!dc)
-			{
-				continue;
-			}
-
-			bool alreadyOpen = false;
-
-			for (int i = 0; i < dc->openMenuCount; ++i)
-			{
-				if (dc->menuStack[i] == menu)
-				{
-					alreadyOpen = true;
-					break;
-				}
-			}
-
-			if (!alreadyOpen && dc->openMenuCount < ARRAYSIZE(dc->menuStack))
-			{
-				dc->menuStack[dc->openMenuCount++] = menu;
-			}
+			if (dc) Game::Menus_OpenByName(dc, "connect");
 		}
 	}
 
@@ -2375,6 +2518,177 @@ namespace Components
 		}
 	}
 
+	void Menus::UpdateLoadingProgress()
+	{
+		static auto lastConnState = Game::connstate_t::CA_DISCONNECTED;
+		static std::string lastMapName;
+		static bool wasLoading = false;
+		static bool wasConnectMenuVisible = false;
+		static int lastUpdateTime = 0;
+		static bool loadingSessionActive = false;
+		static int caLoadingStartTime = 0;
+
+		const auto now = Game::Sys_Milliseconds();
+
+		if (!lastUpdateTime)
+		{
+			lastUpdateTime = now;
+		}
+
+		const float deltaSeconds = std::clamp((now - lastUpdateTime) / 1000.0f, 0.0f, 0.1f);
+		lastUpdateTime = now;
+
+		const auto connState = *reinterpret_cast<Game::connstate_t*>(0xB2C540);
+
+		const char* mapNameRaw = Dvar::Var("mapname").get<const char*>();
+		const std::string currentMapName = mapNameRaw ? mapNameRaw : "";
+
+		const bool isLoading = connState >= Game::connstate_t::CA_CONNECTING
+			&& connState < Game::connstate_t::CA_ACTIVE;
+
+		if (isLoading || lastConnState >= Game::connstate_t::CA_CONNECTING)
+		{
+			ForceOnlyCustomConnectMenu();
+		}
+
+		auto* connectMenu = Game::Menus_FindByName(Game::uiContext, "connect");
+		const bool connectMenuVisible = connectMenu && Game::Menu_IsVisible(Game::uiContext, connectMenu);
+
+		const bool connectMenuJustOpened = !wasConnectMenuVisible && connectMenuVisible;
+		const bool startedLoading = !wasLoading && isLoading;
+		const bool isNewConnection = lastConnState < Game::connstate_t::CA_CONNECTING
+			&& connState >= Game::connstate_t::CA_CONNECTING;
+
+		const bool isMapRestart = lastConnState >= Game::connstate_t::CA_ACTIVE
+			&& connState < Game::connstate_t::CA_ACTIVE
+			&& connState > Game::connstate_t::CA_DISCONNECTED;
+
+		const bool mapChanged = !lastMapName.empty()
+			&& !currentMapName.empty()
+			&& lastMapName != currentMapName;
+
+		// Only begin a fresh loading session (and reset progress to 0) when starting a new map load,
+		// restarting the map, or changing to a different map.
+		// Never reset progress on isNewConnection or startedLoading if a session is already underway.
+		const bool shouldStartSession = (!loadingSessionActive && (connectMenuJustOpened || startedLoading))
+			|| isMapRestart
+			|| mapChanged;
+
+		if (shouldStartSession)
+		{
+			loadingSessionActive = true;
+			caLoadingStartTime = 0;
+
+			Dvar::Var("zw3_ui_loading_start_time").set(now);
+			Dvar::Var("zw3_ui_loading_progress").set(0.0f);
+			Dvar::Var("zw3_ui_loading_visible").set(true);
+
+			ForceOnlyCustomConnectMenu();
+
+			const Game::StringTable* table = nullptr;
+			Game::StringTable_GetAsset_FastFile("mp/didyouknow.csv", &table);
+
+			if (table && table->rowCount > 0)
+			{
+				static std::mt19937 rng(std::random_device{}());
+				std::uniform_int_distribution<int> dist(0, table->rowCount - 1);
+
+				const auto* tip = Game::StringTable_GetColumnValueForRow(table, dist(rng), 0);
+				if (tip && *tip)
+				{
+					Dvar::Var("didyouknow").set(tip);
+				}
+			}
+		}
+
+		if (connectMenuVisible || isLoading)
+		{
+			const auto startTime = Dvar::Var("zw3_ui_loading_start_time").get<int>();
+			const auto totalElapsed = std::max(0, now - (startTime ? startTime : now));
+			const float current = Dvar::Var("zw3_ui_loading_progress").get<float>();
+
+			float target = 0.05f;
+			float rate = 0.60f;
+
+			if (connState < Game::connstate_t::CA_CONNECTING)
+			{
+				// Progress from 0.0f to 0.28f based on elapsed server start time
+				const float serverFraction = std::clamp(static_cast<float>(totalElapsed) / 2200.0f, 0.0f, 1.0f);
+				target = EaseOutCubic(serverFraction) * 0.28f;
+				rate = 0.40f;
+			}
+			else if (connState < Game::connstate_t::CA_LOADING)
+			{
+				// Client network handshake (CA_CONNECTING, CA_CHALLENGING, CA_CONNECTED)
+				target = 0.32f;
+				rate = 1.20f;
+			}
+			else if (connState == Game::connstate_t::CA_LOADING)
+			{
+				// FastFiles & CGame initialization
+				if (!caLoadingStartTime)
+				{
+					caLoadingStartTime = now;
+				}
+
+				const auto caElapsed = std::max(0, now - caLoadingStartTime);
+				const float ffProgress = std::clamp(FastFiles::GetFullLoadedFraction(), 0.0f, 1.0f);
+				const float timeFraction = EaseOutQuad(std::clamp(static_cast<float>(caElapsed) / 4800.0f, 0.0f, 1.0f));
+
+				// Blend realtime fastfile progress with time progression
+				const float loadFraction = std::max(ffProgress, timeFraction * 0.88f);
+				target = std::clamp(0.32f + loadFraction * (0.94f - 0.32f), 0.32f, 0.94f);
+
+				const float diff = target - current;
+				rate = std::clamp(diff * 3.5f, 0.30f, 2.2f);
+			}
+			else if (connState == Game::connstate_t::CA_PRIMED)
+			{
+				// Entering game
+				target = 0.98f;
+				rate = 4.0f;
+			}
+			else if (connState >= Game::connstate_t::CA_ACTIVE)
+			{
+				// In game
+				target = 1.0f;
+				rate = 8.0f;
+			}
+
+			const float maxStep = rate * deltaSeconds;
+			const float next = current + std::clamp(target - current, 0.0f, maxStep);
+			const float finalProgress = std::clamp(std::max(current, next), 0.0f, (connState >= Game::connstate_t::CA_ACTIVE ? 1.0f : 0.995f));
+
+			Dvar::Var("zw3_ui_loading_progress").set(finalProgress);
+			Dvar::Var("zw3_ui_loading_visible").set(true);
+		}
+		else
+		{
+			loadingSessionActive = false;
+			caLoadingStartTime = 0;
+			Dvar::Var("zw3_ui_loading_progress").set(0.0f);
+			Dvar::Var("zw3_ui_loading_visible").set(false);
+		}
+
+		if (connState >= Game::connstate_t::CA_CONNECTING)
+		{
+			if (!Party::GetMotd().empty() && Party::Target() == *Game::connectedHost)
+			{
+				Dvar::Var("didyouknow").set(Party::GetMotd());
+			}
+		}
+
+		if (startedLoading || isNewConnection || isMapRestart)
+		{
+			Dvar::Var("zw3_ui_sb_survived_time").set("00:00:00");
+		}
+
+		lastConnState = connState;
+		lastMapName = currentMapName;
+		wasLoading = isLoading;
+		wasConnectMenuVisible = connectMenuVisible;
+	}
+
 	Menus::Menus()
 	{
 		menuParseKeywordHash = reinterpret_cast<Game::KeywordHashEntry<Game::menuDef_t, 128, 3523>**>(0x63AE928);
@@ -2386,19 +2700,26 @@ namespace Components
 
 		if (Dedicated::IsEnabled()) return;
 
+		Utils::Hook(0x46E21B, EvaluatePlayerPerkWhenReady, HOOK_CALL).install()->quick();
+		// Team-field expressions are also evaluated during menu/load transitions.
+		// Keep the engine's empty-string result when cgame is unavailable, without
+		// formatting and logging the same expected condition on every frame.
+		Utils::Hook(0x62B03A, 0x62B049, HOOK_JUMP).install()->quick();
+
 		// The stock ASSET_TYPE_MENU clone handler copies runtime state from the existing menu to its
 		// replacement, assuming both menus have identical item layouts. Disable it to prevent state
 		// from being copied between unrelated items when the layouts differ.
 		Utils::Hook::Set<Game::DB_DynamicCloneXAssetHandler_t>(&Game::DB_DynamicCloneXAssetHandler[Game::ASSET_TYPE_MENU], nullptr);
+
+		// Menu parsing creates and replaces many small allocations. Indexed
+		// ownership avoids a full pool scan and vector shift on every free.
+		Menus::Allocator.enableIndexedTracking();
 
 		Menus::InitializeSupportingData();
 
 		Components::Events::OnCGameInit(ReloadDiskMenus_OnCGameStart);
 		Components::Events::AfterUIInit(ReloadDiskMenus_OnUIInitialization);
 
-		// --- HOOK ASSET HANDLER ---
-		// These hooks were present in your OLD working code.
-		// They are the key to intercepting asset lookup calls via AssetHandler.
 		AssetHandler::OnFind(Game::ASSET_TYPE_MENU, MenuFindHook);
 		AssetHandler::OnFind(Game::ASSET_TYPE_MENULIST, MenuListFindHook);
 
@@ -2466,150 +2787,14 @@ namespace Components
 
 		Components::Scheduler::Loop([]()
 			{
-				static auto lastConnState = Game::connstate_t::CA_DISCONNECTED;
-				static std::string lastMapName;
-				static bool wasLoading = false;
-				static bool wasConnectMenuVisible = false;
-				static int lastUpdateTime = 0;
-
-				const auto now = Game::Sys_Milliseconds();
-
-				if (!lastUpdateTime)
-				{
-					lastUpdateTime = now;
-				}
-
-				const float deltaSeconds = std::clamp((now - lastUpdateTime) / 1000.0f, 0.0f, 0.1f);
-				lastUpdateTime = now;
-
-				const auto connState = *reinterpret_cast<Game::connstate_t*>(0xB2C540);
-
-				const char* mapNameRaw = Dvar::Var("mapname").get<const char*>();
-				const std::string currentMapName = mapNameRaw ? mapNameRaw : "";
-
-				const bool isLoading = connState >= Game::connstate_t::CA_CONNECTING
-					&& connState < Game::connstate_t::CA_ACTIVE;
-
-				if (isLoading || lastConnState >= Game::connstate_t::CA_CONNECTING)
-				{
-					ForceOnlyCustomConnectMenu();
-				}
-
-				auto* connectMenu = Game::Menus_FindByName(Game::uiContext, "connect");
-				const bool connectMenuVisible = connectMenu && Game::Menu_IsVisible(Game::uiContext, connectMenu);
-
-				const bool connectMenuJustOpened = !wasConnectMenuVisible && connectMenuVisible;
-
-				const bool startedLoading = !wasLoading && isLoading;
-
-				const bool isNewConnection = lastConnState < Game::connstate_t::CA_CONNECTING
-					&& connState >= Game::connstate_t::CA_CONNECTING;
-
-				const bool isMapRestart = lastConnState >= Game::connstate_t::CA_ACTIVE
-					&& connState < Game::connstate_t::CA_ACTIVE
-					&& connState > Game::connstate_t::CA_DISCONNECTED;
-
-				const bool mapChanged = !lastMapName.empty()
-					&& !currentMapName.empty()
-					&& lastMapName != currentMapName;
-
-				if (connectMenuJustOpened || startedLoading || isNewConnection || isMapRestart || mapChanged)
-				{
-					Dvar::Var("zw3_ui_loading_start_time").set(now);
-					Dvar::Var("zw3_ui_loading_progress").set(0.0f);
-					Dvar::Var("zw3_ui_loading_visible").set(true);
-
-					ForceOnlyCustomConnectMenu();
-
-					const Game::StringTable* table = nullptr;
-					Game::StringTable_GetAsset_FastFile("mp/didyouknow.csv", &table);
-
-					if (table && table->rowCount > 0)
-					{
-						static std::mt19937 rng(std::random_device{}());
-						std::uniform_int_distribution<int> dist(0, table->rowCount - 1);
-
-						const auto* tip = Game::StringTable_GetColumnValueForRow(table, dist(rng), 0);
-						if (tip && *tip)
-						{
-							Dvar::Var("didyouknow").set(tip);
-						}
-					}
-				}
-
-				if (connectMenuVisible || isLoading)
-				{
-					const auto startTime = Dvar::Var("zw3_ui_loading_start_time").get<int>();
-					const auto elapsed = std::max(0, now - startTime);
-
-					float stateTarget = 0.08f;
-
-					if (connState >= Game::connstate_t::CA_CONNECTING)
-						stateTarget = 0.22f;
-
-					if (connState >= Game::connstate_t::CA_CHALLENGING)
-						stateTarget = 0.38f;
-
-					if (connState >= Game::connstate_t::CA_CONNECTED)
-						stateTarget = 0.58f;
-
-					if (connState >= Game::connstate_t::CA_LOADING)
-						stateTarget = 0.84f;
-
-					if (connState >= Game::connstate_t::CA_PRIMED)
-						stateTarget = 0.995f;
-
-					const float timeTarget = EaseOutQuart(static_cast<float>(elapsed) / 5200.0f) * 0.985f;
-					const float target = std::clamp(std::max(stateTarget, timeTarget), 0.0f, 0.995f);
-
-					const float current = Dvar::Var("zw3_ui_loading_progress").get<float>();
-
-					float rate = 0.75f;
-
-					if (target > 0.35f)
-						rate = 0.55f;
-
-					if (target > 0.70f)
-						rate = 0.95f;
-
-					if (target > 0.88f)
-						rate = 1.8f;
-
-					if (connState >= Game::connstate_t::CA_PRIMED)
-						rate = 5.0f;
-
-					const float maxStep = rate * deltaSeconds;
-					const float next = current + std::clamp(target - current, 0.0f, maxStep);
-
-					Dvar::Var("zw3_ui_loading_progress").set(std::clamp(next, 0.0f, 0.995f));
-					Dvar::Var("zw3_ui_loading_visible").set(true);
-				}
-				else
-				{
-					Dvar::Var("zw3_ui_loading_progress").set(0.0f);
-					Dvar::Var("zw3_ui_loading_visible").set(false);
-				}
-
-				if (connState >= Game::connstate_t::CA_CONNECTING)
-				{
-					if (!Party::GetMotd().empty() && Party::Target() == *Game::connectedHost)
-					{
-						Dvar::Var("didyouknow").set(Party::GetMotd());
-					}
-				}
-
-				if (startedLoading || isNewConnection || isMapRestart)
-				{
-					Dvar::Var("zw3_ui_sb_survived_time").set("00:00:00");
-				}
-
+				UpdateLoadingProgress();
 				UpdateNewsCarousel();
-
-				lastConnState = connState;
-				lastMapName = currentMapName;
-				wasLoading = isLoading;
-				wasConnectMenuVisible = connectMenuVisible;
 			}, Components::Scheduler::Pipeline::MAIN);
+
+		Components::Scheduler::Loop([]()
+			{
+				UpdateLoadingProgress();
+			}, Components::Scheduler::Pipeline::RENDERER);
 
 		Command::Add("openmenu", [](const Command::Params* params)
 			{
@@ -2658,6 +2843,8 @@ namespace Components
 		Add("ui_mp/zw3changelog.menu");
 		Add("ui_mp/popup_zwnet_connecting.menu");
 		Add("ui_mp/zwnet_matchmaking.menu");
+		Add("ui_mp/popup_zwnet_player_card.menu");
+		Add("ui_mp/menu_quest_challenges.menu");
 		Add("ui_mp/popup_upnp.menu");
 	}
 

@@ -1447,6 +1447,100 @@ namespace Components
 
 	}
 
+	#pragma optimize("", on)
+	namespace
+	{
+		std::optional<std::uint16_t> RemapMaterialConstant(const int version, const std::uint16_t index)
+		{
+			switch (version)
+			{
+			case 446:
+				switch (index)
+				{
+				case 33: return 31;
+				case 34: return 32;
+				case 36: return 34;
+				case 39: return 37;
+				case 40: return 38;
+				case 42: return 40;
+				case 43: return 41;
+				case 45: return 43;
+				case 62: return 52;
+				case 63: return 53;
+				case 199: return 58;
+				case 259: return 86;
+				case 263: return 90;
+				case 271: return 98;
+				case 279: return 106;
+				default: return std::nullopt;
+				}
+
+			case 461:
+				switch (index)
+				{
+				case 33: return 31;
+				case 34: return 32;
+				case 36: return 34;
+				case 38: return 36;
+				case 39: return 37;
+				case 40: return 38;
+				case 42: return 40;
+				case 43: return 41;
+				case 45: return 43;
+				case 62: return 52;
+				case 63: return 53;
+				case 118: return 86;
+				case 197: return 58;
+				case 202: return 63;
+				case 203: return 64;
+				case 261: return 90;
+				case 265: return 94;
+				case 269: return 98;
+				case 277: return 106;
+				default: return std::nullopt;
+				}
+
+			case 460:
+				switch (index)
+				{
+				case 22: return 21;
+				case 33: return 31;
+				case 34: return 32;
+				case 36: return 34;
+				case 37: return 35;
+				case 38: return 36;
+				case 39: return 37;
+				case 40: return 38;
+				case 41: return 39;
+				case 42: return 40;
+				case 43: return 41;
+				case 44: return 42;
+				case 45: return 43;
+				case 62: return 52;
+				case 63: return 53;
+				case 197: return 58;
+				case 198: return 59;
+				case 202: return 63;
+				case 203: return 64;
+				case 207: return 68;
+				case 252: return 81;
+				case 253: return 82;
+				case 261: return 90;
+				case 265: return 94;
+				case 269: return 98;
+				case 272: return 101;
+				case 273: return 102;
+				case 274: return 103;
+				case 277: return 106;
+				default: return std::nullopt;
+				}
+
+			default:
+				return std::nullopt;
+			}
+		}
+	}
+
 	bool Zones::LoadMaterialShaderArgumentArray(bool atStreamStart, Game::MaterialShaderArgument* argument, int size)
 	{
 		// if (Zones::ZoneVersion >= 446 && currentAssetType == Game::XAssetType::ASSET_TYPE_FX) __debugbreak();
@@ -1454,8 +1548,9 @@ namespace Components
 
 		Game::MaterialPass* curPass = *Game::varMaterialPass;
 		int count = curPass->perPrimArgCount + curPass->perObjArgCount + curPass->stableArgCount;
+		const auto version = Zones::ZoneVersion;
 
-		for (int i = 0; i < count && (Zones::ZoneVersion >= VERSION_ALPHA2); ++i)
+		for (int i = 0; i < count && version >= VERSION_ALPHA2; ++i)
 		{
 			Game::MaterialShaderArgument* arg = &argument[i];
 
@@ -1464,7 +1559,7 @@ namespace Components
 				continue;
 			}
 
-			if (Zones::Version() < 446)
+			if (version < 446)
 			{
 				// should be min 68 currently
 				// >= 58 fixes foliage without bad side effects
@@ -1474,7 +1569,7 @@ namespace Components
 				{
 					arg->u.codeConst.index -= 3;
 
-					if (Zones::Version() >= 359/* && arg->paramID <= 113*/)
+					if (version >= 359/* && arg->paramID <= 113*/)
 					{
 						arg->u.codeConst.index -= 7;
 
@@ -1490,7 +1585,7 @@ namespace Components
 				{
 					arg->u.codeConst.index -= 2;
 
-					if (Zones::Version() >= 359)
+					if (version >= 359)
 					{
 						if (arg->u.codeConst.index > 15 && arg->u.codeConst.index < 30)
 						{
@@ -1515,65 +1610,18 @@ namespace Components
 					// 446 is from a special client version that had lot of
 					// unrelased/unfinished maps, is just enough for explore,
 					// trees had issue with it
-					if (Zones::Version() == 446)
+					if (version == 446)
 					{
-						static std::unordered_map<int, int> mapped_constants = {
-							{ 33, 31 },
-							{ 34, 32 },
-							{ 36, 34 },
-							{ 39, 37 },
-							{ 40, 38 },
-							{ 42, 40 },
-							{ 43, 41 },
-							{ 45, 43 },
-							{ 62, 52 },
-							{ 63, 53 },
-							{ 199, 58 },
-							{ 259, 86 },
-							{ 263, 90 },
-							{ 271, 98 },
-							{ 279, 106 },
-						};
-
-						const auto itr = mapped_constants.find(arg->u.codeConst.index);
-						if (itr != mapped_constants.end())
+						if (const auto mapped = RemapMaterialConstant(446, arg->u.codeConst.index))
 						{
-							arg->u.codeConst.index = static_cast<std::uint16_t>(itr->second);
+							arg->u.codeConst.index = *mapped;
 						}
 					}
-					else if (Zones::Version() == 461)
+					else if (version == 461)
 					{
-						static std::unordered_map<int, int> mapped_constants =
+						if (const auto mapped = RemapMaterialConstant(461, arg->u.codeConst.index))
 						{
-							// mp_raid
-							{ 33, 31 },
-							{ 34, 32 },
-							{ 36, 34 },
-							{ 39, 37 },
-							{ 40, 38 },
-							{ 42, 40 },
-							{ 43, 41 },
-							{ 45, 43 },
-							{ 62, 52 },
-							{ 63, 53 },
-							{ 197, 58 },
-							{ 202, 63 },
-							{ 203, 64 },
-							{ 261, 90 },
-							{ 265, 94 },
-							{ 269, 98 },
-							{ 277, 106 },
-
-							// mp_dome
-							{ 38, 36 },
-							{ 40, 38 },
-							{ 118, 86 },
-						};
-
-						const auto itr = mapped_constants.find(arg->u.codeConst.index);
-						if (itr != mapped_constants.end())
-						{
-							arg->u.codeConst.index = static_cast<std::uint16_t>(itr->second);
+							arg->u.codeConst.index = *mapped;
 						}
 						if (arg->u.codeConst.index == 257)
 						{
@@ -1605,55 +1653,19 @@ namespace Components
 							}
 						}
 					}
-					else if (Zones::Version() == 460 /*|| Zones::Version() == 446*/)		// 446 is no longer compatible, needs correct mappings
+					else if (version == 460 /*|| version == 446*/)		// 446 is no longer compatible, needs correct mappings
 					{
-						static std::unordered_map<int, int> mapped_constants = {
-							{ 22, 21 },
-							{ 33, 31 },
-							{ 34, 32 },
-							{ 36, 34 },
-							{ 37, 35 },
-							{ 38, 36 },
-							{ 39, 37 },
-							{ 40, 38 },
-							{ 41, 39 },
-							{ 42, 40 },
-							{ 43, 41 },
-							{ 44, 42 },
-							{ 45, 43 },
-							{ 62, 52 },
-							{ 63, 53 },
-
-							// these might need fixes?
-							{ 197, 58 },
-							{ 198, 59 },
-							{ 202, 63 },
-							{ 203, 64 },
-							{ 207, 68 },
-							{ 252, 81 },
-							{ 253, 82 },
-
-							// these seem fine
-							{ 261, 90 },
-							{ 265, 94 },
-							{ 269, 98 },
-							{ 272, 101 },
-							{ 273, 102 },
-							{ 274, 103 },
-							{ 277, 106 },
-						};
-
-						const auto itr = mapped_constants.find(arg->u.codeConst.index);
-						if (itr != mapped_constants.end())
+						if (const auto mapped = RemapMaterialConstant(460, arg->u.codeConst.index))
 						{
-							arg->u.codeConst.index = static_cast<std::uint16_t>(itr->second);
+							arg->u.codeConst.index = *mapped;
 						}
 						else
 						{
 							if (arg->u.codeConst.index == 257)
 							{
-								if (FastFiles::Current() != "mp_conflict" && FastFiles::Current() != "mp_derail_sh" && FastFiles::Current() != "mp_overwatch_sh" &&
-									FastFiles::Current() != "mp_con_spring" && FastFiles::Current() != "mp_resistance_sh" && FastFiles::Current() != "mp_lookout_sh")
+								const auto currentZone = FastFiles::Current();
+								if (currentZone != "mp_conflict" && currentZone != "mp_derail_sh" && currentZone != "mp_overwatch_sh" &&
+									currentZone != "mp_con_spring" && currentZone != "mp_resistance_sh" && currentZone != "mp_lookout_sh")
 								{
 									const auto varMaterialTechniqueSet = *reinterpret_cast<Game::MaterialTechniqueSet**>(0x112AE8C);
 									if (varMaterialTechniqueSet->name && !strncmp(varMaterialTechniqueSet->name, "mc_", 3))
@@ -1688,6 +1700,7 @@ namespace Components
 
 		return result;
 	}
+	#pragma optimize("", off)
 
 	bool Zones::LoadStructuredDataStructPropertyArray(bool atStreamStart, char* data, int size)
 	{

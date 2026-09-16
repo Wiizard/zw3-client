@@ -67,6 +67,6 @@ namespace Game
 	HANDLE Sys_OpenFileReliable(const char* filename)
 	{
 		return CreateFileA(filename, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-			FILE_FLAG_OVERLAPPED | FILE_FLAG_NO_BUFFERING, nullptr);
+			FILE_FLAG_OVERLAPPED | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
 	}
 }

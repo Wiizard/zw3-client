@@ -4,9 +4,240 @@
 #include "TextRenderer.hpp"
 #include "Toast.hpp"
 #include "Gamepad.hpp"
+#include "Events.hpp"
+#include "Scheduler.hpp"
 
 namespace Components
 {
+	// Retain the engine's retry intervals for remote servers. Loopback packets
+	// are consumed locally and can advance the connection on the next frame.
+	static __declspec(naked) void LocalStatsRetryInterval()
+	{
+		__asm
+		{
+			cmp dword ptr ds:0xA5EA44, 2 // clc.serverAddress.type == NA_LOOPBACK
+			je local_server
+			cmp dword ptr ds:0xA1E888, 2 // clientConnections->serverAddress.type == NA_LOOPBACK
+			je local_server
+			cmp dword ptr ds:0x1a831c0, 0 // local server active
+			jne local_server
+			cmp edx, 100
+			jmp resume
+		local_server:
+			cmp edx, 4
+		resume:
+			push 0x41D063
+			ret
+		}
+	}
+
+	static __declspec(naked) void LocalConnectRetryInterval()
+	{
+		__asm
+		{
+			cmp dword ptr ds:0xA5EA44, 2 // clc.serverAddress.type == NA_LOOPBACK
+			je local_server
+			cmp dword ptr ds:0xA1E888, 2
+			je local_server
+			cmp dword ptr ds:0x1a831c0, 0 // local server active
+			jne local_server
+			cmp edx, 3000
+			jmp resume
+		local_server:
+			cmp edx, 4
+		resume:
+			push 0x41D063
+			ret
+		}
+	}
+
+	static __declspec(naked) void LocalConnectedPacketInterval()
+	{
+		__asm
+		{
+			cmp dword ptr ds:0xA5EA44, 2 // clc.serverAddress.type == NA_LOOPBACK
+			je local_server
+			cmp dword ptr ds:0xA1E888, 2 // clientConnections->serverAddress.type == NA_LOOPBACK
+			je local_server
+			cmp dword ptr ds:0x1a831c0, 0 // local server active
+			jne local_server
+			cmp eax, 1000
+			jmp resume
+		local_server:
+			cmp eax, 4
+		resume:
+			push 0x5A6F0C
+			ret
+		}
+	}
+
+
+
+	// Stock engine allocates only 12 client loopback packets (0x4200 bytes / 12 slots).
+	// During CGame initialization (~900ms), the local server generates 14-16 packets
+	// (snapshots, bot joins, gamestate), overflowing the 12-slot buffer and dropping
+	// 2-4 critical packets. This forces snapshot retransmits and stalls the transition
+	// from CA_PRIMED to CA_ACTIVE.
+	// Expanding the ring buffer to 256 slots completely eliminates packet loss.
+	namespace
+	{
+		constexpr size_t CLIENT_LOOP_QUEUE_SIZE = 256;
+		constexpr size_t CLIENT_LOOP_QUEUE_MASK = CLIENT_LOOP_QUEUE_SIZE - 1;
+
+		struct LoopMsg
+		{
+			char data[2048];
+			int datalen;
+			int netsrc;
+		};
+
+		static LoopMsg s_loopMsgs[2][CLIENT_LOOP_QUEUE_SIZE];
+		static volatile LONG s_loopSend[2] = { 0, 0 };
+		static volatile LONG s_loopGet[2] = { 0, 0 };
+		static std::mutex s_loopMutex[2];
+
+		void Custom_SendLoopPacket(int netsrc, int length, const void* data)
+		{
+			if (length <= 0 || length > static_cast<int>(sizeof(LoopMsg::data)))
+			{
+				return;
+			}
+
+			const int q = (netsrc >= 0 && netsrc < 2) ? netsrc : 0;
+			std::lock_guard<std::mutex> lock(s_loopMutex[q]);
+			const auto send = s_loopSend[q];
+			auto& msg = s_loopMsgs[q][send & CLIENT_LOOP_QUEUE_MASK];
+			std::memcpy(msg.data, data, length);
+			msg.datalen = length;
+			msg.netsrc = netsrc;
+			s_loopSend[q] = send + 1;
+		}
+
+		int Custom_GetLoopPacket(int netsrc, Game::netadr_t* netadr, Game::msg_t* msg)
+		{
+			const int q = (netsrc >= 0 && netsrc < 2) ? netsrc : 0;
+			std::lock_guard<std::mutex> lock(s_loopMutex[q]);
+			if (s_loopGet[q] >= s_loopSend[q])
+			{
+				return 0;
+			}
+
+			if (s_loopSend[q] - s_loopGet[q] > static_cast<LONG>(CLIENT_LOOP_QUEUE_SIZE))
+			{
+				s_loopGet[q] = s_loopSend[q] - static_cast<LONG>(CLIENT_LOOP_QUEUE_SIZE);
+			}
+
+			const auto& slotMsg = s_loopMsgs[q][s_loopGet[q] & CLIENT_LOOP_QUEUE_MASK];
+			if (msg->maxsize < slotMsg.datalen)
+			{
+				s_loopGet[q]++;
+				return 0;
+			}
+
+			std::memcpy(msg->data, slotMsg.data, slotMsg.datalen);
+			msg->cursize = slotMsg.datalen;
+
+			std::memset(netadr, 0, sizeof(Game::netadr_t));
+			netadr->type = Game::NA_LOOPBACK;
+			netadr->port = static_cast<unsigned short>(slotMsg.netsrc);
+
+			s_loopGet[q]++;
+			return 1;
+		}
+
+		__declspec(naked) void NET_SendLoopPacket_Stub()
+		{
+			__asm
+			{
+				push ebp
+				mov ebp, [esp + 8]   // netsrc
+				mov eax, [esp + 0xC] // data
+				// ebx contains length
+				push eax             // data
+				push ebx             // length
+				push ebp             // netsrc
+				call Custom_SendLoopPacket
+				add esp, 12
+				pop ebp
+				ret
+			}
+		}
+
+		__declspec(naked) void NET_GetLoopPacket_Stub()
+		{
+			__asm
+			{
+				mov edx, [esp + 4]   // msg_t* msg
+				// eax contains netsrc
+				// esi contains netadr_t* netadr
+				push edx             // msg
+				push esi             // netadr
+				push eax             // netsrc
+				call Custom_GetLoopPacket
+				add esp, 12
+				ret
+			}
+		}
+
+		__declspec(naked) void SendClientMessages_Fragment_Stub()
+		{
+			__asm
+			{
+				cmp dword ptr [esi + 0x50], 0 // unsentFragments == 0?
+				je no_fragments
+
+				cmp dword ptr [esi + 0x28], 2 // client->netchan.remoteAddress.type == NA_LOOPBACK?
+				jne normal_path
+
+			loop_fragments:
+				lea eax, [esi + 0x18]
+				push eax            // &client->netchan
+				push esi            // client
+				mov eax, 0x47C580   // Netchan_TransmitNextFragment
+				call eax
+				add esp, 8
+				cmp dword ptr [esi], 0 // client disconnected/freed?
+				je finish_client
+				cmp dword ptr [esi + 0x50], 0 // more fragments?
+				jne loop_fragments
+
+			finish_client:
+				mov eax, dword ptr ds:[0x31D9384] // svs.time
+				mov dword ptr [esi + 0x212C0], eax // nextSnapshotTime = svs.time
+				push 0x451905
+				ret
+
+			normal_path:
+				push 0x4518C5
+				ret
+
+			no_fragments:
+				push 0x45190D
+				ret
+			}
+		}
+
+		__declspec(naked) void SV_RateMsec_Stub()
+		{
+			__asm
+			{
+				mov eax, [esp + 4] // client_t*
+				test eax, eax
+				je stock_code
+				cmp dword ptr [eax + 0x28], 2 // NA_LOOPBACK
+				jne stock_code
+				xor eax, eax // 0 ms rate delay on loopback
+				ret
+
+			stock_code:
+				push ebx
+				mov ebx, [esp + 8]
+				push 0x629A05
+				ret
+			}
+		}
+	}
+
 	Dvar::Var QuickPatch::UIMousePitch;
 
 	Dvar::Var QuickPatch::r_customAspectRatio;
@@ -375,6 +606,12 @@ namespace Components
 
 	QuickPatch::QuickPatch()
 	{
+		// The stock renderer compares the machine against its old hardware
+		// recommendation and opens the "run with optimized settings" prompt.
+		// That check is stale for this client and can repeatedly interrupt startup
+		// after renderer/config changes, so disable the prompt for clients too.
+		Utils::Hook::Nop(0x60BC52, 0x15);
+
 		// Filtering any mapents that is intended for Spec:Ops gamemode (CODO) and prevent them from spawning
 		Utils::Hook(0x5FBD6E, QuickPatch::IsDynClassname_Stub, HOOK_CALL).install()->quick();
 
@@ -494,6 +731,80 @@ namespace Components
 
 		// vid_restart when ingame
 		Utils::Hook::Nop(0x4CA1FA, 6);
+
+		// Accelerate connection handshake and stats exchange on loopback / listen server.
+		// State 6 (CA_SENDINGSTATS) at 0x41D04A (cmp edx, 0x64): patch 0x41D04A to 4ms.
+		// States 3 & 4 (CA_CONNECTING / CA_CHALLENGING) at 0x41D05D: patch to 4ms.
+		// On local listen servers, packets are processed immediately in memory; reducing
+		// the interval eliminates over 600ms of dead handshake wait.
+		Utils::Hook(0x41D04A, LocalStatsRetryInterval, HOOK_JUMP).install()->quick();
+		Utils::Hook(0x41D05D, LocalConnectRetryInterval, HOOK_JUMP).install()->quick();
+		Utils::Hook::Nop(0x41D062, 1);
+
+		// Accelerate packet send interval in CA_CONNECTED (and other non-active states) on loopback / listen server.
+		// At 0x5A6F07 (cmp eax, 0x3e8): patch 1000ms delay down to 4ms for local servers,
+		// eliminating over 3.8 seconds of dead wait during gamestate handshakes.
+		Utils::Hook(0x5A6F07, LocalConnectedPacketInterval, HOOK_JUMP).install()->quick();
+
+		// Override defaults for party countdown timers from 10s/5s/60s to 0s to eliminate
+		// multi-second pre-game lobby stalls during local/listen match transitions.
+		Utils::Hook::Set<uint8_t>(0x4D5D81, 0); // party_gameStartTimerLength default: was 10 -> 0
+		Utils::Hook::Set<uint8_t>(0x4D5DA3, 0); // party_pregameStartTimerLength default: was 5 -> 0
+		Utils::Hook::Set<uint8_t>(0x4D6064, 0); // party_minLobbyTime default: was 60 -> 0
+		Utils::Hook::Set<uint8_t>(0x4D3B0D, 0); // sv_reconnectlimit default: was 3 -> 0
+		Utils::Hook::Set<uint8_t>(0x4D5E80, 0); // party_vetoDelayTime default: was 4 -> 0
+		Utils::Hook::Set<uint32_t>(0x4D6083, 0); // party_connectTimeout default: was 1000 -> 0
+		Utils::Hook::Set<uint32_t>(0x4D61F9, 0); // party_searchPauseTime default: was 2000 -> 0
+
+		// Bypass lobby veto and match launch countdown stalls in Party_HostFrame.
+		Utils::Hook::Nop(0x4E5239, 2); // Start match immediately without veto wait
+		Utils::Hook::Nop(0x4E52B6, 2); // Launch game immediately without countdown wait
+
+		Scheduler::Once([]()
+		{
+			if (const auto dvar = Game::Dvar_FindVar("party_pregameStartTimerLength"))
+				Game::Dvar_SetInt(dvar, 0);
+			if (const auto dvar = Game::Dvar_FindVar("party_gameStartTimerLength"))
+				Game::Dvar_SetInt(dvar, 0);
+			if (const auto dvar = Game::Dvar_FindVar("party_minLobbyTime"))
+				Game::Dvar_SetInt(dvar, 0);
+			if (const auto dvar = Game::Dvar_FindVar("sv_reconnectlimit"))
+				Game::Dvar_SetInt(dvar, 0);
+			if (const auto dvar = Game::Dvar_FindVar("party_vetoDelayTime"))
+				Game::Dvar_SetInt(dvar, 0);
+			if (const auto dvar = Game::Dvar_FindVar("party_connectTimeout"))
+				Game::Dvar_SetInt(dvar, 0);
+			if (const auto dvar = Game::Dvar_FindVar("party_searchPauseTime"))
+				Game::Dvar_SetInt(dvar, 0);
+			if (const auto dvar = Game::Dvar_FindVar("sv_hugeSnapshotDelay"))
+				Game::Dvar_SetInt(dvar, 0);
+		}, Scheduler::Pipeline::MAIN);
+
+		// Accelerate fragment transmission on loopback: transmit all gamestate fragments immediately
+		// without waiting for inter-fragment rate-limiting delays (~57ms per fragment * 38 = ~2.2s).
+		Utils::Hook(0x4518BF, SendClientMessages_Fragment_Stub, HOOK_JUMP).install()->quick();
+		Utils::Hook::Nop(0x4518C4, 1);
+
+		// Bypass rate-limiting delay calculation (SV_RateMsec) on loopback.
+		Utils::Hook(0x629A00, SV_RateMsec_Stub, HOOK_JUMP).install()->quick();
+
+		// Eliminate sv_hugeSnapshotDelay stall default (was 200ms).
+		Utils::Hook::Set<uint32_t>(0x4D3CCC, 0);
+
+		// Expand client loopback queue from stock 12 packets to 256 packets.
+		// Prevents packet dropping while the client is busy loading CGame assets.
+		Utils::Hook(0x60FD60, NET_SendLoopPacket_Stub, HOOK_JUMP).install()->quick();
+		Utils::Hook(0x60FC80, NET_GetLoopPacket_Stub, HOOK_JUMP).install()->quick();
+
+		Events::OnCLDisconnected([](bool)
+		{
+			for (int i = 0; i < 2; ++i)
+			{
+				std::lock_guard<std::mutex> lock(s_loopMutex[i]);
+				s_loopSend[i] = 0;
+				s_loopGet[i] = 0;
+			}
+		});
 
 		// Filter log (initially com_logFilter, but I don't see why that dvar print is needed)
 		// Seems like it's needed for B3, so there is a separate handling for dedicated servers in Dedicated.cpp
@@ -618,7 +929,7 @@ namespace Components
 
 			auto count = 0;
 
-			AssetHandler::OnLoad([](Game::XAssetType type, Game::XAssetHeader asset, const std::string& name, bool* /*restrict*/)
+			AssetHandler::OnLoad([](Game::XAssetType type, Game::XAssetHeader asset, const std::string_view name, bool* /*restrict*/)
 			{
 				// they're basically the same right?
 				if (type == Game::ASSET_TYPE_PIXELSHADER || type == Game::ASSET_TYPE_VERTEXSHADER)
@@ -739,7 +1050,7 @@ namespace Components
 		});
 
 #ifdef DEBUG_MAT_LOG
-		AssetHandler::OnLoad([](Game::XAssetType type, Game::XAssetHeader asset, const std::string& /*name*/, bool* /*restrict*/)
+		AssetHandler::OnLoad([](Game::XAssetType type, Game::XAssetHeader asset, const std::string_view /*name*/, bool* /*restrict*/)
 		{
 			if (type == Game::XAssetType::ASSET_TYPE_GFXWORLD)
 			{

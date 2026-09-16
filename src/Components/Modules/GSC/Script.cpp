@@ -15,8 +15,6 @@ namespace Components::GSC
 	{
 		for (const auto& handle : ScriptMainHandles)
 		{
-			Logger::Print("Executing '{}::main'\n", handle.first.data());
-
 			const auto id = Game::Scr_ExecThread(handle.second, 0);
 			Game::Scr_FreeThread(static_cast<std::uint16_t>(id));
 		}
@@ -28,8 +26,6 @@ namespace Components::GSC
 	{
 		for (const auto& handle : ScriptInitHandles)
 		{
-			Logger::Print("Executing '{}::init'\n", handle.first.data());
-
 			const auto id = Game::Scr_ExecThread(handle.second, 0);
 			Game::Scr_FreeThread(static_cast<std::uint16_t>(id));
 		}

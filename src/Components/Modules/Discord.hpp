@@ -1,5 +1,7 @@
 #pragma once
 
+struct DiscordUser;
+
 namespace Components
 {
 	class Discord : public Component
@@ -18,6 +20,8 @@ namespace Components
 		static void InitializeDiscord();
 
 		static void UpdateDiscord();
+		static void JoinGame(const char* joinSecret);
+		static void JoinRequest(const DiscordUser* request);
 
 		static bool IsPrivateMatchOpen();
 

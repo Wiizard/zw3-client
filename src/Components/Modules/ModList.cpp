@@ -1,5 +1,6 @@
 
 #include "Events.hpp"
+#include "FastFiles.hpp"
 #include "ModList.hpp"
 #include "UIFeeder.hpp"
 
@@ -36,6 +37,7 @@ namespace Components
 		}
 
 		Game::Dvar_SetString(*Game::fs_gameDirVar, "");
+		FastFiles::PrefetchZone("mod");
 
 		if (cl_modVidRestart.get<bool>())
 		{
@@ -91,6 +93,7 @@ namespace Components
 	void ModList::RunMod(const std::string& mod)
 	{
 		Game::Dvar_SetString(*Game::fs_gameDirVar, Utils::String::Format("mods/{}", mod));
+		FastFiles::PrefetchZone("mod");
 
 		if (cl_modVidRestart.get<bool>())
 		{

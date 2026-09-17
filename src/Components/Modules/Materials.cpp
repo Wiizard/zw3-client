@@ -49,6 +49,67 @@ namespace Components
 
 		ULONG_PTR GdiPlusToken = 0;
 
+		void CropMatchmakingVotePreview(const Game::Material* material,
+			float* s0, float* s1, float* t0, float* t1)
+		{
+			if (!material || !material->info.name || !material->textureTable ||
+				*s0 != 0.0f || *s1 != 1.0f || *t0 != 0.0f || *t1 != 1.0f)
+			{
+				return;
+			}
+
+			const auto* voteActive = Game::Dvar_FindVar("zwnet_vote_active");
+			if (!voteActive || !voteActive->current.enabled) return;
+
+			const auto* mapA = Game::Dvar_FindVar("zwnet_vote_map_a_image");
+			const auto* mapB = Game::Dvar_FindVar("zwnet_vote_map_b_image");
+			const auto isMapA = mapA && mapA->current.string &&
+				!_stricmp(material->info.name, mapA->current.string);
+			const auto isMapB = mapB && mapB->current.string &&
+				!_stricmp(material->info.name, mapB->current.string);
+			if (!isMapA && !isMapB) return;
+
+			auto* menu = Game::Menus_FindByName(Game::uiContext, "zwnet_matchmaking");
+			if (!menu || !Game::Menus_MenuIsInStack(Game::uiContext, menu)) return;
+
+			const Game::GfxImage* image = nullptr;
+			for (auto i = 0; i < material->textureCount; ++i)
+			{
+				if (material->textureTable[i].semantic == Game::TS_2D ||
+					material->textureTable[i].semantic == Game::TS_COLOR_MAP)
+				{
+					image = material->textureTable[i].u.image;
+					break;
+				}
+			}
+			if (!image || !image->width || !image->height) return;
+
+			const auto* itemName = isMapA ? "image_map_preview_vote_a" : "image_map_preview_vote_b";
+			for (auto i = 0; i < menu->itemCount; ++i)
+			{
+				const auto* item = menu->items[i];
+				if (!item || !item->window.name || _stricmp(item->window.name, itemName)) continue;
+				const auto& rect = item->window.rect;
+				if (rect.w <= 0.0f || rect.h <= 0.0f) return;
+
+				const auto imageAspect = static_cast<float>(image->width) / image->height;
+				const auto cardAspect = rect.w / rect.h;
+				if (imageAspect < cardAspect)
+				{
+					const auto span = imageAspect / cardAspect;
+					*t0 = (1.0f - span) * 0.5f;
+					*t1 = (1.0f + span) * 0.5f;
+				}
+				else
+				{
+					const auto span = cardAspect / imageAspect;
+					*s0 = (1.0f - span) * 0.5f;
+					*s1 = (1.0f + span) * 0.5f;
+				}
+				return;
+			}
+		}
+
 		void Process2DTextureCoordsForAnimatedAtlases(const Game::Material* material,
 			float* s0, float* s1, float* t0, float* t1)
 		{
@@ -57,6 +118,7 @@ namespace Components
 			{
 				Game::Material_Process2DTextureCoordsForAtlasing(
 					material, s0, s1, t0, t1);
+				CropMatchmakingVotePreview(material, s0, s1, t0, t1);
 				return;
 			}
 

@@ -1232,6 +1232,7 @@ namespace Components
 		Dvar::Var("zwnet_server_status").set("NOT ASSIGNED");
 		Dvar::Var("zwnet_join_status").set("WAITING IN LOBBY");
 		Dvar::Var("zwnet_join_countdown").set(0);
+		Dvar::Var("zwnet_managed_session").set(false);
 	}
 
 	void ZWNet::Register()
@@ -2008,6 +2009,34 @@ namespace Components
 		SearchingState() = false; SetState("IDLE");
 	}
 
+	void ZWNet::CancelMatchmaking()
+	{
+		CloseOnlineSession(false, false);
+		if (!ActiveState()) return;
+
+		auto party = Request("GET", "/zwnet/parties/current");
+		if (party && party->is_null())
+		{
+			party = Request("POST", "/zwnet/parties/create",
+				{{"visibility", PartyVisibilityName(DesiredPartyPrivacy().load())}});
+		}
+		if (!party || !party->is_object() || party->contains("error"))
+		{
+			SetState("ERROR", "ZWNET_PARTY_FAILED");
+			return;
+		}
+		party = ApplyPartyVisibility(std::move(*party));
+		if (!party)
+		{
+			SetState("ERROR", "ZWNET_PARTY_FAILED");
+			return;
+		}
+		*party = PublishLocalRank(std::move(*party));
+		UpdateLobbyDvars(*party);
+		SetState("IN_PARTY");
+		UpdatePresence();
+	}
+
 	void ZWNet::CloseOnlineSession(const bool shuttingDown, const bool terminal)
 	{
 		if (!ActiveState() || ClosingOnlineSessionState().exchange(true)) return;
@@ -2112,7 +2141,53 @@ namespace Components
 		return true;
 	}
 
-	void ZWNet::HandleServerDisconnect(const bool terminal)
+	void ZWNet::ReturnToIdleMatchmakingMenu()
+	{
+		AbandonOnlineSession();
+		Dvar::Var("zwnet_managed_session").set(false);
+		SetState("IDLE");
+		Command::Execute("set xblive_privateserver 0", false);
+		Command::Execute("set xblive_privatematch 0", false);
+		Command::Execute("set xblive_rankedmatch 0", false);
+		Command::Execute("openmenu zwnet_matchmaking", false);
+	}
+
+	void ZWNet::ScheduleReturnToIdleMatchmakingMenu()
+	{
+		static std::atomic_bool s_returnPending{false};
+		if (s_returnPending.exchange(true))
+		{
+			return;
+		}
+
+		const auto startedAt = Game::Sys_Milliseconds();
+		Scheduler::Schedule([startedAt, disconnectedAt = -1]() mutable -> bool
+		{
+			const auto now = Game::Sys_Milliseconds();
+
+			if (Game::CL_IsCgameInitialized())
+			{
+				return (now - startedAt) > 10000;
+			}
+
+			if (disconnectedAt < 0)
+			{
+				disconnectedAt = now;
+				return false;
+			}
+
+			if ((now - disconnectedAt) < 150)
+			{
+				return false;
+			}
+
+			s_returnPending = false;
+			ReturnToIdleMatchmakingMenu();
+			return true;
+		}, Scheduler::Pipeline::MAIN, 50ms);
+	}
+
+	void ZWNet::HandleServerDisconnect(const bool terminal, const bool wasMatchmaking)
 	{
 		if (!terminal && ReturnToMatchmakingLobby())
 		{
@@ -2120,6 +2195,10 @@ namespace Components
 			return;
 		}
 		CloseOnlineSession(false, terminal);
+		if (wasMatchmaking)
+		{
+			ScheduleReturnToIdleMatchmakingMenu();
+		}
 	}
 
 	void ZWNet::ConnectMatch(const std::string& matchId, const bool relay)
@@ -2168,6 +2247,7 @@ namespace Components
 			Dvar::Var("zwnet_server_endpoint").set(endpoint);
 			Dvar::Var("zwnet_server_status").set("SERVER ASSIGNED");
 			Dvar::Var("zwnet_join_status").set("JOINING SERVER");
+			Dvar::Var("zwnet_managed_session").set(true);
 			ServerJoinTransitionState() = true;
 			Scheduler::Once([]
 			{
@@ -2314,6 +2394,7 @@ namespace Components
 		Dvar::Register<const char*>("ui_zwnet_error", "", Game::DVAR_NONE, "Stable ZWNET error key");
 		Dvar::Register<const char*>("ui_zwnet_error_text", "", Game::DVAR_NONE, "Readable ZWNET error text");
 		Dvar::Register<const char*>("ui_zwnet_guid", PublicGuidText(), Game::DVAR_ROM, "Public ZW3 GUID used for Stats account linking");
+		Dvar::Register<bool>("zwnet_managed_session", false, Game::DVAR_NONE, "Active ZWNET matchmaking session");
 		Dvar::Register<bool>("zwnet_lobby_active", false, Game::DVAR_NONE, "ZWNET party lobby is active");
 		Dvar::Register<const char*>("zwnet_lobby_party_id", "", Game::DVAR_NONE, "Current ZWNET party");
 		Dvar::Register<const char*>("zwnet_lobby_visibility", "OPEN", Game::DVAR_NONE, "Current ZWNET party visibility");
@@ -2510,7 +2591,41 @@ namespace Components
 		});
 		UIScript::Add("ZWNetQuickPlay", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { Command::Execute("zwnet_quickplay", false); });
 		UIScript::Add("ZWNetCancel", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { Command::Execute("zwnet_cancel", false); });
-		UIScript::Add("ZWNET_CloseOnlineSession", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { EnqueueAsync([] { CloseOnlineSession(false, true); }); });
+		UIScript::Add("ZWNET_CancelMatchmaking", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { EnqueueAsync([] { CancelMatchmaking(); }); });
+		UIScript::Add("ZWNET_QuitToMatchmaking", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*)
+		{
+			bool hasMatch = false;
+			{
+				std::lock_guard lock(StateMutex());
+				hasMatch = !CurrentMatchIdState().empty();
+			}
+			const bool wasMatch = Dvar::Var("zwnet_managed_session").get<bool>() ||
+				InGameState() || hasMatch;
+
+			TerminalDisconnectRequested() = true;
+			EnqueueAsync([] { CloseOnlineSession(false, true); });
+			Command::Execute("disconnect", false);
+
+			if (wasMatch)
+			{
+				ScheduleReturnToIdleMatchmakingMenu();
+			}
+		});
+		UIScript::Add("ZWNET_CloseOnlineSession", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*)
+		{
+			bool hasMatch = false;
+			{
+				std::lock_guard lock(StateMutex());
+				hasMatch = !CurrentMatchIdState().empty();
+			}
+			const bool wasMatch = Dvar::Var("zwnet_managed_session").get<bool>() ||
+				InGameState() || hasMatch;
+			EnqueueAsync([] { CloseOnlineSession(false, true); });
+			if (wasMatch && Game::CL_IsCgameInitialized())
+			{
+				ScheduleReturnToIdleMatchmakingMenu();
+			}
+		});
 		UIScript::Add("ZWNetLogin", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { Command::Execute("zwnet_login", false); });
 		UIScript::Add("ZWNET_ConnectOnline", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { BeginOnlineEntry(); });
 		UIScript::Add("ZWNET_CancelOnlineEntry", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { OnlineEntryPendingState() = false; });
@@ -2590,8 +2705,17 @@ namespace Components
 				std::lock_guard lock(StateMutex());
 				hasMatch = !CurrentMatchIdState().empty();
 			}
+			const auto isManaged = Dvar::Var("zwnet_managed_session").get<bool>();
+			const auto wasMatchmaking = hasMatch || isManaged;
+
 			const auto terminal = TerminalDisconnectRequested().exchange(false);
-			if (wasConnected || hasMatch) EnqueueAsync([terminal] { HandleServerDisconnect(terminal); });
+			if (wasConnected || hasMatch || isManaged)
+			{
+				EnqueueAsync([terminal, wasMatchmaking]
+				{
+					HandleServerDisconnect(terminal, wasMatchmaking);
+				});
+			}
 		});
 		Events::OnCGameInit([]
 		{
@@ -2605,6 +2729,7 @@ namespace Components
 			InGameState() = hasMatch;
 			if (hasMatch)
 			{
+				Dvar::Var("zwnet_managed_session").set(true);
 				Dvar::Var("zwnet_server_hostname").set(Party::GetHostName());
 				SetState("IN_MATCH");
 				EnqueueAsync([] { UpdatePresence(); });

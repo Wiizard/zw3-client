@@ -23,8 +23,7 @@ namespace Components
 		constexpr std::size_t ZW3_ZONE_NONCE_SIZE = 16;
 		Utils::Cryptography::BufferedAesCtr ZW3BatchedCtr;
 		bool UseBatchedZW3Ctr = false;
-		std::atomic<std::int64_t> InitialLoadStart{};
-		std::atomic_bool InitialDatabaseReadyLogged = false;
+		std::atomic_bool InitialLoadPending = false;
 		std::atomic_bool MainMenuReached = false;
 
 		constexpr DWORD FASTFILE_PREFETCH_BUFFER_SIZE = 4u * 1024u * 1024u;
@@ -283,9 +282,7 @@ namespace Components
 	{
 		g_loadingInitialZones.set(true);
 		MainMenuReached.store(false, std::memory_order_release);
-		InitialLoadStart.store(std::chrono::duration_cast<std::chrono::nanoseconds>(
-			std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_release);
-		InitialDatabaseReadyLogged.store(false, std::memory_order_release);
+		InitialLoadPending.store(true, std::memory_order_release);
 
 		std::vector<Game::XZoneInfo> data;
 		data.reserve(zoneCount + 5);
@@ -350,14 +347,6 @@ namespace Components
 		}
 
 		FastFiles::LoadDLCUIZones(data.data(), data.size(), sync);
-
-		const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
-			std::chrono::steady_clock::now().time_since_epoch()).count();
-		const auto message = Utils::String::Format(
-			"Startup timing: initial zones returned in {:.2f} ms.\n",
-			static_cast<double>(now - InitialLoadStart.load(std::memory_order_acquire)) / 1'000'000.0);
-		Logger::Print(Game::CON_CHANNEL_SYSTEM, "{}", message);
-		Utils::IO::WriteFile("zw3/logs/load_timings.log", message, true);
 
 		if (loadDevModSeparately)
 		{
@@ -485,16 +474,6 @@ namespace Components
 
 		Scheduler::OnGameInitialized([]
 		{
-			const auto started = InitialLoadStart.load(std::memory_order_acquire);
-			if (started && !InitialDatabaseReadyLogged.exchange(true, std::memory_order_acq_rel))
-			{
-				const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
-					std::chrono::steady_clock::now().time_since_epoch()).count();
-				Logger::Print(Game::CON_CHANNEL_SYSTEM,
-					"Startup timing: initial database ready in {:.2f} ms.\n",
-					static_cast<double>(now - started) / 1'000'000.0);
-			}
-
 			g_loadingInitialZones.set(false);
 		}, Scheduler::Pipeline::MAIN);
 
@@ -502,35 +481,9 @@ namespace Components
 
 	void FastFiles::MarkMainMenuReady()
 	{
-		if (!InitialLoadStart.load(std::memory_order_acquire) || !Ready()) return;
-		const auto started = InitialLoadStart.exchange(0, std::memory_order_acq_rel);
+		if (!InitialLoadPending.load(std::memory_order_acquire) || !Ready()) return;
+		if (!InitialLoadPending.exchange(false, std::memory_order_acq_rel)) return;
 		MainMenuReached.store(true, std::memory_order_release);
-		if (!started) return;
-
-		const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
-			std::chrono::steady_clock::now().time_since_epoch()).count();
-		const auto message = Utils::String::Format(
-			"Startup timing: main_text reached in {:.2f} ms.\n",
-			static_cast<double>(now - started) / 1'000'000.0);
-		Logger::Print(Game::CON_CHANNEL_SYSTEM, "{}", message);
-		Utils::IO::WriteFile("zw3/logs/load_timings.log", message, true);
-		FILETIME created{}, exited{}, kernel{}, user{}, current{};
-		if (GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user))
-		{
-			GetSystemTimeAsFileTime(&current);
-			ULARGE_INTEGER begin{}, end{};
-			begin.LowPart = created.dwLowDateTime;
-			begin.HighPart = created.dwHighDateTime;
-			end.LowPart = current.dwLowDateTime;
-			end.HighPart = current.dwHighDateTime;
-			static bool loggedProcessStartup = false;
-			if (!loggedProcessStartup)
-			{
-				loggedProcessStartup = true;
-				Utils::IO::WriteFile("zw3/logs/load_timings.log", Utils::String::Format(
-					"Startup timing: process to main_text in {:.2f} ms.\n", (end.QuadPart - begin.QuadPart) / 10'000.0), true);
-			}
-		}
 		Renderer::FinishLoading();
 	}
 
@@ -1348,26 +1301,6 @@ namespace Components
 		FastFiles::PrefetchZone("iw4x_ui_mp");
 		FastFiles::PrefetchZone("iw4x_localized_english");
 		FastFiles::PrefetchZone("iw4x_code_post_gfx_mp");
-
-		// Register this before the main-menu module so a frame where the
-		// database becomes ready and main_text opens cannot lose the phase edge.
-		Scheduler::Loop([]
-		{
-			const auto started = InitialLoadStart.load(std::memory_order_acquire);
-			if (!started || InitialDatabaseReadyLogged.load(std::memory_order_acquire)
-				|| !Game::Sys_IsDatabaseReady2()) return;
-
-			const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
-				std::chrono::steady_clock::now().time_since_epoch()).count();
-			if (!InitialDatabaseReadyLogged.exchange(true, std::memory_order_acq_rel))
-			{
-				const auto message = Utils::String::Format(
-					"Startup timing: database ready in {:.2f} ms.\n",
-					static_cast<double>(now - started) / 1'000'000.0);
-				Logger::Print(Game::CON_CHANNEL_SYSTEM, "{}", message);
-				Utils::IO::WriteFile("zw3/logs/load_timings.log", message, true);
-			}
-		}, Scheduler::Pipeline::MAIN);
 
 		if (!Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled())
 		{

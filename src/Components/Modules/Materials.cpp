@@ -59,7 +59,16 @@ namespace Components
 			}
 
 			const auto* voteActive = Game::Dvar_FindVar("zwnet_vote_active");
-			if (!voteActive || !voteActive->current.enabled) return;
+			if (!voteActive) return;
+			const auto* winner = Game::Dvar_FindVar("zwnet_vote_winner_image");
+			const auto* winnerId = Game::Dvar_FindVar("zwnet_vote_winner_id");
+			const auto winnerFallback = std::string("preview_") +
+				(winnerId && winnerId->current.string ? winnerId->current.string : "");
+			const auto isWinner = !voteActive->current.enabled && winnerId &&
+				winnerId->current.string && *winnerId->current.string &&
+				((winner && winner->current.string && !_stricmp(material->info.name, winner->current.string)) ||
+				 !_stricmp(material->info.name, winnerFallback.c_str()));
+			if (!voteActive->current.enabled && !isWinner) return;
 
 			const auto* mapA = Game::Dvar_FindVar("zwnet_vote_map_a_image");
 			const auto* mapB = Game::Dvar_FindVar("zwnet_vote_map_b_image");
@@ -67,7 +76,7 @@ namespace Components
 				!_stricmp(material->info.name, mapA->current.string);
 			const auto isMapB = mapB && mapB->current.string &&
 				!_stricmp(material->info.name, mapB->current.string);
-			if (!isMapA && !isMapB) return;
+			if (!isWinner && !isMapA && !isMapB) return;
 
 			auto* menu = Game::Menus_FindByName(Game::uiContext, "zwnet_matchmaking");
 			if (!menu || !Game::Menus_MenuIsInStack(Game::uiContext, menu)) return;
@@ -84,7 +93,8 @@ namespace Components
 			}
 			if (!image || !image->width || !image->height) return;
 
-			const auto* itemName = isMapA ? "image_map_preview_vote_a" : "image_map_preview_vote_b";
+			const auto* itemName = isWinner ? "image_map_preview_winner" :
+				(isMapA ? "image_map_preview_vote_a" : "image_map_preview_vote_b");
 			for (auto i = 0; i < menu->itemCount; ++i)
 			{
 				const auto* item = menu->items[i];

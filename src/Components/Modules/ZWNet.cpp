@@ -1223,6 +1223,7 @@ namespace Components
 		Dvar::Var("zwnet_all_ready").set(false);
 		Dvar::Var("zwnet_start_phase").set("");
 		Dvar::Var("zwnet_start_seconds").set(0);
+		Dvar::Var("zwnet_vote_reveal_time").set(0);
 		Dvar::Var("zwnet_vote_winner_id").set("");
 		Dvar::Var("zwnet_vote_winner_name").set("");
 		Dvar::Var("zwnet_vote_winner_image").set("");
@@ -2077,6 +2078,7 @@ namespace Components
 				Dvar::Var("zwnet_all_ready").set(false);
 				Dvar::Var("zwnet_start_phase").set("");
 				Dvar::Var("zwnet_start_seconds").set(0);
+				Dvar::Var("zwnet_vote_reveal_time").set(0);
 				Dvar::Var("zwnet_vote_winner_id").set("");
 				Dvar::Var("zwnet_vote_winner_name").set("");
 				Dvar::Var("zwnet_vote_winner_image").set("");
@@ -2128,6 +2130,7 @@ namespace Components
 				Dvar::Var("zwnet_all_ready").set(false);
 				Dvar::Var("zwnet_start_phase").set("");
 				Dvar::Var("zwnet_start_seconds").set(0);
+				Dvar::Var("zwnet_vote_reveal_time").set(0);
 				Dvar::Var("zwnet_vote_winner_id").set("");
 				Dvar::Var("zwnet_vote_winner_name").set("");
 				Dvar::Var("zwnet_vote_winner_image").set("");
@@ -2295,6 +2298,7 @@ namespace Components
 				Dvar::Var("zwnet_vote_proposal_id").set(JsonString(vote, "proposal_id"));
 				Dvar::Var("zwnet_vote_seconds").set(vote.value("seconds_remaining", 0));
 				Dvar::Var("zwnet_vote_selection").set(selected);
+				Dvar::Var("zwnet_vote_reveal_time").set(0);
 				Dvar::Var("zwnet_vote_winner_id").set("");
 				Dvar::Var("zwnet_vote_winner_name").set("");
 				Dvar::Var("zwnet_vote_winner_image").set("");
@@ -2378,6 +2382,7 @@ namespace Components
 			Scheduler::Once([map, mapName, mapImage, matchId, serverStatus, joinStatus, joinCountdown, allReady, startPhase, startSeconds]
 				{
 					if (!ActiveState()) return;
+					const auto wasVoting = Dvar::Var("zwnet_vote_active").get<bool>();
 					Dvar::Var("zwnet_vote_active").set(false);
 					Dvar::Var("zwnet_all_ready").set(allReady);
 					Dvar::Var("zwnet_start_phase").set(startPhase);
@@ -2388,6 +2393,14 @@ namespace Components
 					Dvar::Var("zwnet_join_status").set(joinStatus);
 					if (!map.empty())
 					{
+						if (Dvar::Var("zwnet_vote_winner_id").get<std::string>() != map)
+						{
+							const auto mapA = Dvar::Var("zwnet_vote_map_a_id").get<std::string>();
+							const auto mapB = Dvar::Var("zwnet_vote_map_b_id").get<std::string>();
+							const auto slot = map == mapA ? 0 : (map == mapB ? 1 : 2);
+							Dvar::Var("zwnet_vote_reveal_slot").set(slot);
+							Dvar::Var("zwnet_vote_reveal_time").set(wasVoting ? Game::Sys_Milliseconds() : 0);
+						}
 						Dvar::Var("ui_mapname").set(map);
 						Dvar::Var("zwnet_vote_winner_id").set(map);
 						Dvar::Var("zwnet_vote_winner_name").set(mapName);
@@ -2491,6 +2504,8 @@ namespace Components
 			Dvar::Register<int>(voteCounts[i], 0, 0, 4, Game::DVAR_NONE, "Map vote count");
 		}
 		Dvar::Register<int>("zwnet_vote_random_votes", 0, 0, 4, Game::DVAR_NONE, "Random map vote count");
+		Dvar::Register<int>("zwnet_vote_reveal_time", 0, 0, INT_MAX, Game::DVAR_NONE, "Map result reveal start time");
+		Dvar::Register<int>("zwnet_vote_reveal_slot", 0, 0, 2, Game::DVAR_NONE, "Map result source card: A, B or random");
 		Dvar::Register<const char*>("zwnet_vote_winner_id", "", Game::DVAR_NONE, "Winning ZW3 map id");
 		Dvar::Register<const char*>("zwnet_vote_winner_name", "", Game::DVAR_NONE, "Winning ZW3 map name");
 		Dvar::Register<const char*>("zwnet_vote_winner_image", "", Game::DVAR_NONE, "Winning ZW3 map preview");

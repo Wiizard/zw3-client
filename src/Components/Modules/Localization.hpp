@@ -15,6 +15,7 @@ namespace Components
 		static void ParseOutput(const std::function<void(Game::LocalizeEntry*)>& callback);
 
 		static const char* LocalizeMapName(const char* mapName);
+		static const char* GetMapImageName(const char* mapName);
 
 	private:
 		static std::recursive_mutex LocalizeMutex;

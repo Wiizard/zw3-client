@@ -72,10 +72,17 @@ namespace Components
 
 			const auto* mapA = Game::Dvar_FindVar("zwnet_vote_map_a_image");
 			const auto* mapB = Game::Dvar_FindVar("zwnet_vote_map_b_image");
-			const auto isMapA = mapA && mapA->current.string &&
-				!_stricmp(material->info.name, mapA->current.string);
-			const auto isMapB = mapB && mapB->current.string &&
-				!_stricmp(material->info.name, mapB->current.string);
+			const auto* mapAId = Game::Dvar_FindVar("zwnet_vote_map_a_id");
+			const auto* mapBId = Game::Dvar_FindVar("zwnet_vote_map_b_id");
+			const auto mapAFallback = std::string("preview_") +
+				(mapAId && mapAId->current.string ? mapAId->current.string : "");
+			const auto mapBFallback = std::string("preview_") +
+				(mapBId && mapBId->current.string ? mapBId->current.string : "");
+
+			const auto isMapA = (mapA && mapA->current.string && !_stricmp(material->info.name, mapA->current.string)) ||
+				(mapAId && mapAId->current.string && *mapAId->current.string && !_stricmp(material->info.name, mapAFallback.c_str()));
+			const auto isMapB = (mapB && mapB->current.string && !_stricmp(material->info.name, mapB->current.string)) ||
+				(mapBId && mapBId->current.string && *mapBId->current.string && !_stricmp(material->info.name, mapBFallback.c_str()));
 			if (!isWinner && !isMapA && !isMapB) return;
 
 			auto* menu = Game::Menus_FindByName(Game::uiContext, "zwnet_matchmaking");
@@ -95,10 +102,13 @@ namespace Components
 
 			const auto* itemName = isWinner ? "image_map_preview_winner" :
 				(isMapA ? "image_map_preview_vote_a" : "image_map_preview_vote_b");
+			const auto* fallbackName = isWinner ? "image_map_preview_winner_fallback" :
+				(isMapA ? "image_map_preview_vote_a_fallback" : "image_map_preview_vote_b_fallback");
 			for (auto i = 0; i < menu->itemCount; ++i)
 			{
 				const auto* item = menu->items[i];
-				if (!item || !item->window.name || _stricmp(item->window.name, itemName)) continue;
+				if (!item || !item->window.name) continue;
+				if (_stricmp(item->window.name, itemName) && _stricmp(item->window.name, fallbackName)) continue;
 				const auto& rect = item->window.rect;
 				if (rect.w <= 0.0f || rect.h <= 0.0f) return;
 

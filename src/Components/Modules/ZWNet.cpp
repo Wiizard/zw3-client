@@ -8,6 +8,8 @@
 #include "Events.hpp"
 #include "FileSystem.hpp"
 #include "Friends.hpp"
+#include "Localization.hpp"
+#include "Maps.hpp"
 #include "Party.hpp"
 #include "Scheduler.hpp"
 #include "TextRenderer.hpp"
@@ -25,6 +27,52 @@ namespace Components
 		std::array<Game::XAssetHeader, ZWNET_MATERIAL_ENUM_CAPACITY> MaterialEnumerationAssets{};
 		std::uint32_t MaterialEnumerationCount{};
 		std::string FormatPublicGuid();
+
+		std::string ResolveVoteMapImage(const std::string& mapId, const std::string& serverImage)
+		{
+			if (!mapId.empty())
+			{
+				const auto* arenaImage = Localization::GetMapImageName(mapId.c_str());
+				if (arenaImage && arenaImage[0])
+				{
+					return arenaImage;
+				}
+			}
+
+			if (!serverImage.empty() && serverImage != mapId && !serverImage.starts_with("preview_mp_mp_"))
+			{
+				if (serverImage.starts_with("preview_"))
+				{
+					return serverImage;
+				}
+			}
+
+			if (!mapId.empty())
+			{
+				return "preview_" + mapId;
+			}
+
+			return serverImage;
+		}
+
+		std::string ResolveVoteMapDisplayName(const std::string& mapId, const std::string& serverName)
+		{
+			if (!serverName.empty() && serverName != mapId)
+			{
+				return serverName;
+			}
+
+			if (!mapId.empty())
+			{
+				const auto* locName = Localization::LocalizeMapName(mapId.c_str());
+				if (locName && locName[0] && locName != mapId)
+				{
+					return locName;
+				}
+			}
+
+			return serverName.empty() ? mapId : serverName;
+		}
 
 		struct SharedLobbyRank
 		{
@@ -2307,9 +2355,12 @@ namespace Components
 				for (std::size_t i = 0; i < 2; ++i)
 				{
 					const auto prefix = std::format("zwnet_vote_map_{}", i == 0 ? "a" : "b");
-					Dvar::Var(prefix + "_id").set(JsonString(choices[i], "id"));
-					Dvar::Var(prefix + "_name").set(JsonString(choices[i], "name"));
-					Dvar::Var(prefix + "_image").set(JsonString(choices[i], "image"));
+					const auto mapId = JsonString(choices[i], "id");
+					const auto resolvedName = ResolveVoteMapDisplayName(mapId, JsonString(choices[i], "name"));
+					const auto resolvedImage = ResolveVoteMapImage(mapId, JsonString(choices[i], "image"));
+					Dvar::Var(prefix + "_id").set(mapId);
+					Dvar::Var(prefix + "_name").set(resolvedName);
+					Dvar::Var(prefix + "_image").set(resolvedImage);
 					Dvar::Var(prefix + "_votes").set(choices[i].value("votes", 0));
 				}
 				Dvar::Var("zwnet_vote_random_votes").set(choices[2].value("votes", 0));
@@ -2393,6 +2444,9 @@ namespace Components
 					Dvar::Var("zwnet_join_status").set(joinStatus);
 					if (!map.empty())
 					{
+						const auto winnerDisplayName = ResolveVoteMapDisplayName(map, mapName);
+						const auto winnerImage = ResolveVoteMapImage(map, mapImage);
+
 						if (Dvar::Var("zwnet_vote_winner_id").get<std::string>() != map)
 						{
 							const auto mapA = Dvar::Var("zwnet_vote_map_a_id").get<std::string>();
@@ -2403,8 +2457,9 @@ namespace Components
 						}
 						Dvar::Var("ui_mapname").set(map);
 						Dvar::Var("zwnet_vote_winner_id").set(map);
-						Dvar::Var("zwnet_vote_winner_name").set(mapName);
-						Dvar::Var("zwnet_vote_winner_image").set(mapImage);
+						Dvar::Var("zwnet_vote_winner_name").set(winnerDisplayName);
+						Dvar::Var("zwnet_vote_winner_image").set(winnerImage);
+						Maps::SynchronizeMapDvars(map);
 					}
 				}, Scheduler::Pipeline::MAIN);
 		}

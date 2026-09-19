@@ -4,6 +4,7 @@
 #include "version.hpp"
 
 #include <Utils/WebIO.hpp>
+#include <Utils/IO.hpp>
 
 #include <rapidjson/document.h>
 
@@ -13,50 +14,93 @@ namespace Components
 	{
 		const Game::dvar_t* cl_updateAvailable;
 
-		constexpr auto* GITHUB_REMOTE_URL = "https://api.github.com/repos/iw4x/iw4x-client/releases/latest";
+		constexpr auto* UPDATE_MANIFEST_URL = "https://zw3.eu/dl/launcher/game_update.yaml";
+		constexpr auto* INSTALLED_VERSION_FILE = "main/zw3/zw3-version.json";
+
+		struct Version
+		{
+			int major{};
+			int minor{};
+			int patch{};
+		};
+
+		std::optional<Version> ParseVersion(const std::string_view value)
+		{
+			Version version{};
+			char suffix{};
+			if (std::sscanf(value.data(), "%d.%d.%d%c", &version.major, &version.minor, &version.patch, &suffix) != 3)
+				return {};
+			return version;
+		}
+
+		std::optional<std::string> ReadInstalledVersion()
+		{
+			const auto state = Utils::IO::ReadFile(INSTALLED_VERSION_FILE);
+			if (state.empty()) return {};
+
+			rapidjson::Document document{};
+			const rapidjson::ParseResult parseResult = document.Parse(state);
+			if (!parseResult || !document.IsObject() || !document.HasMember("version") || !document["version"].IsString()) return {};
+
+			const std::string version = document["version"].GetString();
+			return ParseVersion(version) ? std::make_optional(version) : std::nullopt;
+		}
+
+		bool IsNewerVersion(const std::string_view latest, const std::optional<std::string>& installed)
+		{
+			const auto latestVersion = ParseVersion(latest);
+			if (!latestVersion) return false;
+			if (!installed) return true;
+
+			const auto installedVersion = ParseVersion(*installed);
+			return !installedVersion || std::tie(latestVersion->major, latestVersion->minor, latestVersion->patch)
+				> std::tie(installedVersion->major, installedVersion->minor, installedVersion->patch);
+		}
 		constexpr auto* INSTALL_GUIDE_REMOTE_URL = "https://forum.alterware.dev/t/how-to-install-the-alterware-launcher/56";
 
 		void CheckForUpdate()
 		{
-			const auto result = Utils::WebIO("IW4x", GITHUB_REMOTE_URL).setTimeout(5000)->get();
+			const auto result = Utils::WebIO("ZW3", UPDATE_MANIFEST_URL).setTimeout(5000)->get();
 			if (result.empty())
 			{
-				// Nothing to do in this situation. We won't know if we need to update or not
-				Logger::Print("Could not fetch latest tag from GitHub\n");
+				Logger::Print("Could not fetch the ZW3 update manifest\n");
 				return;
 			}
 
-			rapidjson::Document doc{};
-			const rapidjson::ParseResult parseResult = doc.Parse(result);
-			if (!parseResult || !doc.IsObject())
+			std::istringstream stream(result);
+			std::string line;
+			std::string version;
+			while (std::getline(stream, line))
 			{
-				// Nothing to do in this situation. We won't know if we need to update or not
-				Logger::Print("GitHub sent an invalid reply (malformed JSON)\n");
+				if (line.rfind("version:", 0) == 0)
+				{
+					version = line.substr(8);
+					Utils::String::Trim(version);
+				}
+			}
+
+			if (version.empty())
+			{
+				Logger::Print("ZW3 update manifest has no version\n");
 				return;
 			}
 
-			if (!doc.HasMember("tag_name") || !doc["tag_name"].IsString())
+			// Engine dvars are updated only after returning to the main pipeline.
+			const auto updateAvailable = IsNewerVersion(version, ReadInstalledVersion());
+			Scheduler::Once([updateAvailable]
 			{
-				// Nothing to do in this situation. We won't know if we need to update or not
-				Logger::Print("GitHub sent an invalid reply (missing 'tag_name' JSON member)\n");
-				return;
-			}
-
-			const std::string tag = doc["tag_name"].GetString();
-			if (REVISION_STR != tag)
-			{
-				// A new version came out!
-				Game::Dvar_SetBool(cl_updateAvailable, true);
-			}
+				Game::Dvar_SetBool(cl_updateAvailable, updateAvailable);
+			}, Scheduler::Pipeline::MAIN);
 		}
 
 		// Depending on Linux/Windows 32/64 there are a few things we must check
 		std::optional<std::string> GetLauncher()
 		{
 			const char* launchers[] = {
-				"iw4x-launcher.exe",
-				"iw4x-launcher-x86.exe",
-				Utils::IsWineEnvironment() ? "iw4x-launcher" : nullptr
+				"zw3_launcher.exe",
+				"zw3-launcher.exe",
+				"Zombie Warfare 3 Launcher.exe",
+				Utils::IsWineEnvironment() ? "zw3-launcher" : nullptr
 			};
 
 			for (const char* launcher : launchers) {
@@ -71,12 +115,12 @@ namespace Components
 
 	Updater::Updater()
 	{
-		cl_updateAvailable = Game::Dvar_RegisterBool("cl_updateAvailable", false, Game::DVAR_NONE, "Whether an update is available or not");
+		cl_updateAvailable = Game::Dvar_RegisterBool("cl_updateAvailable", false, Game::DVAR_NONE, "Whether a ZW3 update is available");
 		Scheduler::Once(CheckForUpdate, Scheduler::Pipeline::ASYNC);
 
 		UIScript::Add("checkForUpdate", [](const UIScript::Token& /*token*/, const Game::uiInfo_s* /*info*/)
 		{
-			CheckForUpdate();
+			Scheduler::Once(CheckForUpdate, Scheduler::Pipeline::ASYNC);
 		});
 
 		UIScript::Add("getAutoUpdate", [](const UIScript::Token& /*token*/, const Game::uiInfo_s* /*info*/)

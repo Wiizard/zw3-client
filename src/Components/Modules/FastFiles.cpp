@@ -559,6 +559,11 @@ namespace Components
 
 		Utils::Merge(&paths, FastFiles::ZonePaths);
 
+		// Prefer the converted copy, but allow the stock x64 tree as a
+		// fallback while conversion is being recovered.
+		paths.push_back(ZoneConvert::SearchPath(Game::Win_GetLanguage()));
+		paths.push_back(std::format("zone\\{}\\", Game::Win_GetLanguage()));
+
 		for (auto& path : paths)
 		{
 			const auto* dir = (*Game::fs_basepath)->current.string;
@@ -577,7 +582,7 @@ namespace Components
 			}
 		}
 
-		return Utils::String::Format("zone\\{}\\", Game::Win_GetLanguage());
+		return Utils::String::Format("{}", ZoneConvert::SearchPath(Game::Win_GetLanguage()));
 	}
 
 	void FastFiles::AddZonePath(const std::string& path)
@@ -1172,7 +1177,12 @@ namespace Components
 
 		if (file.handle == INVALID_HANDLE_VALUE && ZoneBuilder::IsEnabled())
 		{
-			file = Game::Sys_CreateFile("zone\\zonebuilder\\", filename);
+			file = Game::Sys_CreateFile(ZoneConvert::SearchPath("zonebuilder").data(), filename);
+
+			if (file.handle == INVALID_HANDLE_VALUE)
+			{
+				file = Game::Sys_CreateFile("zone\\zonebuilder\\", filename);
+			}
 		}
 
 		return file;
@@ -1291,8 +1301,8 @@ namespace Components
 		Utils::Hook(0x4159E2, FastFiles::ReadXFileHeader, HOOK_CALL).install()->quick();
 
 		// Add custom zone paths
-		FastFiles::AddZonePath("zone\\patch\\");
-		FastFiles::AddZonePath("zone\\dlc\\");
+		FastFiles::AddZonePath(ZoneConvert::SearchPath("patch"));
+		FastFiles::AddZonePath(ZoneConvert::SearchPath("dlc"));
 		FastFiles::AddZonePath("zw3\\");
 
 		FastFiles::PrefetchZone("zw3_common");
@@ -1332,8 +1342,15 @@ namespace Components
 		{
 			if (params->size() < 2) return;
 
+			const auto* zoneName = params->get(1);
+			if (!FastFiles::Exists(zoneName))
+			{
+				Logger::PrintError(Game::CON_CHANNEL_ERROR, "Zone '{}' does not exist\n", zoneName);
+				return;
+			}
+
 			Game::XZoneInfo info;
-			info.name = params->get(1);
+			info.name = zoneName;
 			info.allocFlags = 1;//0x01000000;
 			info.freeFlags = 0;
 

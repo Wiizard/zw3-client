@@ -274,10 +274,10 @@ tools\premake5 generate-buildinfo</Command>
     <ClInclude Include="..\src\Components\Modules\Vote.hpp" />
     <ClInclude Include="..\src\Components\Modules\Weapon.hpp" />
     <ClInclude Include="..\src\Components\Modules\Window.hpp" />
-    <ClInclude Include="..\src\Components\Modules\ZoneConverter.hpp" />
     <ClInclude Include="..\src\Components\Modules\ZW3Changelog.hpp" />
     <ClInclude Include="..\src\Components\Modules\ZWNet.hpp" />
     <ClInclude Include="..\src\Components\Modules\ZoneBuilder.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ZoneConvert.hpp" />
     <ClInclude Include="..\src\Components\Modules\Zones.hpp" />
     <ClInclude Include="..\src\Game\BothGames.hpp" />
     <ClInclude Include="..\src\Game\Client.hpp" />
@@ -476,10 +476,10 @@ tools\premake5 generate-buildinfo</Command>
     <ClCompile Include="..\src\Components\Modules\Vote.cpp" />
     <ClCompile Include="..\src\Components\Modules\Weapon.cpp" />
     <ClCompile Include="..\src\Components\Modules\Window.cpp" />
-    <ClCompile Include="..\src\Components\Modules\ZoneConverter.cpp" />
     <ClCompile Include="..\src\Components\Modules\ZW3Changelog.cpp" />
     <ClCompile Include="..\src\Components\Modules\ZWNet.cpp" />
     <ClCompile Include="..\src\Components\Modules\ZoneBuilder.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ZoneConvert.cpp" />
     <ClCompile Include="..\src\Components\Modules\Zones.cpp" />
     <ClCompile Include="..\src\DllMain.cpp" />
     <ClCompile Include="..\src\Game\BothGames.cpp" />

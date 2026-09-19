@@ -2846,6 +2846,7 @@ namespace Components
 		Add("ui_mp/popup_partyconnect.menu");
 		Add("ui_mp/popup_partyconnect_warning.menu");
 		Add("ui_mp/popup_autosave.menu");
+		Add("ui_mp/popup_zw3_update.menu");
 		Add("ui_mp/zw3changelog.menu");
 		Add("ui_mp/popup_zwnet_connecting.menu");
 		Add("ui_mp/zwnet_matchmaking.menu");

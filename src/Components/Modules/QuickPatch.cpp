@@ -3,7 +3,6 @@
 #include "QuickPatch.hpp"
 #include "TextRenderer.hpp"
 #include "Toast.hpp"
-#include "Gamepad.hpp"
 #include "Events.hpp"
 #include "Scheduler.hpp"
 
@@ -1092,10 +1091,5 @@ namespace Components
 			intro->flags |= Game::DVAR_ROM;
 		}*/
 
-		//Gamepad::SetIntroInputBlocked(true);
-		/*Scheduler::OnGameInitialized([]()
-			{
-				Gamepad::SetIntroInputBlocked(false);
-			}, Scheduler::Pipeline::MAIN, 8s);*/
 	}
 }

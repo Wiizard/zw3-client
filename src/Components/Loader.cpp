@@ -26,7 +26,7 @@
 #include "Modules/Exception.hpp"
 #include "Modules/FastFiles.hpp"
 #include "Modules/Friends.hpp"
-#include "Modules/Gamepad.hpp"
+#include "Modules/Controller.hpp"
 #include "Modules/Huffman.hpp"
 #include "Modules/IPCPipe.hpp"
 #include "Modules/Lean.hpp"
@@ -163,7 +163,7 @@ namespace Components
 		Register(new FastFiles());
 		Register(new FileSystem());
 		Register(new Friends());
-		Register(new Gamepad());
+		Register(new Controller());
 		Register(new Rumble());
 		Register(new Huffman());
 		Register(new Lean());

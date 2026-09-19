@@ -3,7 +3,7 @@
 #include "Auth.hpp"
 #include "Download.hpp"
 #include "Friends.hpp"
-#include "Gamepad.hpp"
+#include "Controller.hpp"
 #include "ModList.hpp"
 #include "Node.hpp"
 #include "ServerList.hpp"
@@ -2448,7 +2448,7 @@ namespace Components
 				hostResponseInfo.set("hc", (Dvar::Var("g_hardcore").get<bool>() ? "1"s : "0"s));
 				hostResponseInfo.set("securityLevel", std::to_string(securityLevel));
 				hostResponseInfo.set("sv_running", (Dedicated::IsRunning() ? "1"s : "0"s));
-				hostResponseInfo.set("aimAssist", (Gamepad::sv_allowAimAssist.get<bool>() ? "1"s : "0"s));
+				hostResponseInfo.set("aimAssist", (Controller::sv_allowAimAssist.get<bool>() ? "1"s : "0"s));
 				hostResponseInfo.set("voiceChat", (Voice::SV_VoiceEnabled() ? "1"s : "0"s));
 				hostResponseInfo.set("zombiemode", std::to_string(Dvar::Var("zombiemode").get<int>()));
 				hostResponseInfo.set("ui_zombiecounter", std::to_string(Dvar::Var("ui_zombiecounter").get<int>()));

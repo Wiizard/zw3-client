@@ -3,6 +3,7 @@
 #include "Events.hpp"
 #include "AssetHandler.hpp"
 #include "FastFiles.hpp"
+#include "Maps.hpp"
 #include "Materials.hpp"
 #include "Menus.hpp"
 #include "D3D9Ex.hpp"
@@ -150,6 +151,7 @@ namespace Components
 				&& (Utils::String::Compare(params[0], "map")
 					|| Utils::String::Compare(params[0], "devmap")))
 			{
+				Maps::SynchronizeMapDvars(params[1]);
 				SPLoadscreens::SetLoadingMap(params[1]);
 			}
 
@@ -161,7 +163,11 @@ namespace Components
 			Command::ClientParams params;
 			++MapCommandDepth;
 			const auto guard = gsl::finally([] { --MapCommandDepth; });
-			if (params.size() > 1) SPLoadscreens::SetLoadingMap(params[1]);
+			if (params.size() > 1)
+			{
+				Maps::SynchronizeMapDvars(params[1]);
+				SPLoadscreens::SetLoadingMap(params[1]);
+			}
 			NativeDevmapCommand();
 		}
 	}
@@ -174,6 +180,8 @@ namespace Components
 	void SPLoadscreens::SetLoadingMap(const std::string& name)
 	{
 		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled()) return;
+
+		Maps::SynchronizeMapDvars(name);
 
 		const auto map = Utils::MapPreview::Normalize(name);
 		D3D9Ex::BeginMapLoading(map);

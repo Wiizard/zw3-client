@@ -49,6 +49,87 @@ namespace Components
 
 		ULONG_PTR GdiPlusToken = 0;
 
+		void CropMatchmakingVotePreview(const Game::Material* material,
+			float* s0, float* s1, float* t0, float* t1)
+		{
+			if (!material || !material->info.name || !material->textureTable ||
+				*s0 != 0.0f || *s1 != 1.0f || *t0 != 0.0f || *t1 != 1.0f)
+			{
+				return;
+			}
+
+			const auto* voteActive = Game::Dvar_FindVar("zwnet_vote_active");
+			if (!voteActive) return;
+			const auto* winner = Game::Dvar_FindVar("zwnet_vote_winner_image");
+			const auto* winnerId = Game::Dvar_FindVar("zwnet_vote_winner_id");
+			const auto winnerFallback = std::string("preview_") +
+				(winnerId && winnerId->current.string ? winnerId->current.string : "");
+			const auto isWinner = !voteActive->current.enabled && winnerId &&
+				winnerId->current.string && *winnerId->current.string &&
+				((winner && winner->current.string && !_stricmp(material->info.name, winner->current.string)) ||
+				 !_stricmp(material->info.name, winnerFallback.c_str()));
+			if (!voteActive->current.enabled && !isWinner) return;
+
+			const auto* mapA = Game::Dvar_FindVar("zwnet_vote_map_a_image");
+			const auto* mapB = Game::Dvar_FindVar("zwnet_vote_map_b_image");
+			const auto* mapAId = Game::Dvar_FindVar("zwnet_vote_map_a_id");
+			const auto* mapBId = Game::Dvar_FindVar("zwnet_vote_map_b_id");
+			const auto mapAFallback = std::string("preview_") +
+				(mapAId && mapAId->current.string ? mapAId->current.string : "");
+			const auto mapBFallback = std::string("preview_") +
+				(mapBId && mapBId->current.string ? mapBId->current.string : "");
+
+			const auto isMapA = (mapA && mapA->current.string && !_stricmp(material->info.name, mapA->current.string)) ||
+				(mapAId && mapAId->current.string && *mapAId->current.string && !_stricmp(material->info.name, mapAFallback.c_str()));
+			const auto isMapB = (mapB && mapB->current.string && !_stricmp(material->info.name, mapB->current.string)) ||
+				(mapBId && mapBId->current.string && *mapBId->current.string && !_stricmp(material->info.name, mapBFallback.c_str()));
+			if (!isWinner && !isMapA && !isMapB) return;
+
+			auto* menu = Game::Menus_FindByName(Game::uiContext, "zwnet_matchmaking");
+			if (!menu || !Game::Menus_MenuIsInStack(Game::uiContext, menu)) return;
+
+			const Game::GfxImage* image = nullptr;
+			for (auto i = 0; i < material->textureCount; ++i)
+			{
+				if (material->textureTable[i].semantic == Game::TS_2D ||
+					material->textureTable[i].semantic == Game::TS_COLOR_MAP)
+				{
+					image = material->textureTable[i].u.image;
+					break;
+				}
+			}
+			if (!image || !image->width || !image->height) return;
+
+			const auto* itemName = isWinner ? "image_map_preview_winner" :
+				(isMapA ? "image_map_preview_vote_a" : "image_map_preview_vote_b");
+			const auto* fallbackName = isWinner ? "image_map_preview_winner_fallback" :
+				(isMapA ? "image_map_preview_vote_a_fallback" : "image_map_preview_vote_b_fallback");
+			for (auto i = 0; i < menu->itemCount; ++i)
+			{
+				const auto* item = menu->items[i];
+				if (!item || !item->window.name) continue;
+				if (_stricmp(item->window.name, itemName) && _stricmp(item->window.name, fallbackName)) continue;
+				const auto& rect = item->window.rect;
+				if (rect.w <= 0.0f || rect.h <= 0.0f) return;
+
+				const auto imageAspect = static_cast<float>(image->width) / image->height;
+				const auto cardAspect = rect.w / rect.h;
+				if (imageAspect < cardAspect)
+				{
+					const auto span = imageAspect / cardAspect;
+					*t0 = (1.0f - span) * 0.5f;
+					*t1 = (1.0f + span) * 0.5f;
+				}
+				else
+				{
+					const auto span = cardAspect / imageAspect;
+					*s0 = (1.0f - span) * 0.5f;
+					*s1 = (1.0f + span) * 0.5f;
+				}
+				return;
+			}
+		}
+
 		void Process2DTextureCoordsForAnimatedAtlases(const Game::Material* material,
 			float* s0, float* s1, float* t0, float* t1)
 		{
@@ -57,6 +138,7 @@ namespace Components
 			{
 				Game::Material_Process2DTextureCoordsForAtlasing(
 					material, s0, s1, t0, t1);
+				CropMatchmakingVotePreview(material, s0, s1, t0, t1);
 				return;
 			}
 

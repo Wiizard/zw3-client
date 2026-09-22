@@ -169,8 +169,8 @@ newaction {
 
 dependencies.load()
 
-workspace "iw4x"
-	startproject "iw4x"
+workspace "zw3"
+	startproject "zw3"
 	location "./build"
 	objdir "%{wks.location}/obj"
 	targetdir "%{wks.location}/bin/%{cfg.platform}/%{cfg.buildcfg}"
@@ -183,7 +183,8 @@ workspace "iw4x"
 	architecture "x86"
 	platforms "Win32"
 
-	systemversion "10.0.19041.0"
+	-- Match the Windows SDK installed with the project toolchain.
+	systemversion "10.0.26100.0"
 	toolset "msc-v143"
 	symbols "On"
 	staticruntime "On"
@@ -223,7 +224,7 @@ workspace "iw4x"
 		defines {"DEBUG", "_DEBUG"}
 	filter {}
 
-	project "iw4x"
+project "zw3"
 		kind "SharedLib"
 		language "C++"
 		targetname "zw3"

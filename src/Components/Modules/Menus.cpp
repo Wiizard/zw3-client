@@ -18,6 +18,27 @@ namespace Components
 	{
 		const char EmptyPlayerPerk[] = "";
 
+		// Current IW4x controller option pages are loaded alongside ZW3's
+		// redesigned pc_options.inc. Adapt the few navigation helpers those
+		// pages expect to ZW3's native controls without replacing its layout.
+		constexpr std::string_view PcOptionsCompatibility = R"(
+#ifndef PC_OPTIONS_NAV
+#define PC_OPTIONS_NAV
+#endif
+#ifndef PC_OPTIONS_SELECTION_BAR
+#define PC_OPTIONS_SELECTION_BAR
+#endif
+#ifndef PC_OPTIONS_BUTTON_BACK
+#define PC_OPTIONS_BUTTON_BACK(actionArg) PC_OPTIONS_BACK_TO(actionArg)
+#endif
+)";
+
+		bool NeedsPcOptionsCompatibility(const std::string& name)
+		{
+			const auto filename = Utils::String::ToLower(std::filesystem::path(name).filename().string());
+			return filename.starts_with("pc_options_") && filename.ends_with(".menu");
+		}
+
 		using ParsedMenuFile = std::vector<std::pair<std::string, Game::menuDef_t*>>;
 		struct MenuReloadCache
 		{
@@ -158,18 +179,29 @@ namespace Components
 
 	Game::script_s* Menus::LoadMenuScript(const std::string& name, const std::string& buffer)
 	{
-		auto* script = static_cast<Game::script_s*>(Game::GetClearedMemory(sizeof(Game::script_s) + 1 + buffer.length()));
+		std::string compatibleBuffer;
+		const std::string* source = &buffer;
+
+		if (NeedsPcOptionsCompatibility(name))
+		{
+			compatibleBuffer.reserve(PcOptionsCompatibility.size() + buffer.size());
+			compatibleBuffer.append(PcOptionsCompatibility);
+			compatibleBuffer.append(buffer);
+			source = &compatibleBuffer;
+		}
+
+		auto* script = static_cast<Game::script_s*>(Game::GetClearedMemory(sizeof(Game::script_s) + 1 + source->length()));
 		if (!script) return nullptr;
 
 		strcpy_s(script->filename, sizeof(script->filename), name.data());
 		script->buffer = reinterpret_cast<char*>(script + 1);
 
-		*(script->buffer + buffer.length()) = '\0';
+		*(script->buffer + source->length()) = '\0';
 
 		script->script_p = script->buffer;
 		script->lastscript_p = script->buffer;
-		script->length = static_cast<int>(buffer.length());
-		script->end_p = &script->buffer[buffer.length()];
+		script->length = static_cast<int>(source->length());
+		script->end_p = &script->buffer[source->length()];
 		script->line = 1;
 		script->lastline = 1;
 		script->tokenavailable = 0;
@@ -177,7 +209,7 @@ namespace Components
 		Game::PS_CreatePunctuationTable(script, Game::default_punctuations);
 		script->punctuations = Game::default_punctuations;
 
-		std::memcpy(script->buffer, buffer.data(), script->length + 1);
+		std::memcpy(script->buffer, source->data(), script->length + 1);
 
 		script->length = Game::Com_Compress(script->buffer);
 
@@ -2427,6 +2459,7 @@ namespace Components
 
 	void Menus::RefreshNews([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 	{
+		Dvar::Var("zw3_ui_news_loading").set(true);
 		Dvar::Var("zw3_ui_news_index").set(0);
 		Dvar::Var("zw3_ui_news_page").set(0);
 		Dvar::Var("zw3_ui_news_count").set(0);
@@ -2463,6 +2496,20 @@ namespace Components
 			if (!command.empty())
 			{
 				Command::Execute(command, true);
+				// The private lobby reapplies the saved map in its onOpen script.
+				// Keep a news-selected map in sync with that preference.
+				constexpr std::string_view mapCommand = "set ui_mapname ";
+				if (!_strnicmp(command.c_str(), mapCommand.data(), mapCommand.size()))
+				{
+					const auto mapName = command.substr(mapCommand.size());
+					if (!mapName.empty() && mapName.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") == std::string::npos)
+					{
+						if (auto* preference = Game::Dvar_FindVar("zw3_pref_ui_mapname"))
+						{
+							Game::Dvar_SetString(preference, mapName.c_str());
+						}
+					}
+				}
 			}
 		}
 
@@ -2738,7 +2785,7 @@ namespace Components
 			UINewsCounter = Dvar::Register<const char*>("zw3_ui_news_counter", "0 / 0", Game::DVAR_INTERNAL, "Current ZW3 news counter");
 			UINewsImage = Dvar::Register<const char*>("zw3_ui_news_image", "", Game::DVAR_INTERNAL, "Unused/internal ZW3 news image marker");
 			UINewsHasImage = Dvar::Register<bool>("zw3_ui_news_has_image", false, Game::DVAR_INTERNAL, "Current ZW3 news image availability");
-			UINewsLoading = Dvar::Register<bool>("zw3_ui_news_loading", false, Game::DVAR_INTERNAL, "Current ZW3 news loading state");
+			UINewsLoading = Dvar::Register<bool>("zw3_ui_news_loading", true, Game::DVAR_INTERNAL, "Current ZW3 news loading state");
 			UINewsPage = Dvar::Register<int>("zw3_ui_news_page", 0, 0, INT_MAX, Game::DVAR_INTERNAL, "Current ZW3 news thumbnail page");
 			}, Components::Scheduler::Pipeline::MAIN);
 
@@ -2825,6 +2872,12 @@ namespace Components
 		Add("ui_mp/mod_download_popmenu.menu");
 		Add("ui_mp/pc_options_game.menu");
 		Add("ui_mp/pc_options_gamepad.menu");
+		Add("ui_mp/pc_options_gamepad_advanced.menu");
+		Add("ui_mp/pc_options_gamepad_sticks.menu");
+		Add("ui_mp/pc_options_gamepad_triggers.menu");
+		Add("ui_mp/pc_options_gamepad_response.menu");
+		Add("ui_mp/pc_options_gamepad_feedback.menu");
+		Add("ui_mp/pc_options_gamepad_timing.menu");
 		Add("ui_mp/pc_options_multi.menu");
 		Add("ui_mp/popup_customclan.menu");
 		Add("ui_mp/popup_customtitle.menu");
@@ -2840,6 +2893,7 @@ namespace Components
 		Add("ui_mp/popup_partyconnect.menu");
 		Add("ui_mp/popup_partyconnect_warning.menu");
 		Add("ui_mp/popup_autosave.menu");
+		Add("ui_mp/popup_zw3_update.menu");
 		Add("ui_mp/zw3changelog.menu");
 		Add("ui_mp/popup_zwnet_connecting.menu");
 		Add("ui_mp/zwnet_matchmaking.menu");

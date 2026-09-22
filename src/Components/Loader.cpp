@@ -26,7 +26,7 @@
 #include "Modules/Exception.hpp"
 #include "Modules/FastFiles.hpp"
 #include "Modules/Friends.hpp"
-#include "Modules/Gamepad.hpp"
+#include "Modules/Controller.hpp"
 #include "Modules/Huffman.hpp"
 #include "Modules/IPCPipe.hpp"
 #include "Modules/Lean.hpp"
@@ -72,7 +72,6 @@
 #include "Modules/Vote.hpp"
 #include "Modules/Weapon.hpp"
 #include "Modules/Window.hpp"
-#include "Modules/ZoneConverter.hpp"
 #include "Modules/Sound.hpp"
 #include "Modules/SPLoadscreens.hpp"
 #include "Modules/ZW3Changelog.hpp"
@@ -111,6 +110,10 @@ namespace Components
 		Postgame = false;
 		Uninitializing = false;
 		Utils::Memory::GetAllocator()->clear();
+
+		// Convert stock x64 fastfiles before any component can load them.
+		Register(new ZoneConvert());
+
 		// High priority
 		Register(new Singleton());
 		Register(new Scheduler());
@@ -129,7 +132,6 @@ namespace Components
 		Register(new IPCPipe());
 		Register(new Network());
 		Register(new Logger());
-		Register(new ZoneConverter());
 		Register(new UIScript());
 		Register(new ZoneBuilder());
 
@@ -161,7 +163,7 @@ namespace Components
 		Register(new FastFiles());
 		Register(new FileSystem());
 		Register(new Friends());
-		Register(new Gamepad());
+		Register(new Controller());
 		Register(new Rumble());
 		Register(new Huffman());
 		Register(new Lean());

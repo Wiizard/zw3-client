@@ -3,7 +3,7 @@
 
 #include "Friends.hpp"
 #include "Events.hpp"
-#include "Gamepad.hpp"
+#include "Controller.hpp"
 #include "Party.hpp"
 #include "ServerInfo.hpp"
 #include "CharacterAssignments.hpp"
@@ -812,7 +812,7 @@ namespace Components
 		info.set("mapname", (*Game::sv_mapname)->current.string);
 		info.set("isPrivate", *password ? "1" : "0");
 		info.set("checksum", Utils::String::VA("%X", Utils::Cryptography::JenkinsOneAtATime::Compute(std::to_string(Game::Sys_Milliseconds()))));
-		info.set("aimAssist", (Gamepad::sv_allowAimAssist.get<bool>() ? "1" : "0"));
+		info.set("aimAssist", (Controller::sv_allowAimAssist.get<bool>() ? "1" : "0"));
 		info.set("voiceChat", (Voice::SV_VoiceEnabled() ? "1" : "0"));
 
 		if (Dedicated::IsRunning())

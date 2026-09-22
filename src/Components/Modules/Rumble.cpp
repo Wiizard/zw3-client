@@ -1,6 +1,9 @@
 
 #include "ConfigStrings.hpp"
+#include "Controller.hpp"
 #include "Events.hpp"
+
+#include "../../Controller/Engine/Rumble.hpp"
 
 #include "GSC/Script.hpp"
 
@@ -44,9 +47,14 @@ namespace Components
 	Dvar::Var Rumble::cl_debug_rumbles;
 	Dvar::Var Rumble::cl_rumbleScale;
 
+	bool Rumble::IsValidLocalClient(const int localClientNum)
+	{
+		return localClientNum >= 0 && localClientNum < Game::MAX_GPAD_COUNT;
+	}
+
 	int Rumble::GetRumbleInfoIndexFromName(const char* rumbleName)
 	{
-		for (size_t i = 0; i < Gamepad::RUMBLE_CONFIGSTRINGS_COUNT-1; i++)
+		for (size_t i = 0; i < Controller::RUMBLE_CONFIGSTRINGS_COUNT-1; i++)
 		{
 			const char* configStringArr = ConfigStrings::CL_GetRumbleConfigString(i);
 			if (configStringArr && *configStringArr)
@@ -158,6 +166,11 @@ namespace Components
 
 	void Rumble::InvalidateActiveRumble(Game::ActiveRumble* ar)
 	{
+		if (ar->rumbleInfo != nullptr)
+		{
+			Controller::StopHapticEffect(static_cast<std::uint32_t>(ar->rumbleInfo->rumbleNameIndex + 1));
+		}
+
 		ar->sourceType = Game::RUMBLESOURCE_INVALID;
 		ar->rumbleInfo = nullptr;
 		ar->startTime = -1;
@@ -267,13 +280,13 @@ namespace Components
 		{
 			assert(finalRumbleHigh >= 0.F);
 			assert(finalRumbleLow >= 0.F);
-			Gamepad::GPad_SetHighRumble(localClientNum, finalRumbleHigh);
-			Gamepad::GPad_SetLowRumble(localClientNum, finalRumbleLow);
+			Controller::GPad_SetHighRumble(localClientNum, finalRumbleHigh);
+			Controller::GPad_SetLowRumble(localClientNum, finalRumbleLow);
 		}
 		else
 		{
-			Gamepad::GPad_SetHighRumble(localClientNum, 0.f);
-			Gamepad::GPad_SetLowRumble(localClientNum, 0.f);
+			Controller::GPad_SetHighRumble(localClientNum, 0.f);
+			Controller::GPad_SetLowRumble(localClientNum, 0.f);
 		}
 	}
 
@@ -282,6 +295,12 @@ namespace Components
 		assert(type != Game::RumbleSourceType::RUMBLESOURCE_INVALID);
 		assert(rumbleName);
 		assert(*rumbleName);
+		assert(IsValidLocalClient(localClientNum));
+
+		if (!IsValidLocalClient(localClientNum))
+		{
+			return;
+		}
 
 		int rumbleIndex = GetRumbleInfoIndexFromName(rumbleName);
 
@@ -381,6 +400,15 @@ namespace Components
 		activeRumble->rumbleInfo = rumbleInfo;
 		activeRumble->loop = loop;
 		activeRumble->scale = static_cast<uint8_t>(scale * 255.0);
+
+		if (!loop || !rumbleIsDuplicate)
+		{
+			::Controller::haptic::effect effect;
+			if (::Controller::engine::effect_from_rumble(*rumbleInfo, static_cast<float>(scale), loop, effect))
+			{
+				Controller::PlayHapticEffect(effect);
+			}
+		}
 
 		if (!cg->nextSnap || cg->predictedPlayerState.clientNum == cg->localClientNum && cg->predictedPlayerState.pm_type != 5)
 			CalcActiveRumbles(
@@ -627,7 +655,7 @@ namespace Components
 	void Rumble::CG_RegisterRumbles(int localClientNum)
 	{
 		const auto myRumbleGlobal = &rumbleGlobArray[localClientNum];
-		const auto maxRumbleGraphIndex = Gamepad::RUMBLE_CONFIGSTRINGS_COUNT;
+		const auto maxRumbleGraphIndex = Controller::RUMBLE_CONFIGSTRINGS_COUNT;
 
 		for (int i = 1; i < maxRumbleGraphIndex; i++)
 		{
@@ -656,7 +684,7 @@ namespace Components
 			auto rumbleToLookFor = Game::SL_FindLowercaseString(name);
 			int i;
 
-			for (i = 1; i <= Gamepad::RUMBLE_CONFIGSTRINGS_COUNT; ++i)
+			for (i = 1; i <= Controller::RUMBLE_CONFIGSTRINGS_COUNT; ++i)
 			{
 				auto rumble = ConfigStrings::SV_GetRumbleConfigStringConst(i - 1);
 				if (rumble == Game::scr_const->_)
@@ -665,7 +693,7 @@ namespace Components
 					return i;
 			}
 
-			if (i >= Gamepad::RUMBLE_CONFIGSTRINGS_COUNT)
+			if (i >= Controller::RUMBLE_CONFIGSTRINGS_COUNT)
 			{
 				Logger::Print("WARNING: Rumble not registered, {}\n", name);
 			}
@@ -789,11 +817,11 @@ namespace Components
 		int controllerIndex = Game::CL_ControllerIndexFromClientNum(0);
 		if (connectionState != 9 || (*Game::cl_paused)->current.enabled)
 		{
-			Gamepad::GPad_StopRumbles(controllerIndex);
+			Controller::GPad_StopRumbles(controllerIndex);
 		}
 		else
 		{
-			Gamepad::GPad_UpdateFeedbacks();
+			Controller::GPad_UpdateFeedbacks();
 		}
 	}
 
@@ -859,8 +887,8 @@ namespace Components
 				InvalidateActiveRumble(ar);
 			}
 
-			Gamepad::GPad_SetLowRumble(localClientNum, 0.0);
-			Gamepad::GPad_SetHighRumble(localClientNum, 0.0);
+			Controller::GPad_SetLowRumble(localClientNum, 0.0);
+			Controller::GPad_SetHighRumble(localClientNum, 0.0);
 		}
 		else
 		{
@@ -935,7 +963,7 @@ namespace Components
 
 	void Rumble::LoadConstantRumbleConfigStrings()
 	{
-		static_assert(ARRAYSIZE(rumbleStrings) < Gamepad::RUMBLE_CONFIGSTRINGS_COUNT);
+		static_assert(ARRAYSIZE(rumbleStrings) < Controller::RUMBLE_CONFIGSTRINGS_COUNT);
 
 		for (size_t i = 0; i < ARRAYSIZE(rumbleStrings); i++)
 		{
@@ -1148,9 +1176,9 @@ namespace Components
 			InvalidateActiveRumble(&rumbleGlobArray[0].activeRumbles[i]);
 		}
 
-		Gamepad::GPad_SetHighRumble(0, 0.0);
-		Gamepad::GPad_SetLowRumble(0, 0.0);
-		Gamepad::GPad_StopRumbles(0);
+		Controller::GPad_SetHighRumble(0, 0.0);
+		Controller::GPad_SetLowRumble(0, 0.0);
+		Controller::GPad_StopRumbles(0);
 	}
 
 	void Rumble::Scr_PlayRumbleOnEntity(Game::scr_entref_t entref)

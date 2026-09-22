@@ -2459,6 +2459,7 @@ namespace Components
 
 	void Menus::RefreshNews([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 	{
+		Dvar::Var("zw3_ui_news_loading").set(true);
 		Dvar::Var("zw3_ui_news_index").set(0);
 		Dvar::Var("zw3_ui_news_page").set(0);
 		Dvar::Var("zw3_ui_news_count").set(0);
@@ -2495,6 +2496,20 @@ namespace Components
 			if (!command.empty())
 			{
 				Command::Execute(command, true);
+				// The private lobby reapplies the saved map in its onOpen script.
+				// Keep a news-selected map in sync with that preference.
+				constexpr std::string_view mapCommand = "set ui_mapname ";
+				if (!_strnicmp(command.c_str(), mapCommand.data(), mapCommand.size()))
+				{
+					const auto mapName = command.substr(mapCommand.size());
+					if (!mapName.empty() && mapName.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") == std::string::npos)
+					{
+						if (auto* preference = Game::Dvar_FindVar("zw3_pref_ui_mapname"))
+						{
+							Game::Dvar_SetString(preference, mapName.c_str());
+						}
+					}
+				}
 			}
 		}
 
@@ -2770,7 +2785,7 @@ namespace Components
 			UINewsCounter = Dvar::Register<const char*>("zw3_ui_news_counter", "0 / 0", Game::DVAR_INTERNAL, "Current ZW3 news counter");
 			UINewsImage = Dvar::Register<const char*>("zw3_ui_news_image", "", Game::DVAR_INTERNAL, "Unused/internal ZW3 news image marker");
 			UINewsHasImage = Dvar::Register<bool>("zw3_ui_news_has_image", false, Game::DVAR_INTERNAL, "Current ZW3 news image availability");
-			UINewsLoading = Dvar::Register<bool>("zw3_ui_news_loading", false, Game::DVAR_INTERNAL, "Current ZW3 news loading state");
+			UINewsLoading = Dvar::Register<bool>("zw3_ui_news_loading", true, Game::DVAR_INTERNAL, "Current ZW3 news loading state");
 			UINewsPage = Dvar::Register<int>("zw3_ui_news_page", 0, 0, INT_MAX, Game::DVAR_INTERNAL, "Current ZW3 news thumbnail page");
 			}, Components::Scheduler::Pipeline::MAIN);
 

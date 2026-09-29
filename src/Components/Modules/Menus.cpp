@@ -4,6 +4,7 @@
 #include "Events.hpp"
 #include "SPLoadscreens.hpp"
 #include "FastFiles.hpp"
+#include "LobbyScene.hpp"
 #include <Utils/WebIO.hpp>
 #include <filesystem>
 // Ensure you have includes for AssetHandler, if it's a separate component.
@@ -1730,6 +1731,10 @@ namespace Components
 
 	bool Menus::IsMenuVisible(Game::UiContext* dc, Game::menuDef_t* menu)
 	{
+		if (LobbyScene::IsTransitionActive())
+		{
+			return false;
+		}
 		if (menu && menu->window.name && !_stricmp(menu->window.name, "connect"))
 		{
 			const auto custom = MenusFromDisk.find("connect");
@@ -1885,6 +1890,10 @@ namespace Components
 
 	void Menus::OpenLoadingScreen()
 	{
+		if (LobbyScene::IsTransitionActive())
+		{
+			return;
+		}
 		const auto custom = MenusFromDisk.find("connect");
 		if (custom == MenusFromDisk.end() || !custom->second)
 		{
@@ -2567,6 +2576,12 @@ namespace Components
 
 	void Menus::UpdateLoadingProgress()
 	{
+		if (LobbyScene::IsTransitionActive())
+		{
+			Dvar::Var("zw3_ui_loading_visible").set(false);
+			Dvar::Var("zw3_ui_loading_progress").set(0.0f);
+			return;
+		}
 		static auto lastConnState = Game::connstate_t::CA_DISCONNECTED;
 		static std::string lastMapName;
 		static bool wasLoading = false;

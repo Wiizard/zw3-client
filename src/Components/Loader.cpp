@@ -30,6 +30,7 @@
 #include "Modules/Huffman.hpp"
 #include "Modules/IPCPipe.hpp"
 #include "Modules/Lean.hpp"
+#include "Modules/LobbyScene.hpp"
 #include "Modules/MapDump.hpp"
 #include "Modules/MapRotation.hpp"
 #include "Modules/Materials.hpp"
@@ -188,6 +189,7 @@ namespace Components
 		Register(new RawMouse());
 		Register(new RCon());
 		Register(new Renderer());
+		Register(new LobbyScene());
 		Register(new Security());
 		Register(new ServerCommands());
 		Register(new ServerInfo());

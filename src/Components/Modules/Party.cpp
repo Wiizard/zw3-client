@@ -15,6 +15,7 @@
 #include "Bots.hpp"
 #include "CharacterAssignments.hpp"
 #include "ZWNet.hpp"
+#include "LobbyScene.hpp"
 #include <version.hpp>
 #include <unordered_set>
 #include <unordered_map>
@@ -453,6 +454,10 @@ namespace Components
 	void Party::Connect(Network::Address target, bool downloadOnly,
 		bool requireUnmanagedProof)
 	{
+		if (!downloadOnly && LobbyScene::DeferLaunch([target, downloadOnly, requireUnmanagedProof]
+		{
+			Connect(target, downloadOnly, requireUnmanagedProof);
+		})) return;
 		Node::Add(target);
 
 		Container.valid = true;
@@ -506,6 +511,7 @@ namespace Components
 
 	void Party::ConnectError(const std::string& message)
 	{
+		LobbyScene::StopTransition();
 		Command::Execute("closemenu popup_reconnectingtoparty");
 		Dvar::Var("partyend_reason").set(message);
 		Command::Execute("openmenu menu_xboxlive_partyended");

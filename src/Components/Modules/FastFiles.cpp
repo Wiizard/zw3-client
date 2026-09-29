@@ -7,6 +7,7 @@
 
 #include "FastFiles.hpp"
 #include "Renderer.hpp"
+#include "LobbyScene.hpp"
 
 namespace Components
 {
@@ -285,21 +286,100 @@ namespace Components
 		InitialLoadPending.store(true, std::memory_order_release);
 
 		std::vector<Game::XZoneInfo> data;
-		data.reserve(zoneCount + 5);
+		data.reserve(zoneCount + 8);
 		Utils::Merge(&data, zoneInfo, zoneCount);
-		const auto hasZW3Common = HasZW3CommonZone();
+		const char* basepath = (*Game::fs_basepath)->current.string;
+		const auto zw3CommonPath = std::string(basepath) + "\\zw3\\zw3_common.ff";
+		const auto zw3LobbyPath = std::string(basepath) + "\\zw3\\zw3_lobby.ff";
+		const auto zw3Patch = std::string(basepath) + "\\zw3\\zw3.ff";
 
-		for (auto& info : data)
+		const auto hasZW3Common = HasZW3CommonZone();
+		if (Flags::HasFlag("dev"))
 		{
-			if (hasZW3Common && info.name &&
-				std::strcmp(info.name, "common_mp") == 0)
+			Logger::Print("Skipping zw3/zw3_common.ff requirement because -dev is enabled.\n");
+			if (hasZW3Common)
 			{
-				info.name = "zw3_common";
+				for (auto& info : data)
+				{
+					if (info.name && std::strcmp(info.name, "common_mp") == 0)
+					{
+						info.name = "zw3_common";
+					}
+				}
+			}
+			else
+			{
+				Logger::Print("zw3_common.ff is unavailable; using common_mp.ff\n");
 			}
 		}
-		if (!hasZW3Common)
+		else if (hasZW3Common)
 		{
-			Logger::Print("zw3_common.ff is unavailable; using common_mp.ff\n");
+			for (auto& info : data)
+			{
+				if (info.name && std::strcmp(info.name, "common_mp") == 0)
+				{
+					info.name = "zw3_common";
+				}
+			}
+		}
+		else
+		{
+			MessageBoxA(nullptr,
+				Utils::String::Format(
+					"Missing 'zw3_common.ff':\n{}\n\nPlease run the Zombie Warfare 3 Launcher to verify game files or place it inside the zw3 folder.",
+					zw3CommonPath.c_str()),
+				"Error",
+				MB_OK | MB_ICONERROR);
+			std::exit(EXIT_FAILURE);
+		}
+
+		const bool isServerOrBuilder = Dedicated::IsEnabled() || ZoneBuilder::IsEnabled();
+		if (!isServerOrBuilder)
+		{
+			if (Flags::HasFlag("dev"))
+			{
+				Logger::Print("Skipping zw3/zw3_lobby.ff requirement because -dev is enabled.\n");
+				if (Utils::IO::FileExists(zw3LobbyPath))
+				{
+					const auto commonIt = std::find_if(data.begin(), data.end(), [](const Game::XZoneInfo& info)
+					{
+						return info.name && (std::strcmp(info.name, "zw3_common") == 0 || std::strcmp(info.name, "common_mp") == 0);
+					});
+					if (commonIt != data.end())
+					{
+						data.insert(commonIt + 1, { "zw3_lobby", 1, 0 });
+					}
+					else
+					{
+						data.push_back({ "zw3_lobby", 1, 0 });
+					}
+				}
+			}
+			else if (Utils::IO::FileExists(zw3LobbyPath))
+			{
+				const auto commonIt = std::find_if(data.begin(), data.end(), [](const Game::XZoneInfo& info)
+				{
+					return info.name && (std::strcmp(info.name, "zw3_common") == 0 || std::strcmp(info.name, "common_mp") == 0);
+				});
+				if (commonIt != data.end())
+				{
+					data.insert(commonIt + 1, { "zw3_lobby", 1, 0 });
+				}
+				else
+				{
+					data.push_back({ "zw3_lobby", 1, 0 });
+				}
+			}
+			else
+			{
+				MessageBoxA(nullptr,
+					Utils::String::Format(
+						"Missing 'zw3_lobby.ff':\n{}\n\nPlease run the Zombie Warfare 3 Launcher to verify game files or place it inside the zw3 folder.",
+						zw3LobbyPath.c_str()),
+					"Error",
+					MB_OK | MB_ICONERROR);
+				std::exit(EXIT_FAILURE);
+			}
 		}
 
 		if (FastFiles::Exists("iw4x_patch_mp"))
@@ -315,9 +395,6 @@ namespace Components
 		{
 			data.push_back({ "mod", 1, 0 });
 		}
-
-		const char* basepath = (*Game::fs_basepath)->current.string;
-		const auto zw3Patch = std::string(basepath) + "\\zw3\\zw3.ff";
 		//const auto zw3Patch = std::format("{}\\zw3\\zw3.ff", basepath);
 		if (Flags::HasFlag("dev"))
 		{
@@ -419,14 +496,16 @@ namespace Components
 	// This has to be called every time fastfiles are loaded :D
 	void FastFiles::LoadLocalizeZones(Game::XZoneInfo* zoneInfo, unsigned int zoneCount, int sync)
 	{
-		std::vector<Game::XZoneInfo> data;
+		static std::vector<Game::XZoneInfo> data;
+		data.clear();
 		data.reserve(zoneCount + 1);
 		Utils::Merge(&data, zoneInfo, zoneCount);
 
 		Game::XZoneInfo info = { nullptr, 4, 0 };
 
 		// Not sure how they should be loaded :S
-		std::string langZone = Utils::String::VA("iw4x_localized_%s", Game::Win_GetLanguage());
+		static std::string langZone;
+		langZone = Utils::String::VA("iw4x_localized_%s", Game::Win_GetLanguage());
 
 		if (FastFiles::Exists(langZone))
 		{
@@ -454,7 +533,7 @@ namespace Components
 			{
 				if (!zone.name) return false;
 				const std::string_view name = zone.name;
-				if (name == "zw3_common" || name == "common_mp") return false;
+				if (name == "zw3_common" || name == "common_mp" || name == "zw3_lobby") return false;
 				return true;
 			});
 		}
@@ -475,6 +554,7 @@ namespace Components
 		Scheduler::OnGameInitialized([]
 		{
 			g_loadingInitialZones.set(false);
+			LobbyScene::PrepareStartup();
 		}, Scheduler::Pipeline::MAIN);
 
 	}
@@ -1054,10 +1134,19 @@ namespace Components
 		return progress;
 	}
 
+	struct PendingZone
+	{
+		char name[64];
+		int allocFlags;
+	};
+	static PendingZone s_pendingZones[64];
+
 	void FastFiles::LoadZonesStub(Game::XZoneInfo* zoneInfo, unsigned int zoneCount)
 	{
 		FastFiles::CurrentZone = 0;
 		FastFiles::MaxZones = zoneCount;
+		if (zoneCount > 64) zoneCount = 64;
+		std::memset(s_pendingZones, 0, sizeof(s_pendingZones));
 
 		Utils::Hook::Call<void(Game::XZoneInfo*, unsigned int)>(0x5BBAC0)(zoneInfo, zoneCount);
 	}
@@ -1290,8 +1379,10 @@ namespace Components
 		// General read
 		Utils::Hook(0x5B98E4, FastFiles::AuthLoadInflateDecryptBase, HOOK_CALL).install()->quick();
 
-		// Fix fastfile progress
+		// Fix fastfile progress and expand pending zones buffer from 8 to 64 entries
 		Utils::Hook(0x4E5DE3, FastFiles::LoadZonesStub, HOOK_CALL).install()->quick();
+		Utils::Hook::Set<void*>(0x005BBAE9, s_pendingZones);
+		Utils::Hook::Set<void*>(0x005BCA76, s_pendingZones);
 		Utils::Hook(0x407761, FastFiles::GetFullLoadedFraction, HOOK_CALL).install()->quick();
 		Utils::Hook(0x49FA1E, FastFiles::GetFullLoadedFraction, HOOK_CALL).install()->quick();
 		Utils::Hook(0x589090, FastFiles::GetFullLoadedFraction, HOOK_CALL).install()->quick();
@@ -1304,6 +1395,7 @@ namespace Components
 		FastFiles::AddZonePath(ZoneConvert::SearchPath("patch"));
 		FastFiles::AddZonePath(ZoneConvert::SearchPath("dlc"));
 		FastFiles::AddZonePath("zw3\\");
+		if (!Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled()) FastFiles::PrefetchZone("zw3_lobby");
 
 		FastFiles::PrefetchZone("zw3_common");
 		if (!Flags::HasFlag("dev")) FastFiles::PrefetchZone("zw3");

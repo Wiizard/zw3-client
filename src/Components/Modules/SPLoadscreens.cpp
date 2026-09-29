@@ -7,6 +7,7 @@
 #include "Materials.hpp"
 #include "Menus.hpp"
 #include "D3D9Ex.hpp"
+#include "LobbyScene.hpp"
 #include <Utils/MapPreview.hpp>
 
 namespace Components
@@ -196,6 +197,19 @@ namespace Components
 		FastFiles::PrefetchZone(map);
 		if (!map.empty() && !map.ends_with("_load")) FastFiles::PrefetchZone("patch_" + map);
 		FastFiles::PrefetchPath(std::filesystem::path("main") / "video" / (map + "_load.bik"));
+
+		if (LobbyScene::IsTransitionActive())
+		{
+			ClearPreview();
+			LoadingMap = map;
+			TransitionPending = false;
+			if (*Game::ui_mapname)
+			{
+				Game::Dvar_SetString(*Game::ui_mapname, map.c_str());
+			}
+			LobbyScene::StartTransition();
+			return;
+		}
 
 		if (map.empty() || Utils::MapPreview::IsMultiplayer(map))
 		{

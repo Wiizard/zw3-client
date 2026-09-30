@@ -148,6 +148,7 @@ namespace Components
 		std::array<std::atomic_int, 4> lobbyCharacterModels = { 0, 1, 2, 3 };
 		std::atomic_bool assetsReady = false;
 		std::atomic_bool frameReady = false;
+		std::atomic_bool startupLoading = true;
 		std::atomic<bool> theaterDirectTransitionActive = false;
 		std::atomic<bool> sawConnectingState = false;
 		std::atomic<unsigned> transitionStartTime = 0;
@@ -155,6 +156,11 @@ namespace Components
 		std::atomic_bool fadePresented = false;
 		void (*originalPartyGo)() = nullptr;
 		bool executingDeferredLaunch = false;
+
+		bool IsCinematicActive()
+		{
+			return LobbyScene::IsCinematicActive();
+		}
 
 		struct TexturePackCache
 		{
@@ -634,7 +640,7 @@ namespace Components
 					if (isWeaponGroup)
 					{
 						actor.groups.back().alphaTest = false;
-						actor.groups.back().alphaThreshold = -1.0f;
+						actor.groups.back().alphaThreshold = 0.0f;
 					}
 					firstExpected += length;
 				}
@@ -867,6 +873,13 @@ namespace Components
 			AttachMaterialToLobby("zwnet_matchmaking", sceneReady);
 			AttachMaterialToLobby("pregame_loaderror", sceneReady);
 			AttachMaterialToLobby("main_text", sceneReady);
+			if (startupLoading.load(std::memory_order_acquire))
+			{
+				static const auto start = timeGetTime();
+				const auto elapsed = timeGetTime() - start;
+				if (sceneReady || elapsed >= 12000u)
+					startupLoading.store(false, std::memory_order_release);
+			}
 		}
 
 		void ReleaseDepth()
@@ -1307,7 +1320,7 @@ namespace Components
 
 		void RenderRoom(IDirect3DDevice9* device)
 		{
-			if (!assetsReady.load(std::memory_order_acquire) || roomVertices.empty() ||
+			if (IsCinematicActive() || !assetsReady.load(std::memory_order_acquire) || roomVertices.empty() ||
 				Renderer::IsDeviceRecoveryActive() || !roomImage || !device) return;
 
 			const auto inTransition = theaterDirectTransitionActive.load(std::memory_order_acquire);
@@ -2020,8 +2033,8 @@ namespace Components
 						const auto clip = isFiring ? (survivor.weaponIndex == 3 ? 6 :
 							survivor.weaponIndex == 0 ? 1 : 5) :
 							(survivor.isWalking ? 3 : survivor.weaponIndex == 0 ? 0 : 4);
-						const auto phaseOffset = isFiring ? (now - survivor.lastFireTime) :
-							(survivor.isWalking ? (now + i * 200u) : (i * 540u));
+						const auto phaseOffset = isFiring ? (0u - survivor.lastFireTime) :
+							(survivor.isWalking ? (i * 200u) : (i * 540u));
 						const std::vector<Vertex>* pose = &sampleActor(actor, clip, phaseOffset);
 
 						if (!drawGroups(actor.groups, *pose, false, false, nullptr, survivor.weaponIndex))
@@ -2202,7 +2215,7 @@ namespace Components
 					rendered = SUCCEEDED(device->StretchRect(sceneTarget, nullptr, target, nullptr, D3DTEXF_NONE));
 				}
 
-				if ((inTransition || bootPreview) && oldTarget)
+				if ((inTransition || (bootPreview && !startupLoading.load(std::memory_order_acquire))) && oldTarget)
 				{
 					device->SetRenderTarget(0, oldTarget);
 					device->SetDepthStencilSurface(nullptr);
@@ -2301,7 +2314,14 @@ namespace Components
 				1, 0x1000003, D3DFMT_A8R8G8B8);
 			if (roomImage) roomMaterial = Materials::Create("zw3_lobby_scene", roomImage);
 		});
-		Renderer::OnBackendFrame(RenderRoom);
+		Renderer::OnBackendFrame([](IDirect3DDevice9* device)
+		{
+			if (IsCinematicActive()) return;
+
+			RenderRoom(device);
+			if (!startupLoading.load(std::memory_order_acquire) || Renderer::IsDeviceRecoveryActive()) return;
+			device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_XRGB(8, 8, 8), 1.0f, 0);
+		});
 		Renderer::OnDeviceRecoveryBegin([]
 		{
 			StopTransition();
@@ -2326,6 +2346,18 @@ namespace Components
 	bool LobbyScene::IsSceneReady()
 	{
 		return assetsReady.load(std::memory_order_acquire) && frameReady.load(std::memory_order_acquire);
+	}
+
+	bool LobbyScene::IsStartupLoading()
+	{
+		return startupLoading.load(std::memory_order_acquire);
+	}
+
+	bool LobbyScene::IsCinematicActive()
+	{
+		if (*reinterpret_cast<void**>(0x069F980C) != nullptr) return true;
+		const auto state = Game::CL_GetLocalClientConnectionState(0);
+		return state == Game::CA_CINEMATIC || state == Game::CA_LOGO;
 	}
 
 	void LobbyScene::PrepareStartup()
@@ -2395,6 +2427,15 @@ namespace Components
 		theaterDirectTransitionActive.store(true, std::memory_order_release);
 		sawConnectingState.store(false, std::memory_order_release);
 
+		Game::Key_RemoveCatcher(0, ~Game::KEYCATCH_UI);
+		Game::Key_ClearStates(0);
+		if (Game::uiContext)
+		{
+			Game::uiContext->cursor.x = -1000.0f;
+			Game::uiContext->cursor.y = -1000.0f;
+			Game::uiContext->isCursorVisible = 0;
+		}
+
 		if (Game::ui_mapname && *Game::ui_mapname && (*Game::ui_mapname)->current.string)
 		{
 			const std::string mapName = (*Game::ui_mapname)->current.string;
@@ -2416,6 +2457,10 @@ namespace Components
 		transitionGeneration.fetch_add(1);
 		sawConnectingState.store(false, std::memory_order_release);
 		transitionStartTime.store(0, std::memory_order_release);
+		if (Game::uiContext && Game::uiContext->openMenuCount > 0)
+		{
+			Game::Key_SetCatcher(0, Game::KEYCATCH_UI);
+		}
 	}
 
 	LobbyScene::~LobbyScene()

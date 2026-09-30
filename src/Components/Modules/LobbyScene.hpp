@@ -12,6 +12,8 @@ namespace Components
 		static void StartTransition();
 		static void StopTransition();
 		static bool IsSceneReady();
+		static bool IsStartupLoading();
+		static bool IsCinematicActive();
 		static void PrepareStartup();
 		static bool DeferLaunch(const std::function<void()>& launch);
 	};

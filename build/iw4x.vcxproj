@@ -300,6 +300,7 @@ tools\premake5 generate-buildinfo</Command>
     <ClInclude Include="..\src\Game\Structs.hpp" />
     <ClInclude Include="..\src\Game\System.hpp" />
     <ClInclude Include="..\src\Game\Zone.hpp" />
+    <ClInclude Include="..\src\GameVersion.hpp" />
     <ClInclude Include="..\src\STDInclude.hpp" />
     <ClInclude Include="..\src\Steam\Interfaces\SteamFriends.hpp" />
     <ClInclude Include="..\src\Steam\Interfaces\SteamGameServer.hpp" />

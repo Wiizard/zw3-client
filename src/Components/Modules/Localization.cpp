@@ -362,6 +362,35 @@ namespace Components
 		return mapName;
 	}
 
+	const char* Localization::GetMapImageName(const char* mapName)
+	{
+		if (!mapName || !*mapName) return nullptr;
+
+		for (int i = 0; i < *Game::arenaCount; ++i)
+		{
+			const auto& arena = ArenaLength::NewArenas[i];
+			if (!_stricmp(arena.mapName, mapName) && arena.mapimage[0])
+			{
+				return arena.mapimage;
+			}
+		}
+
+		for (int i = 0; i < *Game::arenaCount; ++i)
+		{
+			const auto& arena = ArenaLength::NewArenas[i];
+			if (arena.mapimage[0] && !_stricmp(arena.mapimage, mapName)) return arena.mapimage;
+			if (arena.uiName[0] && !_stricmp(arena.uiName, mapName) && arena.mapimage[0]) return arena.mapimage;
+
+			const auto* localized = LocalizeMapName(arena.mapName);
+			if (localized && localized[0] && !_stricmp(localized, mapName) && arena.mapimage[0])
+			{
+				return arena.mapimage;
+			}
+		}
+
+		return nullptr;
+	}
+
 	Localization::Localization()
 	{
 		SetCredits();

@@ -158,3 +158,6 @@ zw3-online-system/backend/data/
 zw3-online-system/backend/.env
 zw3-online-system/backend/agent/.env
 zw3-online-system/backend/relay/.env
+
+# Generated ZW3 client overlay release artifacts
+/staging/

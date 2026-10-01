@@ -1,4 +1,5 @@
 #include <Utils/InfoString.hpp>
+#include <Utils/WebIO.hpp>
 
 #include <proto/auth.pb.h>
 
@@ -31,6 +32,172 @@ namespace Components
 
 	namespace
 	{
+		struct PendingManagedConnect
+		{
+			std::mutex mutex;
+			std::string endpoint;
+			std::string ticket;
+			std::string matchId;
+			std::string sessionId;
+			std::chrono::steady_clock::time_point expires{};
+		};
+
+		PendingManagedConnect& ManagedConnectState()
+		{
+			static PendingManagedConnect value;
+			return value;
+		}
+
+		std::string ReadAdmissionEnvironment(const char* name)
+		{
+			const auto size = GetEnvironmentVariableA(name, nullptr, 0);
+			if (size == 0 || size > 1024) return {};
+			std::string value(size, '\0');
+			const auto written = GetEnvironmentVariableA(name, value.data(), size);
+			if (written == 0 || written >= size) return {};
+			value.resize(written);
+			return value;
+		}
+
+		bool OpaqueAdmissionValue(const std::string& value, const std::size_t maximum)
+		{
+			return !value.empty() && value.size() <= maximum &&
+				std::ranges::all_of(value, [](const unsigned char c)
+				{
+					return std::isalnum(c) || c == '-' || c == '_';
+				});
+		}
+
+		struct ManagedAdmissionConfig
+		{
+			bool enabled = false;
+			bool valid = false;
+			std::string token;
+			std::string instanceId;
+			std::string backendUrl;
+		};
+
+		struct RecentManagedAdmission
+		{
+			std::string ticketHash;
+			std::string matchId;
+			std::string sessionId;
+			std::string playerId;
+			std::string instanceId;
+			std::string sourceEndpoint;
+			std::chrono::steady_clock::time_point expires;
+		};
+
+		std::mutex& RecentAdmissionMutex()
+		{
+			static std::mutex value;
+			return value;
+		}
+
+		std::vector<RecentManagedAdmission>& RecentAdmissions()
+		{
+			static std::vector<RecentManagedAdmission> value;
+			return value;
+		}
+
+		const ManagedAdmissionConfig& AdmissionConfig()
+		{
+			static const auto value = []
+			{
+				ManagedAdmissionConfig config;
+				const auto mode = ReadAdmissionEnvironment("ZWNET_ADMISSION_MODE");
+				config.enabled =
+					GetEnvironmentVariableA("ZWNET_ADMISSION_MODE", nullptr, 0) != 0 ||
+					GetEnvironmentVariableA("ZWNET_ADMISSION_TOKEN", nullptr, 0) != 0 ||
+					GetEnvironmentVariableA("ZWNET_ADMISSION_INSTANCE_ID", nullptr, 0) != 0;
+				if (!config.enabled) return config;
+				config.token = ReadAdmissionEnvironment("ZWNET_ADMISSION_TOKEN");
+				config.instanceId = ReadAdmissionEnvironment("ZWNET_ADMISSION_INSTANCE_ID");
+				config.backendUrl = ReadAdmissionEnvironment("ZWNET_ADMISSION_BACKEND_URL");
+				constexpr auto loopback = "http://127.0.0.1:";
+				const auto localUrl = config.backendUrl.starts_with(loopback) &&
+					config.backendUrl.size() > std::strlen(loopback) &&
+					config.backendUrl.size() <= std::strlen(loopback) + 5 &&
+					std::ranges::all_of(config.backendUrl.substr(std::strlen(loopback)),
+						[](const unsigned char c) { return std::isdigit(c); });
+				const auto port = localUrl ?
+					std::stoi(config.backendUrl.substr(std::strlen(loopback))) : 0;
+				config.valid = mode == "REQUIRED" &&
+					OpaqueAdmissionValue(config.token, 128) && config.token.size() >= 43 &&
+					OpaqueAdmissionValue(config.instanceId, 128) &&
+					localUrl && port > 0 && port <= 65535;
+				return config;
+			}();
+			return value;
+		}
+
+		bool AdmitManagedConnect(const Proto::Auth::Connect& packet,
+			const std::uint64_t certificateXuid, const Network::Address& address)
+		{
+			const auto& config = AdmissionConfig();
+			if (!config.enabled) return true;
+			if (!config.valid ||
+				!OpaqueAdmissionValue(packet.connect_ticket(), 128) ||
+				!OpaqueAdmissionValue(packet.match_id(), 128) ||
+				!OpaqueAdmissionValue(packet.session_id(), 128)) return false;
+			const auto playerId = std::format("{:016x}", certificateXuid);
+			const auto ticketHash = Utils::Cryptography::SHA256::Compute(packet.connect_ticket());
+			const auto sourceEndpoint = address.getString();
+			{
+				std::lock_guard lock(RecentAdmissionMutex());
+				auto& recent = RecentAdmissions();
+				const auto now = std::chrono::steady_clock::now();
+				std::erase_if(recent, [now](const RecentManagedAdmission& entry)
+				{
+					return entry.expires <= now;
+				});
+				for (const auto& entry : recent)
+				{
+					if (entry.ticketHash == ticketHash && entry.matchId == packet.match_id() &&
+						entry.sessionId == packet.session_id() && entry.playerId == playerId &&
+						entry.instanceId == config.instanceId && entry.sourceEndpoint == sourceEndpoint)
+						return true;
+				}
+			}
+			try
+			{
+				const auto body = nlohmann::json{
+					{"connect_ticket", packet.connect_ticket()},
+					{"match_id", packet.match_id()},
+					{"session_id", packet.session_id()},
+					{"player_id", playerId},
+					{"instance_id", config.instanceId}
+				};
+				Utils::WebIO::params headers{
+					{"Content-Type", "application/json"},
+					{"Accept", "application/json"},
+					{"X-ZWNET-Admission-Token", config.token}
+				};
+				bool success = false;
+				Utils::WebIO request("ZW3-ManagedAdmission/1",
+					config.backendUrl + "/internal/connect/admit");
+				const auto response = request.setTimeout(1500)->post(body.dump(), headers, &success);
+				if (!success || response.empty()) return false;
+				const auto parsed = nlohmann::json::parse(response);
+				const auto admitted = parsed.is_object() && parsed.value("valid", false) &&
+					parsed.value("match_id", std::string{}) == packet.match_id() &&
+					parsed.value("player_id", std::string{}) == playerId;
+				if (admitted)
+				{
+					std::lock_guard lock(RecentAdmissionMutex());
+					auto& recent = RecentAdmissions();
+					if (recent.size() >= 64) recent.erase(recent.begin());
+					recent.push_back({ticketHash, packet.match_id(), packet.session_id(), playerId,
+						config.instanceId, sourceEndpoint, std::chrono::steady_clock::now() + 5s});
+				}
+				return admitted;
+			}
+			catch (const std::exception&)
+			{
+				return false;
+			}
+		}
+
 		bool IsSameMachineAddress(const Network::Address& address)
 		{
 			if (address.isLoopback())
@@ -53,6 +220,36 @@ namespace Components
 
 			return false;
 		}
+	}
+
+	bool Auth::SetManagedConnectTicket(const Network::Address& target,
+		const std::string& ticket, const std::string& matchId,
+		const std::string& sessionId)
+	{
+		if (!target.isValid() || !OpaqueAdmissionValue(ticket, 128) ||
+			!OpaqueAdmissionValue(matchId, 128) ||
+			!OpaqueAdmissionValue(sessionId, 128)) return false;
+		auto& state = ManagedConnectState();
+		std::lock_guard lock(state.mutex);
+		std::ranges::fill(state.ticket, '\0');
+		state.endpoint = target.getString();
+		state.ticket = ticket;
+		state.matchId = matchId;
+		state.sessionId = sessionId;
+		state.expires = std::chrono::steady_clock::now() + 120s;
+		return true;
+	}
+
+	void Auth::ClearManagedConnectTicket()
+	{
+		auto& state = ManagedConnectState();
+		std::lock_guard lock(state.mutex);
+		std::ranges::fill(state.ticket, '\0');
+		state.endpoint.clear();
+		state.ticket.clear();
+		state.matchId.clear();
+		state.sessionId.clear();
+		state.expires = {};
 	}
 
 	void Auth::Frame()
@@ -167,6 +364,18 @@ namespace Components
 		connectData.set_publickey(GuidKey.getPublicKey());
 		connectData.set_signature(Utils::Cryptography::ECC::SignMessage(GuidKey, challenge));
 		connectData.set_infostring(connectString);
+		{
+			auto& state = ManagedConnectState();
+			std::lock_guard lock(state.mutex);
+			const Network::Address expected(state.endpoint);
+			if (expected.isValid() && expected == Network::Address(adr) &&
+				std::chrono::steady_clock::now() < state.expires)
+			{
+				connectData.set_connect_ticket(state.ticket);
+				connectData.set_match_id(state.matchId);
+				connectData.set_session_id(state.sessionId);
+			}
+		}
 
 		Network::SendCommand(sock, adr, "connect", connectData.SerializeAsString());
 	}
@@ -184,10 +393,14 @@ namespace Components
 			return;
 		}
 
-		// Simply connect, if we're in debug mode, we ignore all security checks
-#ifndef DEBUG
-		if (address.isLoopback())
+		// Legacy local/debug joins retain their previous behavior. Managed
+		// instances always verify the certificate and backend admission, even
+		// for loopback clients and debug builds.
+		bool skipNativeChecks = address.isLoopback();
+#ifdef DEBUG
+		skipNativeChecks = true;
 #endif
+		if (skipNativeChecks && !AdmissionConfig().enabled)
 		{
 			if (!connectData.infostring().empty())
 			{
@@ -201,7 +414,6 @@ namespace Components
 				Network::Send(address, "error\nInvalid infostring data!");
 			}
 		}
-#ifndef DEBUG
 		else
 		{
 			// Validate proto data
@@ -269,7 +481,7 @@ namespace Components
 			const auto certificateXuid = GetKeyHash(connectData.publickey());
 			if (xuid != certificateXuid)
 			{
-				if (!address.isLocal())
+				if (AdmissionConfig().enabled || !address.isLocal())
 				{
 					Network::Send(address, "error\nXUID doesn't match the certificate!");
 					return;
@@ -304,9 +516,14 @@ namespace Components
 			}
 
 			Logger::Debug("Verified XUID {:#X} ({}) from {}", xuid, userLevel, address.getString());
+			if (!AdmitManagedConnect(connectData, certificateXuid, address))
+			{
+				Logger::PrintFail2Ban("Managed admission rejected connection from {}\n", address.getString());
+				Network::Send(address, "error\nThis managed match did not authorize your connection.");
+				return;
+			}
 			Game::SV_DirectConnect(*address.get());
 		}
-#endif
 	}
 
 	__declspec(naked) void Auth::DirectConnectStub()

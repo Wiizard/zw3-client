@@ -15,4 +15,9 @@ message Connect
 	bytes publickey  = 2;
 	bytes token      = 3;
 	bytes infostring = 4;
+	// Present only for backend-managed match instances. The server derives the
+	// player GUID from the verified certificate, never from this packet.
+	string connect_ticket = 5;
+	string match_id = 6;
+	string session_id = 7;
 }

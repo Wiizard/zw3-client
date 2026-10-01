@@ -7,6 +7,7 @@
 
 #include <cwctype>
 #include <version.hpp>
+#include "GameVersion.hpp"
 
 namespace Components
 {
@@ -59,8 +60,7 @@ namespace Components
 
 	std::wstring Exception::GetErrorMessage(const std::string& error)
 	{
-		//const auto clientVersion = (*Game::shortversion)->current.string;
-		const std::string clientVersion = "4.0.0";
+		const std::string clientVersion = ZW3_GAME_VERSION;
 		const auto osVersion = Utils::IsWineEnvironment() ? "Wine" : Utils::GetWindowsVersion();
 		const auto launchParams = Utils::String::Convert(Utils::GetLaunchParameters());
 

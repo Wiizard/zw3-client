@@ -1661,7 +1661,8 @@ namespace Components
 							device->SetRenderState(D3DRS_SRCBLEND, group.srcBlend);
 							device->SetRenderState(D3DRS_DESTBLEND, group.dstBlend);
 							device->SetRenderState(D3DRS_ALPHATESTENABLE, TRUE);
-							device->SetRenderState(D3DRS_ZWRITEENABLE, roomPass ? group.depthWrite : !group.blend);
+							device->SetRenderState(D3DRS_ZWRITEENABLE,
+								(roomPass || group.hasCell) ? group.depthWrite : !group.blend);
 						}
 						if (group.blend)
 						{
@@ -1685,7 +1686,13 @@ namespace Components
 						// not a universal cut-out mask. Preserve actor/prop cut-outs.
 						const bool isWeapon = group.weaponIndex >= 0;
 						const bool alphaCutout = !isWeapon && (group.alphaTest || group.blend);
-						device->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE); // Shader uses the material's exact threshold.
+						// Keep the native cutout test active for static props, including the
+						// fixed-function fallback if shader creation is unavailable.
+						const bool hardwareCutout = !isEyeGlow && alphaCutout && group.alphaThreshold >= 0.0f;
+						device->SetRenderState(D3DRS_ALPHATESTENABLE, hardwareCutout);
+						device->SetRenderState(D3DRS_ALPHAFUNC, D3DCMP_GREATEREQUAL);
+						device->SetRenderState(D3DRS_ALPHAREF,
+							static_cast<DWORD>(std::clamp(group.alphaThreshold * 255.0f, 0.0f, 255.0f)));
 						const float materialFlags[4] = { (lightmapped ? group.normalTexture != nullptr : group.gammaWrite) ? 1.0f : 0.0f,
 							alphaCutout ? 1.0f : 0.0f, isEyeGlow ? -4.0f : group.alphaThreshold,
 							group.multiplicative ? 1.0f : 0.0f };

@@ -76,6 +76,7 @@ namespace Components
 		static const std::vector<std::string>& GetCustomMaps();
 
 		static std::unordered_map<std::string, std::string> ParseCustomMapArena(const std::string& singleMapArena);
+		static void SynchronizeMapDvars(const std::string& rawMapName);
 
 	private:
 		class DLC

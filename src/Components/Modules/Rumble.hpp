@@ -26,6 +26,7 @@ namespace Components
 
 		static Dvar::Var cl_rumbleScale;
 
+		static bool IsValidLocalClient(int localClientNum);
 		static int GetRumbleInfoIndexFromName(const char* rumbleName);
 		static Game::ActiveRumble* GetDuplicateRumbleIfExists(Game::cg_s* cgameGlob, Game::ActiveRumble* arArray, Game::RumbleInfo* info, bool loop, Game::RumbleSourceType type, int entityNum, const float* pos);
 		static int FindClosestToDyingActiveRumble(Game::cg_s* cgameGlob, Game::ActiveRumble* activeRumbleArray);

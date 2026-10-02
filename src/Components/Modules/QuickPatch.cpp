@@ -3,7 +3,6 @@
 #include "QuickPatch.hpp"
 #include "TextRenderer.hpp"
 #include "Toast.hpp"
-#include "Gamepad.hpp"
 #include "Events.hpp"
 #include "Scheduler.hpp"
 
@@ -900,22 +899,21 @@ namespace Components
 			std::vector<std::string> fastFiles;
 			if (std::strcmp(param->get(1), "all") == 0)
 			{
-				for (const auto& entry : Utils::IO::ListFiles("zone/english", false))
+				for (const auto* group : {"english", "dlc", "patch"})
 				{
-					const auto& f = entry.path().string();
-					fastFiles.emplace_back(f.substr(7, f.length() - 10));
-				}
+					const auto directory = ZoneConvert::SearchPath(group);
+					if (!Utils::IO::DirectoryExists(directory))
+					{
+						continue;
+					}
 
-				for (const auto& entry : Utils::IO::ListFiles("zone/dlc", false))
-				{
-					const auto& f = entry.path().string();
-					fastFiles.emplace_back(f.substr(3, f.length() - 6));
-				}
-
-				for (const auto& entry : Utils::IO::ListFiles("zone/patch", false))
-				{
-					const auto& f = entry.path().string();
-					fastFiles.emplace_back(f.substr(5, f.length() - 8));
+					for (const auto& entry : Utils::IO::ListFiles(directory, false))
+					{
+						if (entry.path().extension() == ".ff")
+						{
+							fastFiles.emplace_back(entry.path().stem().string());
+						}
+					}
 				}
 			}
 			else
@@ -1093,10 +1091,5 @@ namespace Components
 			intro->flags |= Game::DVAR_ROM;
 		}*/
 
-		//Gamepad::SetIntroInputBlocked(true);
-		/*Scheduler::OnGameInitialized([]()
-			{
-				Gamepad::SetIntroInputBlocked(false);
-			}, Scheduler::Pipeline::MAIN, 8s);*/
 	}
 }

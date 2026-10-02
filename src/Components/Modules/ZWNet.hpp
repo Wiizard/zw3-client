@@ -56,9 +56,12 @@ namespace Components
 		static void RefreshPartyVisibility();
 		static void CapturePartyPrivacy();
 		static void CancelSearch();
+		static void CancelMatchmaking();
 		static void CloseOnlineSession(bool shuttingDown, bool terminal);
-		static void HandleServerDisconnect(bool terminal);
+		static void HandleServerDisconnect(bool terminal, bool wasMatchmaking = false);
 		static bool ReturnToMatchmakingLobby();
+		static void ScheduleReturnToIdleMatchmakingMenu();
+		static void ReturnToIdleMatchmakingMenu();
 		static void UpdatePresence();
 		static nlohmann::json PublishLocalRank(nlohmann::json party);
 		static void EnterLobby(std::string map);

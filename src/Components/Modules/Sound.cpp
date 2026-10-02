@@ -1,7 +1,108 @@
 #include "Sound.hpp"
+#include "LobbyScene.hpp"
+#include "Dedicated.hpp"
+#include "ZoneBuilder.hpp"
+#include <mmsystem.h>
+#pragma comment(lib, "winmm.lib")
 
 namespace Components
 {
+	namespace
+	{
+		struct LobbyVoice
+		{
+			HWAVEOUT device = nullptr;
+			WAVEHDR header{};
+			std::vector<short> samples;
+		};
+		std::mutex lobbyAudioMutex;
+		WAVEFORMATEX lobbyAudioFormat{};
+		std::vector<short> lobbyAudioSamples;
+		std::unique_ptr<LobbyVoice> lobbyVoice;
+		bool lobbyAudioStopping = false;
+
+		void ReleaseLobbyVoice(bool stop)
+		{
+			if (!lobbyVoice) return;
+			if (stop) waveOutReset(lobbyVoice->device);
+			if (!stop && !(lobbyVoice->header.dwFlags & WHDR_DONE)) return;
+			if (waveOutUnprepareHeader(lobbyVoice->device, &lobbyVoice->header, sizeof(WAVEHDR)) != MMSYSERR_NOERROR) return;
+			if (waveOutClose(lobbyVoice->device) != MMSYSERR_NOERROR) return;
+			lobbyVoice.reset();
+		}
+	}
+
+	void Sound::PrepareLobbyRoundStart(const std::string& wav)
+	{
+		if (wav.size() < 44 || wav.size() > 4 * 1024 * 1024 ||
+			std::memcmp(wav.data(), "RIFF", 4) || std::memcmp(wav.data() + 8, "WAVE", 4)) return;
+		WAVEFORMATEX format{};
+		std::vector<short> samples;
+		for (size_t offset = 12; offset + 8 <= wav.size();)
+		{
+			unsigned length = 0;
+			std::memcpy(&length, wav.data() + offset + 4, 4);
+			if (length > wav.size() - offset - 8) return;
+			if (!std::memcmp(wav.data() + offset, "fmt ", 4) && length >= 16)
+				std::memcpy(&format, wav.data() + offset + 8, 16);
+			else if (!std::memcmp(wav.data() + offset, "data", 4))
+			{
+				if (length % sizeof(short)) return;
+				samples.resize(length / sizeof(short));
+				std::memcpy(samples.data(), wav.data() + offset + 8, length);
+			}
+			offset += 8ull + length + (length & 1u);
+		}
+		if (format.wFormatTag != WAVE_FORMAT_PCM || format.wBitsPerSample != 16 ||
+			(format.nChannels != 1 && format.nChannels != 2) ||
+			format.nSamplesPerSec < 8000 || format.nSamplesPerSec > 48000 ||
+			format.nBlockAlign != format.nChannels * 2 ||
+			format.nAvgBytesPerSec != format.nSamplesPerSec * format.nBlockAlign ||
+			samples.empty() || samples.size() % format.nChannels) return;
+		std::lock_guard lock(lobbyAudioMutex);
+		if (lobbyAudioStopping) return;
+		lobbyAudioFormat = format;
+		lobbyAudioSamples = std::move(samples);
+	}
+
+	void Sound::PlayLobbyRoundStart()
+	{
+		const auto* volume = Game::Dvar_FindVar("snd_volume");
+		const float gain = volume ? std::clamp(volume->current.value, 0.0f, 1.0f) : 0.0f;
+		if (gain <= 0.0f) return;
+		Scheduler::Once([gain]
+		{
+			std::lock_guard lock(lobbyAudioMutex);
+			ReleaseLobbyVoice(false);
+			if (lobbyAudioStopping || lobbyVoice || lobbyAudioSamples.empty()) return;
+			auto voice = std::make_unique<LobbyVoice>();
+			voice->samples = lobbyAudioSamples;
+			for (auto& sample : voice->samples) sample = static_cast<short>(sample * gain);
+			if (waveOutOpen(&voice->device, WAVE_MAPPER, &lobbyAudioFormat, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) return;
+			voice->header.lpData = reinterpret_cast<LPSTR>(voice->samples.data());
+			voice->header.dwBufferLength = static_cast<DWORD>(voice->samples.size() * sizeof(short));
+			if (waveOutPrepareHeader(voice->device, &voice->header, sizeof(WAVEHDR)) != MMSYSERR_NOERROR)
+			{
+				waveOutClose(voice->device);
+				return;
+			}
+			if (waveOutWrite(voice->device, &voice->header, sizeof(WAVEHDR)) != MMSYSERR_NOERROR)
+			{
+				waveOutUnprepareHeader(voice->device, &voice->header, sizeof(WAVEHDR));
+				waveOutClose(voice->device);
+				return;
+			}
+			lobbyVoice = std::move(voice);
+		}, Scheduler::Pipeline::ASYNC);
+	}
+
+	void Sound::preDestroy()
+	{
+		std::lock_guard lock(lobbyAudioMutex);
+		lobbyAudioStopping = true;
+		ReleaseLobbyVoice(true);
+		lobbyAudioSamples.clear();
+	}
 	constexpr auto g_en(0x1AA4908); // global enable flag
 	constexpr auto ppDS8(0x1AA490C); // global DirectSound8 interface pointer
 	constexpr auto g_cf(0x79B174);  // config value
@@ -151,9 +252,54 @@ namespace Components
 		}
 	}
 
+	void Sound::UpdateFrontendVolume(int milliseconds)
+	{
+		// Gate the mixer, not snd_volume: never overwrite the player's saved settings.
+		// This call runs before channel volumes are updated, including the first UI sound.
+		static bool wasHeld = false;
+		static unsigned int fadeStart = 0;
+		const bool held = LobbyScene::IsStartupLoading();
+		if (held)
+		{
+			wasHeld = true;
+			fadeStart = 0;
+		}
+		else if (wasHeld)
+		{
+			wasHeld = false;
+			fadeStart = timeGetTime();
+		}
+
+		const bool adjusting = held || fadeStart != 0;
+		if (adjusting)
+		{
+			// Force the engine to recompute its unscaled gain each frame; otherwise
+			// applying our envelope repeatedly would compound on the previous gain.
+			auto* volume = *reinterpret_cast<Game::dvar_t**>(0x66CF230);
+			if (volume) volume->modified = true;
+		}
+		Utils::Hook::Call<void(int)>(0x688820)(milliseconds);
+		if (adjusting)
+		{
+			const auto elapsed = fadeStart ? timeGetTime() - fadeStart : 0u;
+			const auto gain = held ? 0.0f : std::min(elapsed / 350.0f, 1.0f);
+			*reinterpret_cast<float*>(0x66D3264) *= gain;
+			if (!held && elapsed >= 350u) fadeStart = 0;
+		}
+	}
+
 	Sound::
 		Sound()
 	{
+		if (!Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled())
+		{
+			Utils::Hook(0x4497FC, Sound::UpdateFrontendVolume, HOOK_CALL).install()->quick();
+			Scheduler::Loop([]
+			{
+				std::lock_guard lock(lobbyAudioMutex);
+				ReleaseLobbyVoice(false);
+			}, Scheduler::Pipeline::ASYNC, 100ms);
+		}
 		Utils::Hook(0x0463A80, Sound::Init, HOOK_JUMP).install()->quick();
 		Utils::Hook(0x04A23E6, Sound::Loop, HOOK_JUMP).install()->quick();
 	}

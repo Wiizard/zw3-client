@@ -1,5 +1,6 @@
 
 #include "FastFiles.hpp"
+#include "LobbyScene.hpp"
 #include "RawMouse.hpp"
 #include "Renderer.hpp"
 #include "Window.hpp"
@@ -83,7 +84,7 @@ namespace Components
 	bool Window::IsLoadingScreenMovable()
 	{
 		const auto* fullscreen = Dvar::Var("r_fullscreen").get<Game::dvar_t*>();
-		return MainWindow && fullscreen && !fullscreen->current.enabled
+		return MainWindow && fullscreen && !fullscreen->current.enabled && !IsNoBorder()
 			&& (!FastFiles::MainMenuReady() || !FastFiles::Ready() || Renderer::IsDeviceRecoveryActive());
 	}
 
@@ -128,6 +129,9 @@ namespace Components
 
 	LRESULT CALLBACK Window::NativeWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
 	{
+		// A mode change or completed load must also cancel a drag already in progress.
+		if (WindowDragActive && !IsLoadingScreenMovable()) EndWindowDrag();
+
 		if (Msg == WM_MOUSEACTIVATE && IsLoadingScreenMovable())
 		{
 			return MA_ACTIVATE;
@@ -286,6 +290,12 @@ namespace Components
 
 	void Window::DrawCursorStub(Game::ScreenPlacement* scrPlace, float x, float y, float w, float h, int horzAlign, int vertAlign, const float* color, Game::Material* material)
 	{
+		if (LobbyScene::IsTransitionActive())
+		{
+			Window::CursorVisible = FALSE;
+			return;
+		}
+
 		if (Window::NativeCursor.get<bool>())
 		{
 			Window::CursorVisible = TRUE;
@@ -298,6 +308,12 @@ namespace Components
 
 	int WINAPI Window::ShowCursorHook(BOOL show)
 	{
+		if (LobbyScene::IsTransitionActive())
+		{
+			Window::CursorVisible = FALSE;
+			return -1;
+		}
+
 		if (Window::NativeCursor.get<bool>() && Window::HasFocus() && Window::IsCursorWithin(Window::MainWindow))
 		{
 			static int count = 0;
@@ -350,6 +366,12 @@ namespace Components
 
 	void Window::ApplyCursor()
 	{
+		if (LobbyScene::IsTransitionActive())
+		{
+			SetCursor(nullptr);
+			return;
+		}
+
 		bool isLoading = !FastFiles::Ready() && !IsLoadingScreenMovable() && !IsDragging();
 		SetCursor(LoadCursor(nullptr, isLoading ? IDC_APPSTARTING : IDC_ARROW));
 	}
@@ -434,6 +456,12 @@ namespace Components
 
 		Window::OnWndMessage(WM_SETCURSOR, [](WPARAM lParam, LPARAM wParam)
 		{
+			if (LobbyScene::IsTransitionActive())
+			{
+				SetCursor(nullptr);
+				return TRUE;
+			}
+
 			if (IsLoadingScreenMovable() || IsDragging())
 			{
 				SetCursor(LoadCursor(nullptr, IDC_ARROW));

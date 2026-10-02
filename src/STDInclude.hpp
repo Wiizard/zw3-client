@@ -152,7 +152,8 @@ using namespace std::literals;
 
 #endif
 
-#define BASEGAME "iw4x"
+#define BASEGAME "main/zw3/x86"
+#define BASEGAME_LEGACY "iw4x"
 #define BASEGAME_NAME "iw4mp_ceg.exe"
 #define CLIENT_CONFIG "iw4x_config.cfg"
 

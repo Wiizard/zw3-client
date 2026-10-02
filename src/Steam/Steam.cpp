@@ -19,14 +19,32 @@ namespace Steam
 	void Callbacks::RegisterCallback(Callbacks::Base* handler, int callback)
 	{
 		std::lock_guard<std::recursive_mutex> _(Callbacks::Mutex);
+		if (!handler) return;
 		handler->SetICallback(callback);
-		Callbacks::CallbackList.push_back(handler);
+		handler->SetRegistered(true);
+		if (std::find(CallbackList.begin(), CallbackList.end(), handler) == CallbackList.end())
+			Callbacks::CallbackList.push_back(handler);
 	}
 
 	void Callbacks::RegisterCallResult(uint64_t call, Callbacks::Base* result)
 	{
 		std::lock_guard<std::recursive_mutex> _(Callbacks::Mutex);
+		if (!result) return;
 		Callbacks::ResultHandlers[call] = result;
+	}
+
+	void Callbacks::UnregisterCallback(Base* handler)
+	{
+		std::lock_guard<std::recursive_mutex> _(Mutex);
+		std::erase(CallbackList, handler);
+		if (handler) handler->SetRegistered(false);
+	}
+
+	void Callbacks::UnregisterCallResult(Base* handler, uint64_t call)
+	{
+		std::lock_guard<std::recursive_mutex> _(Mutex);
+		const auto found = ResultHandlers.find(call);
+		if (found != ResultHandlers.end() && found->second == handler) ResultHandlers.erase(found);
 	}
 
 	void Callbacks::ReturnCall(void* data, int size, int type, uint64_t call)
@@ -54,14 +72,19 @@ namespace Steam
 
 		for (auto result : results)
 		{
-			if (Callbacks::ResultHandlers.contains(result.call))
+			if (const auto found = ResultHandlers.find(result.call); found != ResultHandlers.end())
 			{
-				Callbacks::ResultHandlers[result.call]->Run(result.data, false, result.call);
+				auto* handler = found->second;
+				ResultHandlers.erase(found); // A call result is delivered once, including reentrant dispatch.
+				handler->Run(result.data, false, result.call);
 			}
 
-			for (auto callback : Callbacks::CallbackList)
+			const auto callbacks = CallbackList;
+			for (auto callback : callbacks)
 			{
-				if (callback && callback->GetICallback() == result.type)
+				// Run may unregister/destroy another callback or grow the live vector.
+				if (callback && std::find(CallbackList.begin(), CallbackList.end(), callback) != CallbackList.end() &&
+					callback->GetICallback() == result.type)
 				{
 					callback->Run(result.data, false, 0);
 				}
@@ -78,9 +101,11 @@ namespace Steam
 	{
 		std::lock_guard<std::recursive_mutex> _(Callbacks::Mutex);
 
-		for (auto cb : Callbacks::CallbackList)
+		const auto callbacks = CallbackList;
+		for (auto cb : callbacks)
 		{
-			if (cb && cb->GetICallback() == callback)
+			if (cb && std::find(CallbackList.begin(), CallbackList.end(), cb) != CallbackList.end() &&
+				cb->GetICallback() == callback)
 			{
 				cb->Run(data);
 			}
@@ -159,12 +184,14 @@ namespace Steam
 			Callbacks::Uninitialize();
 		}
 
-		void SteamAPI_UnregisterCallResult()
+		void SteamAPI_UnregisterCallResult(Callbacks::Base* handler, uint64_t call)
 		{
+			Callbacks::UnregisterCallResult(handler, call);
 		}
 
-		void SteamAPI_UnregisterCallback()
+		void SteamAPI_UnregisterCallback(Callbacks::Base* handler)
 		{
+			Callbacks::UnregisterCallback(handler);
 		}
 
 

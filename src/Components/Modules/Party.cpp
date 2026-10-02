@@ -3,7 +3,7 @@
 #include "Auth.hpp"
 #include "Download.hpp"
 #include "Friends.hpp"
-#include "Gamepad.hpp"
+#include "Controller.hpp"
 #include "ModList.hpp"
 #include "Node.hpp"
 #include "ServerList.hpp"
@@ -15,6 +15,7 @@
 #include "Bots.hpp"
 #include "CharacterAssignments.hpp"
 #include "ZWNet.hpp"
+#include "LobbyScene.hpp"
 #include <version.hpp>
 #include <unordered_set>
 #include <unordered_map>
@@ -453,6 +454,7 @@ namespace Components
 	void Party::Connect(Network::Address target, bool downloadOnly,
 		bool requireUnmanagedProof)
 	{
+		LobbyScene::StopTransition();
 		Node::Add(target);
 
 		Container.valid = true;
@@ -506,6 +508,7 @@ namespace Components
 
 	void Party::ConnectError(const std::string& message)
 	{
+		LobbyScene::StopTransition();
 		Command::Execute("closemenu popup_reconnectingtoparty");
 		Dvar::Var("partyend_reason").set(message);
 		Command::Execute("openmenu menu_xboxlive_partyended");
@@ -2448,7 +2451,7 @@ namespace Components
 				hostResponseInfo.set("hc", (Dvar::Var("g_hardcore").get<bool>() ? "1"s : "0"s));
 				hostResponseInfo.set("securityLevel", std::to_string(securityLevel));
 				hostResponseInfo.set("sv_running", (Dedicated::IsRunning() ? "1"s : "0"s));
-				hostResponseInfo.set("aimAssist", (Gamepad::sv_allowAimAssist.get<bool>() ? "1"s : "0"s));
+				hostResponseInfo.set("aimAssist", (Controller::sv_allowAimAssist.get<bool>() ? "1"s : "0"s));
 				hostResponseInfo.set("voiceChat", (Voice::SV_VoiceEnabled() ? "1"s : "0"s));
 				hostResponseInfo.set("zombiemode", std::to_string(Dvar::Var("zombiemode").get<int>()));
 				hostResponseInfo.set("ui_zombiecounter", std::to_string(Dvar::Var("ui_zombiecounter").get<int>()));
@@ -2737,12 +2740,16 @@ namespace Components
 								}
 								else
 								{
-									Dvar::Var("xblive_privateserver").set(true);
-									ServerVersion.set(version);
-									Game::Menus_CloseAll(Game::uiContext);
-
-									Game::_XSESSION_INFO hostInfo;
-									Game::CL_ConnectFromParty(0, &hostInfo, *Container.target.get(), 0, 0, Container.info.get("mapname").data(), Container.info.get("gametype").data());
+									auto connectMatch = [target = Container.target,
+										map = Container.info.get("mapname"), gametype = Container.info.get("gametype"), version]() mutable
+									{
+										Dvar::Var("xblive_privateserver").set(true);
+										ServerVersion.set(version);
+										Game::Menus_CloseAll(Game::uiContext);
+										Game::_XSESSION_INFO hostInfo{};
+										Game::CL_ConnectFromParty(0, &hostInfo, *target.get(), 0, 0, map.data(), gametype.data());
+									};
+									if (!LobbyScene::DeferLaunch(connectMatch)) connectMatch();
 								}
 							}
 							break;

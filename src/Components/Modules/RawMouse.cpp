@@ -1,6 +1,7 @@
 #include "RawMouse.hpp"
 
-#include "Gamepad.hpp"
+#include "Controller.hpp"
+#include "LobbyScene.hpp"
 #include "Window.hpp"
 
 namespace Components
@@ -53,6 +54,24 @@ namespace Components
 	bool RawMouse::FirstRawInputUpdate = true;
 	bool RawMouse::FirstLegacyInputUpdate = true;
 	bool RawMouse::CursorClipped = false;
+
+	static Utils::Hook CL_MouseEventHook;
+	static Game::CL_MouseEvent_t OriginalCL_MouseEvent = nullptr;
+
+	static int CL_MouseEventCustom(int x, int y, int dx, int dy)
+	{
+		if (LobbyScene::IsTransitionActive())
+		{
+			return 0;
+		}
+
+		if (OriginalCL_MouseEvent)
+		{
+			return OriginalCL_MouseEvent(x, y, dx, dy);
+		}
+
+		return 0;
+	}
 
 	// We need to keep the OS cursor confined to the window rect. If we don't,
 	// clicks on the edge might register outside the context (losing focus) or
@@ -221,7 +240,7 @@ namespace Components
 		// it. Also, reset events to not conflict with legacy handling if we
 		// switched modes at runtime.
 		//
-		if (!InRawInput || !Window::HasFocus() || GET_RAWINPUT_CODE_WPARAM(w) != RIM_INPUT)
+		if (!InRawInput || !Window::HasFocus() || GET_RAWINPUT_CODE_WPARAM(w) != RIM_INPUT || LobbyScene::IsTransitionActive())
 		{
 			ResetMouseRawEvents();
 			return static_cast<BOOL>(DefWindowProcA(Window::GetWindow(), WM_INPUT, w, l));
@@ -291,7 +310,7 @@ namespace Components
 	BOOL
 		RawMouse::OnLegacyMouseEvent(UINT m, LPARAM l, WPARAM w)
 	{
-		if (!Window::HasFocus())
+		if (!Window::HasFocus() || LobbyScene::IsTransitionActive())
 		{
 			ResetMouseRawEvents();
 			return static_cast<BOOL>(DefWindowProcA(Window::GetWindow(), m, w, l));
@@ -360,7 +379,7 @@ namespace Components
 	void
 		RawMouse::IN_RawMouseMove()
 	{
-		if (!Window::HasFocus())
+		if (!Window::HasFocus() || LobbyScene::IsTransitionActive())
 		{
 			SuspendMouseInput();
 			return;
@@ -383,12 +402,18 @@ namespace Components
 		Game::s_wmv->oldPos = p;
 		ScreenToClient(Window::GetWindow(), &p);
 
-		Gamepad::OnMouseMove(p.x, p.y, dx, dy);
+		Controller::OnMouseMove(dx, dy);
 
 		// CL_MouseEvent returns false if we are in a state where the mouse should
 		// float freely (e.g., menu). If true, it means we are in-game and looking
 		// around, so we need to lock/clip the cursor to the window.
 		//
+		if (LobbyScene::IsTransitionActive())
+		{
+			ReleaseMouseCursor();
+			return;
+		}
+
 		if (!Game::CL_MouseEvent(p.x, p.y, dx, dy))
 		{
 			ReleaseMouseCursor();
@@ -546,7 +571,7 @@ namespace Components
 	void
 		RawMouse::IN_MouseMove()
 	{
-		if (!Window::HasFocus() || Window::IsLoadingScreenMovable() || Window::IsDragging())
+		if (!Window::HasFocus() || Window::IsLoadingScreenMovable() || Window::IsDragging() || LobbyScene::IsTransitionActive())
 		{
 			SuspendMouseInput();
 			return;
@@ -576,6 +601,11 @@ namespace Components
 		p = c;
 
 		ScreenToClient(Window::GetWindow(), &c);
+		if (LobbyScene::IsTransitionActive())
+		{
+			ReleaseMouseCursor();
+			return;
+		}
 		auto recenter(Game::CL_MouseEvent(c.x, c.y, dx, dy));
 
 		if (recenter && (dx || dy))
@@ -663,6 +693,10 @@ namespace Components
 		Utils::Hook(0x48A0E6, IN_Frame, HOOK_CALL).install()->quick();
 
 		Utils::Hook(0x473517, IN_RecenterMouse, HOOK_CALL).install()->quick();
+
+		OriginalCL_MouseEvent = Game::CL_MouseEvent;
+		Game::CL_MouseEvent = CL_MouseEventCustom;
+		CL_MouseEventHook.initialize(0x64C507, CL_MouseEventCustom, HOOK_CALL)->install()->quick();
 
 		M_RawInput =
 			Dvar::Register<bool>("m_rawinput",

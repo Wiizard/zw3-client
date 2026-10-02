@@ -1044,8 +1044,8 @@ namespace Components
 		}
 
 		// hunk size (was 300 MiB)
-		Utils::Hook::Set<DWORD>(0x64A029, 0x1C200000); // 450 MiB
-		Utils::Hook::Set<DWORD>(0x64A057, 0x1C200000);
+		Utils::Hook::Set<DWORD>(0x64A029, 0x24000000); // 576 MiB
+		Utils::Hook::Set<DWORD>(0x64A057, 0x24000000);
 
 		// Intercept BSP name resolving
 		Utils::Hook(0x4C5979, Maps::GetBSPName, HOOK_CALL).install()->quick();

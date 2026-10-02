@@ -464,7 +464,6 @@ namespace Components
 				data.push_back(info);
 			}
 		}
-
 		return FastFiles::LoadLocalizeZones(data.data(), data.size(), sync);
 	}
 
@@ -550,6 +549,11 @@ namespace Components
 		}
 
 		Game::DB_LoadXAssets(data.data(), data.size(), sync);
+
+		if (!Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled())
+		{
+			LobbyScene::PrepareStartup();
+		}
 
 		Scheduler::OnGameInitialized([]
 		{
@@ -1147,7 +1151,6 @@ namespace Components
 		FastFiles::MaxZones = zoneCount;
 		if (zoneCount > 64) zoneCount = 64;
 		std::memset(s_pendingZones, 0, sizeof(s_pendingZones));
-
 		Utils::Hook::Call<void(Game::XZoneInfo*, unsigned int)>(0x5BBAC0)(zoneInfo, zoneCount);
 	}
 
@@ -1290,6 +1293,10 @@ namespace Components
 		// for fastfile I/O in the engine so OS cache and prefetching accelerate reads
 		Utils::Hook::Set<DWORD>(0x45EA47, 0x48000000);
 		Utils::Hook::Set<DWORD>(0x4B2F20, 0x48000000);
+
+		// Expand physical memory pool from 300 MiB to 576 MiB to prevent OOM errors when loading maps
+		Utils::Hook::Set<DWORD>(0x64A029, 0x24000000); // 576 MiB VirtualAlloc reserve (up from 300 MiB)
+		Utils::Hook::Set<DWORD>(0x64A057, 0x24000000); // 576 MiB physical pool capacity limit (up from 300 MiB)
 
 
 		// Disable artificial fastfile load throttling sleep while preserving unpause synchronization

@@ -15,6 +15,7 @@ namespace Components
 		static bool IsStartupLoading();
 		static bool IsCinematicActive();
 		static void PrepareStartup();
+		static void ReleaseResources();
 		static bool DeferLaunch(const std::function<void()>& launch);
 	};
 }

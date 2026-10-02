@@ -84,7 +84,7 @@ namespace Components
 	bool Window::IsLoadingScreenMovable()
 	{
 		const auto* fullscreen = Dvar::Var("r_fullscreen").get<Game::dvar_t*>();
-		return MainWindow && fullscreen && !fullscreen->current.enabled
+		return MainWindow && fullscreen && !fullscreen->current.enabled && !IsNoBorder()
 			&& (!FastFiles::MainMenuReady() || !FastFiles::Ready() || Renderer::IsDeviceRecoveryActive());
 	}
 
@@ -129,6 +129,9 @@ namespace Components
 
 	LRESULT CALLBACK Window::NativeWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
 	{
+		// A mode change or completed load must also cancel a drag already in progress.
+		if (WindowDragActive && !IsLoadingScreenMovable()) EndWindowDrag();
+
 		if (Msg == WM_MOUSEACTIVATE && IsLoadingScreenMovable())
 		{
 			return MA_ACTIVATE;

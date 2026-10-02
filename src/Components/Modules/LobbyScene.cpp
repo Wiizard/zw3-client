@@ -7,6 +7,7 @@
 #include "FileSystem.hpp"
 #include "Materials.hpp"
 #include "Renderer.hpp"
+#include "Sound.hpp"
 
 #include <sstream>
 #include <random>
@@ -93,6 +94,9 @@ namespace Components
 			UINT rifleFireCount = 1;
 			UINT shotgunFireFirst = 0;
 			UINT shotgunFireCount = 1;
+			UINT pointFirst = 0;
+			UINT pointCount = 0;
+			std::array<unsigned, 8> clipDurationMs{};
 		};
 
 		static_assert(sizeof(Vertex) == 24);
@@ -149,6 +153,8 @@ namespace Components
 		std::atomic_bool assetsReady = false;
 		std::atomic_bool frameReady = false;
 		std::atomic_bool startupLoading = true;
+		unsigned startupWaitStart = 0;
+		bool materialNeedsRefresh = true;
 		std::atomic<bool> theaterDirectTransitionActive = false;
 		std::atomic<bool> sawConnectingState = false;
 		std::atomic<unsigned> transitionStartTime = 0;
@@ -210,8 +216,12 @@ namespace Components
 		void PrepareTexturePack()
 		{
 			if (texturePackStage.load(std::memory_order_acquire) != 0 ||
-				!Game::DB_IsZoneLoaded("zw3_lobby")) return;
-			auto* raw = Game::DB_FindXAssetHeader(Game::ASSET_TYPE_RAWFILE, "lobby/textures.pack").rawfile;
+				!Game::DB_IsZoneLoaded("zw3_lobby") ||
+				!Game::Sys_IsDatabaseReady() ||
+				Game::CL_IsCgameInitialized() ||
+				*reinterpret_cast<Game::connstate_t*>(0xB2C540) >= Game::CA_CONNECTING) return;
+			auto* entry = Game::DB_FindXAssetEntry(Game::ASSET_TYPE_RAWFILE, "lobby/textures.pack");
+			auto* raw = entry ? entry->asset.header.rawfile : nullptr;
 			if (!raw || Game::DB_IsXAssetDefault(Game::ASSET_TYPE_RAWFILE, "lobby/textures.pack") ||
 				!raw->buffer || raw->len <= 0 || raw->len > 256 * 1024 * 1024 ||
 				raw->compressedLen < 0 || raw->compressedLen > 256 * 1024 * 1024)
@@ -242,7 +252,17 @@ namespace Components
 
 		std::string ReadLobbyAsset(const std::string& assetName, const std::string& diskPath)
 		{
-			if (Game::DB_IsZoneLoaded("zw3_lobby"))
+			// The pack is owned by this component and survives database/device reloads.
+			// Do not turn a temporary database unavailability into a missing texture.
+			if (assetName.starts_with("lobby/textures/") && texturePackStage.load(std::memory_order_acquire) == 2)
+			{
+				const auto found = texturePackCache.entries.find(assetName.substr(15));
+				if (found != texturePackCache.entries.end())
+					return texturePackCache.bytes.substr(found->second.first, found->second.second);
+			}
+			if (Game::DB_IsZoneLoaded("zw3_lobby") && !Game::CL_IsCgameInitialized() &&
+				*reinterpret_cast<Game::connstate_t*>(0xB2C540) < Game::CA_CONNECTING &&
+				Game::Sys_IsDatabaseReady())
 			{
 				if (assetName.starts_with("lobby/textures/"))
 				{
@@ -481,17 +501,6 @@ namespace Components
 						auto v0_out = v0;
 						auto v1_out = v1;
 						auto v2_out = v2;
-						// Balcony barricade boards: nudge forward towards camera (camera is at -1450, so y -= 1.2f)
-						// to ensure clean separation from the doorway and door trim behind them, eliminating Z-fighting.
-						const auto isBalconyBoard = [](const RoomVertex& v) {
-							return v.x >= -70.0f && v.x <= 70.0f && v.y >= -627.5f && v.y <= -625.0f && v.z >= 295.0f && v.z <= 385.0f;
-						};
-						if (isBalconyBoard(v0_out) && isBalconyBoard(v1_out) && isBalconyBoard(v2_out))
-						{
-							v0_out.y -= 1.2f;
-							v1_out.y -= 1.2f;
-							v2_out.y -= 1.2f;
-						}
 						filteredRoomVertices.push_back(v0_out);
 						filteredRoomVertices.push_back(v1_out);
 						filteredRoomVertices.push_back(v2_out);
@@ -657,6 +666,11 @@ namespace Components
 						const auto length = clip.at("frameCount").get<UINT>();
 						if (!length || first >= frameCount || length > frameCount - first) return;
 						const auto clipName = clip.at("name").get<std::string>();
+						const auto clipIndex = clipName == "point" ? 7 : clipName == "shotgun_fire" ? 6 :
+							clipName == "rifle_fire" ? 5 : clipName == "rifle_idle" ? 4 :
+							clipName == "walk" && index != 4 ? 3 : clipName == "death" ? 2 :
+							clipName == "fire" || clipName == "run" ? 1 : 0;
+						actor.clipDurationMs[clipIndex] = std::clamp(clip.value("durationMs", 0u), 0u, 10000u);
 						if (clipName == "idle" || (clipName == "walk" && index == 4))
 						{
 							actor.idleFirst = first;
@@ -671,6 +685,11 @@ namespace Components
 						{
 							actor.actionFirst = first;
 							actor.actionCount = length;
+						}
+						else if (clipName == "point")
+						{
+							actor.pointFirst = first;
+							actor.pointCount = length;
 						}
 						else if (clipName == "death")
 						{
@@ -752,38 +771,78 @@ namespace Components
 			}
 		}
 
-		void AttachMaterialToLobby(const char* name, const bool sceneReady)
+		void RefreshLobbyMaterial()
+		{
+			if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled() ||
+				!FastFiles::Ready() ||
+				!*Game::dx_ptr || Renderer::Width() <= 0 || Renderer::Height() <= 0 ||
+				Renderer::IsDeviceRecoveryActive()) return;
+
+			if (!roomImage)
+			{
+				textureWidth = static_cast<unsigned>(std::clamp(Renderer::Width(), 640, 3840));
+				textureHeight = static_cast<unsigned>(std::clamp(Renderer::Height(), 360, 2160));
+				roomImage = Materials::CreateImage("zw3_lobby_scene_image", textureWidth, textureHeight,
+					1, 0x1000003, D3DFMT_A8R8G8B8);
+			}
+
+			auto* entry = Game::DB_FindXAssetEntry(Game::ASSET_TYPE_MATERIAL, "white");
+			auto* baseMaterial = entry ? entry->asset.header.material : nullptr;
+			if (!baseMaterial) return;
+
+			if (!roomMaterial)
+			{
+				if (roomImage) roomMaterial = Materials::Create("zw3_lobby_scene", roomImage);
+			}
+			else if (materialNeedsRefresh && baseMaterial->techniqueSet)
+			{
+				roomMaterial->techniqueSet = baseMaterial->techniqueSet;
+				roomMaterial->stateBitsTable = baseMaterial->stateBitsTable;
+				roomMaterial->stateBitsCount = baseMaterial->stateBitsCount;
+				if (roomMaterial->textureTable)
+				{
+					roomMaterial->textureTable->u.image = roomImage;
+				}
+			}
+			if (roomMaterial) materialNeedsRefresh = false;
+		}
+
+		void AttachMaterialToLobby(const char* name, const bool sceneReady = true)
 		{
 			auto* menu = Game::Menus_FindByName(Game::uiContext, name);
 			if (!menu) return;
-			const bool useRoom = roomMaterial && (sceneReady || assetsReady.load(std::memory_order_acquire));
 			for (auto i = 0; i < menu->itemCount; ++i)
 			{
 				auto* item = menu->items[i];
-				if (item && item->window.name)
+				if (!item) continue;
+				const char* winName = item->window.name ? item->window.name : "";
+				const char* bgName = (item->window.background && item->window.background->info.name)
+					? item->window.background->info.name : "";
+
+				if (!_stricmp(winName, "zw3_lobby_theater_background") ||
+					!_stricmp(winName, "main_text_background") ||
+					!_stricmp(bgName, "mw2_main_co_image") ||
+					!_stricmp(bgName, "mw2_main_background"))
 				{
-					if (!_stricmp(item->window.name, "zw3_lobby_theater_background") ||
-						!_stricmp(item->window.name, "main_text_background"))
+					if (sceneReady && roomMaterial && roomImage && roomImage->texture.map)
 					{
-						if (useRoom)
-						{
-							item->window.background = roomMaterial;
-							item->window.foreColor[3] = 1.0f;
-						}
-						else
-						{
-							auto* fallback = Game::DB_FindXAssetHeader(Game::ASSET_TYPE_MATERIAL,
-								"mw2_main_co_image").material;
-							if (fallback && !Game::DB_IsXAssetDefault(Game::ASSET_TYPE_MATERIAL,
-								"mw2_main_co_image")) item->window.background = fallback;
-							item->window.foreColor[3] = 0.35f;
-						}
+						item->window.background = roomMaterial;
+						item->window.foreColor[3] = 1.0f;
 					}
-					else if (!_stricmp(item->window.name, "zw3_lobby_fallback_cloud") ||
-						!_stricmp(item->window.name, "main_text_cloud"))
+					else
 					{
-						item->window.foreColor[3] = useRoom ? 0.0f : 0.7f;
+						auto* entry = FastFiles::Ready() ? Game::DB_FindXAssetEntry(Game::ASSET_TYPE_MATERIAL, "mw2_main_co_image") : nullptr;
+						if (entry && entry->asset.header.material)
+							item->window.background = entry->asset.header.material;
+						item->window.foreColor[3] = 0.35f;
 					}
+				}
+				else if (!_stricmp(winName, "zw3_lobby_fallback_cloud") ||
+					!_stricmp(winName, "main_text_cloud") ||
+					strstr(winName, "cloud") ||
+					strstr(bgName, "cloud"))
+				{
+					item->window.foreColor[3] = sceneReady ? 0.0f : 0.7f;
 				}
 			}
 		}
@@ -796,17 +855,6 @@ namespace Components
 
 		void UpdateMenu()
 		{
-			if (LobbyScene::IsTransitionActive())
-			{
-				const auto state = *reinterpret_cast<Game::connstate_t*>(0xB2C540);
-				if (state >= Game::CA_CONNECTING && state < Game::CA_ACTIVE)
-					sawConnectingState.store(true, std::memory_order_release);
-				if (timeGetTime() - transitionStartTime.load() > 25000u ||
-					(sawConnectingState.load() && (state == Game::CA_ACTIVE || state == Game::CA_DISCONNECTED)))
-					LobbyScene::StopTransition();
-				else return;
-			}
-
 			// Wrap the existing engine command, retaining its normal launch semantics.
 			if (!originalPartyGo)
 			{
@@ -821,14 +869,61 @@ namespace Components
 				}
 			}
 
+			const auto state = *reinterpret_cast<Game::connstate_t*>(0xB2C540);
+			if (state >= Game::CA_CONNECTING || Game::CL_IsCgameInitialized())
+			{
+				startupLoading.store(false, std::memory_order_release);
+				if (LobbyScene::IsTransitionActive())
+				{
+					sawConnectingState.store(true, std::memory_order_release);
+					if (timeGetTime() - transitionStartTime.load() > 25000u ||
+						(sawConnectingState.load() && (state == Game::CA_ACTIVE || state == Game::CA_DISCONNECTED)))
+					{
+						LobbyScene::StopTransition();
+					}
+				}
+				lobbyVisible.store(false, std::memory_order_release);
+				return;
+			}
+
+			if (LobbyScene::IsTransitionActive())
+			{
+				return;
+			}
+
+			const auto sceneReady = frameReady.load(std::memory_order_acquire) && roomMaterial &&
+				!roomVertices.empty();
+			AttachMaterialToLobby("menu_xboxlive_privatelobby", sceneReady);
+			AttachMaterialToLobby("zwnet_matchmaking", sceneReady);
+			AttachMaterialToLobby("pregame_loaderror", sceneReady);
+			AttachMaterialToLobby("main_text", sceneReady);
+
+			PrepareTexturePack();
+			LobbyScene::PrepareStartup();
+
 			const auto privateVisible = IsLobbyVisible("menu_xboxlive_privatelobby");
 			const auto matchmakingVisible = IsLobbyVisible("zwnet_matchmaking");
 			const auto inLobby = privateVisible || matchmakingVisible;
 			const auto visible = inLobby || IsLobbyVisible("pregame_loaderror") || IsLobbyVisible("main_text");
 			closeCamera.store(inLobby, std::memory_order_release);
-			PrepareTexturePack();
+			lobbyVisible.store(visible, std::memory_order_release);
 
-			LobbyScene::PrepareStartup();
+			static bool wasLobbyVisible = false;
+			if (visible && !wasLobbyVisible) lobbySession.fetch_add(1, std::memory_order_release);
+			wasLobbyVisible = visible;
+
+			if (!visible)
+			{
+				return;
+			}
+
+			if (startupLoading.load(std::memory_order_acquire) && !Renderer::IsDeviceRecoveryActive())
+			{
+				if (!startupWaitStart) startupWaitStart = timeGetTime();
+				if (sceneReady || timeGetTime() - startupWaitStart >= 12000u)
+					startupLoading.store(false, std::memory_order_release);
+			}
+
 			if (inLobby)
 			{
 				const auto* countDvar = Game::Dvar_FindVar(privateVisible ?
@@ -862,24 +957,6 @@ namespace Components
 					lobbyCharacterModels[slot].store(modelIndex, std::memory_order_release);
 				}
 			}
-			static bool wasLobbyVisible = false;
-			if (visible && !wasLobbyVisible) lobbySession.fetch_add(1, std::memory_order_release);
-			wasLobbyVisible = visible;
-			lobbyVisible.store(visible, std::memory_order_release);
-			if (!visible) return;
-			const auto sceneReady = frameReady.load(std::memory_order_acquire) && roomMaterial &&
-				!roomVertices.empty();
-			AttachMaterialToLobby("menu_xboxlive_privatelobby", sceneReady);
-			AttachMaterialToLobby("zwnet_matchmaking", sceneReady);
-			AttachMaterialToLobby("pregame_loaderror", sceneReady);
-			AttachMaterialToLobby("main_text", sceneReady);
-			if (startupLoading.load(std::memory_order_acquire))
-			{
-				static const auto start = timeGetTime();
-				const auto elapsed = timeGetTime() - start;
-				if (sceneReady || elapsed >= 12000u)
-					startupLoading.store(false, std::memory_order_release);
-			}
 		}
 
 		void ReleaseDepth()
@@ -908,9 +985,6 @@ namespace Components
 
 		void ReleaseTextures()
 		{
-			texturePackCache = {};
-			if (texturePackStage.load(std::memory_order_acquire) == 2)
-				texturePackStage.store(0, std::memory_order_release);
 			if (savedState)
 			{
 				savedState->Release();
@@ -954,16 +1028,23 @@ namespace Components
 				if (lightmap) lightmap->Release();
 				lightmap = nullptr;
 			}
-			for (auto& group : roomGroups) group.texture = nullptr;
-			for (auto& group : propGroups) group.texture = nullptr;
+			const auto clearGroups = [](auto& groups)
+			{
+				for (auto& group : groups) group.texture = group.normalTexture = nullptr;
+			};
+			clearGroups(roomGroups);
+			clearGroups(doorLeftGroups);
+			clearGroups(doorRightGroups);
+			clearGroups(propGroups);
 			for (auto& actor : actorMeshes)
 			{
-				for (auto& group : actor.groups) group.texture = nullptr;
+				clearGroups(actor.groups);
 			}
 		}
 
 		bool EnsureRenderTarget(IDirect3DDevice9* device)
 		{
+			if (!Game::Sys_IsDatabaseReady() || !FastFiles::Ready() || !Game::DB_IsZoneLoaded("zw3_lobby")) return false;
 			if (texturePackStage.load(std::memory_order_acquire) != 2) return false;
 			if (!roomImage) return false;
 			const auto width = static_cast<unsigned>(std::clamp(Renderer::Width(), 640, 3840));
@@ -1041,8 +1122,13 @@ namespace Components
 				if (seen.emplace("zombie_eye_flare.dds").second)
 					pendingTextureNames.push_back("zombie_eye_flare.dds");
 			}
-			while (nextTexture < pendingTextureNames.size())
+			const auto uploadStart = timeGetTime();
+			unsigned uploaded = 0;
+			const auto preparing = startupLoading.load(std::memory_order_acquire);
+			while (nextTexture < pendingTextureNames.size() && uploaded < (preparing ? 16u : 2u) &&
+				(uploaded == 0 || timeGetTime() - uploadStart < (preparing ? 4u : 2u)))
 			{
+				++uploaded;
 				const auto& name = pendingTextureNames[nextTexture++];
 				const auto data = ReadLobbyAsset("lobby/textures/" + name,
 					"zw3/core/lobby/textures/" + name);
@@ -1051,6 +1137,7 @@ namespace Components
 					data.data(), static_cast<UINT>(data.size()), &texture);
 				loadedTextures.emplace(name, texture);
 			}
+			if (nextTexture < pendingTextureNames.size()) return false;
 			const auto bindGroups = [](std::vector<DrawGroup>& groups)
 			{
 				for (auto& group : groups)
@@ -1143,13 +1230,14 @@ namespace Components
 				float4 main(float2 uv : TEXCOORD0, float4 vertexColor : COLOR0) : COLOR0
 				{
 					float4 diffuse = tex2D(diffuseTexture, uv);
-					if (materialFlags.z < -1.5f)
-					{
-						return float4(diffuse.rgb * vertexColor.a * 2.5f, 1.0f);
-					}
-					if (materialFlags.z < -0.5f)
+					// -1 is a normal material's disabled alpha cutoff, not an eye glow.
+					if (materialFlags.z < -3.5f)
 					{
 						return float4(float3(3.5f, 0.25f, 0.08f) * diffuse.rgb, 1.0f);
+					}
+					if (materialFlags.z < -1.5f)
+					{
+						return float4(diffuse.rgb * vertexColor.rgb * vertexColor.a * 2.5f, 1.0f);
 					}
 					if (materialFlags.y > 0.5f)
 					{
@@ -1263,8 +1351,6 @@ namespace Components
 				}
 			}
 			renderResourcesReady = true;
-			// DDS staging is no longer needed; the zone can supply it again after reset.
-			texturePackCache = {};
 			return true;
 		}
 
@@ -1320,11 +1406,11 @@ namespace Components
 
 		void RenderRoom(IDirect3DDevice9* device)
 		{
-			if (IsCinematicActive() || !assetsReady.load(std::memory_order_acquire) || roomVertices.empty() ||
-				Renderer::IsDeviceRecoveryActive() || !roomImage || !device) return;
+			if (IsCinematicActive() || Renderer::IsDeviceRecoveryActive() || !device) return;
 
 			const auto inTransition = theaterDirectTransitionActive.load(std::memory_order_acquire);
-			const bool bootPreview = !FastFiles::MainMenuReady();
+			const bool bootPreview = startupLoading.load(std::memory_order_acquire) &&
+				Game::CL_GetLocalClientConnectionState(0) < Game::CA_CONNECTING;
 			const auto transitionElapsed = timeGetTime() - transitionStartTime.load(std::memory_order_acquire);
 			if (inTransition && transitionElapsed >= LobbyTransition::WhiteEndMs)
 			{
@@ -1336,6 +1422,8 @@ namespace Components
 					fadePresented.store(true, std::memory_order_release);
 				return;
 			}
+
+			if (!assetsReady.load(std::memory_order_acquire) || roomVertices.empty() || !roomImage) return;
 
 			if (!EnsureRenderTarget(device)) return;
 			// Warm resources and the first frame before a menu requests this material.
@@ -1363,7 +1451,12 @@ namespace Components
 			}
 
 			if (!savedState) device->CreateStateBlock(D3DSBT_ALL, &savedState);
-			if (savedState) savedState->Capture();
+			if (!savedState || FAILED(savedState->Capture()))
+			{
+				oldDepth->Release(); oldTarget->Release(); target->Release(); sceneTarget->Release();
+				frameReady.store(false, std::memory_order_release);
+				return;
+			}
 
 			bool rendered = false;
 			float whiteOpacity = 0.0f;
@@ -1399,13 +1492,14 @@ namespace Components
 					currentBaseTarget = desiredBaseTarget;
 					cameraSession = session;
 				}
-				if (closeCamera.load(std::memory_order_acquire) || inTransition)
+				// Pull back during the taunt instead of retaining the private-lobby close shot.
+				if (closeCamera.load(std::memory_order_acquire) && !inTransition)
 				{
 					desiredBaseEye = { 0.0f, -1180.0f, 188.0f };
 					desiredBaseTarget = { 0.0f, -550.0f, 168.0f };
 				}
 
-				// Smooth camera interpolation when selecting map
+				// Smooth menu zoom and the transition's initial pullback.
 				const float lerpFactor = 1.0f - std::exp(-dt * 2.0f);
 				currentBaseEye += (desiredBaseEye - currentBaseEye) * lerpFactor;
 				currentBaseTarget += (desiredBaseTarget - currentBaseTarget) * lerpFactor;
@@ -1420,13 +1514,13 @@ namespace Components
 					const auto start = transitionStartTime.load(std::memory_order_acquire);
 					const auto elapsed = now - start;
 
-					// Keep the approach visible; doors and white fade start together at 2.4s.
+					// Give the balcony-facing taunt time to read before the door approach.
 					const float doorT = LobbyTransition::Smooth(LobbyTransition::Progress(elapsed,
 						LobbyTransition::DoorStartMs, LobbyTransition::DoorEndMs));
 					currentDoorAngle = doorT * D3DXToRadian(102.0f);
 
-					// Camera slowly flies into the door and the dark (0.0s to 5.4s)
-					const float flyT = LobbyTransition::Progress(elapsed, 0, LobbyTransition::CameraEndMs);
+					// Hold for the taunt, then preserve the existing flight duration.
+					const float flyT = LobbyTransition::CameraProgress(elapsed);
 					const float easeFly = LobbyTransition::Smooth(flyT);
 
 					const D3DXVECTOR3 flyEndEye = { 0.0f, -400.0f, 140.0f };
@@ -1562,7 +1656,7 @@ namespace Components
 						const bool alphaCutout = !isWeapon && (group.alphaTest || group.blend);
 						device->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE); // Shader uses the material's exact threshold.
 						const float materialFlags[4] = { group.normalTexture ? 1.0f : 0.0f,
-							alphaCutout ? 1.0f : 0.0f, isEyeGlow ? -1.0f : group.alphaThreshold,
+							alphaCutout ? 1.0f : 0.0f, isEyeGlow ? -4.0f : group.alphaThreshold,
 							group.multiplicative ? 1.0f : 0.0f };
 						device->SetPixelShaderConstantF(0, materialFlags, 1);
 						device->SetSamplerState(2, D3DSAMP_MINFILTER, D3DTEXF_ANISOTROPIC);
@@ -1654,24 +1748,25 @@ namespace Components
 						-> const std::vector<Vertex>&
 					{
 						if (actor.frames.size() < 2) return actor.frames.front();
-						const auto first = clip == 6 ? actor.shotgunFireFirst :
+						const auto first = clip == 7 ? actor.pointFirst : clip == 6 ? actor.shotgunFireFirst :
 							clip == 5 ? actor.rifleFireFirst : clip == 4 ? actor.rifleIdleFirst :
 							clip == 3 ? actor.walkFirst : clip == 2 ? actor.deathFirst :
 							clip == 1 ? actor.actionFirst : actor.idleFirst;
-						const auto length = clip == 6 ? actor.shotgunFireCount :
+						const auto length = clip == 7 ? actor.pointCount : clip == 6 ? actor.shotgunFireCount :
 							clip == 5 ? actor.rifleFireCount : clip == 4 ? actor.rifleIdleCount :
 							clip == 3 ? actor.walkCount : clip == 2 ? actor.deathCount :
 							clip == 1 ? actor.actionCount : actor.idleCount;
 						if (length < 2) return actor.frames[first];
 						const auto zombie = &actor == &actorMeshes[4];
-						const auto frameTime = clip == 2 ? 140u : (clip == 1 || clip == 5 || clip == 6) ? (zombie ? 130u : 85u) :
+						const auto frameTime = clip == 2 || clip == 7 ? 140u : (clip == 1 || clip == 5 || clip == 6) ? (zombie ? 130u : 85u) :
 							clip == 3 ? 250u : (zombie ? 190u : 240u);
-						const auto phase = clip == 2 ?
-							std::min(static_cast<float>(now + phaseOffset) / frameTime,
-								static_cast<float>(length - 1)) :
-							static_cast<float>((now + phaseOffset) % (frameTime * length)) / frameTime;
+						const bool oneShot = clip == 2 || clip == 7 || (!zombie && (clip == 1 || clip == 5 || clip == 6));
+						const auto duration = actor.clipDurationMs[clip] ? actor.clipDurationMs[clip] : frameTime * (length - 1);
+						const unsigned elapsed = now + phaseOffset;
+						const auto phase = static_cast<float>(oneShot ? std::min(elapsed, duration) : elapsed % duration) /
+							duration * static_cast<float>(length - 1);
 						const auto frameA = static_cast<unsigned>(phase) % length;
-						const auto frameB = clip == 2 ? std::min(frameA + 1, length - 1) :
+						const auto frameB = oneShot ? std::min(frameA + 1, length - 1) :
 							(frameA + 1) % length;
 						const auto blend = phase - static_cast<float>(static_cast<unsigned>(phase));
 						const auto& a = actor.frames[first + frameA];
@@ -1836,12 +1931,45 @@ namespace Components
 						float facing = -D3DX_PI * 0.5f;
 						bool isWalking = false;
 						bool initialized = false;
+						bool present = false;
+						int modelIndex = -1;
 						int weaponIndex = 0;
 						unsigned session = 0;
 					};
 					static std::array<SurvivorState, 4> survivors{};
+					constexpr auto balconyY = -765.0f;
 					static std::mt19937 weaponRandom(timeGetTime() ^ GetCurrentProcessId());
 					static std::uniform_int_distribution<int> weaponChoice(0, 3);
+					struct TeleportBurst
+					{
+						float x = 0.0f;
+						unsigned started = 0;
+						bool active = false;
+					};
+					static std::array<TeleportBurst, 4> teleportBursts{};
+					static unsigned teleportSession = 0;
+					if (teleportSession != session)
+					{
+						teleportBursts = {};
+						for (auto& survivor : survivors) survivor.present = false;
+						teleportSession = session;
+					}
+					// One arrival effect per occupied slot. Leaves and icon changes do not
+					// create ghost effects, and never reset the zombie simulation.
+					for (auto slot = 0u; slot < survivors.size(); ++slot)
+					{
+						auto& survivor = survivors[slot];
+						const auto model = lobbyCharacterModels[slot].load(std::memory_order_acquire);
+						const bool present = slot < static_cast<unsigned>(count) && model >= 0 && model < 4 && !actorMeshes[model].frames.empty();
+						if (!present || inTransition) teleportBursts[slot].active = false;
+						else if (!survivor.present)
+							teleportBursts[slot] = { (static_cast<float>(slot) - (count - 1) * 0.5f) * 65.0f, now, true };
+						else if (teleportBursts[slot].active)
+							teleportBursts[slot].x = (static_cast<float>(slot) - (count - 1) * 0.5f) * 65.0f;
+						if (!present) survivor.initialized = false;
+						survivor.present = present;
+						survivor.modelIndex = model;
+					}
 
 					struct MuzzleFlareRecord
 					{
@@ -1880,7 +2008,7 @@ namespace Components
 							survivor.homeX = homeX;
 						}
 
-						const auto y = -765.0f;
+						const auto y = balconyY;
 						const auto z = 245.0f;
 
 						int bestZombie = -1;
@@ -1941,10 +2069,12 @@ namespace Components
 						}
 
 						// Smooth shortest-arc yaw rotation
+						// Keep balcony aim forward-facing instead of twisting through the torso.
+						targetYaw = std::clamp(targetYaw, -D3DX_PI * 0.5f - 1.05f, -D3DX_PI * 0.5f + 1.05f);
 						float diffYaw = targetYaw - survivor.facing;
 						while (diffYaw > D3DX_PI) diffYaw -= 2.0f * D3DX_PI;
 						while (diffYaw < -D3DX_PI) diffYaw += 2.0f * D3DX_PI;
-						survivor.facing += diffYaw * 0.14f;
+						survivor.facing += diffYaw * (1.0f - std::exp(-dt * 5.0f));
 
 						// Survivors stand their ground at homeX on the balcony
 						const auto diffX = survivor.homeX - survivor.currentX;
@@ -1961,7 +2091,7 @@ namespace Components
 						}
 
 						// Check if ready to initiate burst
-						if (bestZombie >= 0 && bestApproach >= 0.80f && bestApproach <= 0.98f)
+						if (!inTransition && bestZombie >= 0 && bestApproach >= 0.80f && bestApproach <= 0.98f)
 						{
 							if (now - survivor.targetEngageTime >= 180u &&
 								survivor.burstRemaining == 0 &&
@@ -1973,7 +2103,7 @@ namespace Components
 						}
 
 						// Handle active burst shots
-						if (survivor.burstRemaining > 0 && static_cast<int>(now - survivor.nextBurstShotTime) >= 0)
+						if (!inTransition && survivor.burstRemaining > 0 && static_cast<int>(now - survivor.nextBurstShotTime) >= 0)
 						{
 							survivor.burstRemaining--;
 							survivor.lastFireTime = now;
@@ -1994,7 +2124,9 @@ namespace Components
 							}
 						}
 
-						const bool isFiring = (survivor.burstRemaining > 0) || (now - survivor.lastFireTime < 180u);
+						const auto fireClip = survivor.weaponIndex == 3 ? 6 : survivor.weaponIndex == 0 ? 1 : 5;
+						const auto fireDuration = actor.clipDurationMs[fireClip] ? actor.clipDurationMs[fireClip] : 450u;
+						const bool isFiring = !inTransition && ((survivor.burstRemaining > 0) || (now - survivor.lastFireTime < fireDuration));
 
 						D3DXMATRIX rotation, translation, placement;
 						D3DXMatrixRotationZ(&rotation, survivor.facing);
@@ -2036,6 +2168,20 @@ namespace Components
 						const auto phaseOffset = isFiring ? (0u - survivor.lastFireTime) :
 							(survivor.isWalking ? (i * 200u) : (i * 540u));
 						const std::vector<Vertex>* pose = &sampleActor(actor, clip, phaseOffset);
+						const auto shotAge = now - survivor.lastFireTime;
+						if (isFiring && fireDuration > 150u && shotAge > fireDuration - 150u)
+						{
+							actor.blended = *pose;
+							const auto& idle = sampleActor(actor, survivor.weaponIndex == 0 ? 0 : 4, i * 540u);
+							const auto t = LobbyTransition::Smooth(LobbyTransition::Progress(shotAge, fireDuration - 150u, fireDuration));
+							for (auto v = 0u; v < idle.size(); ++v)
+							{
+								actor.blended[v].x += (idle[v].x - actor.blended[v].x) * t;
+								actor.blended[v].y += (idle[v].y - actor.blended[v].y) * t;
+								actor.blended[v].z += (idle[v].z - actor.blended[v].z) * t;
+							}
+							pose = &actor.blended;
+						}
 
 						if (!drawGroups(actor.groups, *pose, false, false, nullptr, survivor.weaponIndex))
 						{
@@ -2082,7 +2228,8 @@ namespace Components
 							placement = rotation * translation;
 							device->SetTransform(D3DTS_WORLD, &placement);
 
-							const auto clip = visual.dying ? 2 : (visual.variant == 1 || progress > 0.84f) ? 1 : 0;
+							// Keep walkers walking on the stairs; changing to run mid-route snaps the pose.
+							const auto clip = visual.dying ? 2 : visual.variant == 1 ? 1 : 0;
 							const auto clipStart = visual.dying ? visual.deathTime : visual.spawnTime;
 							const auto& pose = sampleActor(zombie, clip, 0u - clipStart);
 							if (!drawGroups(zombie.groups, pose, false, false, nullptr))
@@ -2129,6 +2276,26 @@ namespace Components
 							}
 						}
 
+						// Menu-only teleport energy: reuse the existing soft flare texture,
+						// with bounded particles and no gameplay FX entities or new assets.
+						for (auto& burst : teleportBursts)
+						{
+							if (!burst.active) continue;
+							const auto age = now - burst.started;
+							if (age >= 800u) { burst.active = false; continue; }
+							const float t = static_cast<float>(age) / 800.0f;
+							const float intensity = std::sin(t * D3DX_PI) * 0.55f;
+							const auto color = D3DCOLOR_ARGB(static_cast<DWORD>(255 * intensity), 255, 32, 16);
+							for (auto particle = 0u; particle < 8u; ++particle)
+							{
+								const float angle = particle * 2.399963f + t * 4.0f;
+								const float radius = 8.0f + (1.0f - t) * 10.0f;
+								const float height = std::fmod(particle * 5.7f + t * 90.0f, 72.0f);
+								addFlareQuad({ burst.x + std::cos(angle) * radius,
+									balconyY + std::sin(angle) * radius, 248.0f + height }, 2.5f, color);
+							}
+							addFlareQuad({ burst.x, balconyY, 278.0f }, 10.0f, color);
+						}
 						for (const auto& mf : muzzleFlares)
 						{
 							// Warm orange/yellow outer muzzle flare
@@ -2215,7 +2382,7 @@ namespace Components
 					rendered = SUCCEEDED(device->StretchRect(sceneTarget, nullptr, target, nullptr, D3DTEXF_NONE));
 				}
 
-				if ((inTransition || (bootPreview && !startupLoading.load(std::memory_order_acquire))) && oldTarget)
+				if ((inTransition || bootPreview) && oldTarget)
 				{
 					device->SetRenderTarget(0, oldTarget);
 					device->SetDepthStencilSurface(nullptr);
@@ -2243,6 +2410,8 @@ namespace Components
 					device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
 					device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
 					device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+					device->SetTextureStageState(0, D3DTSS_TEXCOORDINDEX, 0);
+					device->SetTextureStageState(0, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
 					device->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
 					device->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
 					if (rendered)
@@ -2306,28 +2475,65 @@ namespace Components
 
 		Events::AfterUIInit([]
 		{
+			materialNeedsRefresh = true;
+			RefreshLobbyMaterial();
 			PrepareStartup();
-			if (roomMaterial) return;
-			textureWidth = static_cast<unsigned>(std::clamp(Renderer::Width(), 640, 3840));
-			textureHeight = static_cast<unsigned>(std::clamp(Renderer::Height(), 360, 2160));
-			roomImage = Materials::CreateImage("zw3_lobby_scene_image", textureWidth, textureHeight,
-				1, 0x1000003, D3DFMT_A8R8G8B8);
-			if (roomImage) roomMaterial = Materials::Create("zw3_lobby_scene", roomImage);
+			const auto ready = IsSceneReady();
+			AttachMaterialToLobby("main_text", ready);
+			AttachMaterialToLobby("menu_xboxlive_privatelobby", ready);
+			AttachMaterialToLobby("zwnet_matchmaking", ready);
+			AttachMaterialToLobby("pregame_loaderror", ready);
 		});
 		Renderer::OnBackendFrame([](IDirect3DDevice9* device)
 		{
 			if (IsCinematicActive()) return;
 
 			RenderRoom(device);
-			if (!startupLoading.load(std::memory_order_acquire) || Renderer::IsDeviceRecoveryActive()) return;
-			device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_XRGB(8, 8, 8), 1.0f, 0);
+			if (IsStartupLoading() && !frameReady.load(std::memory_order_acquire))
+				device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_XRGB(0, 0, 0), 1.0f, 0);
 		});
 		Renderer::OnDeviceRecoveryBegin([]
 		{
 			StopTransition();
 			frameReady.store(false, std::memory_order_release);
+			assetsReady.store(false, std::memory_order_release);
+			startupLoading.store(true, std::memory_order_release);
+			startupWaitStart = 0;
+			materialNeedsRefresh = true;
+			AttachMaterialToLobby("main_text", false);
+			AttachMaterialToLobby("menu_xboxlive_privatelobby", false);
+			AttachMaterialToLobby("zwnet_matchmaking", false);
+			AttachMaterialToLobby("pregame_loaderror", false);
 			ReleaseDepth();
 			ReleaseTextures();
+			// Keep texturePackCache populated — only GPU resources are lost on device reset.
+			// Set texturePackStage back to 2 if cache is still valid so we skip re-decompression.
+		});
+		Renderer::OnDeviceRecoveryEnd([]
+		{
+			frameReady.store(false, std::memory_order_release);
+
+			// Refresh material technique pointers (fastfiles were reloaded during vid_restart)
+			RefreshLobbyMaterial();
+
+			// CPU-side mesh data (roomVertices, propVertices, actorMeshes, etc.) survives
+			// device reset. If it's still loaded, re-enable assetsReady so the normal
+			// OnBackendFrame → RenderRoom → EnsureRenderTarget path can recreate GPU resources
+			// and render the first frame.
+			if (!roomVertices.empty())
+			{
+				assetsReady.store(true, std::memory_order_release);
+			}
+
+			// texturePackCache (CPU bytes) is preserved across vid_restart.
+			// If it's still valid, keep texturePackStage=2 so we skip re-decompression.
+			// If it was cleared (e.g. by ReleaseResources for map load), reset to 0.
+			if (texturePackCache.bytes.empty())
+			{
+				texturePackStage.store(0, std::memory_order_release);
+			}
+
+			// UpdateMenu attaches the replacement texture after the first complete frame.
 		});
 		Events::OnCLDisconnected([](bool)
 		{
@@ -2350,7 +2556,8 @@ namespace Components
 
 	bool LobbyScene::IsStartupLoading()
 	{
-		return startupLoading.load(std::memory_order_acquire);
+		return !Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled() &&
+			startupLoading.load(std::memory_order_acquire) && !IsCinematicActive();
 	}
 
 	bool LobbyScene::IsCinematicActive()
@@ -2360,32 +2567,70 @@ namespace Components
 		return state == Game::CA_CINEMATIC || state == Game::CA_LOGO;
 	}
 
+	void LobbyScene::ReleaseResources()
+	{
+		static std::mutex releaseMutex;
+		std::lock_guard lock(releaseMutex);
+
+		if (!assetsReady.load(std::memory_order_acquire) && !frameReady.load(std::memory_order_acquire))
+		{
+			return;
+		}
+
+		frameReady.store(false, std::memory_order_release);
+		assetsReady.store(false, std::memory_order_release);
+
+		ReleaseDepth();
+		ReleaseTextures();
+
+		texturePackCache = {};
+		texturePackStage.store(0, std::memory_order_release);
+
+		roomVertices.clear();
+		roomGroups.clear();
+		propVertices.clear();
+		propIndices.clear();
+		propGroups.clear();
+		doorLeftVertices.clear();
+		doorRightVertices.clear();
+		doorLeftGroups.clear();
+		doorRightGroups.clear();
+		for (auto& actor : actorMeshes)
+		{
+			actor.frames.clear();
+			actor.interpolated.clear();
+			actor.blended.clear();
+			actor.groups.clear();
+		}
+	}
+
 	void LobbyScene::PrepareStartup()
 	{
 		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled() ||
-			!FastFiles::Ready() || !*Game::dx_ptr || Renderer::Width() <= 0 || Renderer::Height() <= 0) return;
+			!Game::Sys_IsDatabaseReady() ||
+			Game::CL_IsCgameInitialized() ||
+			*reinterpret_cast<Game::connstate_t*>(0xB2C540) >= Game::CA_CONNECTING ||
+			!*Game::dx_ptr || Renderer::Width() <= 0 || Renderer::Height() <= 0) return;
 		if (!Game::DB_IsZoneLoaded("zw3_common") && !Game::DB_IsZoneLoaded("common_mp")) return;
-		static bool zoneChecked = false;
-		if (!zoneChecked)
+		if (!Game::DB_IsZoneLoaded("zw3_lobby"))
 		{
-			zoneChecked = true;
-			if (!Game::DB_IsZoneLoaded("zw3_lobby") && FastFiles::Exists("zw3_lobby"))
+			if (FastFiles::Exists("zw3_lobby") && !Game::CL_IsCgameInitialized() &&
+				*reinterpret_cast<Game::connstate_t*>(0xB2C540) < Game::CA_CONNECTING)
 			{
 				Game::XZoneInfo zone{ "zw3_lobby", 1, 0 };
 				Game::DB_LoadXAssets(&zone, 1, true);
 			}
+			else
+			{
+				return;
+			}
 		}
 		if (!Game::DB_IsZoneLoaded("zw3_lobby")) return;
-		if (!roomMaterial && *Game::dx_ptr && Renderer::Width() > 0 && Renderer::Height() > 0 &&
-			!Renderer::IsDeviceRecoveryActive())
+		RefreshLobbyMaterial();
+		if (assetsReady.load(std::memory_order_acquire))
 		{
-			textureWidth = static_cast<unsigned>(std::clamp(Renderer::Width(), 640, 3840));
-			textureHeight = static_cast<unsigned>(std::clamp(Renderer::Height(), 360, 2160));
-			if (!roomImage) roomImage = Materials::CreateImage("zw3_lobby_scene_image", textureWidth, textureHeight,
-				1, 0x1000003, D3DFMT_A8R8G8B8);
-			if (roomImage) roomMaterial = Materials::Create("zw3_lobby_scene", roomImage);
+			return;
 		}
-		if (assetsReady.load(std::memory_order_acquire)) return;
 		// No nested DB loads or renderer calls while the engine is loading its startup batch.
 		PrepareTexturePack();
 		LoadRoomMesh();
@@ -2393,7 +2638,21 @@ namespace Components
 		LoadTheaterVision();
 		static constexpr const char* names[] = { "richtofen", "dempsey", "nikolai", "takeo", "zombie" };
 		for (auto i = 0u; i < std::size(names); ++i) LoadActorMesh(i, names[i]);
+		// Cache the round-start PCM clip while the frontend database is ready. Playback
+		// never performs an asset lookup or enters the game's sound-alias dispatcher.
+		if (auto* entry = Game::DB_FindXAssetEntry(Game::ASSET_TYPE_RAWFILE, "lobby/audio/round_start.wav"))
+		{
+			auto* raw = entry->asset.header.rawfile;
+			if (raw && raw->len > 0 && raw->len < 4 * 1024 * 1024)
+			{
+				std::string wav(raw->len + 1, '\0');
+				Game::DB_GetRawBuffer(raw, wav.data(), static_cast<int>(wav.size()));
+				wav.resize(raw->len);
+				Sound::PrepareLobbyRoundStart(wav);
+			}
+		}
 		assetsReady.store(true, std::memory_order_release);
+
 	}
 
 	bool LobbyScene::DeferLaunch(const std::function<void()>& launch)
@@ -2428,6 +2687,7 @@ namespace Components
 		sawConnectingState.store(false, std::memory_order_release);
 
 		Game::Key_RemoveCatcher(0, ~Game::KEYCATCH_UI);
+		Sound::PlayLobbyRoundStart();
 		Game::Key_ClearStates(0);
 		if (Game::uiContext)
 		{
@@ -2466,14 +2726,6 @@ namespace Components
 	LobbyScene::~LobbyScene()
 	{
 		StopTransition();
-		ReleaseDepth();
-		ReleaseTextures();
-		roomVertices.clear();
-		propVertices.clear();
-		propIndices.clear();
-		doorLeftVertices.clear();
-		doorRightVertices.clear();
-		doorLeftGroups.clear();
-		doorRightGroups.clear();
+		ReleaseResources();
 	}
 }

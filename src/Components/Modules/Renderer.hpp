@@ -22,6 +22,8 @@ namespace Components
 		static void OnDeviceRecoveryEnd(Utils::Slot<Renderer::Callback> callback);
 		static void OnDeviceRecoveryBegin(Utils::Slot<Renderer::Callback> callback);
 
+		static IDirect3DBaseTexture9* GetFallbackTexture();
+
 	private:
 		static void BackendFrameStub();
 		static void BackendFrameHandler();

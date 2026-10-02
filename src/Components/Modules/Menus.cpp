@@ -1732,7 +1732,8 @@ namespace Components
 	bool Menus::IsMenuVisible(Game::UiContext* dc, Game::menuDef_t* menu)
 	{
 		if (LobbyScene::IsStartupLoading() && menu && menu->window.name &&
-			(!_stricmp(menu->window.name, "main_text") || !_stricmp(menu->window.name, "pregame_loaderror")))
+			(!_stricmp(menu->window.name, "main_text") || !_stricmp(menu->window.name, "pregame_loaderror") ||
+			 !_stricmp(menu->window.name, "menu_xboxlive_privatelobby") || !_stricmp(menu->window.name, "zwnet_matchmaking")))
 			return false;
 		if (LobbyScene::IsTransitionActive())
 		{

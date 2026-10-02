@@ -454,10 +454,7 @@ namespace Components
 	void Party::Connect(Network::Address target, bool downloadOnly,
 		bool requireUnmanagedProof)
 	{
-		if (!downloadOnly && LobbyScene::DeferLaunch([target, downloadOnly, requireUnmanagedProof]
-		{
-			Connect(target, downloadOnly, requireUnmanagedProof);
-		})) return;
+		LobbyScene::StopTransition();
 		Node::Add(target);
 
 		Container.valid = true;
@@ -2743,12 +2740,16 @@ namespace Components
 								}
 								else
 								{
-									Dvar::Var("xblive_privateserver").set(true);
-									ServerVersion.set(version);
-									Game::Menus_CloseAll(Game::uiContext);
-
-									Game::_XSESSION_INFO hostInfo;
-									Game::CL_ConnectFromParty(0, &hostInfo, *Container.target.get(), 0, 0, Container.info.get("mapname").data(), Container.info.get("gametype").data());
+									auto connectMatch = [target = Container.target,
+										map = Container.info.get("mapname"), gametype = Container.info.get("gametype"), version]() mutable
+									{
+										Dvar::Var("xblive_privateserver").set(true);
+										ServerVersion.set(version);
+										Game::Menus_CloseAll(Game::uiContext);
+										Game::_XSESSION_INFO hostInfo{};
+										Game::CL_ConnectFromParty(0, &hostInfo, *target.get(), 0, 0, map.data(), gametype.data());
+									};
+									if (!LobbyScene::DeferLaunch(connectMatch)) connectMatch();
 								}
 							}
 							break;

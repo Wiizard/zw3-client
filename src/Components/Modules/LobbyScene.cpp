@@ -930,7 +930,9 @@ namespace Components
 					"party_currentPlayers" : "zwnet_lobby_member_count");
 				const auto count = countDvar && countDvar->type == Game::DVAR_TYPE_INT ?
 					countDvar->current.integer : 1;
-				lobbyCharacterCount.store(std::clamp(count, 1, 4), std::memory_order_release);
+				const auto publishedCount = std::clamp(count, 0, 4);
+				int occupiedCount = 0;
+				std::array<int, 4> models{ -1, -1, -1, -1 };
 				static constexpr const char* characterDvars[] =
 				{
 					"character_1", "character_2", "character_3", "character_4"
@@ -941,7 +943,13 @@ namespace Components
 				};
 				for (auto slot = 0u; slot < lobbyCharacterModels.size(); ++slot)
 				{
-					auto modelIndex = static_cast<int>(slot);
+					if (slot >= static_cast<unsigned>(publishedCount)) break;
+					// Private-party snapshots explicitly publish None for vacated slots.
+					// Never substitute a default actor for a departed player.
+					auto modelIndex = privateVisible ? -1 : static_cast<int>(slot);
+					const auto* owner = Game::Dvar_FindVar(Utils::String::VA("character_%u_player", slot + 1));
+					if (privateVisible && owner && owner->type == Game::DVAR_TYPE_STRING &&
+						(!owner->current.string || !owner->current.string[0] || !_stricmp(owner->current.string, "None"))) continue;
 					const auto* character = Game::Dvar_FindVar(characterDvars[slot]);
 					if (character && character->type == Game::DVAR_TYPE_STRING && character->current.string)
 					{
@@ -954,8 +962,20 @@ namespace Components
 							}
 						}
 					}
-					lobbyCharacterModels[slot].store(modelIndex, std::memory_order_release);
+					if (modelIndex >= 0) models[occupiedCount++] = modelIndex;
 				}
+				for (auto slot = 0u; slot < models.size(); ++slot)
+					lobbyCharacterModels[slot].store(models[slot], std::memory_order_release);
+				lobbyCharacterCount.store(occupiedCount, std::memory_order_release);
+			}
+			else
+			{
+				// Leaving a lobby must not leave its remote players/bots in the menu scene.
+				for (auto slot = 1u; slot < lobbyCharacterModels.size(); ++slot)
+					lobbyCharacterModels[slot].store(-1, std::memory_order_release);
+				if (lobbyCharacterModels[0].load(std::memory_order_acquire) < 0)
+					lobbyCharacterModels[0].store(0, std::memory_order_release);
+				lobbyCharacterCount.store(1, std::memory_order_release);
 			}
 		}
 

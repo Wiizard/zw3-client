@@ -52,6 +52,7 @@ namespace Components
 			float alphaThreshold = 0.05f;
 			bool multiplicative = false;
 			bool depthWrite = true;
+			bool gammaWrite = false;
 		};
 
 		DWORD MaterialBlendFactor(const std::string& name)
@@ -127,7 +128,7 @@ namespace Components
 		IDirect3DPixelShader9* lightmapFilmShader = nullptr;
 		IDirect3DPixelShader9* visionShader = nullptr;
 		IDirect3DTexture9* sceneTexture = nullptr;
-		std::array<IDirect3DTexture9*, 2> roomLightmaps{};
+		std::array<IDirect3DTexture9*, 3> roomLightmaps{};
 		IDirect3DVertexBuffer9* roomVertexBuffer = nullptr;
 		IDirect3DVertexBuffer9* propVertexBuffer = nullptr;
 		IDirect3DIndexBuffer9* propIndexBuffer = nullptr;
@@ -412,6 +413,7 @@ namespace Components
 						roomGroups.back().alphaTest ? 0.05f : -1.0f), -1.0f, 1.0f);
 					roomGroups.back().multiplicative = group.value("multiplicative", false);
 					roomGroups.back().depthWrite = group.value("depthWrite", !blend);
+					roomGroups.back().gammaWrite = group.value("gammaWrite", false);
 					expectedFirst += count;
 				}
 				if (expectedFirst != vertexCount)
@@ -584,6 +586,13 @@ namespace Components
 						cell[0].get<int>(), cell[1].get<int>() });
 					propGroups.back().firstIndex = firstIndex;
 					propGroups.back().indexCount = numIndices;
+					propGroups.back().alphaTest = group.value("alphaTest", true);
+					propGroups.back().alphaThreshold = std::clamp(group.value("alphaThreshold", 0.05f), -1.0f, 1.0f);
+					propGroups.back().srcBlend = MaterialBlendFactor(group.value("srcBlend", "srcalpha"));
+					propGroups.back().dstBlend = MaterialBlendFactor(group.value("dstBlend", "invsrcalpha"));
+					propGroups.back().multiplicative = group.value("multiplicative", false);
+					propGroups.back().depthWrite = group.value("depthWrite", !propGroups.back().blend);
+					propGroups.back().gammaWrite = group.value("gammaWrite", false);
 					expectedFirst += count;
 					expectedIndex += numIndices;
 				}
@@ -1264,6 +1273,7 @@ namespace Components
 						clip(diffuse.a - materialFlags.z);
 					}
 					float3 shaded = diffuse.rgb * lerp(vertexColor.rgb, 1.0f, materialFlags.w);
+					if (materialFlags.x > 0.5f) shaded *= shaded;
 					return float4(shaded, lerp(1.0f, diffuse.a, materialFlags.y));
 				}
 			)";
@@ -1633,6 +1643,7 @@ namespace Components
 							const auto dy = (group.cellY + 0.5f) * 512.0f - eye.y;
 							if (dx * dx + dy * dy > 1400.0f * 1400.0f) continue;
 						}
+						device->SetRenderState(D3DRS_SRGBWRITEENABLE, group.gammaWrite ? TRUE : FALSE);
 						const bool isEyeGlow = !group.textureName.empty() &&
 							(group.textureName.find("zombie_eye") != std::string::npos ||
 							 group.textureName.find("eye_glow") != std::string::npos);
@@ -1675,7 +1686,7 @@ namespace Components
 						const bool isWeapon = group.weaponIndex >= 0;
 						const bool alphaCutout = !isWeapon && (group.alphaTest || group.blend);
 						device->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE); // Shader uses the material's exact threshold.
-						const float materialFlags[4] = { group.normalTexture ? 1.0f : 0.0f,
+						const float materialFlags[4] = { (lightmapped ? group.normalTexture != nullptr : group.gammaWrite) ? 1.0f : 0.0f,
 							alphaCutout ? 1.0f : 0.0f, isEyeGlow ? -4.0f : group.alphaThreshold,
 							group.multiplicative ? 1.0f : 0.0f };
 						device->SetPixelShaderConstantF(0, materialFlags, 1);
@@ -2328,6 +2339,7 @@ namespace Components
 
 						if (rendered && !eyeFlares.empty())
 						{
+							device->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
 							IDirect3DTexture9* flareTex = nullptr;
 							const auto found = loadedTextures.find("zombie_eye_flare.dds");
 							if (found != loadedTextures.end()) flareTex = found->second;
@@ -2356,6 +2368,7 @@ namespace Components
 
 			// Screen-space vision grading pass: sceneTexture -> target (roomImage->texture.map)
 			struct ScreenVertex { float x, y, z, rhw, u, v; };
+			device->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
 			if (rendered && SUCCEEDED(device->SetRenderTarget(0, target)) &&
 				SUCCEEDED(device->SetDepthStencilSurface(nullptr)))
 			{

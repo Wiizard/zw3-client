@@ -258,6 +258,17 @@ namespace Components
 		// This call runs before channel volumes are updated, including the first UI sound.
 		static bool wasHeld = false;
 		static unsigned int fadeStart = 0;
+		if (LobbyScene::IsCinematicActive())
+		{
+			if (wasHeld || fadeStart)
+			{
+				if (auto* volume = *reinterpret_cast<Game::dvar_t**>(0x66CF230)) volume->modified = true;
+			}
+			wasHeld = false;
+			fadeStart = 0;
+			Utils::Hook::Call<void(int)>(0x688820)(milliseconds);
+			return;
+		}
 		const bool held = LobbyScene::IsStartupLoading();
 		if (held)
 		{

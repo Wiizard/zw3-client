@@ -77,6 +77,13 @@ namespace Components
 		};
 		struct ActorMesh
 		{
+			struct MuzzleAnchor
+			{
+				std::array<UINT, 3> vertices{};
+				float u = 0, v = 0, w = 0;
+				bool valid = false;
+			};
+			std::array<MuzzleAnchor, 4> muzzleAnchors{};
 			std::vector<std::vector<Vertex>> frames;
 			std::vector<Vertex> interpolated;
 			std::vector<Vertex> blended;
@@ -638,6 +645,22 @@ namespace Components
 			{
 				const auto manifest = nlohmann::json::parse(manifestBytes);
 				if (manifest.at("version").get<std::uint32_t>() != version) return;
+				actor.muzzleAnchors = {};
+				if (manifest.contains("muzzleAnchors") && manifest["muzzleAnchors"].size() == 4)
+				{
+					for (size_t weapon = 0; weapon < 4; ++weapon)
+					{
+						const auto& source = manifest["muzzleAnchors"][weapon];
+						auto& anchor = actor.muzzleAnchors[weapon];
+						anchor.vertices = source.at("vertices").get<std::array<UINT, 3>>();
+						anchor.u = source.at("u").get<float>();
+						anchor.v = source.at("v").get<float>();
+						anchor.w = source.at("w").get<float>();
+						anchor.valid = std::all_of(anchor.vertices.begin(), anchor.vertices.end(),
+							[count](UINT vertex) { return vertex < count; }) &&
+							std::isfinite(anchor.u) && std::isfinite(anchor.v) && std::isfinite(anchor.w);
+					}
+				}
 				UINT firstExpected = 0;
 				for (const auto& group : manifest.at("groups"))
 				{
@@ -864,6 +887,22 @@ namespace Components
 
 		void UpdateMenu()
 		{
+			static bool wasStartupCinematic = false;
+			static unsigned cinematicEndTime = 0;
+			if (startupLoading.load(std::memory_order_acquire))
+			{
+				const bool cinematic = IsCinematicActive();
+				if (cinematic) cinematicEndTime = 0;
+				else if (wasStartupCinematic) cinematicEndTime = timeGetTime();
+				wasStartupCinematic = cinematic;
+				if (!cinematic && cinematicEndTime && timeGetTime() - cinematicEndTime >= 2000u)
+					startupLoading.store(false, std::memory_order_release);
+			}
+			else
+			{
+				wasStartupCinematic = false;
+				cinematicEndTime = 0;
+			}
 			// Wrap the existing engine command, retaining its normal launch semantics.
 			if (!originalPartyGo)
 			{
@@ -1260,6 +1299,11 @@ namespace Components
 				{
 					float4 diffuse = tex2D(diffuseTexture, uv);
 					// -1 is a normal material's disabled alpha cutoff, not an eye glow.
+					if (materialFlags.z < -4.5f)
+					{
+						float intensity = max(diffuse.r, max(diffuse.g, diffuse.b));
+						return float4(intensity * vertexColor.rgb * vertexColor.a * 2.5f, 1.0f);
+					}
 					if (materialFlags.z < -3.5f)
 					{
 						return float4(float3(3.5f, 0.25f, 0.08f) * diffuse.rgb, 1.0f);
@@ -1436,7 +1480,7 @@ namespace Components
 
 		void RenderRoom(IDirect3DDevice9* device)
 		{
-			if (IsCinematicActive() || Renderer::IsDeviceRecoveryActive() || !device) return;
+			if (Renderer::IsDeviceRecoveryActive() || !device) return;
 
 			const auto inTransition = theaterDirectTransitionActive.load(std::memory_order_acquire);
 			const bool bootPreview = startupLoading.load(std::memory_order_acquire) &&
@@ -2172,34 +2216,6 @@ namespace Components
 						placement = rotation * translation;
 						device->SetTransform(D3DTS_WORLD, &placement);
 
-						const auto flashElapsed = now - survivor.lastFireTime;
-						if (flashElapsed <= 75u)
-						{
-							float localMuzzleX = 28.0f;
-							float localMuzzleY = -12.5f;
-							float localMuzzleZ = 43.5f;
-							float flashRadius = 6.0f;
-							if (survivor.weaponIndex == 0) // Pistol
-							{
-								localMuzzleX = 16.0f;
-								localMuzzleY = -14.8f;
-								localMuzzleZ = 50.5f;
-								flashRadius = 4.2f;
-							}
-							else if (survivor.weaponIndex == 3) // Shotgun
-							{
-								localMuzzleX = 40.0f;
-								localMuzzleY = -12.0f;
-								localMuzzleZ = 42.5f;
-								flashRadius = 8.5f;
-							}
-							const D3DXVECTOR3 localMuzzle(localMuzzleX, localMuzzleY, localMuzzleZ);
-							D3DXVECTOR3 worldMuzzle;
-							D3DXVec3TransformCoord(&worldMuzzle, &localMuzzle, &placement);
-							const float alpha = 1.0f - static_cast<float>(flashElapsed) / 75.0f;
-							muzzleFlares.push_back({ worldMuzzle, flashRadius, alpha });
-						}
-
 						const auto clip = isFiring ? (survivor.weaponIndex == 3 ? 6 :
 							survivor.weaponIndex == 0 ? 1 : 5) :
 							(survivor.isWalking ? 3 : survivor.weaponIndex == 0 ? 0 : 4);
@@ -2221,6 +2237,26 @@ namespace Components
 							pose = &actor.blended;
 						}
 
+						const auto flashElapsed = now - survivor.lastFireTime;
+						const auto& anchor = actor.muzzleAnchors[survivor.weaponIndex];
+						if (!inTransition && isFiring && flashElapsed <= 75u && anchor.valid)
+						{
+							const auto position = [&](UINT index)
+							{
+								const auto& vertex = (*pose)[index];
+								return D3DXVECTOR3(vertex.x, vertex.y, vertex.z);
+							};
+							const auto a = position(anchor.vertices[0]);
+							const auto ab = position(anchor.vertices[1]) - a;
+							const auto ac = position(anchor.vertices[2]) - a;
+							D3DXVECTOR3 normal, worldMuzzle;
+							D3DXVec3Cross(&normal, &ab, &ac);
+							D3DXVec3Normalize(&normal, &normal);
+							const auto localMuzzle = a + ab * anchor.u + ac * anchor.v + normal * anchor.w;
+							D3DXVec3TransformCoord(&worldMuzzle, &localMuzzle, &placement);
+							const float radius = survivor.weaponIndex == 0 ? 4.2f : survivor.weaponIndex == 3 ? 8.5f : 6.0f;
+							muzzleFlares.push_back({ worldMuzzle, radius, 1.0f - flashElapsed / 75.0f });
+						}
 						if (!drawGroups(actor.groups, *pose, false, false, nullptr, survivor.weaponIndex))
 						{
 							rendered = false;
@@ -2231,7 +2267,8 @@ namespace Components
 					if (rendered)
 					{
 						auto& zombie = actorMeshes[4];
-						std::vector<Vertex> eyeFlares;
+						std::vector<Vertex> eyeFlares, muzzleQuads;
+						auto* flareBatch = &eyeFlares;
 						const D3DXVECTOR3 camRight(view._11, view._21, view._31);
 						const D3DXVECTOR3 camUp(view._12, view._22, view._32);
 
@@ -2241,12 +2278,12 @@ namespace Components
 							const D3DXVECTOR3 p1 = center + camRight * r - camUp * r;
 							const D3DXVECTOR3 p2 = center + camRight * r + camUp * r;
 							const D3DXVECTOR3 p3 = center - camRight * r + camUp * r;
-							eyeFlares.push_back({ p0.x, p0.y, p0.z, c, 0.0f, 0.0f });
-							eyeFlares.push_back({ p1.x, p1.y, p1.z, c, 1.0f, 0.0f });
-							eyeFlares.push_back({ p2.x, p2.y, p2.z, c, 1.0f, 1.0f });
-							eyeFlares.push_back({ p0.x, p0.y, p0.z, c, 0.0f, 0.0f });
-							eyeFlares.push_back({ p2.x, p2.y, p2.z, c, 1.0f, 1.0f });
-							eyeFlares.push_back({ p3.x, p3.y, p3.z, c, 0.0f, 1.0f });
+							flareBatch->push_back({ p0.x, p0.y, p0.z, c, 0.0f, 0.0f });
+							flareBatch->push_back({ p1.x, p1.y, p1.z, c, 1.0f, 0.0f });
+							flareBatch->push_back({ p2.x, p2.y, p2.z, c, 1.0f, 1.0f });
+							flareBatch->push_back({ p0.x, p0.y, p0.z, c, 0.0f, 0.0f });
+							flareBatch->push_back({ p2.x, p2.y, p2.z, c, 1.0f, 1.0f });
+							flareBatch->push_back({ p3.x, p3.y, p3.z, c, 0.0f, 1.0f });
 						};
 
 						for (auto i = 0u; i < zombies.size() && !zombie.frames.empty(); ++i)
@@ -2334,6 +2371,7 @@ namespace Components
 							}
 							addFlareQuad({ burst.x, balconyY, 278.0f }, 10.0f, color);
 						}
+						flareBatch = &muzzleQuads;
 						for (const auto& mf : muzzleFlares)
 						{
 							// Warm orange/yellow outer muzzle flare
@@ -2344,7 +2382,7 @@ namespace Components
 								D3DCOLOR_ARGB(static_cast<DWORD>(255 * mf.alpha), 255, 255, 230));
 						}
 
-						if (rendered && !eyeFlares.empty())
+						if (rendered && (!eyeFlares.empty() || !muzzleQuads.empty()))
 						{
 							device->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
 							IDirect3DTexture9* flareTex = nullptr;
@@ -2365,8 +2403,14 @@ namespace Components
 							const float flareFlags[4] = { 0.0f, 0.0f, -2.0f, 0.0f };
 							device->SetPixelShaderConstantF(0, flareFlags, 1);
 							device->SetPixelShader(filmShader);
-							device->DrawPrimitiveUP(D3DPT_TRIANGLELIST, static_cast<UINT>(eyeFlares.size() / 3),
+							if (!eyeFlares.empty()) device->DrawPrimitiveUP(D3DPT_TRIANGLELIST, static_cast<UINT>(eyeFlares.size() / 3),
 								eyeFlares.data(), sizeof(Vertex));
+							if (!muzzleQuads.empty())
+							{
+								const float muzzleFlags[4] = { 0.0f, 0.0f, -5.0f, 0.0f };
+								device->SetPixelShaderConstantF(0, muzzleFlags, 1);
+								device->DrawPrimitiveUP(D3DPT_TRIANGLELIST, static_cast<UINT>(muzzleQuads.size() / 3), muzzleQuads.data(), sizeof(Vertex));
+							}
 						}
 					}
 					device->SetTransform(D3DTS_WORLD, &world);
@@ -2526,7 +2570,11 @@ namespace Components
 		});
 		Renderer::OnBackendFrame([](IDirect3DDevice9* device)
 		{
-			if (IsCinematicActive()) return;
+			if (IsCinematicActive())
+			{
+				if (!frameReady.load(std::memory_order_acquire)) RenderRoom(device);
+				return;
+			}
 
 			RenderRoom(device);
 			if (IsStartupLoading() && !frameReady.load(std::memory_order_acquire))

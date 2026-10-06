@@ -74,6 +74,7 @@ namespace Steam
 
 			int GetICallback() { return Callback; }
 			void SetICallback(int iCallback) { Callback = iCallback; }
+			void SetRegistered(bool registered) { Flags = registered ? (Flags | 1) : (Flags & ~1); }
 
 		protected:
 			~Base() = default;
@@ -93,6 +94,8 @@ namespace Steam
 		static uint64_t RegisterCall();
 		static void RegisterCallback(Base* handler, int callback);
 		static void RegisterCallResult(uint64_t call, Base* result);
+		static void UnregisterCallback(Base* handler);
+		static void UnregisterCallResult(Base* handler, uint64_t call);
 		static void ReturnCall(void* data, int size, int type, uint64_t call);
 		static void RunCallbacks();
 
@@ -116,8 +119,8 @@ namespace Steam
 	STEAM_EXPORT void SteamAPI_RegisterCallback(Callbacks::Base* handler, int callback);
 	STEAM_EXPORT void SteamAPI_RunCallbacks();
 	STEAM_EXPORT void SteamAPI_Shutdown();
-	STEAM_EXPORT void SteamAPI_UnregisterCallResult();
-	STEAM_EXPORT void SteamAPI_UnregisterCallback();
+	STEAM_EXPORT void SteamAPI_UnregisterCallResult(Callbacks::Base* handler, uint64_t call);
+	STEAM_EXPORT void SteamAPI_UnregisterCallback(Callbacks::Base* handler);
 
 	STEAM_EXPORT bool SteamGameServer_Init();
 	STEAM_EXPORT void SteamGameServer_RunCallbacks();

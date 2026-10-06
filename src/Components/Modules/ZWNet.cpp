@@ -4758,6 +4758,12 @@ namespace Components
 		// second client countdown that can reach zero before connection begins.
 		Scheduler::Loop(UpdateMatchmaking, Scheduler::Pipeline::ASYNC, 1s);
 		Scheduler::Loop(RefreshActiveParty, Scheduler::Pipeline::ASYNC, 3s);
+		Scheduler::Loop([]
+		{
+			if (!ActiveState() || !Dvar::Var("zwnet_vote_active").get<bool>()) return;
+			const auto seconds = Dvar::Var("zwnet_vote_seconds").get<int>();
+			if (seconds > 0) Dvar::Var("zwnet_vote_seconds").set(seconds - 1);
+		}, Scheduler::Pipeline::MAIN, 1s);
 		Scheduler::Loop([] { RefreshPlaylistCatalog(false); }, Scheduler::Pipeline::ASYNC, 30s);
 		Scheduler::Loop(RefreshNetworkMetrics, Scheduler::Pipeline::ASYNC, 10s);
 		Scheduler::Loop([]

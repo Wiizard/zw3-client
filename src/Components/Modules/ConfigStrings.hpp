@@ -2,7 +2,7 @@
 
 #include "Weapon.hpp"
 #include "ModelCache.hpp"
-#include "Gamepad.hpp"
+#include "Controller.hpp"
 
 namespace Components
 {
@@ -15,7 +15,7 @@ namespace Components
 			(BASEGAME_MAX_CONFIGSTRINGS
 				+ Weapon::ADDED_WEAPONS
 				+ ModelCache::ADDITIONAL_GMODELS
-				+ Gamepad::RUMBLE_CONFIGSTRINGS_COUNT
+				+ Controller::RUMBLE_CONFIGSTRINGS_COUNT
 				+ 1
 				+ (DEV_DVAR_CONFIGSTRINGS_CAPACITY * 2)
 			);

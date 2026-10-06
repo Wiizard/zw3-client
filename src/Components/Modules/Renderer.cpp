@@ -120,10 +120,9 @@ namespace Components
 
 	void Renderer::PostVidRestart()
 	{
-		Renderer::EndRecoverDeviceSignal();
-		// Renderer creation finishes before initial zones/UI are reloaded.
-		// Keep the input suspended through main_text.
 		DeviceRecoveryComplete.store(true, std::memory_order_release);
+		DeviceRecoveryActive.store(false, std::memory_order_release);
+		Renderer::EndRecoverDeviceSignal();
 	}
 
 	void Renderer::FinishLoading()
@@ -136,18 +135,31 @@ namespace Components
 	{
 		__asm
 		{
+			mov eax, 4F84C0h
+			call eax
+
 			pushad
 			call Renderer::PostVidRestart
 			popad
 
-			push 4F84C0h
 			retn
 		}
 	}
 
+	IDirect3DBaseTexture9* Renderer::GetFallbackTexture()
+	{
+		auto* entry = Game::DB_FindXAssetEntry(Game::ASSET_TYPE_MATERIAL, "white");
+		auto* mat = entry ? entry->asset.header.material : nullptr;
+		if (mat && mat->textureTable && mat->textureTable[0].u.image && mat->textureTable[0].u.image->texture.map)
+		{
+			return mat->textureTable[0].u.image->texture.map;
+		}
+		return nullptr;
+	}
+
 	void Renderer::R_TextureFromCodeError(const char* sampler, Game::GfxCmdBufState* state, int samplerCode)
 	{
-		Logger::Error(Game::ERR_FATAL, "Tried to use sampler '{}' ({}) at the wrong time! Additional info:\nMaterial: '{}'\nTechnique '{}'\nTechnique slot: {}\nTechnique flags: {}\nPass: {}\nPixel shader: '{}'\n",
+		Logger::Print("Warning: Tried to use sampler '{}' ({}) at the wrong time! Additional info:\nMaterial: '{}'\nTechnique '{}'\nTechnique slot: {}\nTechnique flags: {}\nPass: {}\nPixel shader: '{}'\n",
 			samplerCode,
 			sampler,
 			state->material && state->material->info.name ? state->material->info.name : "NULL",
@@ -177,6 +189,12 @@ namespace Components
 
 			popad
 
+			test ebx, ebx
+			jnz continueExecution1
+			call Renderer::GetFallbackTexture
+			mov ebx, eax
+
+		continueExecution1:
 			// Jump back in
 			push 0x54CAC1
 			ret
@@ -199,6 +217,11 @@ namespace Components
 			add esp, 0xC
 			popad
 
+			test eax, eax
+			jnz continueExecution2
+			call Renderer::GetFallbackTexture
+
+		continueExecution2:
 			// go back
 			push 0x54CFA4
 			retn
@@ -793,10 +816,10 @@ namespace Components
 		// End device recovery (not D3D9Ex)
 		Utils::Hook(0x508355, []
 		{
-			Renderer::EndRecoverDeviceSignal();
 			Game::DB_EndRecoverLostDevice();
 			DeviceRecoveryComplete.store(true, std::memory_order_release);
 			DeviceRecoveryActive.store(false, std::memory_order_release);
+			Renderer::EndRecoverDeviceSignal();
 		}, HOOK_CALL).install()->quick();
 
 		// Begin vid_restart

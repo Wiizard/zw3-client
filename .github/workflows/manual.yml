@@ -12,19 +12,25 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+        fetch-depth: 0
 
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    - name: Build iw4x.vcxproj only
-      run: msbuild build\iw4x.vcxproj /m /p:Configuration=Release /p:Platform=x64
+    - name: Generate project files
+      run: tools/premake5 vs2022
+
+    - name: Build zw3 solution
+      run: msbuild build/zw3.sln /m /p:Configuration=Release /p:Platform=Win32
 
     - name: List output files
-      run: dir /s /b path\to\output\folder
+      run: Get-ChildItem build/bin/Win32/Release
 
     - name: Upload zw3.dll
       uses: actions/upload-artifact@v4
       with:
         name: zw3.dll
-        path: path\to\output\folder\zw3.dll
+        path: build/bin/Win32/Release/zw3.dll

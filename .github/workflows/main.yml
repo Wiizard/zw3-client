@@ -10,12 +10,12 @@ on:
     types: [opened, synchronize, reopened]
 
 concurrency:
-  group: ${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Build zw3.dll from iw4x project
+    name: Build zw3 solution
     runs-on: windows-2022
     strategy:
       matrix:
@@ -38,9 +38,9 @@ jobs:
       - name: Set up problem matching
         uses: ammaraskar/msvc-problem-matcher@master
 
-      - name: Build iw4x project only - ${{ matrix.configuration }}
-        run:
-            msbuild build/iw4x.vcxproj `
+      - name: Build zw3 solution - ${{ matrix.configuration }}
+        run: |
+            msbuild build/zw3.sln `
             /m `
             /v:minimal `
             /p:Configuration=${{ matrix.configuration }} `

@@ -541,53 +541,23 @@ namespace Components
 
 	void Maps::SynchronizeMapDvars(const std::string& rawMapName)
 	{
-		if (rawMapName.empty() || rawMapName == "none" || rawMapName == "None")
-		{
-			return;
-		}
+		if (rawMapName.empty() || rawMapName == "none" || rawMapName == "None") return;
 
 		const auto normalizedMap = Utils::MapPreview::Normalize(rawMapName);
-		const char* localized = Localization::LocalizeMapName(normalizedMap.c_str());
-		std::string displayName = (localized && localized[0]) ? localized : normalizedMap;
-
+		const auto* localized = Localization::LocalizeMapName(normalizedMap.c_str());
+		std::string displayName = localized && localized[0] ? localized : normalizedMap;
 		if (displayName.empty() || displayName == normalizedMap)
 		{
-			const char* rawLoc = Localization::LocalizeMapName(rawMapName.c_str());
-			if (rawLoc && rawLoc[0])
-			{
-				displayName = rawLoc;
-			}
+			const auto* rawLocalized = Localization::LocalizeMapName(rawMapName.c_str());
+			if (rawLocalized && rawLocalized[0]) displayName = rawLocalized;
 		}
 
-		if (auto* uiMap = Game::Dvar_FindVar("ui_mapname"))
-		{
-			Game::Dvar_SetString(uiMap, rawMapName.c_str());
-		}
-
-		if (auto* partyMap = Game::Dvar_FindVar("party_mapname"))
-		{
-			Game::Dvar_SetString(partyMap, displayName.c_str());
-		}
-
-		if (auto* prefMap = Game::Dvar_FindVar("zw3_pref_ui_mapname"))
-		{
-			Game::Dvar_SetString(prefMap, rawMapName.c_str());
-		}
-
-		if (auto* lbMap = Game::Dvar_FindVar("zw3_leaderboard_map"))
-		{
-			Game::Dvar_SetString(lbMap, rawMapName.c_str());
-		}
-
-		if (auto* lbDisp = Game::Dvar_FindVar("zw3_leaderboard_mapname_display"))
-		{
-			Game::Dvar_SetString(lbDisp, displayName.c_str());
-		}
-
-		if (auto* uiDisp = Game::Dvar_FindVar("uiDisplayMapName"))
-		{
-			Game::Dvar_SetString(uiDisp, displayName.c_str());
-		}
+		if (auto* value = Game::Dvar_FindVar("ui_mapname")) Game::Dvar_SetString(value, rawMapName.c_str());
+		if (auto* value = Game::Dvar_FindVar("party_mapname")) Game::Dvar_SetString(value, displayName.c_str());
+		if (auto* value = Game::Dvar_FindVar("zw3_pref_ui_mapname")) Game::Dvar_SetString(value, rawMapName.c_str());
+		if (auto* value = Game::Dvar_FindVar("zw3_leaderboard_map")) Game::Dvar_SetString(value, rawMapName.c_str());
+		if (auto* value = Game::Dvar_FindVar("zw3_leaderboard_mapname_display")) Game::Dvar_SetString(value, displayName.c_str());
+		if (auto* value = Game::Dvar_FindVar("uiDisplayMapName")) Game::Dvar_SetString(value, displayName.c_str());
 	}
 
 	void Maps::PrepareUsermap(const char* mapname)

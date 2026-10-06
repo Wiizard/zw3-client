@@ -52,6 +52,7 @@ namespace Utils
 		std::string get(const params& headers, bool* success = nullptr);
 
 		WebIO* setTimeout(DWORD msec);
+		WebIO* setReadHttpErrorBody(bool enabled);
 
 		// FTP
 		bool connect();
@@ -109,6 +110,7 @@ namespace Utils
 		HINTERNET hFile_;
 
 		DWORD timeout_;
+		bool readHttpErrorBody_ = false;
 
 		Slot<void(size_t, size_t)> progressCallback;
 

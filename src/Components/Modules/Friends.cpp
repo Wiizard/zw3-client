@@ -40,7 +40,8 @@ namespace Components
 			std::string status;
 			std::string zwnetPartyId;
 			bool joinable{};
-			int rankLevel{1};
+			bool rankKnown{};
+			int rankLevel{};
 			int rankPrestige{};
 		};
 
@@ -67,6 +68,8 @@ namespace Components
 		std::atomic_bool SocialRefreshBusy{false};
 		std::atomic_bool PartyInvitePollBusy{false};
 		std::mutex SocialMutex;
+		std::mutex SocialErrorMutex;
+		std::string LastSocialError;
 		std::vector<SocialFriend> SocialFriends;
 		std::vector<IncomingFriendRequest> IncomingRequests;
 		std::unordered_set<std::string> PendingOutgoingFriends;
@@ -128,35 +131,82 @@ namespace Components
 		bool ReadSocialRankObject(const nlohmann::json& object, const bool nested,
 			int& level, int& prestige)
 		{
-			int parsedLevel = level;
-			int parsedPrestige = prestige;
+			int parsedLevel = 0;
+			int parsedPrestige = 0;
 			const auto hasLevel = JsonInteger(object, nested ? "level" : "rank_level", parsedLevel);
 			const auto hasPrestige = JsonInteger(object, nested ? "prestige" : "rank_prestige", parsedPrestige);
-			if (!hasLevel && !hasPrestige) return false;
+			if (!hasLevel || !hasPrestige || parsedLevel < 1 || parsedLevel > 54 ||
+				parsedPrestige < 0 || parsedPrestige > 20) return false;
 
-			if (hasLevel) level = std::clamp(parsedLevel, 1, 54);
-			if (hasPrestige) prestige = std::max(parsedPrestige, 0);
+			level = parsedLevel;
+			prestige = parsedPrestige;
 			return true;
 		}
 
 		bool ReadSocialRank(const nlohmann::json& row, int& level, int& prestige)
 		{
 			if (!row.is_object()) return false;
-			bool found = ReadSocialRankObject(row, false, level, prestige);
+			if (ReadSocialRankObject(row, false, level, prestige)) return true;
 			if (row.contains("rank") && row.at("rank").is_object())
 			{
-				found = ReadSocialRankObject(row.at("rank"), true, level, prestige) || found;
+				if (ReadSocialRankObject(row.at("rank"), true, level, prestige)) return true;
 			}
 			if (row.contains("presence") && row.at("presence").is_object())
 			{
 				const auto& presence = row.at("presence");
-				found = ReadSocialRankObject(presence, false, level, prestige) || found;
+				if (ReadSocialRankObject(presence, false, level, prestige)) return true;
 				if (presence.contains("rank") && presence.at("rank").is_object())
 				{
-					found = ReadSocialRankObject(presence.at("rank"), true, level, prestige) || found;
+					if (ReadSocialRankObject(presence.at("rank"), true, level, prestige)) return true;
 				}
 			}
-			return found;
+			return false;
+		}
+
+		std::string SocialStatusText(std::string status)
+		{
+			std::ranges::transform(status, status.begin(), [](const unsigned char character)
+			{
+				return static_cast<char>(std::toupper(character));
+			});
+			if (status == "IN_PARTY" || status == "IN_LOBBY" || status == "MATCH_FOUND" || status == "READY_CHECK" || status == "WAITING_FOR_READY") return "IN LOBBY";
+			if (status == "MAP_VOTE" || status == "VOTING") return "VOTING";
+			if (status == "RESERVING_SERVER" || status == "STARTING_SERVER" || status == "SERVER_STARTING" || status == "STARTING") return "STARTING";
+			if (status == "CONNECTING" || status == "JOINING" || status == "JOIN_PREVIEW") return "JOINING";
+			if (status == "IN_MATCH" || status == "IN_GAME" || status == "IN_PUBLIC_MATCH" || status == "IN_ZOMBIES") return "IN GAME";
+			if (status == "SEARCHING") return "SEARCHING";
+			if (status == "MAIN_MENU" || status == "IDLE" || status == "ONLINE") return "ONLINE";
+			return status.empty() ? "OFFLINE" : status;
+		}
+
+		void SetLastSocialError(std::string error)
+		{
+			std::lock_guard lock(SocialErrorMutex);
+			LastSocialError = std::move(error);
+		}
+
+		std::string SocialFailure(const std::string& fallback)
+		{
+			std::string code;
+			{
+				std::lock_guard lock(SocialErrorMutex);
+				code = LastSocialError;
+			}
+			if (code == "PARTY_FULL" || code == "MATCH_FULL" || code == "SERVER_FULL") return "That lobby is full.";
+			if (code == "PARTY_CLOSED" || code == "INVITE_REQUIRED") return "That lobby requires a current invitation.";
+			if (code == "PLAYER_BLOCKED") return "Joining is unavailable because one player blocked the other.";
+			if (code == "FRIEND_PARTY_NOT_JOINABLE" || code == "MATCH_NOT_JOINABLE") return "That friend is no longer in a joinable session.";
+			if (code == "JOIN_IN_PROGRESS_CLOSED" || code == "SERVER_NOT_JOINABLE") return "That match no longer allows joining in progress.";
+			if (code == "INVITE_INVALID") return "That party invitation expired or was cancelled.";
+			if (code == "ALREADY_IN_PARTY") return "Leave or finish the current party before joining this one.";
+			return fallback;
+		}
+
+		bool SocialFailureResolvedInvite()
+		{
+			std::lock_guard lock(SocialErrorMutex);
+			return !LastSocialError.empty() && LastSocialError != "REQUEST_UNAVAILABLE" &&
+				LastSocialError != "LOGIN_REQUIRED" && LastSocialError != "REQUEST_FAILED";
 		}
 
 		std::string BuildSocialRankText(const int level, const int prestige)
@@ -299,13 +349,15 @@ namespace Components
 		std::optional<nlohmann::json> SocialApiRequest(const std::string& method, const std::string& path,
 			const nlohmann::json& body = nlohmann::json::object(), const bool idempotent = false)
 		{
+			SetLastSocialError({});
 			if (!SocialActive || (method != "GET" && method != "POST") || path.empty() || path.front() != '/')
 			{
+				SetLastSocialError("REQUEST_UNAVAILABLE");
 				return std::nullopt;
 			}
 
 			auto accessToken = LoadSocialAccessToken();
-			if (!accessToken) return std::nullopt;
+			if (!accessToken) { SetLastSocialError("LOGIN_REQUIRED"); return std::nullopt; }
 			const auto clearToken = gsl::finally([&accessToken]
 			{
 				if (accessToken && !accessToken->empty()) SecureZeroMemory(accessToken->data(), accessToken->size());
@@ -330,18 +382,25 @@ namespace Components
 				const auto response = method == "GET"
 					? request.setTimeout(5000)->get(headers, &success)
 					: request.setTimeout(5000)->post(body.dump(), headers, &success);
-				if (!SocialActive || !success || response.empty()) return std::nullopt;
+				if (!SocialActive || !success || response.empty()) { SetLastSocialError("REQUEST_UNAVAILABLE"); return std::nullopt; }
 				const auto parsed = nlohmann::json::parse(response);
-				if (parsed.is_object() && parsed.contains("error")) return std::nullopt;
-				if (parsed.is_object() && parsed.contains("ok") && !JsonBool(parsed, "ok")) return std::nullopt;
+				if (parsed.is_object() && parsed.contains("error"))
+				{
+					const auto& error = parsed.at("error");
+					SetLastSocialError(error.is_object() ? JsonString(error, "code") : "REQUEST_FAILED");
+					return std::nullopt;
+				}
+				if (parsed.is_object() && parsed.contains("ok") && !JsonBool(parsed, "ok")) { SetLastSocialError("REQUEST_FAILED"); return std::nullopt; }
 				return parsed;
 			}
 			catch (const std::exception&)
 			{
+				SetLastSocialError("REQUEST_UNAVAILABLE");
 				return std::nullopt;
 			}
 			catch (...)
 			{
+				SetLastSocialError("REQUEST_UNAVAILABLE");
 				return std::nullopt;
 			}
 		}
@@ -377,26 +436,25 @@ namespace Components
 				if (row.contains("presence") && row.at("presence").is_object())
 				{
 					const auto& presence = row.at("presence");
+					if (status.empty()) status = JsonString(presence, "status");
 					if (status.empty()) status = JsonString(presence, "state");
 					joinable = JsonBool(presence, "joinable", joinable);
 					if (zwnetPartyId.empty()) zwnetPartyId = JsonString(presence, "zwnet_party_id");
 				}
-				if (!IsOpaquePartyId(zwnetPartyId) || !zwnetPartyId.starts_with("pty_")) zwnetPartyId.clear();
+				if (!joinable || !IsOpaquePartyId(zwnetPartyId) || !zwnetPartyId.starts_with("pty_")) zwnetPartyId.clear();
 				if (status.empty()) status = JsonBool(row, "online") ? "ONLINE" : "OFFLINE";
-				std::ranges::transform(status, status.begin(), [](const unsigned char character)
-				{
-					return static_cast<char>(std::toupper(character));
-				});
+				status = SocialStatusText(std::move(status));
 
 				auto displayName = SafeSocialText(JsonString(row, "display_name"), 48);
 				if (displayName.empty()) displayName = SafeSocialText(JsonString(row, "player_name"), 48);
 				if (displayName.empty()) displayName = "ZW3 Player";
-				int rankLevel = 1;
+				int rankLevel = 0;
 				int rankPrestige = 0;
-				if (!ReadSocialRank(row, rankLevel, rankPrestige) &&
-					!ZWNet::TryGetSharedLobbyRank(id, rankLevel, rankPrestige))
+				auto rankKnown = ReadSocialRank(row, rankLevel, rankPrestige);
+				if (!rankKnown) rankKnown = ZWNet::TryGetSharedLobbyRank(id, rankLevel, rankPrestige);
+				if (!rankKnown)
 				{
-					Friends::TryGetZombieRankByGuid(id, rankLevel, rankPrestige);
+					rankKnown = Friends::TryGetZombieRankByGuid(id, rankLevel, rankPrestige);
 				}
 				updated.push_back(
 				{
@@ -407,8 +465,9 @@ namespace Components
 					SafeSocialText(status, 32),
 					SafeSocialText(zwnetPartyId, 80),
 					joinable,
-					std::clamp(rankLevel, 1, 54),
-					std::max(rankPrestige, 0)
+					rankKnown,
+					rankKnown ? rankLevel : 0,
+					rankKnown ? rankPrestige : 0
 				});
 			}
 
@@ -540,9 +599,9 @@ namespace Components
 				const auto& user = SocialFriends[index];
 				switch (column)
 				{
-				case 0: value = BuildSocialRankText(user.rankLevel, user.rankPrestige); break;
+				case 0: value = user.rankKnown ? BuildSocialRankText(user.rankLevel, user.rankPrestige) : "--"; break;
 				case 1: value = user.displayName; break;
-				case 2: value = std::format("PRESTIGE {}", user.rankPrestige); break;
+				case 2: value = user.rankKnown ? std::format("PRESTIGE {}", user.rankPrestige) : "UNAVAILABLE"; break;
 				case 3: value = user.status + (user.joinable ? " / JOINABLE" : ""); break;
 				default: return "";
 				}
@@ -670,6 +729,24 @@ namespace Components
 			{
 				return;
 			}
+			std::unordered_set<std::string> liveInvites;
+			for (const auto& row : response->at("invites"))
+			{
+				if (!row.is_object()) continue;
+				const auto inviteId = JsonString(row, "invite_id");
+				const auto createdAt = JsonString(row, "created_at");
+				if (!inviteId.empty()) liveInvites.insert(inviteId + ":" + createdAt);
+			}
+			bool closeExpiredPopup = false;
+			{
+				std::lock_guard lock(SocialMutex);
+				if (CurrentPartyInvite && !liveInvites.contains(PartyInviteSignature(*CurrentPartyInvite)))
+				{
+					CurrentPartyInvite.reset();
+					closeExpiredPopup = true;
+				}
+			}
+			if (closeExpiredPopup) ClosePartyInvitePopup();
 
 			for (const auto& row : response->at("invites"))
 			{
@@ -701,7 +778,7 @@ namespace Components
 					if (signature == LastHandledPartyInvite
 						|| (CurrentPartyInvite && signature == PartyInviteSignature(*CurrentPartyInvite)))
 					{
-						return;
+						continue;
 					}
 					CurrentPartyInvite = invite;
 				}
@@ -1626,14 +1703,14 @@ namespace Components
 				return;
 			}
 
-			RunSocialTask("Joining friend's ZW3 party...", [user]
+			RunSocialTask("Joining friend's ZW3 party...", [user]() -> std::string
 			{
 				const auto response = SocialApiRequest("POST",
 					"/zwnet/parties/join-friend",
 					{{"player_id", user->id}}, true);
 				if (!response || !response->is_object() || response->contains("error"))
 				{
-					return "The friend's ZW3 party could not be joined.";
+					return SocialFailure("The friend's ZW3 party could not be joined.");
 				}
 				ZWNet::ResumeParty(*response);
 				Scheduler::Once([]
@@ -1654,7 +1731,7 @@ namespace Components
 			}
 			const auto visibility = std::string{PartyVisibilityName(
 				std::clamp(Dvar::Var("partyPrivacy").get<int>(), 0, 2))};
-			RunSocialTask("Preparing party invitation...", [user, visibility]
+			RunSocialTask("Preparing party invitation...", [user, visibility]() -> std::string
 			{
 				auto party = SocialApiRequest("GET", "/zwnet/parties/current");
 				if (!party || party->is_null())
@@ -1662,7 +1739,7 @@ namespace Components
 					party = SocialApiRequest("POST", "/zwnet/parties/create",
 						{{"visibility", visibility}}, true);
 				}
-				if (!party || !party->is_object()) return "A party could not be created or loaded.";
+				if (!party || !party->is_object()) return SocialFailure("A party could not be created or loaded.");
 				auto partyId = JsonString(*party, "id");
 				if (partyId.empty()) partyId = JsonString(*party, "partyId");
 				if (!IsOpaquePartyId(partyId)) return "The party response was invalid.";
@@ -1675,7 +1752,7 @@ namespace Components
 						{{"visibility", visibility}}, true);
 					if (!updated || !updated->is_object() || updated->contains("error"))
 					{
-						return "The party privacy setting could not be synchronized.";
+						return SocialFailure("The party privacy setting could not be synchronized.");
 					}
 					party = updated;
 				}
@@ -1684,7 +1761,7 @@ namespace Components
 					{{"player_id", user->id}}, true);
 				return response
 					? "Party invitation sent."
-					: "The party invitation could not be sent.";
+					: SocialFailure("The party invitation could not be sent.");
 			});
 		});
 
@@ -1696,11 +1773,20 @@ namespace Components
 				ClosePartyInvitePopup();
 				return;
 			}
-			RunSocialTask("Joining the ZW3 party...", [invite]
+			RunSocialTask("Joining the ZW3 party...", [invite]() -> std::string
 			{
 				const auto response = SocialApiRequest("POST", "/zwnet/parties/" + invite->partyId + "/accept",
 					nlohmann::json::object(), true);
-				if (!response || !response->is_object()) return "The party invitation could not be accepted.";
+				if (!response || !response->is_object())
+				{
+					const auto message = SocialFailure("The party invitation could not be accepted.");
+					if (SocialFailureResolvedInvite())
+					{
+						MarkPartyInviteHandled(*invite);
+						ClosePartyInvitePopup();
+					}
+					return message;
+				}
 				MarkPartyInviteHandled(*invite);
 				ZWNet::ResumeParty(*response);
 				Scheduler::Once([]
@@ -1721,11 +1807,11 @@ namespace Components
 				ClosePartyInvitePopup();
 				return;
 			}
-			RunSocialTask("Declining the party invitation...", [invite]
+			RunSocialTask("Declining the party invitation...", [invite]() -> std::string
 			{
 				const auto response = SocialApiRequest("POST", "/zwnet/parties/" + invite->partyId + "/decline",
 					nlohmann::json::object(), true);
-				if (!response) return "The party invitation could not be declined.";
+				if (!response) return SocialFailure("The party invitation could not be declined.");
 				MarkPartyInviteHandled(*invite);
 				ClosePartyInvitePopup();
 				return "Party invitation declined.";

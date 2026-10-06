@@ -300,6 +300,12 @@ namespace Utils
 		return this;
 	}
 
+	WebIO* WebIO::setReadHttpErrorBody(const bool enabled)
+	{
+		this->readHttpErrorBody_ = enabled;
+		return this;
+	}
+
 	std::string WebIO::execute(const char* command, const std::string& body, const params& headers, bool* success)
 	{
 		if (success) *success = false;
@@ -345,7 +351,13 @@ namespace Utils
 
 		DWORD statusCode = 404;
 		DWORD length = sizeof(statusCode);
-		if (HttpQueryInfoA(this->hFile_, HTTP_QUERY_FLAG_NUMBER | HTTP_QUERY_STATUS_CODE, &statusCode, &length, nullptr) == FALSE || (statusCode != 200 && statusCode != 201 && statusCode != 304))
+		if (HttpQueryInfoA(this->hFile_, HTTP_QUERY_FLAG_NUMBER | HTTP_QUERY_STATUS_CODE, &statusCode, &length, nullptr) == FALSE)
+		{
+			this->closeConnection();
+			return {};
+		}
+		const auto acceptedStatus = statusCode == 200 || statusCode == 201 || statusCode == 304;
+		if (!acceptedStatus && (!this->readHttpErrorBody_ || statusCode < 400 || statusCode > 599))
 		{
 			this->closeConnection();
 			return {};
@@ -359,7 +371,7 @@ namespace Utils
 		}
 
 		std::string returnBuffer;
-		returnBuffer.reserve(contentLength);
+		returnBuffer.reserve(acceptedStatus ? contentLength : std::min<DWORD>(contentLength, 65536));
 
 		DWORD size{};
 		char buffer[0x2001]{};
@@ -373,13 +385,18 @@ namespace Utils
 			}
 
 			returnBuffer.append(buffer, size);
+			if (!acceptedStatus && returnBuffer.size() > 65536)
+			{
+				this->closeConnection();
+				return {};
+			}
 			if (this->progressCallback) this->progressCallback(returnBuffer.size(), contentLength);
 			if (!size) break;
 		}
 
 		this->closeConnection();
 
-		if (success) *success = true;
+		if (success) *success = acceptedStatus;
 		return returnBuffer;
 	}
 

@@ -1766,6 +1766,7 @@ namespace Components
 
 		Command::Add("reconnect", []()
 			{
+				if (ZWNet::BeginManagedReconnect(Container.target.getString())) return;
 				Connect(Container.target);
 			});
 
@@ -2353,7 +2354,10 @@ namespace Components
 						if ((Game::Sys_Milliseconds() - Container.joinTime) > 10'000)
 						{
 							Container.valid = false;
-							ConnectError("Server connection timed out.");
+							if (!ZWNet::TryRelayAfterDirectTimeout(Container.target.getString()))
+							{
+								ConnectError("Server connection timed out.");
+							}
 						}
 					}
 

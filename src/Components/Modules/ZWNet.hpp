@@ -17,6 +17,9 @@ namespace Components
 		static void JoinParty(const std::string& partyId);
 		static void JoinCapability(const std::string& capability);
 		static bool BeginEndpointJoin(const std::string& endpoint);
+		static bool BeginManagedReconnect(const std::string& endpoint);
+		// Called only by Party's managed getinfo timeout, before its generic error UI.
+		static bool TryRelayAfterDirectTimeout(const std::string& endpoint);
 		static bool TryGetSharedLobbyRank(const std::string& guid, int& level, int& prestige);
 
 	private:
@@ -51,7 +54,18 @@ namespace Components
 		static void AbandonOnlineSession();
 		static void Register();
 		static void SetState(const std::string& state, const std::string& error = {});
-		static void StartQuickPlay();
+		static void StartQuickPlay(std::string playlistId, std::int64_t playlistRevision,
+			std::uint64_t selectorGeneration);
+		static void RefreshPlaylistCatalog(bool force = false);
+		static void ClearPlaylistCatalog();
+		static void BeginPlaylistSelection();
+		static void CancelPlaylistSelection();
+		static void HighlightPlaylistSlot(int slot);
+		static void ActivatePlaylistSlot(int slot);
+		static void ChangePlaylistPage(int direction);
+		static void AcknowledgePlaylistNotice();
+		static void PublishPlaylistCatalog();
+		static std::optional<nlohmann::json> PublishPartyContent();
 		static std::optional<nlohmann::json> ApplyPartyVisibility(nlohmann::json party);
 		static void RefreshPartyVisibility();
 		static void CapturePartyPrivacy();
@@ -75,7 +89,10 @@ namespace Components
 		static void UpdateVoteDvars(const nlohmann::json& status);
 		static void RefreshActiveParty();
 		static void UpdateMatchmaking();
-		static void ConnectMatch(const std::string& matchId, bool relay);
+		static void RefreshNetworkMetrics();
+		static void BeginJoinInProgressPreview(const nlohmann::json& status);
+		static void CancelJoinInProgressPreview();
+		static void ConnectMatch(const std::string& matchId, bool relay, bool reconnect = false);
 		static void InitializeDvars();
 		static void EnqueueAsync(std::function<void()> task);
 		static void ProcessAsyncTasks();

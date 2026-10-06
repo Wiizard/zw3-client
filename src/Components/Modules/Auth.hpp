@@ -24,6 +24,10 @@ namespace Components
 		static void IncrementToken(Utils::Cryptography::Token& token, Utils::Cryptography::Token& computeToken, const std::string& publicKey, uint32_t zeroBits, bool* cancel = nullptr, uint64_t* count = nullptr);
 
 		static std::string GetMachineEntropy();
+		static bool SetManagedConnectTicket(const Network::Address& target,
+			const std::string& ticket, const std::string& matchId,
+			const std::string& sessionId);
+		static void ClearManagedConnectTicket();
 
 	private:
 

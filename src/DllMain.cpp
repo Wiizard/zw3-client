@@ -1,82 +1,45 @@
+#include "STDInclude.hpp"
+
 namespace Main
 {
-	void Initialize()
+	HMODULE Instance = nullptr;
+
+	bool Initialize()
 	{
 		std::srand(std::uint32_t(std::time(nullptr)) ^ ~(GetTickCount() * GetCurrentProcessId()));
 
-		Utils::SetEnvironment();
-		Steam::Proxy::RunMod();
+		if (!Game::Initialize())
+		{
+			return false;
+		}
 
-		Utils::Cryptography::Initialize();
-
-		Components::FileSystem::CleanupZw3Files();
 		Components::Loader::Initialize();
-	}
 
-	void Uninitialize()
-	{
-		Components::Loader::Uninitialize();
-	}
-
-	int EntryPoint()
-	{
-		// /GS security cookie must be initialized before any exception-handling
-		// constructs are registered in the current module.
-		Game::__security_init_cookie();
-
-		// Perform ZW3-specific initialization before transferring control to
-		// the original C runtime startup.
-		Initialize();
-
-		return Game::__tmainCRTStartup();
+		return true;
 	}
 }
 
-BOOL APIENTRY DllMain(HINSTANCE /*hinstDLL*/, DWORD fdwReason, LPVOID lpvReserved)
+BOOL APIENTRY DllMain(HINSTANCE instance, DWORD reason, LPVOID )
 {
-	if (fdwReason == DLL_PROCESS_ATTACH)
+	if (reason != DLL_PROCESS_ATTACH)
 	{
-		SetProcessDEPPolicy(PROCESS_DEP_ENABLE);
-
-#ifndef DISABLE_BINARY_CHECK
-		const auto* binary = reinterpret_cast<const char*>(0x6F9358);
-		if (!binary || std::memcmp(binary, BASEGAME_NAME, 14) != 0)
-		{
-			MessageBoxA(nullptr,
-			            "Failed to load game binary.\n"
-			            "You did not install the iw4x-rawfiles!\n"
-			            "Please use the Zombie Warfare 3 Launcher to run the game. For support, please visit https://zw3.eu",
-			            "ERROR",
-			            MB_ICONERROR
-			);
-			return FALSE;
-		}
-#endif
-
-		Utils::Hook(0x6BAC0F, Main::EntryPoint, HOOK_JUMP).install()->quick();
+		return TRUE;
 	}
-	else if (fdwReason == DLL_PROCESS_DETACH)
-	{
-		// For `DLL_PROCESS_DETACH`, the `lpReserved` parameter is used to
-		// determine the context:
-		//
-		//   - `lpReserved == nullptr` when `FreeLibrary()` is called.
-		//   - `lpReserved != nullptr` when the process is being terminated.
-		//
-		// When `FreeLibrary()` is called, worker threads remain alive. That is,
-		// runtime's state is consistent, and executing proper shutdown is
-		// acceptable.
-		//
-		// When process is terminated, worker threads have either exited or been
-		// forcefully terminated by the OS, leaving only the shutdown thread.
-		// This situation leaves runtime in an inconsistent state.
-		//
-		// Hence, proper cleanup should only be attempted when `FreeLibrary()`
-		// is called. Otherwise, the process should rely on the OS to reclaim
-		// resources.
-		if (lpvReserved != nullptr) return TRUE;
 
-		Main::Uninitialize();
+	DisableThreadLibraryCalls(instance);
+
+	Main::Instance = instance;
+
+	Utils::DeleteCrashMarker();
+
+	if (!Main::Initialize())
+	{
+		MessageBoxA(nullptr,
+			"zw3 could not bind to this copy of the game.\n"
+			"It is built for the 64 bit 2.0.13 build and this is not it.\n"
+			"Nothing has been patched and the game will run unmodified.",
+			"Zombie Warfare 3",
+			MB_ICONERROR);
 	}
 
 	return TRUE;

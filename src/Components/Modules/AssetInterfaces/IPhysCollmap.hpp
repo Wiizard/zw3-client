@@ -5,12 +5,15 @@ namespace Assets
 	class IPhysCollmap : public Components::AssetHandler::IAsset
 	{
 	public:
-		Game::XAssetType getType() override { return Game::XAssetType::ASSET_TYPE_PHYSCOLLMAP; }
+		Game::XAssetType GetType() override
+		{
+			return Game::ASSET_TYPE_PHYSCOLLMAP;
+		}
 
-		void save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder) override;
+		void Save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder) override;
 
 	private:
-		void savePhysGeomInfoArray(Components::ZoneBuilder::Zone* builder, Game::PhysGeomInfo* geoms, unsigned int count);
-		void saveBrushWrapper(Components::ZoneBuilder::Zone* builder, Game::BrushWrapper* brush);
+		void SavePhysGeomInfoArray(Components::ZoneBuilder::Zone* builder, const Game::PhysGeomInfo* geoms, unsigned int count);
+		void SaveBrushWrapper(Components::ZoneBuilder::Zone* builder, const Game::BrushWrapper* brush);
 	};
 }

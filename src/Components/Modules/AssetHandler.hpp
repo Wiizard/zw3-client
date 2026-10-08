@@ -1,6 +1,6 @@
 #pragma once
 
-#include <unordered_set>
+#include "ZoneBuilder.hpp"
 
 namespace Components
 {
@@ -10,81 +10,81 @@ namespace Components
 		class IAsset
 		{
 		public:
-			virtual ~IAsset() {}
-			virtual Game::XAssetType getType() { return Game::XAssetType::ASSET_TYPE_INVALID; }
-			virtual void mark(Game::XAssetHeader /*header*/, ZoneBuilder::Zone* /*builder*/) {}
-			virtual void save(Game::XAssetHeader /*header*/, ZoneBuilder::Zone* /*builder*/) {}
-			virtual void dump(Game::XAssetHeader /*header*/) {}
-			virtual void load(Game::XAssetHeader* /*header*/, const std::string& /*name*/, ZoneBuilder::Zone* /*builder*/) {}
+			virtual ~IAsset() = default;
+
+			virtual Game::XAssetType GetType()
+			{
+				return Game::ASSET_TYPE_COUNT;
+			}
+
+			virtual void Mark(Game::XAssetHeader, ZoneBuilder::Zone*)
+			{
+			}
+
+			virtual void Save(Game::XAssetHeader, ZoneBuilder::Zone*)
+			{
+			}
+
+			virtual bool HasDump()
+			{
+				return false;
+			}
+
+			virtual void Dump(Game::XAssetHeader)
+			{
+			}
+
+			virtual void Load(Game::XAssetHeader*, const std::string&, ZoneBuilder::Zone*)
+			{
+			}
 		};
 
-		typedef Game::XAssetHeader(Callback)(Game::XAssetType type, const std::string& name);
-		typedef void(RestrictCallback)(Game::XAssetType type, Game::XAssetHeader asset, std::string_view name, bool* restrict);
+		typedef void(LoadCallback)(unsigned int type, void* asset, const std::string& name, bool* restrict);
+		typedef void*(FindCallback)(unsigned int type, const std::string& name);
 
 		AssetHandler();
-		~AssetHandler();
 
-		static void OnFind(Game::XAssetType type, Utils::Slot<Callback> callback);
-		static std::function<void()> OnLoad(Utils::Slot<RestrictCallback> callback);
-		static std::function<void()> OnLoad(Game::XAssetType type, Utils::Slot<RestrictCallback> callback);
+		static bool IsInstalled();
 
-		static void ClearRelocations();
-		static void Relocate(void* start, void* to, DWORD size = 4);
+		static void OnLoad(const std::function<LoadCallback>& callback);
+
+		static bool OnFind(unsigned int type, const std::function<FindCallback>& callback);
+
+		static void OnLoad(unsigned int type, const std::function<LoadCallback>& callback);
 
 		static void ZoneSave(Game::XAsset asset, ZoneBuilder::Zone* builder);
 		static void ZoneMark(Game::XAsset asset, ZoneBuilder::Zone* builder);
+		static void DumpAsset(Game::XAsset asset);
+		static bool CanDump(Game::XAssetType type);
+		static void ForgetDumpedAssets();
 
 		static Game::XAssetHeader FindOriginalAsset(Game::XAssetType type, const char* filename);
+		static Game::XAssetHeader FindLoadedAsset(Game::XAssetType type, const char* name);
 		static Game::XAssetHeader FindAssetForZone(Game::XAssetType type, const std::string& filename, ZoneBuilder::Zone* builder, bool isSubAsset = true);
+		static Game::XAssetHeader FindTemporaryAsset(Game::XAssetType type, const char* filename);
 
 		static void ClearTemporaryAssets();
 		static void StoreTemporaryAsset(Game::XAssetType type, Game::XAssetHeader asset);
 		static void RemoveTemporaryAsset(Game::XAssetType type, const char* name);
 
-		static void ResetBypassState();
-
 		static void ExposeTemporaryAssets(bool expose);
 
-		static void OffsetToAlias(Utils::Stream::Offset* offset);
-
-		static Game::XAssetHeader FindTemporaryAsset(Game::XAssetType type, const char* filename);
-
 	private:
-		static thread_local int BypassState;
-		static bool ShouldSearchTempAssets;
-		static bool LogAssetEntries;
+		static bool isInstalled;
+		static std::vector<std::function<LoadCallback>> loadCallbacks;
+		static std::unordered_map<unsigned int, std::vector<std::function<LoadCallback>>> typeLoadCallbacks;
+		static std::map<unsigned int, std::vector<std::function<FindCallback>>> findCallbacks;
 
-		static std::map<std::string, Game::XAssetHeader> TemporaryAssets[Game::XAssetType::ASSET_TYPE_COUNT];
+		static bool shouldSearchTempAssets;
+		static std::map<std::string, Game::XAssetHeader> temporaryAssets[Game::ASSET_TYPE_COUNT];
+		static std::map<Game::XAssetType, std::unique_ptr<IAsset>> assetInterfaces;
 
-		static std::map<Game::XAssetType, IAsset*> AssetInterfaces;
-		static std::map<Game::XAssetType, Utils::Slot<Callback>> TypeCallbacks;
-		static Utils::Signal<RestrictCallback> RestrictSignal;
-		static Utils::Signal<RestrictCallback> TypeRestrictSignals[Game::XAssetType::ASSET_TYPE_COUNT];
-		static std::atomic_bool HasRestrictCallbacks;
-		static std::atomic<std::uint64_t> TypeRestrictCallbackMask;
+		static void RegisterInterface(IAsset* asset);
 
-		static std::map<void*, void*> Relocations;
+		static void ModifyAsset(unsigned int type, void* asset, const std::string& name);
+		static void* DB_AddXAsset_Hook(unsigned int type, void** header);
+		static void* DB_FindXAssetHeader_Hook(unsigned int type, const char* name);
 
-		static std::vector<std::pair<Game::XAssetType, std::string>> EmptyAssets;
-		static std::unordered_set<std::string> EmptyAssetNames[Game::ASSET_TYPE_COUNT];
-
-		static void RegisterInterface(IAsset* iAsset);
-
-		static Game::XAssetHeader FindAsset(Game::XAssetType type, const char* filename);
-		static bool IsAssetEligible(Game::XAssetType type, Game::XAssetHeader* asset);
-		static void FindAssetStub();
-		static void AddAssetStub();
-
-		static void StoreEmptyAsset(Game::XAssetType type, const char* name);
-		static void StoreEmptyAssetStub();
-
-		static void ModifyAsset(Game::XAssetType type, Game::XAssetHeader asset, std::string_view name);
-
-		static int HasThreadBypass();
-		static void SetBypassState(bool value);
-
-		static void MissingAssetError(int severity, const char* format, const char* type, const char* name);
-
-		void reallocateEntryPool();
+		static void InstallFindHooks();
 	};
 }

@@ -1,34 +1,90 @@
+#include "STDInclude.hpp"
+
 #include "ClanTags.hpp"
+#include "ClientSlots.hpp"
 #include "Events.hpp"
+#include "Logger.hpp"
 #include "PlayerName.hpp"
 #include "ServerCommands.hpp"
 
 namespace Components
 {
-	const Game::dvar_t* ClanTags::ClanName;
+	extern "C"
+	{
+		void ClientUserinfoChangedStub();
+		void ClientConnectUserinfoStub();
+		void ScoreboardNameStub();
+		std::uintptr_t ClanTags_ScoreboardNameNext = 0;
 
-	// bgs_t and clientState_s do not have this
-	char ClanTags::ClientState[Game::MAX_CLIENTS][MAX_CLAN_NAME_LENGTH];
+		const char* ClanTags_UserinfoChanged(const char* s, const char* key, int clientNum)
+		{
+			ClanTags::ClientUserinfoChanged(s, clientNum);
+			return Game::Info_ValueForKey(s, key);
+		}
+
+		const char* ClanTags_GetClanTagWithName(int clientNum, const char* playerName)
+		{
+			return ClanTags::GetClanTagWithName(clientNum, playerName);
+		}
+	}
+
+	const Game::dvar_t* ClanTags::clanName;
+
+	char ClanTags::clientState[Game::MAX_CLIENTS][MAX_CLAN_NAME_LENGTH];
+
+	constexpr std::uintptr_t Dvar_InfoString_NameCall = 0x1401FC411;
+	constexpr std::uintptr_t Info_SetValueForKey = 0x14028C5E0;
+
+	constexpr std::uintptr_t ClientUserinfoChanged_NameCall = 0x1401969CA;
+	constexpr std::uintptr_t ClientConnect_NameCall = 0x140196088;
+	constexpr std::uintptr_t Info_ValueForKey = 0x14028CA30;
+
+	constexpr std::uintptr_t CG_DrawClientScore_NameColumn = 0x1400E3D82;
+	constexpr std::uintptr_t CG_DrawClientScore_ColumnTail = 0x1400E3DE1;
+	static const std::uint8_t nameColumn[] = { 0x48, 0x8D, 0x53, 0x0C, 0xEB, 0x59 };
+
+	constexpr std::uintptr_t PartyClient_Frame_StrcmpCall = 0x140106468;
+	constexpr std::uintptr_t PartyClient_Frame_UpdateClanNameCall = 0x14010648B;
+	constexpr std::uintptr_t I_strcmp = 0x14028C0A0;
+	constexpr std::uintptr_t Party_UpdateClanName = 0x14010C300;
+
+	constexpr std::uintptr_t PlayerCards_SetCachedPlayerData_NameCall = 0x1401E6C0C;
+	constexpr std::uintptr_t PlayerCards_SetCachedPlayerData_ClearClan = 0x1401E6C11;
+	static const std::uint8_t clearClan[] = { 0xC6, 0x43, 0x3C, 0x00 };
+	constexpr std::uintptr_t I_strncpyz = 0x14028C390;
+	constexpr std::uintptr_t firstClientInfoNameOffset = 0xC;
+	constexpr std::uintptr_t clientInfoSize = 0x548;
+
+	constexpr std::uintptr_t GetPlayerCardClientData_ForClientCall = 0x140251ADD;
+	constexpr std::uintptr_t GetPlayerCardClientData_ForControllerCall = 0x140251AE9;
+	constexpr std::uintptr_t PlayerCards_GetLiveProfileDataForClient = 0x1401E6770;
+	constexpr std::uintptr_t PlayerCards_GetLiveProfileDataForController = 0x1401E6850;
+
+	constexpr std::uintptr_t CG_Obituary_ClientNameCalls[] = { 0x1400AF0F4, 0x1400AF14C };
+	constexpr std::uintptr_t CL_GetClientName = 0x140101D80;
+
+	static Utils::Hook hooks[10];
+	static Utils::Hook scoreboardNameHook;
 
 	const char* ClanTags::GetClanTagWithName(int clientNum, const char* playerName)
 	{
 		AssertIn(clientNum, Game::MAX_CLIENTS);
 
-		if (ClientState[clientNum][0] == '\0')
+		if (clientState[clientNum][0] == '\0')
 		{
 			return playerName;
 		}
 
-		return Utils::String::VA("[%s^7]%s", ClientState[clientNum], playerName);
+		return Utils::String::VA("[%s^7]%s", clientState[clientNum], playerName);
 	}
 
 	void ClanTags::SendClanTagsToClients()
 	{
 		std::string list;
 
-		for (std::size_t i = 0; i < Game::MAX_CLIENTS; ++i)
+		for (std::size_t i = 0; i < ClientSlots::SentClientCount(); ++i)
 		{
-			list.append(std::format("\\{}\\{}", i, ClientState[i]));
+			list.append(std::format("\\{}\\{}", i, clientState[i]));
 		}
 
 		Game::SV_GameSendServerCommand(-1, Game::SV_CMD_CAN_IGNORE, Utils::String::Format("{:c} clanNames \"{}\"", 22, list));
@@ -43,11 +99,11 @@ namespace Components
 
 			if (clanTag[0] == '\0')
 			{
-				ClientState[i][0] = '\0';
+				clientState[i][0] = '\0';
 			}
 			else
 			{
-				Game::I_strncpyz(ClientState[i], clanTag, sizeof(ClientState[0]) / sizeof(char));
+				Game::I_strncpyz(clientState[i], clanTag, sizeof(clientState[0]) / sizeof(char));
 			}
 		}
 	}
@@ -58,6 +114,7 @@ namespace Components
 		{
 			return ' ';
 		}
+
 		if (input < ' ')
 		{
 			return -1;
@@ -76,14 +133,17 @@ namespace Components
 		char saneNameBuf[MAX_CLAN_NAME_LENGTH]{};
 		auto* saneName = saneNameBuf;
 
-		assert(ClanName);
-		const auto* currentName = ClanName->current.string;
+		assert(clanName);
+		const auto* currentName = clanName->current.string;
+
 		if (currentName)
 		{
-			auto nameLen = std::strlen(currentName);
+			const auto nameLen = std::strlen(currentName);
+
 			for (std::size_t i = 0; (i < nameLen) && (i < sizeof(saneNameBuf)); ++i)
 			{
-				auto curChar = CL_FilterChar(static_cast<unsigned char>(currentName[i]));
+				const auto curChar = CL_FilterChar(static_cast<unsigned char>(currentName[i]));
+
 				if (curChar > 0)
 				{
 					*saneName++ = curChar & 0xFF;
@@ -91,27 +151,28 @@ namespace Components
 			}
 
 			saneNameBuf[sizeof(saneNameBuf) - 1] = '\0';
-			Game::Dvar_SetString(ClanName, saneNameBuf);
+			Game::Dvar_SetString(clanName, saneNameBuf);
 		}
 	}
 
 	char* ClanTags::GamerProfile_GetClanName(int controllerIndex)
 	{
 		AssertIn(controllerIndex, Game::MAX_LOCAL_CLIENTS);
-		assert(ClanName);
+		assert(clanName);
 
 		CL_SanitizeClanName();
-		Game::I_strncpyz(Game::gamerSettings[controllerIndex].exeConfig.clanPrefix, ClanName->current.string, sizeof(Game::GamerSettingExeConfig::clanPrefix));
+		Game::I_strncpyz(Game::gamerSettings[controllerIndex].exeConfig.clanPrefix, clanName->current.string, sizeof(Game::GamerSettingExeConfig::clanPrefix));
 
 		return Game::gamerSettings[controllerIndex].exeConfig.clanPrefix;
 	}
 
 	void ClanTags::Dvar_InfoString_Stub(char* s, const char* key, const char* value)
 	{
-		Utils::Hook::Call<void(char*, const char*, const char*)>(0x4AE560)(s, key, value); // Info_SetValueForKey
+		const auto setValueForKey = reinterpret_cast<void(*)(char*, const char*, const char*)>(Utils::Hook::Rebase(Info_SetValueForKey));
 
-		// Set 'clanAbbrev' in the info string
-		Utils::Hook::Call<void(char*, const char*, const char*)>(0x4AE560)(s, "clanAbbrev", GamerProfile_GetClanName(0)); // Info_SetValueForKey
+		setValueForKey(s, key, value);
+
+		setValueForKey(s, "clanAbbrev", GamerProfile_GetClanName(0));
 	}
 
 	void ClanTags::ClientUserinfoChanged(const char* s, int clientNum)
@@ -122,101 +183,58 @@ namespace Components
 
 		if (clanAbbrev[0] == '\0')
 		{
-			ClientState[clientNum][0] = '\0';
+			clientState[clientNum][0] = '\0';
 		}
 		else
 		{
-			Game::I_strncpyz(ClientState[clientNum], clanAbbrev, sizeof(ClientState[0]) / sizeof(char));
+			Game::I_strncpyz(clientState[clientNum], clanAbbrev, sizeof(clientState[0]) / sizeof(char));
 		}
 	}
 
-	void __declspec(naked) ClanTags::ClientUserinfoChanged_Stub()
-	{
-		__asm
-		{
-			pushad
-
-			push [esp + 0x20 + 0x824] // clientNum
-			push ecx // s
-			call ClientUserinfoChanged
-			add esp, 0x8
-
-			popad
-
-			push 0x445334 // Return address
-			push 0x47C820 // Info_ValueForKey
-			// Jump to Info_ValueForKey & add return address
-			retn
-		}
-	}
-
-	void __declspec(naked) ClanTags::DrawPlayerNameOnScoreboard()
-	{
-		__asm
-		{
-			push eax
-			pushad
-
-			push edi
-			push [ebp]
-
-			call GetClanTagWithName
-			add esp, 0x8
-
-			mov [esp + 0x20], eax
-
-			popad
-			pop edi
-
-			push 0x591247 // Return address
-			push 0x5909E0 // DrawListString
-			retn
-		}
-	}
-
-	// s1 is always an empty string
 	int ClanTags::PartyClient_Frame_Stub(const char* s0, [[maybe_unused]] const char* s1)
 	{
-		return Utils::Hook::Call<int(const char*, const char*)>(0x4B0100)(s0, GamerProfile_GetClanName(0)); // I_strcmp
+		return reinterpret_cast<int(*)(const char*, const char*)>(Utils::Hook::Rebase(I_strcmp))(s0, GamerProfile_GetClanName(0));
 	}
 
-	// clanAbbrev is always an empty string
 	void ClanTags::Party_UpdateClanName_Stub(Game::PartyData* party, [[maybe_unused]] const char* clanAbbrev)
 	{
-		Utils::Hook::Call<void(Game::PartyData*, const char*)>(0x4B3B10)(party, GamerProfile_GetClanName(0)); // Party_UpdateClanName
+		reinterpret_cast<void(*)(Game::PartyData*, const char*)>(Utils::Hook::Rebase(Party_UpdateClanName))(party, GamerProfile_GetClanName(0));
 	}
 
 	void ClanTags::PlayerCards_SetCachedPlayerData(Game::PlayerCardData* data, const int clientNum)
 	{
-		Game::I_strncpyz(data->clanAbbrev, ClientState[clientNum], sizeof(Game::PlayerCardData::clanAbbrev));
+		Game::I_strncpyz(data->clanAbbrev, clientState[clientNum], sizeof(Game::PlayerCardData::clanAbbrev));
 	}
 
-	void __declspec(naked) ClanTags::PlayerCards_SetCachedPlayerData_Stub()
+	void ClanTags::PlayerCards_SetCachedPlayerData_Stub(char* name, const char* source, int size)
 	{
-		using namespace Game;
+		Game::I_strncpyz(name, source, size);
 
-		__asm
+		auto* data = reinterpret_cast<Game::PlayerCardData*>(name - offsetof(Game::PlayerCardData, name));
+
+		const auto firstName = reinterpret_cast<std::uintptr_t>(ClientSlots::CgameClientInfo(0)) + firstClientInfoNameOffset;
+		const auto sourceAt = reinterpret_cast<std::uintptr_t>(source);
+
+		if (sourceAt < firstName)
 		{
-			call I_strncpyz
-			add esp, 0xC
-
-			mov byte ptr [esi + 0x3C], 0x0
-
-			// Copy the clanName
-			push [esp + 0xC] // clientNum
-			push esi // g_PlayerCardCache
-			call PlayerCards_SetCachedPlayerData
-			add esp, 0x8
-
-			// Exit function
-			pop esi
-			ret
+			data->clanAbbrev[0] = '\0';
+			return;
 		}
+
+		const std::size_t clientNum = (sourceAt - firstName) / clientInfoSize;
+
+		if (clientNum >= Game::MAX_CLIENTS)
+		{
+			data->clanAbbrev[0] = '\0';
+			return;
+		}
+
+		PlayerCards_SetCachedPlayerData(data, static_cast<int>(clientNum));
 	}
 
 	Game::PlayerCardData* ClanTags::PlayerCards_GetLiveProfileDataForClient_Stub(const unsigned int clientIndex)
 	{
-		auto* result = Utils::Hook::Call<Game::PlayerCardData*(unsigned int)>(0x46C0F0)(clientIndex);
+		auto* result = reinterpret_cast<Game::PlayerCardData*(*)(unsigned int)>(Utils::Hook::Rebase(PlayerCards_GetLiveProfileDataForClient))(clientIndex);
 		Game::I_strncpyz(result->clanAbbrev, GamerProfile_GetClanName(static_cast<int>(clientIndex)), sizeof(Game::PlayerCardData::clanAbbrev));
 
 		return result;
@@ -224,7 +242,7 @@ namespace Components
 
 	Game::PlayerCardData* ClanTags::PlayerCards_GetLiveProfileDataForController_Stub(const unsigned int controllerIndex)
 	{
-		auto* result = Utils::Hook::Call<Game::PlayerCardData*(unsigned int)>(0x463B90)(controllerIndex);
+		auto* result = reinterpret_cast<Game::PlayerCardData*(*)(unsigned int)>(Utils::Hook::Rebase(PlayerCards_GetLiveProfileDataForController))(controllerIndex);
 		AssertIn(controllerIndex, Game::MAX_LOCAL_CLIENTS);
 		Game::I_strncpyz(result->clanAbbrev, GamerProfile_GetClanName(static_cast<int>(controllerIndex)), sizeof(Game::PlayerCardData::clanAbbrev));
 
@@ -233,20 +251,43 @@ namespace Components
 
 	ClanTags::ClanTags()
 	{
+		struct HookSite
+		{
+			std::uintptr_t site;
+			std::uintptr_t target;
+			void* stub;
+		};
+
+		const HookSite sites[] =
+		{
+			{ Dvar_InfoString_NameCall, Info_SetValueForKey, reinterpret_cast<void*>(Dvar_InfoString_Stub) },
+			{ ClientUserinfoChanged_NameCall, Info_ValueForKey, reinterpret_cast<void*>(ClientUserinfoChangedStub) },
+			{ ClientConnect_NameCall, Info_ValueForKey, reinterpret_cast<void*>(ClientConnectUserinfoStub) },
+			{ PartyClient_Frame_StrcmpCall, I_strcmp, reinterpret_cast<void*>(PartyClient_Frame_Stub) },
+			{ PartyClient_Frame_UpdateClanNameCall, Party_UpdateClanName, reinterpret_cast<void*>(Party_UpdateClanName_Stub) },
+			{ PlayerCards_SetCachedPlayerData_NameCall, I_strncpyz, reinterpret_cast<void*>(PlayerCards_SetCachedPlayerData_Stub) },
+			{ GetPlayerCardClientData_ForClientCall, PlayerCards_GetLiveProfileDataForClient, reinterpret_cast<void*>(PlayerCards_GetLiveProfileDataForClient_Stub) },
+			{ GetPlayerCardClientData_ForControllerCall, PlayerCards_GetLiveProfileDataForController, reinterpret_cast<void*>(PlayerCards_GetLiveProfileDataForController_Stub) },
+			{ CG_Obituary_ClientNameCalls[0], CL_GetClientName, reinterpret_cast<void*>(PlayerName::GetClientName) },
+			{ CG_Obituary_ClientNameCalls[1], CL_GetClientName, reinterpret_cast<void*>(PlayerName::GetClientName) },
+		};
+
+		static_assert(std::size(sites) == std::size(hooks));
+
 		Events::OnDvarInit([]
 		{
-			ClanName = Game::Dvar_RegisterString("clanName", "", Game::DVAR_ARCHIVE, "Your clan abbreviation");
+			clanName = Game::Dvar_RegisterString("clanName", "", Game::DVAR_ARCHIVE, "Your clan abbreviation");
 		});
 
-		std::memset(&ClientState, 0, sizeof(char[Game::MAX_CLIENTS][MAX_CLAN_NAME_LENGTH]));
+		std::memset(&clientState, 0, sizeof(char[Game::MAX_CLIENTS][MAX_CLAN_NAME_LENGTH]));
 
 		ServerCommands::OnCommand(22, [](const Command::Params* params)
 		{
-			if (std::strcmp(params->get(1), "clanNames") == 0)
+			if (std::strcmp(params->Get(1), "clanNames") == 0)
 			{
-				if (params->size() == 3)
+				if (params->Size() == 3)
 				{
-					ParseClanTags(params->get(2));
+					ParseClanTags(params->Get(2));
 					return true;
 				}
 			}
@@ -254,23 +295,51 @@ namespace Components
 			return false;
 		});
 
-		Utils::Hook(0x430B00, Dvar_InfoString_Stub, HOOK_CALL).install()->quick();
+		for (const auto& hookSite : sites)
+		{
+			if (!Utils::Hook::BranchesTo(hookSite.site, hookSite.target, false))
+			{
+				Logger::Error("clantags: 0x{:X} no longer reaches 0x{:X}, no clan tags\n", hookSite.site, hookSite.target);
+				return;
+			}
+		}
 
-		Utils::Hook(0x44532F, ClientUserinfoChanged_Stub, HOOK_JUMP).install()->quick();
+		if (!Utils::Hook::MatchesBytes(CG_DrawClientScore_NameColumn, nameColumn, sizeof(nameColumn))
+			|| !Utils::Hook::MatchesBytes(PlayerCards_SetCachedPlayerData_ClearClan, clearClan, sizeof(clearClan)))
+		{
+			Logger::Error("clantags: the scoreboard or the player card does not read as expected, no clan tags\n");
+			return;
+		}
 
-		// clanName before playerName
-		Utils::Hook(0x591242, DrawPlayerNameOnScoreboard, HOOK_JUMP).install()->quick();
+		ClanTags_ScoreboardNameNext = Utils::Hook::Rebase(CG_DrawClientScore_ColumnTail);
 
-		Utils::Hook(0x49765B, PartyClient_Frame_Stub, HOOK_CALL).install()->quick();
-		Utils::Hook(0x49767E, Party_UpdateClanName_Stub, HOOK_CALL).install()->quick();
+		bool isSeated = scoreboardNameHook.Initialize(CG_DrawClientScore_NameColumn, ScoreboardNameStub, HOOK_CALL)->Install()->IsInstalled();
 
-		// clanName in the PlayerCard (GetPlayerCardClientData)
-		Utils::Hook(0x458DF4, PlayerCards_SetCachedPlayerData_Stub, HOOK_JUMP).install()->quick();
-		Utils::Hook(0x62EAB6, PlayerCards_GetLiveProfileDataForClient_Stub, HOOK_CALL).install()->quick();
-		Utils::Hook(0x62EAC3, PlayerCards_GetLiveProfileDataForController_Stub, HOOK_CALL).install()->quick();
+		for (std::size_t i = 0; i < std::size(sites); ++i)
+		{
+			isSeated = hooks[i].Initialize(sites[i].site, sites[i].stub, HOOK_CALL)->Install()->IsInstalled() && isSeated;
+		}
 
-		// clanName in CG_Obituary
-		Utils::Hook(0x586DD6, PlayerName::GetClientName, HOOK_CALL).install()->quick();
-		Utils::Hook(0x586E2A, PlayerName::GetClientName, HOOK_CALL).install()->quick();
+		if (!isSeated)
+		{
+			scoreboardNameHook.Uninstall();
+
+			for (auto& hook : hooks)
+			{
+				hook.Uninstall();
+			}
+
+			Logger::Error("clantags: could not seat every hook, no clan tags\n");
+			return;
+		}
+
+		scoreboardNameHook.Quick();
+
+		for (auto& hook : hooks)
+		{
+			hook.Quick();
+		}
+
+		Utils::Hook::Nop(PlayerCards_SetCachedPlayerData_ClearClan, sizeof(clearClan));
 	}
 }

@@ -8,7 +8,8 @@ namespace Components
 		static bool HasFlag(const std::string& flag);
 
 	private:
-		static std::vector<std::string> EnabledFlags;
+		static std::vector<std::string> enabledFlags;
+		static bool isParsed;
 
 		static void ParseFlags();
 	};

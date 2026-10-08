@@ -1,40 +1,35 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
 namespace Controller
 {
-  enum class stick : uint8_t
-  {
-    left,
-    right,
-  };
+	enum class Stick : std::uint8_t
+	{
+		Left,
+		Right,
+	};
 
-  inline constexpr size_t stick_count {2};
+	inline constexpr std::size_t stickCount = 2;
 
-  const char*
-  to_string (stick) noexcept;
+	struct StickVector
+	{
+		float x = 0.0f;
+		float y = 0.0f;
 
-  struct stick_vector
-  {
-    float x {0.0f};
-    float y {0.0f};
+		float Magnitude() const noexcept;
+	};
 
-    float
-    magnitude () const noexcept;
-  };
+	struct StickRaw
+	{
+		std::int32_t x = 0;
+		std::int32_t y = 0;
+	};
 
-  struct stick_raw
-  {
-    int32_t x {0};
-    int32_t y {0};
-  };
-
-  struct stick_sample
-  {
-    stick_raw raw {};
-    stick_vector normalized {};
-    stick_vector calibrated {};
-    stick_vector filtered {};
-  };
+	struct StickSample
+	{
+		StickRaw raw{};
+		StickVector normalized{};
+		StickVector calibrated{};
+	};
 }

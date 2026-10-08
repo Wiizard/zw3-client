@@ -1,119 +1,211 @@
 #pragma once
 
-#include <d3d9.h>
-#include <algorithm>
-#include <cstring>
-
 namespace Utils
 {
-	// One image at a time: fill its mip chain in CPU memory, then upload it once.
-	// The final texture has the same dynamic/default-pool properties as before.
 	class StagedTextureUpload
 	{
 	public:
+		struct Shape
+		{
+			UINT width;
+			UINT height;
+			UINT levels;
+			D3DFORMAT format;
+		};
+
 		StagedTextureUpload() = default;
 		StagedTextureUpload(const StagedTextureUpload&) = delete;
 		StagedTextureUpload& operator=(const StagedTextureUpload&) = delete;
+
 		~StagedTextureUpload()
 		{
-			if (source_) source_->Release();
-			if (destination_) destination_->Release();
+			if (this->source)
+			{
+				this->source->Release();
+			}
+
+			if (this->destination)
+			{
+				this->destination->Release();
+			}
 		}
 
-		bool Begin(IDirect3DDevice9* device, UINT width, UINT height, UINT levels,
-			D3DFORMAT format, IDirect3DTexture9** output)
+		bool TryBegin(IDirect3DDevice9* targetDevice, const Shape& shape, IDirect3DTexture9** output)
 		{
-			if (source_ || !device || !output) return false;
-			IDirect3DTexture9* destination = nullptr;
-			if (FAILED(device->CreateTexture(width, height, levels, D3DUSAGE_DYNAMIC,
-				format, D3DPOOL_DEFAULT, &destination, nullptr))) return false;
-
-			IDirect3DTexture9* source = nullptr;
-			if (FAILED(device->CreateTexture(width, height, levels, 0,
-				format, D3DPOOL_SYSTEMMEM, &source, nullptr)))
+			if (this->source || !targetDevice || !output)
 			{
-				destination->Release();
 				return false;
 			}
 
-			device_ = device;
-			source_ = source;
-			destination_ = destination;
-			output_ = output;
-			source_->AddRef(); // Separate guard reference from the engine's ownership.
-			*output = source;
+			IDirect3DTexture9* createdDestination = nullptr;
+
+			if (FAILED(targetDevice->CreateTexture(shape.width, shape.height, shape.levels, D3DUSAGE_DYNAMIC, shape.format, D3DPOOL_DEFAULT, &createdDestination, nullptr)))
+			{
+				return false;
+			}
+
+			IDirect3DTexture9* createdSource = nullptr;
+
+			if (FAILED(targetDevice->CreateTexture(shape.width, shape.height, shape.levels, 0, shape.format, D3DPOOL_SYSTEMMEM, &createdSource, nullptr)))
+			{
+				createdDestination->Release();
+				return false;
+			}
+
+			this->device = targetDevice;
+			this->source = createdSource;
+			this->destination = createdDestination;
+			this->engineTexture = output;
+
+			this->source->AddRef();
+			*output = this->source;
+
 			return true;
 		}
 
-		bool Pending() const { return destination_ != nullptr; }
-		bool UsedFallback() const { return usedFallback_; }
+		bool IsPending() const
+		{
+			return this->destination != nullptr;
+		}
 
 		HRESULT Finish()
 		{
-			if (!Pending() || *output_ != source_) return S_FALSE;
-			// Explicitly dirty the entire chain, regardless of mip upload order.
-			auto result = source_->AddDirtyRect(nullptr);
-			if (SUCCEEDED(result)) result = device_->UpdateTexture(source_, destination_);
-			if (FAILED(result))
+			if (!this->IsPending() || *this->engineTexture != this->source)
 			{
-				usedFallback_ = true;
-				result = CopyMipChain(source_, destination_);
+				return S_FALSE;
 			}
 
-			// Never publish a system-memory texture for rendering, even on failure.
-			*output_ = SUCCEEDED(result) ? destination_ : nullptr;
-			if (SUCCEEDED(result)) destination_ = nullptr; // Transfer to the engine.
-			source_->Release(); // Drop the engine's old ownership; retain our guard.
+			HRESULT result = this->source->AddDirtyRect(nullptr);
+
+			if (SUCCEEDED(result))
+			{
+				result = this->device->UpdateTexture(this->source, this->destination);
+			}
+
+			if (FAILED(result))
+			{
+				result = CopyMipChain(this->source, this->destination);
+			}
+
+			if (SUCCEEDED(result))
+			{
+				*this->engineTexture = this->destination;
+				this->destination = nullptr;
+			}
+			else
+			{
+				*this->engineTexture = nullptr;
+			}
+
+			this->source->Release();
+
 			return result;
 		}
 
-		// Compatibility fallback for a driver which rejects UpdateTexture.
-		static HRESULT CopyMipChain(IDirect3DTexture9* source, IDirect3DTexture9* destination)
-		{
-			if (source->GetLevelCount() != destination->GetLevelCount()) return D3DERR_INVALIDCALL;
-			for (UINT level = 0; level < source->GetLevelCount(); ++level)
-			{
-				D3DSURFACE_DESC from{}, to{};
-				auto result = source->GetLevelDesc(level, &from);
-				if (FAILED(result)) return result;
-				result = destination->GetLevelDesc(level, &to);
-				if (FAILED(result)) return result;
-				if (from.Width != to.Width || from.Height != to.Height || from.Format != to.Format)
-					return D3DERR_INVALIDCALL;
+	private:
+		IDirect3DDevice9* device = nullptr;
+		IDirect3DTexture9* source = nullptr;
+		IDirect3DTexture9* destination = nullptr;
+		IDirect3DTexture9** engineTexture = nullptr;
 
-				D3DLOCKED_RECT read{}, write{};
-				result = source->LockRect(level, &read, nullptr, D3DLOCK_READONLY);
-				if (FAILED(result)) return result;
-				result = destination->LockRect(level, &write, nullptr, 0);
+		static HRESULT CopyMipChain(IDirect3DTexture9* from, IDirect3DTexture9* to)
+		{
+			const DWORD levelCount = from->GetLevelCount();
+
+			if (levelCount != to->GetLevelCount())
+			{
+				return D3DERR_INVALIDCALL;
+			}
+
+			for (UINT level = 0; level < levelCount; ++level)
+			{
+				D3DSURFACE_DESC fromDesc{};
+				D3DSURFACE_DESC toDesc{};
+
+				HRESULT result = from->GetLevelDesc(level, &fromDesc);
+
 				if (FAILED(result))
 				{
-					source->UnlockRect(level);
 					return result;
 				}
 
-				const bool compressed = from.Format >= D3DFMT_DXT1 && from.Format <= D3DFMT_DXT5;
-				const auto rows = compressed ? (from.Height + 3) / 4 : from.Height;
-				if (read.Pitch <= 0 || write.Pitch <= 0) result = D3DERR_INVALIDCALL;
-				else for (UINT row = 0; row < rows; ++row)
+				result = to->GetLevelDesc(level, &toDesc);
+
+				if (FAILED(result))
 				{
-					std::memcpy(static_cast<char*>(write.pBits) + row * write.Pitch,
-						static_cast<const char*>(read.pBits) + row * read.Pitch,
-						static_cast<std::size_t>((std::min)(read.Pitch, write.Pitch)));
+					return result;
 				}
-				const auto unlockWrite = destination->UnlockRect(level);
-				const auto unlockRead = source->UnlockRect(level);
-				if (FAILED(result)) return result;
-				if (FAILED(unlockWrite)) return unlockWrite;
-				if (FAILED(unlockRead)) return unlockRead;
+
+				if (fromDesc.Width != toDesc.Width || fromDesc.Height != toDesc.Height || fromDesc.Format != toDesc.Format)
+				{
+					return D3DERR_INVALIDCALL;
+				}
+
+				D3DLOCKED_RECT read{};
+				D3DLOCKED_RECT write{};
+
+				result = from->LockRect(level, &read, nullptr, D3DLOCK_READONLY);
+
+				if (FAILED(result))
+				{
+					return result;
+				}
+
+				result = to->LockRect(level, &write, nullptr, 0);
+
+				if (FAILED(result))
+				{
+					from->UnlockRect(level);
+					return result;
+				}
+
+				const bool isCompressed = fromDesc.Format >= D3DFMT_DXT1 && fromDesc.Format <= D3DFMT_DXT5;
+				UINT rowCount = fromDesc.Height;
+
+				if (isCompressed)
+				{
+					rowCount = (fromDesc.Height + 3) / 4;
+				}
+
+				if (read.Pitch <= 0 || write.Pitch <= 0)
+				{
+					result = D3DERR_INVALIDCALL;
+				}
+				else
+				{
+					const auto readPitch = static_cast<std::size_t>(read.Pitch);
+					const auto writePitch = static_cast<std::size_t>(write.Pitch);
+					const std::size_t rowBytes = std::min(readPitch, writePitch);
+
+					for (UINT row = 0; row < rowCount; ++row)
+					{
+						const auto* const fromRow = static_cast<const std::uint8_t*>(read.pBits) + row * readPitch;
+						auto* const toRow = static_cast<std::uint8_t*>(write.pBits) + row * writePitch;
+
+						std::memcpy(toRow, fromRow, rowBytes);
+					}
+				}
+
+				const HRESULT unlockWrite = to->UnlockRect(level);
+				const HRESULT unlockRead = from->UnlockRect(level);
+
+				if (FAILED(result))
+				{
+					return result;
+				}
+
+				if (FAILED(unlockWrite))
+				{
+					return unlockWrite;
+				}
+
+				if (FAILED(unlockRead))
+				{
+					return unlockRead;
+				}
 			}
+
 			return D3D_OK;
 		}
-
-	private:
-		IDirect3DDevice9* device_ = nullptr; // Loader keeps the device alive.
-		IDirect3DTexture9* source_ = nullptr;
-		IDirect3DTexture9* destination_ = nullptr;
-		IDirect3DTexture9** output_ = nullptr;
-		bool usedFallback_ = false;
 	};
 }

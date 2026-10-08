@@ -6,27 +6,24 @@ namespace Components
 	{
 	public:
 		Exception();
-		~Exception();
 
-		static LPTOP_LEVEL_EXCEPTION_FILTER Hook();
-
-		static void SetMiniDumpType(bool codeseg, bool dataseg);
+		static void SetMiniDumpType(bool codeSegment, bool dataSegment);
 
 	private:
-		static void SuspendProcess();
-		static LONG WINAPI ExceptionFilter(LPEXCEPTION_POINTERS ExceptionInfo);
-		static __declspec(noreturn) void LongJmp_Internal_Stub(jmp_buf env, int status);
+		static int miniDumpType;
+		static LPTOP_LEVEL_EXCEPTION_FILTER previousFilter;
+		static PVOID importThunk;
 
-		static std::wstring GetErrorMessage(const std::string& error);
-		static std::string FormatMessageForClipboard(const std::wstring& message);
+		static LONG WINAPI ExceptionFilter(LPEXCEPTION_POINTERS exceptionInfo);
 
-		static void DisplayErrorMessage(const std::wstring& title, const std::wstring& message, const std::string& crashDumpFolder);
-		static void CopyMessageToClipboard(const char* error);
+		static LPTOP_LEVEL_EXCEPTION_FILTER WINAPI SetUnhandledExceptionFilter_Stub(
+			LPTOP_LEVEL_EXCEPTION_FILTER filter);
 
-		static LPTOP_LEVEL_EXCEPTION_FILTER WINAPI SetUnhandledExceptionFilter_Stub(LPTOP_LEVEL_EXCEPTION_FILTER);
-		static HRESULT CALLBACK TaskDialogCallbackProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, LONG_PTR lpRefData);
+		static bool LockExceptionFilter();
 
-		static int MiniDumpType;
-		static Utils::Hook SetFilterHook;
+		static bool WriteMiniDump(LPEXCEPTION_POINTERS exceptionInfo, std::string& path);
+		static void CopyToClipboard(const std::string& text);
+		static std::string DescribeException(LPEXCEPTION_POINTERS exceptionInfo);
+		static std::string GetErrorMessage(const std::string& error);
 	};
 }

@@ -1,123 +1,129 @@
-#include "Command.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Engine/Command.hpp"
+#include "Controller/Runtime.hpp"
+#include "Controller/Haptic/Effect.hpp"
 
-#include "../Runtime.hpp"
-#include "../Haptic/Effect.hpp"
-#include "../../Components/Modules/Command.hpp"
+#include "Components/Modules/Command.hpp"
 
-namespace Controller
+namespace Controller::Engine
 {
-  namespace engine
-  {
-    namespace
-    {
-      runtime* command_runtime {nullptr};
+	static Runtime* commandRuntime = nullptr;
 
-      void
-      status_command ()
-      {
-        if (command_runtime == nullptr)
-          return;
+	static void StatusCommand()
+	{
+		if (commandRuntime == nullptr)
+		{
+			return;
+		}
 
-        const context ctx (command_runtime->make_context ());
+		const auto& context = commandRuntime->GetContext();
 
-        ctx.report (severity::info, facility::engine, errc::none,
-                    std::to_string (command_runtime->device_count ()) +
-                    " device(s) bound; input source is " +
-                    (command_runtime->keys ().in_use ()
-                     ? "the controller"
-                     : "keyboard and mouse"));
+		const char* source = "keyboard and mouse";
 
-        if (const device_id active = command_runtime->active ())
-        {
-          const input_frame& f (command_runtime->latest ());
+		if (commandRuntime->Keys().IsInUse())
+		{
+			source = "the controller";
+		}
 
-          ctx.report (severity::info, facility::engine, errc::none, active,
-                      std::string ("active device: ") + to_string (f.family) +
-                      " over " + to_string (f.link) + ", sequence " +
-                      std::to_string (f.sequence));
+		context.Report(Severity::Info, Facility::Engine, ErrorCode::None, std::format("{} device(s) bound; input source is {}", commandRuntime->DeviceCount(), source));
 
-          const std::string d (command_runtime->active_diagnostics ());
+		const DeviceId active = commandRuntime->Active();
 
-          if (!d.empty ())
-            ctx.report (severity::info, facility::engine, errc::none, active, d);
-        }
-      }
+		if (!active)
+		{
+			return;
+		}
 
-      void
-      haptic_command (const Components::Command::Params* params)
-      {
-        if (command_runtime == nullptr)
-          return;
+		const auto& frame = commandRuntime->Latest();
 
-        const context ctx (command_runtime->make_context ());
+		context.Report(Severity::Info, Facility::Engine, ErrorCode::None, active,
+			std::format("active device: {} over {}, sequence {}", ToString(frame.family), ToString(frame.link), frame.sequence));
 
-        const auto number = [params] (int i, float fallback)
-        {
-          return params->size () > i
-            ? static_cast<float> (std::atof (params->get (i)))
-            : fallback;
-        };
+		const std::string diagnostics = commandRuntime->ActiveDiagnostics();
 
-        const float intensity (number (1, 1.0f));
-        const float sharpness (number (2, 0.5f));
-        const float duration (number (3, 0.0f));
+		if (!diagnostics.empty())
+		{
+			context.Report(Severity::Info, Facility::Engine, ErrorCode::None, active, diagnostics);
+		}
+	}
 
-        const haptic::effect e (
-          duration > 0.0f
-          ? haptic::continuous (intensity, sharpness, seconds {duration})
-          : haptic::transient (intensity, sharpness));
+	static float NumberArgument(const Components::Command::Params* params, int index, float fallback)
+	{
+		if (params->Size() <= index)
+		{
+			return fallback;
+		}
 
-        command_runtime->submit (e);
+		return static_cast<float>(std::atof(params->Get(index)));
+	}
 
-        ctx.report (severity::info, facility::engine, errc::none,
-                    "played a " +
-                    std::string (duration > 0.0f ? "continuous" : "transient") +
-                    " effect at intensity " + std::to_string (intensity) +
-                    ", sharpness " + std::to_string (sharpness));
+	static void HapticCommand(const Components::Command::Params* params)
+	{
+		if (commandRuntime == nullptr)
+		{
+			return;
+		}
 
-        const std::string d (command_runtime->active_diagnostics ());
+		const auto& context = commandRuntime->GetContext();
 
-        ctx.report (severity::info, facility::engine, errc::none,
-                    d.empty () ? "no device is active to play it on" : d);
-      }
+		const float intensity = NumberArgument(params, 1, 1.0f);
+		const float sharpness = NumberArgument(params, 2, 0.5f);
+		const float duration = NumberArgument(params, 3, 0.0f);
 
-      void
-      buttons_config_command ()
-      {
-        if (command_runtime != nullptr)
-          command_runtime->binds ().reapply_layout ();
-      }
+		Haptic::Effect effect = Haptic::Transient(intensity, sharpness);
+		const char* kind = "transient";
 
-      void
-      sticks_config_command ()
-      {
-        if (command_runtime == nullptr)
-          return;
+		if (duration > 0.0f)
+		{
+			effect = Haptic::Continuous(intensity, sharpness, Seconds{ duration });
+			kind = "continuous";
+		}
 
-        const context ctx (command_runtime->make_context ());
+		commandRuntime->TrySubmit(effect);
 
-        ctx.report (severity::info, facility::engine, errc::none,
-                    std::string ("stick layout: ") +
-                    read (command_runtime->dvars ().sticks_config,
-                          "thumbstick_default"));
-      }
-    }
+		context.Report(Severity::Info, Facility::Engine, ErrorCode::None, std::format("played a {} effect at intensity {}, sharpness {}", kind, intensity, sharpness));
 
-    void
-    register_commands (const context& ctx, runtime& rt)
-    {
-      command_runtime = &rt;
+		std::string diagnostics = commandRuntime->ActiveDiagnostics();
 
-      Components::Command::Add ("controller_status", &status_command);
-      Components::Command::Add ("controller_haptic", &haptic_command);
+		if (diagnostics.empty())
+		{
+			diagnostics = "no device is active to play it on";
+		}
 
-      Components::Command::Add ("bindgpbuttonsconfigs", &buttons_config_command);
-      Components::Command::Add ("bindgpsticksconfigs", &sticks_config_command);
+		context.Report(Severity::Info, Facility::Engine, ErrorCode::None, diagnostics);
+	}
 
-      ctx.report (severity::info, facility::engine, errc::none,
-                  "controller commands registered");
-    }
-  }
+	static void ButtonsConfigCommand()
+	{
+		if (commandRuntime != nullptr)
+		{
+			commandRuntime->Binds().ReapplyLayout();
+		}
+	}
+
+	static void SticksConfigCommand()
+	{
+		if (commandRuntime == nullptr)
+		{
+			return;
+		}
+
+		const auto& context = commandRuntime->GetContext();
+
+		context.Report(Severity::Info, Facility::Engine, ErrorCode::None, std::format("stick layout: {}", Read(commandRuntime->GetDvars().sticksConfig, "thumbstick_default")));
+	}
+
+	void RegisterCommands(const Context& context, Runtime& runtime)
+	{
+		commandRuntime = &runtime;
+
+		Components::Command::Add("controller_status", StatusCommand);
+		Components::Command::Add("controller_haptic", HapticCommand);
+
+		Components::Command::Add("bindgpbuttonsconfigs", ButtonsConfigCommand);
+		Components::Command::Add("bindgpsticksconfigs", SticksConfigCommand);
+
+		context.Report(Severity::Info, Facility::Engine, ErrorCode::None, "controller commands registered");
+	}
 }

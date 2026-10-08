@@ -1,7 +1,8 @@
+#include "STDInclude.hpp"
 
 namespace Utils
 {
-	std::string Entities::build() const
+	std::string Entities::Build() const
 	{
 		std::string entityString;
 
@@ -9,12 +10,12 @@ namespace Utils
 		{
 			entityString.append("{\n");
 
-			for (const auto& property : entity)
+			for (const auto& [key, value] : entity)
 			{
 				entityString.append("\"");
-				entityString.append(property.first);
+				entityString.append(key);
 				entityString.append("\" \"");
-				entityString.append(property.second);
+				entityString.append(value);
 				entityString.append("\"\n");
 			}
 
@@ -24,69 +25,70 @@ namespace Utils
 		return entityString;
 	}
 
-	std::vector<std::string> Entities::getModels()
+	std::vector<std::string> Entities::GetModels()
 	{
 		std::vector<std::string> models;
 
-		for (auto& entity : this->entities)
+		for (const auto& entity : this->entities)
 		{
-			if (const auto itr = entity.find("model"); itr != entity.end())
-			{
-				const auto& model = itr->second;
+			const auto itr = entity.find("model");
 
-				if (!model.empty() && model[0] != '*' && model[0] != '?' &&  // Skip brushmodels
-					model != "com_plasticcase_green_big_us_dirt"s // Team zones
-				)
-				{
-					if (std::find(models.begin(), models.end(), model) == models.end())
-					{
-						models.push_back(model);
-					}
-				}
+			if (itr == entity.end())
+			{
+				continue;
+			}
+
+			const auto& model = itr->second;
+			const bool isBrushModel = !model.empty() && (model[0] == '*' || model[0] == '?');
+			const bool isTeamZone = model == "com_plasticcase_green_big_us_dirt"s;
+
+			if (model.empty() || isBrushModel || isTeamZone)
+			{
+				continue;
+			}
+
+			if (std::find(models.begin(), models.end(), model) == models.end())
+			{
+				models.push_back(model);
 			}
 		}
 
 		return models;
 	}
 
-	std::vector<std::string> Entities::getWeapons()
+	std::vector<std::string> Entities::GetWeapons()
 	{
 		std::vector<std::string> weapons;
 
-		for (auto& entity : this->entities)
+		for (const auto& entity : this->entities)
 		{
-			if (const auto itr = entity.find("weaponinfo"); itr != entity.end())
-			{
-				const auto& weapon = itr->second;
+			const auto itr = entity.find("weaponinfo");
 
-				if (!weapon.empty())
-				{
-					if (std::find(weapons.begin(), weapons.end(), weapon) == weapons.end())
-					{
-						weapons.push_back(weapon);
-					}
-				}
+			if (itr == entity.end())
+			{
+				continue;
+			}
+
+			const auto& weapon = itr->second;
+
+			if (!weapon.empty() && std::find(weapons.begin(), weapons.end(), weapon) == weapons.end())
+			{
+				weapons.push_back(weapon);
 			}
 		}
 
 		return weapons;
 	}
 
-	void Entities::parse(const std::string& buffer)
+	void Entities::Parse(const std::string& buffer)
 	{
-		int parseState = 0;
+		int parseState = PARSE_AWAIT_KEY;
 		std::string key;
 		std::string value;
 		std::unordered_map<std::string, std::string> entity;
 
-		for (std::size_t i = 0; i < buffer.size(); ++i)
+		for (const char character : buffer)
 		{
-			const auto character = buffer[i];
-			if (character == '{')
-			{
-				entity.clear();
-			}
-
 			switch (character)
 			{
 			case '{':
@@ -132,8 +134,14 @@ namespace Utils
 
 			default:
 			{
-				if (parseState == PARSE_READ_KEY) key.push_back(character);
-				else if (parseState == PARSE_READ_VALUE) value.push_back(character);
+				if (parseState == PARSE_READ_KEY)
+				{
+					key.push_back(character);
+				}
+				else if (parseState == PARSE_READ_VALUE)
+				{
+					value.push_back(character);
+				}
 
 				break;
 			}

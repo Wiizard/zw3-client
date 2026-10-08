@@ -1,34 +1,24 @@
 #pragma once
 
-#include "Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "Error.hpp"
-#include "Diagnostic.hpp"
-#include "Device/Id.hpp"
+#include "Controller/Diagnostic.hpp"
+#include "Controller/Error.hpp"
+#include "Controller/Device/Id.hpp"
 
 namespace Controller
 {
-  class context
-  {
-  public:
-    explicit
-    context (diagnostic_sink& sink, bool developer) noexcept
-      : diagnostics_ (sink), developer_ (developer) {}
+	class Context
+	{
+	public:
+		explicit Context(DiagnosticSink& sink) noexcept : sink(sink)
+		{
+		}
 
-    diagnostic_sink&
-    diagnostics () const noexcept {return diagnostics_;}
+		void Report(Severity level, Facility origin, ErrorCode code, DeviceId device, std::string message) const;
+		void Report(Severity level, Facility origin, ErrorCode code, std::string message) const;
 
-    bool
-    developer () const noexcept {return developer_;}
-
-    void
-    report (severity, facility, errc, device_id, std::string message) const;
-
-    void
-    report (severity, facility, errc, std::string message) const;
-
-  private:
-    diagnostic_sink& diagnostics_;
-    bool developer_;
-  };
+	private:
+		DiagnosticSink& sink;
+	};
 }

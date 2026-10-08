@@ -1,39 +1,32 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-namespace Controller
+namespace Controller::Mapping
 {
-  namespace mapping
-  {
-    enum class action : uint8_t
-    {
-      none,
+	enum class Action : std::uint8_t
+	{
+		None,
 
-      fire,
-      ads,
-      ads_toggle,
-      jump_stand,
-      stance,
-      melee,
-      use_reload,
-      sprint,
-      next_weapon,
-      frag,
-      special_grenade,
-      menu,
+		Fire,
+		Ads,
+		AdsToggle,
+		JumpStand,
+		Stance,
+		Melee,
+		UseReload,
+		Sprint,
+		NextWeapon,
+		Frag,
+		SpecialGrenade,
+		Menu,
 
-      scoreboard,
-      action_slot_1,
-      action_slot_2,
-      action_slot_3,
-      action_slot_4,
-    };
+		Scoreboard,
+		ActionSlot1,
+		ActionSlot2,
+		ActionSlot3,
+		ActionSlot4,
+	};
 
-    const char*
-    to_string (action) noexcept;
-
-    const char*
-    command (action) noexcept;
-  }
+	const char* CommandFor(Action action) noexcept;
 }

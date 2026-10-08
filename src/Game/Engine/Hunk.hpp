@@ -1,17 +1,17 @@
 #pragma once
 
-#define FIXED_HUNK_USER_COUNT 1
-#define VIRTUAL_HUNK_USER_MAX 128
-
 namespace Game::Engine
 {
-	extern HunkUser* g_debugUser;
+	constexpr auto FIXED_HUNK_USER_COUNT = 1;
+	constexpr auto VIRTUAL_HUNK_USER_MAX = 128;
 
-	extern HunkUser* Hunk_UserCreate(int maxSize, const char* name, bool fixed, int type);
-	extern void Hunk_UserDestroy(HunkUser* user);
+	extern HunkUser* debugUser;
 
-	extern void Hunk_InitDebugMemory();
-	extern void Hunk_ShutdownDebugMemory();
-	extern void* Hunk_AllocDebugMem(int size);
-	extern void Hunk_FreeDebugMem(void* ptr);
+	HunkUser* Hunk_UserCreate(int maxSize, const char* name, bool fixed, int type);
+	void Hunk_UserDestroy(HunkUser* user);
+
+	void Hunk_InitDebugMemory();
+	void Hunk_ShutdownDebugMemory();
+	void* Hunk_AllocDebugMem(int size);
+	void Hunk_FreeDebugMem(void* ptr);
 }

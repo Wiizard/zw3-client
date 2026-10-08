@@ -1,866 +1,1058 @@
+#include "STDInclude.hpp"
+
 #include "D3D9Ex.hpp"
+#include "Dedicated.hpp"
+#include "Events.hpp"
 #include "FastFiles.hpp"
+#include "Logger.hpp"
 #include "Renderer.hpp"
+#include "Scheduler.hpp"
 #include "Window.hpp"
+
 #include <Utils/StagedTextureUpload.hpp>
 
 namespace Components
 {
-	namespace
-	{
-		std::atomic<bool> StartupTextureUploads{true};
-		std::atomic<bool> MapTextureUploads{false};
-		std::string LoadingMap;
-		bool MapSawConnection = false;
+	constexpr std::uintptr_t Direct3DCreate9Import = 0x1403629D0;
 
-		bool UseStagedUploads()
+	typedef IDirect3D9*(WINAPI* Direct3DCreate9_t)(UINT sdkVersion);
+	typedef HRESULT(WINAPI* Direct3DCreate9Ex_t)(UINT sdkVersion, IDirect3D9Ex** direct3D);
+
+	static Direct3DCreate9_t direct3DCreate9 = nullptr;
+	static Direct3DCreate9Ex_t direct3DCreate9Ex = nullptr;
+
+	constexpr std::uintptr_t Image_LoadFromFileWithReader = 0x14006A180;
+
+	constexpr std::uintptr_t Image_LoadFromFileWithReaderCalls[] =
+	{
+		0x140037AA5,
+
+		0x140037BD0,
+
+		0x140037E5D,
+
+		0x140037F43,
+	};
+
+	static Utils::Hook imageLoadHooks[std::size(Image_LoadFromFileWithReaderCalls)];
+
+	static std::atomic_bool isStartupUpload = true;
+
+	static std::atomic_bool isMapUpload = false;
+	static std::string loadingMap;
+	static bool hasSeenConnection = false;
+
+	static bool ShouldStageUploads()
+	{
+		if (!D3D9Ex::IsD3D9ExEnabled())
 		{
-			// Staging is only useful for the D3D9Ex upload path.  On the normal
-			// D3D9 path it adds an extra system-memory texture and UpdateTexture
-			// for every image, which needlessly duplicates startup/map I/O.
-			return D3D9Ex::IsD3D9ExEnabled()
-				&& (StartupTextureUploads.load(std::memory_order_relaxed)
-				|| MapTextureUploads.load(std::memory_order_relaxed)
-				|| Renderer::IsDeviceRecoveryActive());
+			return false;
 		}
 
-		struct ImageUploadScope;
-		thread_local ImageUploadScope* CurrentImageUpload = nullptr;
+		return isStartupUpload.load(std::memory_order_relaxed) || isMapUpload.load(std::memory_order_relaxed) || Renderer::IsDeviceRecoveryActive();
+	}
 
-		struct ImageUploadScope
+	struct ImageUploadScope;
+
+	static thread_local ImageUploadScope* currentUpload = nullptr;
+
+	struct ImageUploadScope
+	{
+		Game::GfxImage* image;
+		ImageUploadScope* previous;
+		Utils::StagedTextureUpload upload;
+
+		explicit ImageUploadScope(Game::GfxImage* target) : image(target), previous(currentUpload)
 		{
-			Game::GfxImage* image;
-			ImageUploadScope* previous;
-			Utils::StagedTextureUpload upload;
+			currentUpload = this;
+		}
 
-			explicit ImageUploadScope(Game::GfxImage* target) : image(target), previous(CurrentImageUpload)
+		ImageUploadScope(const ImageUploadScope&) = delete;
+		ImageUploadScope& operator=(const ImageUploadScope&) = delete;
+
+		~ImageUploadScope()
+		{
+			currentUpload = this->previous;
+		}
+
+		void Finish()
+		{
+			currentUpload = this->previous;
+
+			if (!this->upload.IsPending())
 			{
-				CurrentImageUpload = this;
+				return;
 			}
 
-			~ImageUploadScope()
+			const HRESULT result = this->upload.Finish();
+
+			if (FAILED(result))
 			{
-				CurrentImageUpload = previous;
-				if (!upload.Pending()) return;
-				const auto result = upload.Finish();
-				if (FAILED(result))
-					Logger::Error(Game::ERR_FATAL, "Could not upload image '{}' (HRESULT {:08X}).", image->name, static_cast<unsigned int>(result));
+				Logger::Error("d3d9ex: could not upload image {} (hresult {:08X})\n", this->image->name, static_cast<unsigned int>(result));
+				Game::Com_Error(Game::ERR_FATAL, "Could not upload image '%s' (HRESULT %08X).", this->image->name, static_cast<unsigned int>(result));
 			}
-		};
-	}
+		}
+	};
 
-	Dvar::Var D3D9Ex::RUseD3D9Ex;
-
-	void D3D9Ex::BeginMapLoading(const std::string& map)
-	{
-		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled() || map.empty()) return;
-		if (MapTextureUploads.load(std::memory_order_relaxed) && LoadingMap == map) return;
-		LoadingMap = map;
-		MapSawConnection = false;
-		MapTextureUploads.store(true, std::memory_order_relaxed);
-	}
-
-	bool D3D9Ex::IsD3D9ExEnabled()
-	{
-		return RUseD3D9Ex.get<bool>();
-	}
-
-	int D3D9Ex::LoadTexture(Game::GfxImageLoadDef** loadDef, Game::GfxImage* image)
-	{
-		Window::PumpLoadingEvents();
-		if (!UseStagedUploads())
-			return Game::Load_Texture(loadDef, image);
-		ImageUploadScope upload(image);
-		return Game::Load_Texture(loadDef, image);
-	}
-
-	bool D3D9Ex::LoadImageWithReader(Game::GfxImage* image, Game::Reader_t reader)
-	{
-		Window::PumpLoadingEvents();
-		if (!UseStagedUploads())
-			return Game::Image_LoadFromFileWithReader(image, reader);
-		ImageUploadScope upload(image);
-		return Game::Image_LoadFromFileWithReader(image, reader);
-	}
+	Dvar::Var D3D9Ex::r_useD3D9Ex;
 
 #pragma region D3D9Device
 
-	HRESULT D3D9Ex::D3D9Device::QueryInterface(REFIID riid, void** ppvObj)
+	HRESULT D3D9Ex::D3D9Device::QueryInterface(REFIID riid, void** object)
 	{
-		*ppvObj = nullptr;
+		*object = nullptr;
 
-		HRESULT hRes = m_pIDirect3DDevice9->QueryInterface(riid, ppvObj);
-		if (hRes == NOERROR) *ppvObj = this;
-		return hRes;
+		const HRESULT result = device->QueryInterface(riid, object);
+
+		if (result == NOERROR)
+		{
+			*object = this;
+		}
+
+		return result;
 	}
 
 	ULONG D3D9Ex::D3D9Device::AddRef()
 	{
-		return m_pIDirect3DDevice9->AddRef();
+		return device->AddRef();
 	}
 
 	ULONG D3D9Ex::D3D9Device::Release()
 	{
-		ULONG count = m_pIDirect3DDevice9->Release();
-		if (!count) delete this;
+		const ULONG count = device->Release();
+
+		if (!count)
+		{
+			delete this;
+		}
+
 		return count;
 	}
 
 	HRESULT D3D9Ex::D3D9Device::TestCooperativeLevel()
 	{
-		return m_pIDirect3DDevice9->TestCooperativeLevel();
+		return device->TestCooperativeLevel();
 	}
 
 	UINT D3D9Ex::D3D9Device::GetAvailableTextureMem()
 	{
-		return m_pIDirect3DDevice9->GetAvailableTextureMem();
+		return device->GetAvailableTextureMem();
 	}
 
 	HRESULT D3D9Ex::D3D9Device::EvictManagedResources()
 	{
-		return m_pIDirect3DDevice9->EvictManagedResources();
+		return device->EvictManagedResources();
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetDirect3D(IDirect3D9** ppD3D9)
+	HRESULT D3D9Ex::D3D9Device::GetDirect3D(IDirect3D9** direct3D)
 	{
-		return m_pIDirect3DDevice9->GetDirect3D(ppD3D9);
+		return device->GetDirect3D(direct3D);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetDeviceCaps(D3DCAPS9* pCaps)
+	HRESULT D3D9Ex::D3D9Device::GetDeviceCaps(D3DCAPS9* caps)
 	{
-		return m_pIDirect3DDevice9->GetDeviceCaps(pCaps);
+		return device->GetDeviceCaps(caps);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetDisplayMode(UINT iSwapChain, D3DDISPLAYMODE* pMode)
+	HRESULT D3D9Ex::D3D9Device::GetDisplayMode(UINT swapChainIndex, D3DDISPLAYMODE* mode)
 	{
-		return m_pIDirect3DDevice9->GetDisplayMode(iSwapChain, pMode);
+		return device->GetDisplayMode(swapChainIndex, mode);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetCreationParameters(D3DDEVICE_CREATION_PARAMETERS *pParameters)
+	HRESULT D3D9Ex::D3D9Device::GetCreationParameters(D3DDEVICE_CREATION_PARAMETERS* parameters)
 	{
-		return m_pIDirect3DDevice9->GetCreationParameters(pParameters);
+		return device->GetCreationParameters(parameters);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetCursorProperties(UINT XHotSpot, UINT YHotSpot, IDirect3DSurface9* pCursorBitmap)
+	HRESULT D3D9Ex::D3D9Device::SetCursorProperties(UINT xHotSpot, UINT yHotSpot, IDirect3DSurface9* cursorBitmap)
 	{
-		return m_pIDirect3DDevice9->SetCursorProperties(XHotSpot, YHotSpot, pCursorBitmap);
+		return device->SetCursorProperties(xHotSpot, yHotSpot, cursorBitmap);
 	}
 
-	void D3D9Ex::D3D9Device::SetCursorPosition(int X, int Y, DWORD Flags)
+	void D3D9Ex::D3D9Device::SetCursorPosition(int x, int y, DWORD flags)
 	{
-		return m_pIDirect3DDevice9->SetCursorPosition(X, Y, Flags);
+		device->SetCursorPosition(x, y, flags);
 	}
 
-	BOOL D3D9Ex::D3D9Device::ShowCursor(BOOL bShow)
+	BOOL D3D9Ex::D3D9Device::ShowCursor(BOOL shouldShow)
 	{
-		return m_pIDirect3DDevice9->ShowCursor(bShow);
+		return device->ShowCursor(shouldShow);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::CreateAdditionalSwapChain(D3DPRESENT_PARAMETERS* pPresentationParameters, IDirect3DSwapChain9** pSwapChain)
+	HRESULT D3D9Ex::D3D9Device::CreateAdditionalSwapChain(D3DPRESENT_PARAMETERS* presentationParameters, IDirect3DSwapChain9** swapChain)
 	{
-		return m_pIDirect3DDevice9->CreateAdditionalSwapChain(pPresentationParameters, pSwapChain);
+		return device->CreateAdditionalSwapChain(presentationParameters, swapChain);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetSwapChain(UINT iSwapChain, IDirect3DSwapChain9** pSwapChain)
+	HRESULT D3D9Ex::D3D9Device::GetSwapChain(UINT swapChainIndex, IDirect3DSwapChain9** swapChain)
 	{
-		return m_pIDirect3DDevice9->GetSwapChain(iSwapChain, pSwapChain);
+		return device->GetSwapChain(swapChainIndex, swapChain);
 	}
 
 	UINT D3D9Ex::D3D9Device::GetNumberOfSwapChains()
 	{
-		return m_pIDirect3DDevice9->GetNumberOfSwapChains();
+		return device->GetNumberOfSwapChains();
 	}
 
-	HRESULT D3D9Ex::D3D9Device::Reset(D3DPRESENT_PARAMETERS* pPresentationParameters)
+	HRESULT D3D9Ex::D3D9Device::Reset(D3DPRESENT_PARAMETERS* presentationParameters)
 	{
-		return m_pIDirect3DDevice9->Reset(pPresentationParameters);
+		return device->Reset(presentationParameters);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::Present(CONST RECT* pSourceRect, CONST RECT* pDestRect, HWND hDestWindowOverride, CONST RGNDATA* pDirtyRegion)
+	HRESULT D3D9Ex::D3D9Device::Present(const RECT* sourceRect, const RECT* destRect, HWND destWindowOverride, const RGNDATA* dirtyRegion)
 	{
-		return m_pIDirect3DDevice9->Present(pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion);
+		return device->Present(sourceRect, destRect, destWindowOverride, dirtyRegion);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetBackBuffer(UINT iSwapChain, UINT iBackBuffer, D3DBACKBUFFER_TYPE Type, IDirect3DSurface9** ppBackBuffer)
+	HRESULT D3D9Ex::D3D9Device::GetBackBuffer(UINT swapChainIndex, UINT backBufferIndex, D3DBACKBUFFER_TYPE type, IDirect3DSurface9** backBuffer)
 	{
-		return m_pIDirect3DDevice9->GetBackBuffer(iSwapChain, iBackBuffer, Type, ppBackBuffer);
+		return device->GetBackBuffer(swapChainIndex, backBufferIndex, type, backBuffer);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetRasterStatus(UINT iSwapChain, D3DRASTER_STATUS* pRasterStatus)
+	HRESULT D3D9Ex::D3D9Device::GetRasterStatus(UINT swapChainIndex, D3DRASTER_STATUS* rasterStatus)
 	{
-		return m_pIDirect3DDevice9->GetRasterStatus(iSwapChain, pRasterStatus);
+		return device->GetRasterStatus(swapChainIndex, rasterStatus);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetDialogBoxMode(BOOL bEnableDialogs)
+	HRESULT D3D9Ex::D3D9Device::SetDialogBoxMode(BOOL shouldEnableDialogs)
 	{
-		return m_pIDirect3DDevice9->SetDialogBoxMode(bEnableDialogs);
+		return device->SetDialogBoxMode(shouldEnableDialogs);
 	}
 
-	void D3D9Ex::D3D9Device::SetGammaRamp(UINT iSwapChain, DWORD Flags, CONST D3DGAMMARAMP* pRamp)
+	void D3D9Ex::D3D9Device::SetGammaRamp(UINT swapChainIndex, DWORD flags, const D3DGAMMARAMP* ramp)
 	{
-		return m_pIDirect3DDevice9->SetGammaRamp(iSwapChain, Flags, pRamp);
+		device->SetGammaRamp(swapChainIndex, flags, ramp);
 	}
 
-	void D3D9Ex::D3D9Device::GetGammaRamp(UINT iSwapChain, D3DGAMMARAMP* pRamp)
+	void D3D9Ex::D3D9Device::GetGammaRamp(UINT swapChainIndex, D3DGAMMARAMP* ramp)
 	{
-		return m_pIDirect3DDevice9->GetGammaRamp(iSwapChain, pRamp);
+		device->GetGammaRamp(swapChainIndex, ramp);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::CreateTexture(UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9** ppTexture, HANDLE* pSharedHandle)
+	HRESULT D3D9Ex::D3D9Device::CreateTexture(UINT width, UINT height, UINT levels, DWORD usage, D3DFORMAT format, D3DPOOL pool, IDirect3DTexture9** texture, HANDLE* sharedHandle)
 	{
-		// Only intercept the image currently being synchronously initialized. No
-		// render targets, procedural textures, cube maps, or persistent staging cache.
-		if (Pool == D3DPOOL_MANAGED && Usage == 0 && !pSharedHandle && CurrentImageUpload
-			&& CurrentImageUpload->image && ppTexture == &CurrentImageUpload->image->texture.map
-			&& UseStagedUploads()
-			&& CurrentImageUpload->upload.Begin(m_pIDirect3DDevice9, Width, Height, Levels, Format, ppTexture))
+		auto* const scope = currentUpload;
+		const bool isImageTexture = pool == D3DPOOL_MANAGED && usage == 0 && !sharedHandle && scope && texture == &scope->image->texture.map;
+
+		if (isImageTexture && ShouldStageUploads())
 		{
-			return D3D_OK;
+			const Utils::StagedTextureUpload::Shape shape{ width, height, levels, format };
+
+			if (scope->upload.TryBegin(device, shape, texture))
+			{
+				return D3D_OK;
+			}
 		}
 
-		if (Pool == D3DPOOL_MANAGED) { Pool = D3DPOOL_DEFAULT; Usage |= D3DUSAGE_DYNAMIC; }
+		if (pool == D3DPOOL_MANAGED)
+		{
+			pool = D3DPOOL_DEFAULT;
+			usage |= D3DUSAGE_DYNAMIC;
+		}
 
-		return m_pIDirect3DDevice9->CreateTexture(Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);
+		return device->CreateTexture(width, height, levels, usage, format, pool, texture, sharedHandle);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::CreateVolumeTexture(UINT Width, UINT Height, UINT Depth, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DVolumeTexture9** ppVolumeTexture, HANDLE* pSharedHandle)
+	HRESULT D3D9Ex::D3D9Device::CreateVolumeTexture(UINT width, UINT height, UINT depth, UINT levels, DWORD usage, D3DFORMAT format, D3DPOOL pool, IDirect3DVolumeTexture9** volumeTexture, HANDLE* sharedHandle)
 	{
-		if (Pool == D3DPOOL_MANAGED) { Pool = D3DPOOL_DEFAULT; Usage |= D3DUSAGE_DYNAMIC; }
+		if (pool == D3DPOOL_MANAGED)
+		{
+			pool = D3DPOOL_DEFAULT;
+			usage |= D3DUSAGE_DYNAMIC;
+		}
 
-		return m_pIDirect3DDevice9->CreateVolumeTexture(Width, Height, Depth, Levels, Usage, Format, Pool, ppVolumeTexture, pSharedHandle);
+		return device->CreateVolumeTexture(width, height, depth, levels, usage, format, pool, volumeTexture, sharedHandle);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::CreateCubeTexture(UINT EdgeLength, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DCubeTexture9** ppCubeTexture, HANDLE* pSharedHandle)
+	HRESULT D3D9Ex::D3D9Device::CreateCubeTexture(UINT edgeLength, UINT levels, DWORD usage, D3DFORMAT format, D3DPOOL pool, IDirect3DCubeTexture9** cubeTexture, HANDLE* sharedHandle)
 	{
-		if (Pool == D3DPOOL_MANAGED) { Pool = D3DPOOL_DEFAULT; Usage |= D3DUSAGE_DYNAMIC; }
+		if (pool == D3DPOOL_MANAGED)
+		{
+			pool = D3DPOOL_DEFAULT;
+			usage |= D3DUSAGE_DYNAMIC;
+		}
 
-		return m_pIDirect3DDevice9->CreateCubeTexture(EdgeLength, Levels, Usage, Format, Pool, ppCubeTexture, pSharedHandle);
+		return device->CreateCubeTexture(edgeLength, levels, usage, format, pool, cubeTexture, sharedHandle);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::CreateVertexBuffer(UINT Length, DWORD Usage, DWORD FVF, D3DPOOL Pool, IDirect3DVertexBuffer9** ppVertexBuffer, HANDLE* pSharedHandle)
+	HRESULT D3D9Ex::D3D9Device::CreateVertexBuffer(UINT length, DWORD usage, DWORD fvf, D3DPOOL pool, IDirect3DVertexBuffer9** vertexBuffer, HANDLE* sharedHandle)
 	{
-		if (Pool == D3DPOOL_MANAGED) { Pool = D3DPOOL_DEFAULT; Usage |= D3DUSAGE_DYNAMIC; }
+		if (pool == D3DPOOL_MANAGED)
+		{
+			pool = D3DPOOL_DEFAULT;
+			usage |= D3DUSAGE_DYNAMIC;
+		}
 
-		return m_pIDirect3DDevice9->CreateVertexBuffer(Length, Usage, FVF, Pool, ppVertexBuffer, pSharedHandle);
+		return device->CreateVertexBuffer(length, usage, fvf, pool, vertexBuffer, sharedHandle);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::CreateIndexBuffer(UINT Length, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DIndexBuffer9** ppIndexBuffer, HANDLE* pSharedHandle)
+	HRESULT D3D9Ex::D3D9Device::CreateIndexBuffer(UINT length, DWORD usage, D3DFORMAT format, D3DPOOL pool, IDirect3DIndexBuffer9** indexBuffer, HANDLE* sharedHandle)
 	{
-		if (Pool == D3DPOOL_MANAGED) { Pool = D3DPOOL_DEFAULT; Usage |= D3DUSAGE_DYNAMIC; }
+		if (pool == D3DPOOL_MANAGED)
+		{
+			pool = D3DPOOL_DEFAULT;
+			usage |= D3DUSAGE_DYNAMIC;
+		}
 
-		return m_pIDirect3DDevice9->CreateIndexBuffer(Length, Usage, Format, Pool, ppIndexBuffer, pSharedHandle);
+		return device->CreateIndexBuffer(length, usage, format, pool, indexBuffer, sharedHandle);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::CreateRenderTarget(UINT Width, UINT Height, D3DFORMAT Format, D3DMULTISAMPLE_TYPE MultiSample, DWORD MultisampleQuality, BOOL Lockable, IDirect3DSurface9** ppSurface, HANDLE* pSharedHandle)
+	HRESULT D3D9Ex::D3D9Device::CreateRenderTarget(UINT width, UINT height, D3DFORMAT format, D3DMULTISAMPLE_TYPE multiSample, DWORD multisampleQuality, BOOL isLockable, IDirect3DSurface9** surface, HANDLE* sharedHandle)
 	{
-		return m_pIDirect3DDevice9->CreateRenderTarget(Width, Height, Format, MultiSample, MultisampleQuality, Lockable, ppSurface, pSharedHandle);
+		return device->CreateRenderTarget(width, height, format, multiSample, multisampleQuality, isLockable, surface, sharedHandle);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::CreateDepthStencilSurface(UINT Width, UINT Height, D3DFORMAT Format, D3DMULTISAMPLE_TYPE MultiSample, DWORD MultisampleQuality, BOOL Discard, IDirect3DSurface9** ppSurface, HANDLE* pSharedHandle)
+	HRESULT D3D9Ex::D3D9Device::CreateDepthStencilSurface(UINT width, UINT height, D3DFORMAT format, D3DMULTISAMPLE_TYPE multiSample, DWORD multisampleQuality, BOOL shouldDiscard, IDirect3DSurface9** surface, HANDLE* sharedHandle)
 	{
-		return m_pIDirect3DDevice9->CreateDepthStencilSurface(Width, Height, Format, MultiSample, MultisampleQuality, Discard, ppSurface, pSharedHandle);
+		return device->CreateDepthStencilSurface(width, height, format, multiSample, multisampleQuality, shouldDiscard, surface, sharedHandle);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::UpdateSurface(IDirect3DSurface9* pSourceSurface, CONST RECT* pSourceRect, IDirect3DSurface9* pDestinationSurface, CONST POINT* pDestPoint)
+	HRESULT D3D9Ex::D3D9Device::UpdateSurface(IDirect3DSurface9* sourceSurface, const RECT* sourceRect, IDirect3DSurface9* destinationSurface, const POINT* destPoint)
 	{
-		return m_pIDirect3DDevice9->UpdateSurface(pSourceSurface, pSourceRect, pDestinationSurface, pDestPoint);
+		return device->UpdateSurface(sourceSurface, sourceRect, destinationSurface, destPoint);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::UpdateTexture(IDirect3DBaseTexture9* pSourceTexture, IDirect3DBaseTexture9* pDestinationTexture)
+	HRESULT D3D9Ex::D3D9Device::UpdateTexture(IDirect3DBaseTexture9* sourceTexture, IDirect3DBaseTexture9* destinationTexture)
 	{
-		return m_pIDirect3DDevice9->UpdateTexture(pSourceTexture, pDestinationTexture);
+		return device->UpdateTexture(sourceTexture, destinationTexture);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetRenderTargetData(IDirect3DSurface9* pRenderTarget, IDirect3DSurface9* pDestSurface)
+	HRESULT D3D9Ex::D3D9Device::GetRenderTargetData(IDirect3DSurface9* renderTarget, IDirect3DSurface9* destSurface)
 	{
-		return m_pIDirect3DDevice9->GetRenderTargetData(pRenderTarget, pDestSurface);
+		return device->GetRenderTargetData(renderTarget, destSurface);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetFrontBufferData(UINT iSwapChain, IDirect3DSurface9* pDestSurface)
+	HRESULT D3D9Ex::D3D9Device::GetFrontBufferData(UINT swapChainIndex, IDirect3DSurface9* destSurface)
 	{
-		return m_pIDirect3DDevice9->GetFrontBufferData(iSwapChain, pDestSurface);
+		return device->GetFrontBufferData(swapChainIndex, destSurface);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::StretchRect(IDirect3DSurface9* pSourceSurface, CONST RECT* pSourceRect, IDirect3DSurface9* pDestSurface, CONST RECT* pDestRect, D3DTEXTUREFILTERTYPE Filter)
+	HRESULT D3D9Ex::D3D9Device::StretchRect(IDirect3DSurface9* sourceSurface, const RECT* sourceRect, IDirect3DSurface9* destSurface, const RECT* destRect, D3DTEXTUREFILTERTYPE filter)
 	{
-		return m_pIDirect3DDevice9->StretchRect(pSourceSurface, pSourceRect, pDestSurface, pDestRect, Filter);
+		return device->StretchRect(sourceSurface, sourceRect, destSurface, destRect, filter);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::ColorFill(IDirect3DSurface9* pSurface, CONST RECT* pRect, D3DCOLOR color)
+	HRESULT D3D9Ex::D3D9Device::ColorFill(IDirect3DSurface9* surface, const RECT* rect, D3DCOLOR color)
 	{
-		return m_pIDirect3DDevice9->ColorFill(pSurface, pRect, color);
+		return device->ColorFill(surface, rect, color);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::CreateOffscreenPlainSurface(UINT Width, UINT Height, D3DFORMAT Format, D3DPOOL Pool, IDirect3DSurface9** ppSurface, HANDLE* pSharedHandle)
+	HRESULT D3D9Ex::D3D9Device::CreateOffscreenPlainSurface(UINT width, UINT height, D3DFORMAT format, D3DPOOL pool, IDirect3DSurface9** surface, HANDLE* sharedHandle)
 	{
-		if (Pool == D3DPOOL_MANAGED) { Pool = D3DPOOL_DEFAULT; }
+		if (pool == D3DPOOL_MANAGED)
+		{
+			pool = D3DPOOL_DEFAULT;
+		}
 
-		return m_pIDirect3DDevice9->CreateOffscreenPlainSurface(Width, Height, Format, Pool, ppSurface, pSharedHandle);
+		return device->CreateOffscreenPlainSurface(width, height, format, pool, surface, sharedHandle);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetRenderTarget(DWORD RenderTargetIndex, IDirect3DSurface9* pRenderTarget)
+	HRESULT D3D9Ex::D3D9Device::SetRenderTarget(DWORD renderTargetIndex, IDirect3DSurface9* renderTarget)
 	{
-		return m_pIDirect3DDevice9->SetRenderTarget(RenderTargetIndex, pRenderTarget);
+		return device->SetRenderTarget(renderTargetIndex, renderTarget);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetRenderTarget(DWORD RenderTargetIndex, IDirect3DSurface9** ppRenderTarget)
+	HRESULT D3D9Ex::D3D9Device::GetRenderTarget(DWORD renderTargetIndex, IDirect3DSurface9** renderTarget)
 	{
-		return m_pIDirect3DDevice9->GetRenderTarget(RenderTargetIndex, ppRenderTarget);
+		return device->GetRenderTarget(renderTargetIndex, renderTarget);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetDepthStencilSurface(IDirect3DSurface9* pNewZStencil)
+	HRESULT D3D9Ex::D3D9Device::SetDepthStencilSurface(IDirect3DSurface9* newZStencil)
 	{
-		return m_pIDirect3DDevice9->SetDepthStencilSurface(pNewZStencil);
+		return device->SetDepthStencilSurface(newZStencil);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetDepthStencilSurface(IDirect3DSurface9** ppZStencilSurface)
+	HRESULT D3D9Ex::D3D9Device::GetDepthStencilSurface(IDirect3DSurface9** zStencilSurface)
 	{
-		return m_pIDirect3DDevice9->GetDepthStencilSurface(ppZStencilSurface);
+		return device->GetDepthStencilSurface(zStencilSurface);
 	}
 
 	HRESULT D3D9Ex::D3D9Device::BeginScene()
 	{
-		return m_pIDirect3DDevice9->BeginScene();
+		return device->BeginScene();
 	}
 
 	HRESULT D3D9Ex::D3D9Device::EndScene()
 	{
-		return m_pIDirect3DDevice9->EndScene();
+		return device->EndScene();
 	}
 
-	HRESULT D3D9Ex::D3D9Device::Clear(DWORD Count, CONST D3DRECT* pRects, DWORD Flags, D3DCOLOR Color, float Z, DWORD Stencil)
+	HRESULT D3D9Ex::D3D9Device::Clear(DWORD count, const D3DRECT* rects, DWORD flags, D3DCOLOR color, float z, DWORD stencil)
 	{
-		return m_pIDirect3DDevice9->Clear(Count, pRects, Flags, Color, Z, Stencil);
+		return device->Clear(count, rects, flags, color, z, stencil);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetTransform(D3DTRANSFORMSTATETYPE State, CONST D3DMATRIX* pMatrix)
+	HRESULT D3D9Ex::D3D9Device::SetTransform(D3DTRANSFORMSTATETYPE state, const D3DMATRIX* matrix)
 	{
-		return m_pIDirect3DDevice9->SetTransform(State, pMatrix);
+		return device->SetTransform(state, matrix);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetTransform(D3DTRANSFORMSTATETYPE State, D3DMATRIX* pMatrix)
+	HRESULT D3D9Ex::D3D9Device::GetTransform(D3DTRANSFORMSTATETYPE state, D3DMATRIX* matrix)
 	{
-		return m_pIDirect3DDevice9->GetTransform(State, pMatrix);
+		return device->GetTransform(state, matrix);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::MultiplyTransform(D3DTRANSFORMSTATETYPE State, CONST D3DMATRIX* pMatrix)
+	HRESULT D3D9Ex::D3D9Device::MultiplyTransform(D3DTRANSFORMSTATETYPE state, const D3DMATRIX* matrix)
 	{
-		return m_pIDirect3DDevice9->MultiplyTransform(State, pMatrix);
+		return device->MultiplyTransform(state, matrix);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetViewport(CONST D3DVIEWPORT9* pViewport)
+	HRESULT D3D9Ex::D3D9Device::SetViewport(const D3DVIEWPORT9* viewport)
 	{
-		return m_pIDirect3DDevice9->SetViewport(pViewport);
+		return device->SetViewport(viewport);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetViewport(D3DVIEWPORT9* pViewport)
+	HRESULT D3D9Ex::D3D9Device::GetViewport(D3DVIEWPORT9* viewport)
 	{
-		return m_pIDirect3DDevice9->GetViewport(pViewport);
+		return device->GetViewport(viewport);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetMaterial(CONST D3DMATERIAL9* pMaterial)
+	HRESULT D3D9Ex::D3D9Device::SetMaterial(const D3DMATERIAL9* material)
 	{
-		return m_pIDirect3DDevice9->SetMaterial(pMaterial);
+		return device->SetMaterial(material);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetMaterial(D3DMATERIAL9* pMaterial)
+	HRESULT D3D9Ex::D3D9Device::GetMaterial(D3DMATERIAL9* material)
 	{
-		return m_pIDirect3DDevice9->GetMaterial(pMaterial);
+		return device->GetMaterial(material);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetLight(DWORD Index, CONST D3DLIGHT9* pLight)
+	HRESULT D3D9Ex::D3D9Device::SetLight(DWORD index, const D3DLIGHT9* light)
 	{
-		return m_pIDirect3DDevice9->SetLight(Index, pLight);
+		return device->SetLight(index, light);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetLight(DWORD Index, D3DLIGHT9* pLight)
+	HRESULT D3D9Ex::D3D9Device::GetLight(DWORD index, D3DLIGHT9* light)
 	{
-		return m_pIDirect3DDevice9->GetLight(Index, pLight);
+		return device->GetLight(index, light);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::LightEnable(DWORD Index, BOOL Enable)
+	HRESULT D3D9Ex::D3D9Device::LightEnable(DWORD index, BOOL isEnabled)
 	{
-		return m_pIDirect3DDevice9->LightEnable(Index, Enable);
+		return device->LightEnable(index, isEnabled);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetLightEnable(DWORD Index, BOOL* pEnable)
+	HRESULT D3D9Ex::D3D9Device::GetLightEnable(DWORD index, BOOL* isEnabled)
 	{
-		return m_pIDirect3DDevice9->GetLightEnable(Index, pEnable);
+		return device->GetLightEnable(index, isEnabled);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetClipPlane(DWORD Index, CONST float* pPlane)
+	HRESULT D3D9Ex::D3D9Device::SetClipPlane(DWORD index, const float* plane)
 	{
-		return m_pIDirect3DDevice9->SetClipPlane(Index, pPlane);
+		return device->SetClipPlane(index, plane);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetClipPlane(DWORD Index, float* pPlane)
+	HRESULT D3D9Ex::D3D9Device::GetClipPlane(DWORD index, float* plane)
 	{
-		return m_pIDirect3DDevice9->GetClipPlane(Index, pPlane);
+		return device->GetClipPlane(index, plane);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetRenderState(D3DRENDERSTATETYPE State, DWORD Value)
+	HRESULT D3D9Ex::D3D9Device::SetRenderState(D3DRENDERSTATETYPE state, DWORD value)
 	{
-		return m_pIDirect3DDevice9->SetRenderState(State, Value);
+		return device->SetRenderState(state, value);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetRenderState(D3DRENDERSTATETYPE State, DWORD* pValue)
+	HRESULT D3D9Ex::D3D9Device::GetRenderState(D3DRENDERSTATETYPE state, DWORD* value)
 	{
-		return m_pIDirect3DDevice9->GetRenderState(State, pValue);
+		return device->GetRenderState(state, value);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::CreateStateBlock(D3DSTATEBLOCKTYPE Type, IDirect3DStateBlock9** ppSB)
+	HRESULT D3D9Ex::D3D9Device::CreateStateBlock(D3DSTATEBLOCKTYPE type, IDirect3DStateBlock9** stateBlock)
 	{
-		return m_pIDirect3DDevice9->CreateStateBlock(Type, ppSB);
+		return device->CreateStateBlock(type, stateBlock);
 	}
 
 	HRESULT D3D9Ex::D3D9Device::BeginStateBlock()
 	{
-		return m_pIDirect3DDevice9->BeginStateBlock();
+		return device->BeginStateBlock();
 	}
 
-	HRESULT D3D9Ex::D3D9Device::EndStateBlock(IDirect3DStateBlock9** ppSB)
+	HRESULT D3D9Ex::D3D9Device::EndStateBlock(IDirect3DStateBlock9** stateBlock)
 	{
-		return m_pIDirect3DDevice9->EndStateBlock(ppSB);
+		return device->EndStateBlock(stateBlock);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetClipStatus(CONST D3DCLIPSTATUS9* pClipStatus)
+	HRESULT D3D9Ex::D3D9Device::SetClipStatus(const D3DCLIPSTATUS9* clipStatus)
 	{
-		return m_pIDirect3DDevice9->SetClipStatus(pClipStatus);
+		return device->SetClipStatus(clipStatus);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetClipStatus(D3DCLIPSTATUS9* pClipStatus)
+	HRESULT D3D9Ex::D3D9Device::GetClipStatus(D3DCLIPSTATUS9* clipStatus)
 	{
-		return m_pIDirect3DDevice9->GetClipStatus(pClipStatus);
+		return device->GetClipStatus(clipStatus);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetTexture(DWORD Stage, IDirect3DBaseTexture9** ppTexture)
+	HRESULT D3D9Ex::D3D9Device::GetTexture(DWORD stage, IDirect3DBaseTexture9** texture)
 	{
-		return m_pIDirect3DDevice9->GetTexture(Stage, ppTexture);
+		return device->GetTexture(stage, texture);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetTexture(DWORD Stage, IDirect3DBaseTexture9* pTexture)
+	HRESULT D3D9Ex::D3D9Device::SetTexture(DWORD stage, IDirect3DBaseTexture9* texture)
 	{
-		return m_pIDirect3DDevice9->SetTexture(Stage, pTexture);
+		return device->SetTexture(stage, texture);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetTextureStageState(DWORD Stage, D3DTEXTURESTAGESTATETYPE Type, DWORD* pValue)
+	HRESULT D3D9Ex::D3D9Device::GetTextureStageState(DWORD stage, D3DTEXTURESTAGESTATETYPE type, DWORD* value)
 	{
-		return m_pIDirect3DDevice9->GetTextureStageState(Stage, Type, pValue);
+		return device->GetTextureStageState(stage, type, value);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetTextureStageState(DWORD Stage, D3DTEXTURESTAGESTATETYPE Type, DWORD Value)
+	HRESULT D3D9Ex::D3D9Device::SetTextureStageState(DWORD stage, D3DTEXTURESTAGESTATETYPE type, DWORD value)
 	{
-		return m_pIDirect3DDevice9->SetTextureStageState(Stage, Type, Value);
+		return device->SetTextureStageState(stage, type, value);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetSamplerState(DWORD Sampler, D3DSAMPLERSTATETYPE Type, DWORD* pValue)
+	HRESULT D3D9Ex::D3D9Device::GetSamplerState(DWORD sampler, D3DSAMPLERSTATETYPE type, DWORD* value)
 	{
-		return m_pIDirect3DDevice9->GetSamplerState(Sampler, Type, pValue);
+		return device->GetSamplerState(sampler, type, value);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetSamplerState(DWORD Sampler, D3DSAMPLERSTATETYPE Type, DWORD Value)
+	HRESULT D3D9Ex::D3D9Device::SetSamplerState(DWORD sampler, D3DSAMPLERSTATETYPE type, DWORD value)
 	{
-		return m_pIDirect3DDevice9->SetSamplerState(Sampler, Type, Value);
+		return device->SetSamplerState(sampler, type, value);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::ValidateDevice(DWORD* pNumPasses)
+	HRESULT D3D9Ex::D3D9Device::ValidateDevice(DWORD* numPasses)
 	{
-		return m_pIDirect3DDevice9->ValidateDevice(pNumPasses);
+		return device->ValidateDevice(numPasses);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetPaletteEntries(UINT PaletteNumber, CONST PALETTEENTRY* pEntries)
+	HRESULT D3D9Ex::D3D9Device::SetPaletteEntries(UINT paletteNumber, const PALETTEENTRY* entries)
 	{
-		return m_pIDirect3DDevice9->SetPaletteEntries(PaletteNumber, pEntries);
+		return device->SetPaletteEntries(paletteNumber, entries);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetPaletteEntries(UINT PaletteNumber, PALETTEENTRY* pEntries)
+	HRESULT D3D9Ex::D3D9Device::GetPaletteEntries(UINT paletteNumber, PALETTEENTRY* entries)
 	{
-		return m_pIDirect3DDevice9->GetPaletteEntries(PaletteNumber, pEntries);
+		return device->GetPaletteEntries(paletteNumber, entries);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetCurrentTexturePalette(UINT PaletteNumber)
+	HRESULT D3D9Ex::D3D9Device::SetCurrentTexturePalette(UINT paletteNumber)
 	{
-		return m_pIDirect3DDevice9->SetCurrentTexturePalette(PaletteNumber);
+		return device->SetCurrentTexturePalette(paletteNumber);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetCurrentTexturePalette(UINT *PaletteNumber)
+	HRESULT D3D9Ex::D3D9Device::GetCurrentTexturePalette(UINT* paletteNumber)
 	{
-		return m_pIDirect3DDevice9->GetCurrentTexturePalette(PaletteNumber);
+		return device->GetCurrentTexturePalette(paletteNumber);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetScissorRect(CONST RECT* pRect)
+	HRESULT D3D9Ex::D3D9Device::SetScissorRect(const RECT* rect)
 	{
-		return m_pIDirect3DDevice9->SetScissorRect(pRect);
+		return device->SetScissorRect(rect);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetScissorRect(RECT* pRect)
+	HRESULT D3D9Ex::D3D9Device::GetScissorRect(RECT* rect)
 	{
-		return m_pIDirect3DDevice9->GetScissorRect(pRect);
+		return device->GetScissorRect(rect);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetSoftwareVertexProcessing(BOOL bSoftware)
+	HRESULT D3D9Ex::D3D9Device::SetSoftwareVertexProcessing(BOOL isSoftware)
 	{
-		return m_pIDirect3DDevice9->SetSoftwareVertexProcessing(bSoftware);
+		return device->SetSoftwareVertexProcessing(isSoftware);
 	}
 
 	BOOL D3D9Ex::D3D9Device::GetSoftwareVertexProcessing()
 	{
-		return m_pIDirect3DDevice9->GetSoftwareVertexProcessing();
+		return device->GetSoftwareVertexProcessing();
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetNPatchMode(float nSegments)
+	HRESULT D3D9Ex::D3D9Device::SetNPatchMode(float segments)
 	{
-		return m_pIDirect3DDevice9->SetNPatchMode(nSegments);
+		return device->SetNPatchMode(segments);
 	}
 
 	float D3D9Ex::D3D9Device::GetNPatchMode()
 	{
-		return m_pIDirect3DDevice9->GetNPatchMode();
+		return device->GetNPatchMode();
 	}
 
-	HRESULT D3D9Ex::D3D9Device::DrawPrimitive(D3DPRIMITIVETYPE PrimitiveType, UINT StartVertex, UINT PrimitiveCount)
+	HRESULT D3D9Ex::D3D9Device::DrawPrimitive(D3DPRIMITIVETYPE primitiveType, UINT startVertex, UINT primitiveCount)
 	{
-		return m_pIDirect3DDevice9->DrawPrimitive(PrimitiveType, StartVertex, PrimitiveCount);
+		return device->DrawPrimitive(primitiveType, startVertex, primitiveCount);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::DrawIndexedPrimitive(D3DPRIMITIVETYPE PrimitiveType, INT BaseVertexIndex, UINT MinVertexIndex, UINT NumVertices, UINT startIndex, UINT primCount)
+	HRESULT D3D9Ex::D3D9Device::DrawIndexedPrimitive(D3DPRIMITIVETYPE primitiveType, INT baseVertexIndex, UINT minVertexIndex, UINT numVertices, UINT startIndex, UINT primCount)
 	{
-		return m_pIDirect3DDevice9->DrawIndexedPrimitive(PrimitiveType, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);
+		return device->DrawIndexedPrimitive(primitiveType, baseVertexIndex, minVertexIndex, numVertices, startIndex, primCount);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::DrawPrimitiveUP(D3DPRIMITIVETYPE PrimitiveType, UINT PrimitiveCount, CONST void* pVertexStreamZeroData, UINT VertexStreamZeroStride)
+	HRESULT D3D9Ex::D3D9Device::DrawPrimitiveUP(D3DPRIMITIVETYPE primitiveType, UINT primitiveCount, const void* vertexStreamZeroData, UINT vertexStreamZeroStride)
 	{
-		return m_pIDirect3DDevice9->DrawPrimitiveUP(PrimitiveType, PrimitiveCount, pVertexStreamZeroData, VertexStreamZeroStride);
+		return device->DrawPrimitiveUP(primitiveType, primitiveCount, vertexStreamZeroData, vertexStreamZeroStride);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE PrimitiveType, UINT MinVertexIndex, UINT NumVertices, UINT PrimitiveCount, CONST void* pIndexData, D3DFORMAT IndexDataFormat, CONST void* pVertexStreamZeroData, UINT VertexStreamZeroStride)
+	HRESULT D3D9Ex::D3D9Device::DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE primitiveType, UINT minVertexIndex, UINT numVertices, UINT primitiveCount, const void* indexData, D3DFORMAT indexDataFormat, const void* vertexStreamZeroData, UINT vertexStreamZeroStride)
 	{
-		return m_pIDirect3DDevice9->DrawIndexedPrimitiveUP(PrimitiveType, MinVertexIndex, NumVertices, PrimitiveCount, pIndexData, IndexDataFormat, pVertexStreamZeroData, VertexStreamZeroStride);
+		return device->DrawIndexedPrimitiveUP(primitiveType, minVertexIndex, numVertices, primitiveCount, indexData, indexDataFormat, vertexStreamZeroData, vertexStreamZeroStride);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::ProcessVertices(UINT SrcStartIndex, UINT DestIndex, UINT VertexCount, IDirect3DVertexBuffer9* pDestBuffer, IDirect3DVertexDeclaration9* pVertexDecl, DWORD Flags)
+	HRESULT D3D9Ex::D3D9Device::ProcessVertices(UINT srcStartIndex, UINT destIndex, UINT vertexCount, IDirect3DVertexBuffer9* destBuffer, IDirect3DVertexDeclaration9* vertexDecl, DWORD flags)
 	{
-		return m_pIDirect3DDevice9->ProcessVertices(SrcStartIndex, DestIndex, VertexCount, pDestBuffer, pVertexDecl, Flags);
+		return device->ProcessVertices(srcStartIndex, destIndex, vertexCount, destBuffer, vertexDecl, flags);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::CreateVertexDeclaration(CONST D3DVERTEXELEMENT9* pVertexElements, IDirect3DVertexDeclaration9** ppDecl)
+	HRESULT D3D9Ex::D3D9Device::CreateVertexDeclaration(const D3DVERTEXELEMENT9* vertexElements, IDirect3DVertexDeclaration9** decl)
 	{
-		return m_pIDirect3DDevice9->CreateVertexDeclaration(pVertexElements, ppDecl);
+		return device->CreateVertexDeclaration(vertexElements, decl);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetVertexDeclaration(IDirect3DVertexDeclaration9* pDecl)
+	HRESULT D3D9Ex::D3D9Device::SetVertexDeclaration(IDirect3DVertexDeclaration9* decl)
 	{
-		return m_pIDirect3DDevice9->SetVertexDeclaration(pDecl);
+		return device->SetVertexDeclaration(decl);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetVertexDeclaration(IDirect3DVertexDeclaration9** ppDecl)
+	HRESULT D3D9Ex::D3D9Device::GetVertexDeclaration(IDirect3DVertexDeclaration9** decl)
 	{
-		return m_pIDirect3DDevice9->GetVertexDeclaration(ppDecl);
+		return device->GetVertexDeclaration(decl);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetFVF(DWORD FVF)
+	HRESULT D3D9Ex::D3D9Device::SetFVF(DWORD fvf)
 	{
-		return m_pIDirect3DDevice9->SetFVF(FVF);
+		return device->SetFVF(fvf);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetFVF(DWORD* pFVF)
+	HRESULT D3D9Ex::D3D9Device::GetFVF(DWORD* fvf)
 	{
-		return m_pIDirect3DDevice9->GetFVF(pFVF);
+		return device->GetFVF(fvf);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::CreateVertexShader(CONST DWORD* pFunction, IDirect3DVertexShader9** ppShader)
+	HRESULT D3D9Ex::D3D9Device::CreateVertexShader(const DWORD* function, IDirect3DVertexShader9** shader)
 	{
-		return m_pIDirect3DDevice9->CreateVertexShader(pFunction, ppShader);
+		return device->CreateVertexShader(function, shader);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetVertexShader(IDirect3DVertexShader9* pShader)
+	HRESULT D3D9Ex::D3D9Device::SetVertexShader(IDirect3DVertexShader9* shader)
 	{
-		return m_pIDirect3DDevice9->SetVertexShader(pShader);
+		return device->SetVertexShader(shader);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetVertexShader(IDirect3DVertexShader9** ppShader)
+	HRESULT D3D9Ex::D3D9Device::GetVertexShader(IDirect3DVertexShader9** shader)
 	{
-		return m_pIDirect3DDevice9->GetVertexShader(ppShader);
+		return device->GetVertexShader(shader);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetVertexShaderConstantF(UINT StartRegister, CONST float* pConstantData, UINT Vector4fCount)
+	HRESULT D3D9Ex::D3D9Device::SetVertexShaderConstantF(UINT startRegister, const float* constantData, UINT vector4fCount)
 	{
-		return m_pIDirect3DDevice9->SetVertexShaderConstantF(StartRegister, pConstantData, Vector4fCount);
+		return device->SetVertexShaderConstantF(startRegister, constantData, vector4fCount);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetVertexShaderConstantF(UINT StartRegister, float* pConstantData, UINT Vector4fCount)
+	HRESULT D3D9Ex::D3D9Device::GetVertexShaderConstantF(UINT startRegister, float* constantData, UINT vector4fCount)
 	{
-		return m_pIDirect3DDevice9->GetVertexShaderConstantF(StartRegister, pConstantData, Vector4fCount);
+		return device->GetVertexShaderConstantF(startRegister, constantData, vector4fCount);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetVertexShaderConstantI(UINT StartRegister, CONST int* pConstantData, UINT Vector4iCount)
+	HRESULT D3D9Ex::D3D9Device::SetVertexShaderConstantI(UINT startRegister, const int* constantData, UINT vector4iCount)
 	{
-		return m_pIDirect3DDevice9->SetVertexShaderConstantI(StartRegister, pConstantData, Vector4iCount);
+		return device->SetVertexShaderConstantI(startRegister, constantData, vector4iCount);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetVertexShaderConstantI(UINT StartRegister, int* pConstantData, UINT Vector4iCount)
+	HRESULT D3D9Ex::D3D9Device::GetVertexShaderConstantI(UINT startRegister, int* constantData, UINT vector4iCount)
 	{
-		return m_pIDirect3DDevice9->GetVertexShaderConstantI(StartRegister, pConstantData, Vector4iCount);
+		return device->GetVertexShaderConstantI(startRegister, constantData, vector4iCount);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetVertexShaderConstantB(UINT StartRegister, CONST BOOL* pConstantData, UINT  BoolCount)
+	HRESULT D3D9Ex::D3D9Device::SetVertexShaderConstantB(UINT startRegister, const BOOL* constantData, UINT boolCount)
 	{
-		return m_pIDirect3DDevice9->SetVertexShaderConstantB(StartRegister, pConstantData, BoolCount);
+		return device->SetVertexShaderConstantB(startRegister, constantData, boolCount);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetVertexShaderConstantB(UINT StartRegister, BOOL* pConstantData, UINT BoolCount)
+	HRESULT D3D9Ex::D3D9Device::GetVertexShaderConstantB(UINT startRegister, BOOL* constantData, UINT boolCount)
 	{
-		return m_pIDirect3DDevice9->GetVertexShaderConstantB(StartRegister, pConstantData, BoolCount);
+		return device->GetVertexShaderConstantB(startRegister, constantData, boolCount);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetStreamSource(UINT StreamNumber, IDirect3DVertexBuffer9* pStreamData, UINT OffsetInBytes, UINT Stride)
+	HRESULT D3D9Ex::D3D9Device::SetStreamSource(UINT streamNumber, IDirect3DVertexBuffer9* streamData, UINT offsetInBytes, UINT stride)
 	{
-		return m_pIDirect3DDevice9->SetStreamSource(StreamNumber, pStreamData, OffsetInBytes, Stride);
+		return device->SetStreamSource(streamNumber, streamData, offsetInBytes, stride);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetStreamSource(UINT StreamNumber, IDirect3DVertexBuffer9** ppStreamData, UINT* OffsetInBytes, UINT* pStride)
+	HRESULT D3D9Ex::D3D9Device::GetStreamSource(UINT streamNumber, IDirect3DVertexBuffer9** streamData, UINT* offsetInBytes, UINT* stride)
 	{
-		return m_pIDirect3DDevice9->GetStreamSource(StreamNumber, ppStreamData, OffsetInBytes, pStride);
+		return device->GetStreamSource(streamNumber, streamData, offsetInBytes, stride);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetStreamSourceFreq(UINT StreamNumber, UINT Divider)
+	HRESULT D3D9Ex::D3D9Device::SetStreamSourceFreq(UINT streamNumber, UINT divider)
 	{
-		return m_pIDirect3DDevice9->SetStreamSourceFreq(StreamNumber, Divider);
+		return device->SetStreamSourceFreq(streamNumber, divider);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetStreamSourceFreq(UINT StreamNumber, UINT* Divider)
+	HRESULT D3D9Ex::D3D9Device::GetStreamSourceFreq(UINT streamNumber, UINT* divider)
 	{
-		return m_pIDirect3DDevice9->GetStreamSourceFreq(StreamNumber, Divider);
+		return device->GetStreamSourceFreq(streamNumber, divider);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetIndices(IDirect3DIndexBuffer9* pIndexData)
+	HRESULT D3D9Ex::D3D9Device::SetIndices(IDirect3DIndexBuffer9* indexData)
 	{
-		return m_pIDirect3DDevice9->SetIndices(pIndexData);
+		return device->SetIndices(indexData);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetIndices(IDirect3DIndexBuffer9** ppIndexData)
+	HRESULT D3D9Ex::D3D9Device::GetIndices(IDirect3DIndexBuffer9** indexData)
 	{
-		return m_pIDirect3DDevice9->GetIndices(ppIndexData);
+		return device->GetIndices(indexData);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::CreatePixelShader(CONST DWORD* pFunction, IDirect3DPixelShader9** ppShader)
+	HRESULT D3D9Ex::D3D9Device::CreatePixelShader(const DWORD* function, IDirect3DPixelShader9** shader)
 	{
-		return m_pIDirect3DDevice9->CreatePixelShader(pFunction, ppShader);
+		return device->CreatePixelShader(function, shader);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetPixelShader(IDirect3DPixelShader9* pShader)
+	HRESULT D3D9Ex::D3D9Device::SetPixelShader(IDirect3DPixelShader9* shader)
 	{
-		return m_pIDirect3DDevice9->SetPixelShader(pShader);
+		return device->SetPixelShader(shader);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetPixelShader(IDirect3DPixelShader9** ppShader)
+	HRESULT D3D9Ex::D3D9Device::GetPixelShader(IDirect3DPixelShader9** shader)
 	{
-		return m_pIDirect3DDevice9->GetPixelShader(ppShader);
+		return device->GetPixelShader(shader);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetPixelShaderConstantF(UINT StartRegister, CONST float* pConstantData, UINT Vector4fCount)
+	HRESULT D3D9Ex::D3D9Device::SetPixelShaderConstantF(UINT startRegister, const float* constantData, UINT vector4fCount)
 	{
-		// Use real bad readptr check here, cause the query takes too long
-		// TODO: Fix the actual error!
-		if (IsBadReadPtr(pConstantData, Vector4fCount * 16))
+		if (IsBadReadPtr(constantData, vector4fCount * 16))
 		{
-			Logger::Debug("Invalid shader constant array!");
+			Logger::Debug("d3d9ex: invalid pixel shader constants at register {}\n", startRegister);
 			return D3DERR_INVALIDCALL;
 		}
 
-		return m_pIDirect3DDevice9->SetPixelShaderConstantF(StartRegister, pConstantData, Vector4fCount);
+		return device->SetPixelShaderConstantF(startRegister, constantData, vector4fCount);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetPixelShaderConstantF(UINT StartRegister, float* pConstantData, UINT Vector4fCount)
+	HRESULT D3D9Ex::D3D9Device::GetPixelShaderConstantF(UINT startRegister, float* constantData, UINT vector4fCount)
 	{
-		return m_pIDirect3DDevice9->GetPixelShaderConstantF(StartRegister, pConstantData, Vector4fCount);
+		return device->GetPixelShaderConstantF(startRegister, constantData, vector4fCount);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetPixelShaderConstantI(UINT StartRegister, CONST int* pConstantData, UINT Vector4iCount)
+	HRESULT D3D9Ex::D3D9Device::SetPixelShaderConstantI(UINT startRegister, const int* constantData, UINT vector4iCount)
 	{
-		return m_pIDirect3DDevice9->SetPixelShaderConstantI(StartRegister, pConstantData, Vector4iCount);
+		return device->SetPixelShaderConstantI(startRegister, constantData, vector4iCount);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetPixelShaderConstantI(UINT StartRegister, int* pConstantData, UINT Vector4iCount)
+	HRESULT D3D9Ex::D3D9Device::GetPixelShaderConstantI(UINT startRegister, int* constantData, UINT vector4iCount)
 	{
-		return m_pIDirect3DDevice9->GetPixelShaderConstantI(StartRegister, pConstantData, Vector4iCount);
+		return device->GetPixelShaderConstantI(startRegister, constantData, vector4iCount);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::SetPixelShaderConstantB(UINT StartRegister, CONST BOOL* pConstantData, UINT  BoolCount)
+	HRESULT D3D9Ex::D3D9Device::SetPixelShaderConstantB(UINT startRegister, const BOOL* constantData, UINT boolCount)
 	{
-		return m_pIDirect3DDevice9->SetPixelShaderConstantB(StartRegister, pConstantData, BoolCount);
+		return device->SetPixelShaderConstantB(startRegister, constantData, boolCount);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::GetPixelShaderConstantB(UINT StartRegister, BOOL* pConstantData, UINT BoolCount)
+	HRESULT D3D9Ex::D3D9Device::GetPixelShaderConstantB(UINT startRegister, BOOL* constantData, UINT boolCount)
 	{
-		return m_pIDirect3DDevice9->GetPixelShaderConstantB(StartRegister, pConstantData, BoolCount);
+		return device->GetPixelShaderConstantB(startRegister, constantData, boolCount);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::DrawRectPatch(UINT Handle, CONST float* pNumSegs, CONST D3DRECTPATCH_INFO* pRectPatchInfo)
+	HRESULT D3D9Ex::D3D9Device::DrawRectPatch(UINT handle, const float* numSegs, const D3DRECTPATCH_INFO* rectPatchInfo)
 	{
-		return m_pIDirect3DDevice9->DrawRectPatch(Handle, pNumSegs, pRectPatchInfo);
+		return device->DrawRectPatch(handle, numSegs, rectPatchInfo);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::DrawTriPatch(UINT Handle, CONST float* pNumSegs, CONST D3DTRIPATCH_INFO* pTriPatchInfo)
+	HRESULT D3D9Ex::D3D9Device::DrawTriPatch(UINT handle, const float* numSegs, const D3DTRIPATCH_INFO* triPatchInfo)
 	{
-		return m_pIDirect3DDevice9->DrawTriPatch(Handle, pNumSegs, pTriPatchInfo);
+		return device->DrawTriPatch(handle, numSegs, triPatchInfo);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::DeletePatch(UINT Handle)
+	HRESULT D3D9Ex::D3D9Device::DeletePatch(UINT handle)
 	{
-		return m_pIDirect3DDevice9->DeletePatch(Handle);
+		return device->DeletePatch(handle);
 	}
 
-	HRESULT D3D9Ex::D3D9Device::CreateQuery(D3DQUERYTYPE Type, IDirect3DQuery9** ppQuery)
+	HRESULT D3D9Ex::D3D9Device::CreateQuery(D3DQUERYTYPE type, IDirect3DQuery9** query)
 	{
-		return m_pIDirect3DDevice9->CreateQuery(Type, ppQuery);
+		return device->CreateQuery(type, query);
 	}
 
 #pragma endregion
 
 #pragma region D3D9
 
-	HRESULT WINAPI D3D9Ex::D3D9::QueryInterface(REFIID riid, void** ppvObj)
+	HRESULT D3D9Ex::D3D9::QueryInterface(REFIID riid, void** object)
 	{
-		*ppvObj = nullptr;
+		*object = nullptr;
 
-		HRESULT hRes = m_pIDirect3D9->QueryInterface(riid, ppvObj);
+		const HRESULT result = direct3D->QueryInterface(riid, object);
 
-		if (hRes == NOERROR)
+		if (result == NOERROR)
 		{
-			*ppvObj = this;
+			*object = this;
 		}
 
-		return hRes;
+		return result;
 	}
 
-	ULONG WINAPI D3D9Ex::D3D9::AddRef()
+	ULONG D3D9Ex::D3D9::AddRef()
 	{
-		return m_pIDirect3D9->AddRef();
+		return direct3D->AddRef();
 	}
 
-	ULONG WINAPI D3D9Ex::D3D9::Release()
+	ULONG D3D9Ex::D3D9::Release()
 	{
-		ULONG count = m_pIDirect3D9->Release();
-		if (!count) delete this;
+		const ULONG count = direct3D->Release();
+
+		if (!count)
+		{
+			delete this;
+		}
+
 		return count;
 	}
 
-	HRESULT WINAPI D3D9Ex::D3D9::RegisterSoftwareDevice(void* pInitializeFunction)
+	HRESULT D3D9Ex::D3D9::RegisterSoftwareDevice(void* initializeFunction)
 	{
-		return m_pIDirect3D9->RegisterSoftwareDevice(pInitializeFunction);
+		return direct3D->RegisterSoftwareDevice(initializeFunction);
 	}
 
-	UINT WINAPI D3D9Ex::D3D9::GetAdapterCount()
+	UINT D3D9Ex::D3D9::GetAdapterCount()
 	{
-		return m_pIDirect3D9->GetAdapterCount();
+		return direct3D->GetAdapterCount();
 	}
 
-	HRESULT WINAPI D3D9Ex::D3D9::GetAdapterIdentifier(UINT Adapter, DWORD Flags, D3DADAPTER_IDENTIFIER9* pIdentifier)
+	HRESULT D3D9Ex::D3D9::GetAdapterIdentifier(UINT adapter, DWORD flags, D3DADAPTER_IDENTIFIER9* identifier)
 	{
-		return m_pIDirect3D9->GetAdapterIdentifier(Adapter, Flags, pIdentifier);
+		return direct3D->GetAdapterIdentifier(adapter, flags, identifier);
 	}
 
-	UINT WINAPI D3D9Ex::D3D9::GetAdapterModeCount(UINT Adapter, D3DFORMAT Format)
+	UINT D3D9Ex::D3D9::GetAdapterModeCount(UINT adapter, D3DFORMAT format)
 	{
-		return m_pIDirect3D9->GetAdapterModeCount(Adapter, Format);
+		return direct3D->GetAdapterModeCount(adapter, format);
 	}
 
-	HRESULT WINAPI D3D9Ex::D3D9::EnumAdapterModes(UINT Adapter, D3DFORMAT Format, UINT Mode, D3DDISPLAYMODE* pMode)
+	HRESULT D3D9Ex::D3D9::EnumAdapterModes(UINT adapter, D3DFORMAT format, UINT modeIndex, D3DDISPLAYMODE* mode)
 	{
-		return m_pIDirect3D9->EnumAdapterModes(Adapter, Format, Mode, pMode);
+		return direct3D->EnumAdapterModes(adapter, format, modeIndex, mode);
 	}
 
-	HRESULT WINAPI D3D9Ex::D3D9::GetAdapterDisplayMode(UINT Adapter, D3DDISPLAYMODE* pMode)
+	HRESULT D3D9Ex::D3D9::GetAdapterDisplayMode(UINT adapter, D3DDISPLAYMODE* mode)
 	{
-		return m_pIDirect3D9->GetAdapterDisplayMode(Adapter, pMode);
+		return direct3D->GetAdapterDisplayMode(adapter, mode);
 	}
 
-	HRESULT WINAPI D3D9Ex::D3D9::CheckDeviceType(UINT iAdapter, D3DDEVTYPE DevType, D3DFORMAT DisplayFormat, D3DFORMAT BackBufferFormat, BOOL bWindowed)
+	HRESULT D3D9Ex::D3D9::CheckDeviceType(UINT adapter, D3DDEVTYPE deviceType, D3DFORMAT displayFormat, D3DFORMAT backBufferFormat, BOOL isWindowed)
 	{
-		return m_pIDirect3D9->CheckDeviceType(iAdapter, DevType, DisplayFormat, BackBufferFormat, bWindowed);
+		return direct3D->CheckDeviceType(adapter, deviceType, displayFormat, backBufferFormat, isWindowed);
 	}
 
-	HRESULT WINAPI D3D9Ex::D3D9::CheckDeviceFormat(UINT Adapter, D3DDEVTYPE DeviceType, D3DFORMAT AdapterFormat, DWORD Usage, D3DRESOURCETYPE RType, D3DFORMAT CheckFormat)
+	HRESULT D3D9Ex::D3D9::CheckDeviceFormat(UINT adapter, D3DDEVTYPE deviceType, D3DFORMAT adapterFormat, DWORD usage, D3DRESOURCETYPE resourceType, D3DFORMAT checkFormat)
 	{
-		return m_pIDirect3D9->CheckDeviceFormat(Adapter, DeviceType, AdapterFormat, Usage, RType, CheckFormat);
+		return direct3D->CheckDeviceFormat(adapter, deviceType, adapterFormat, usage, resourceType, checkFormat);
 	}
 
-	HRESULT WINAPI D3D9Ex::D3D9::CheckDeviceMultiSampleType(UINT Adapter, D3DDEVTYPE DeviceType, D3DFORMAT SurfaceFormat, BOOL Windowed, D3DMULTISAMPLE_TYPE MultiSampleType, DWORD* pQualityLevels)
+	HRESULT D3D9Ex::D3D9::CheckDeviceMultiSampleType(UINT adapter, D3DDEVTYPE deviceType, D3DFORMAT surfaceFormat, BOOL isWindowed, D3DMULTISAMPLE_TYPE multiSampleType, DWORD* qualityLevels)
 	{
-		return m_pIDirect3D9->CheckDeviceMultiSampleType(Adapter, DeviceType, SurfaceFormat, Windowed, MultiSampleType, pQualityLevels);
+		return direct3D->CheckDeviceMultiSampleType(adapter, deviceType, surfaceFormat, isWindowed, multiSampleType, qualityLevels);
 	}
 
-	HRESULT WINAPI D3D9Ex::D3D9::CheckDepthStencilMatch(UINT Adapter, D3DDEVTYPE DeviceType, D3DFORMAT AdapterFormat, D3DFORMAT RenderTargetFormat, D3DFORMAT DepthStencilFormat)
+	HRESULT D3D9Ex::D3D9::CheckDepthStencilMatch(UINT adapter, D3DDEVTYPE deviceType, D3DFORMAT adapterFormat, D3DFORMAT renderTargetFormat, D3DFORMAT depthStencilFormat)
 	{
-		return m_pIDirect3D9->CheckDepthStencilMatch(Adapter, DeviceType, AdapterFormat, RenderTargetFormat, DepthStencilFormat);
+		return direct3D->CheckDepthStencilMatch(adapter, deviceType, adapterFormat, renderTargetFormat, depthStencilFormat);
 	}
 
-	HRESULT WINAPI D3D9Ex::D3D9::CheckDeviceFormatConversion(UINT Adapter, D3DDEVTYPE DeviceType, D3DFORMAT SourceFormat, D3DFORMAT TargetFormat)
+	HRESULT D3D9Ex::D3D9::CheckDeviceFormatConversion(UINT adapter, D3DDEVTYPE deviceType, D3DFORMAT sourceFormat, D3DFORMAT targetFormat)
 	{
-		return m_pIDirect3D9->CheckDeviceFormatConversion(Adapter, DeviceType, SourceFormat, TargetFormat);
+		return direct3D->CheckDeviceFormatConversion(adapter, deviceType, sourceFormat, targetFormat);
 	}
 
-	HRESULT WINAPI D3D9Ex::D3D9::GetDeviceCaps(UINT Adapter, D3DDEVTYPE DeviceType, D3DCAPS9* pCaps)
+	HRESULT D3D9Ex::D3D9::GetDeviceCaps(UINT adapter, D3DDEVTYPE deviceType, D3DCAPS9* caps)
 	{
-		return m_pIDirect3D9->GetDeviceCaps(Adapter, DeviceType, pCaps);
+		return direct3D->GetDeviceCaps(adapter, deviceType, caps);
 	}
 
-	HMONITOR WINAPI D3D9Ex::D3D9::GetAdapterMonitor(UINT Adapter)
+	HMONITOR D3D9Ex::D3D9::GetAdapterMonitor(UINT adapter)
 	{
-		return m_pIDirect3D9->GetAdapterMonitor(Adapter);
+		return direct3D->GetAdapterMonitor(adapter);
 	}
 
-	HRESULT WINAPI D3D9Ex::D3D9::CreateDevice(UINT Adapter, D3DDEVTYPE DeviceType, HWND hFocusWindow, DWORD BehaviorFlags, D3DPRESENT_PARAMETERS* pPresentationParameters, IDirect3DDevice9** ppReturnedDeviceInterface)
+	HRESULT D3D9Ex::D3D9::CreateDevice(UINT adapter, D3DDEVTYPE deviceType, HWND focusWindow, DWORD behaviorFlags, D3DPRESENT_PARAMETERS* presentationParameters, IDirect3DDevice9** returnedDevice)
 	{
-		HRESULT hres = m_pIDirect3D9->CreateDevice(Adapter, DeviceType, hFocusWindow, BehaviorFlags, pPresentationParameters, ppReturnedDeviceInterface);
-		*ppReturnedDeviceInterface = new D3D9Ex::D3D9Device(*ppReturnedDeviceInterface);
-		return hres;
+		const HRESULT result = direct3D->CreateDevice(adapter, deviceType, focusWindow, behaviorFlags, presentationParameters, returnedDevice);
+
+		if (SUCCEEDED(result))
+		{
+			*returnedDevice = new D3D9Device(*returnedDevice);
+		}
+
+		return result;
 	}
 
 #pragma endregion
 
-	IDirect3D9* CALLBACK D3D9Ex::Direct3DCreate9Stub(UINT sdk)
+	bool D3D9Ex::TryRedirectCreate()
 	{
-		if (RUseD3D9Ex.get<bool>())
-		{
-			IDirect3D9Ex* test = nullptr;
-			if (FAILED(Direct3DCreate9Ex(sdk, &test))) return nullptr;
+		auto* const importSlot = reinterpret_cast<void**>(Utils::Hook::Rebase(Direct3DCreate9Import));
+		void* const resolved = *importSlot;
 
-			return (new D3D9(test));
+		HMODULE module = nullptr;
+		const DWORD flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
+
+		if (!resolved || !GetModuleHandleExA(flags, static_cast<LPCSTR>(resolved), &module))
+		{
+			return false;
 		}
 
-		return Direct3DCreate9(sdk);
+		if (reinterpret_cast<void*>(GetProcAddress(module, "Direct3DCreate9")) != resolved)
+		{
+			return false;
+		}
+
+		direct3DCreate9 = reinterpret_cast<Direct3DCreate9_t>(resolved);
+		direct3DCreate9Ex = reinterpret_cast<Direct3DCreate9Ex_t>(GetProcAddress(module, "Direct3DCreate9Ex"));
+
+		Utils::Hook::Set<void*>(Direct3DCreate9Import, reinterpret_cast<void*>(Direct3DCreate9Stub));
+
+		return *importSlot == reinterpret_cast<void*>(Direct3DCreate9Stub);
+	}
+
+	IDirect3D9* WINAPI D3D9Ex::Direct3DCreate9Stub(UINT sdkVersion)
+	{
+		if (IsD3D9ExEnabled())
+		{
+			IDirect3D9Ex* direct3D = nullptr;
+
+			if (direct3DCreate9Ex && SUCCEEDED(direct3DCreate9Ex(sdkVersion, &direct3D)))
+			{
+				return new D3D9(direct3D);
+			}
+
+			Logger::Error("d3d9ex: no D3D9Ex for sdk version {}, the device is plain d3d9\n", sdkVersion);
+		}
+
+		return direct3DCreate9(sdkVersion);
+	}
+
+	bool D3D9Ex::IsD3D9ExEnabled()
+	{
+		return r_useD3D9Ex.IsValid() && r_useD3D9Ex.Get<bool>();
+	}
+
+	void D3D9Ex::BeginMapLoading(const std::string& map)
+	{
+		if (Dedicated::IsEnabled() || map.empty())
+		{
+			return;
+		}
+
+		if (isMapUpload.load(std::memory_order_relaxed) && loadingMap == map)
+		{
+			return;
+		}
+
+		loadingMap = map;
+		hasSeenConnection = false;
+		isMapUpload.store(true, std::memory_order_relaxed);
+	}
+
+	void D3D9Ex::LoadTexture(Game::GfxImageLoadDef** loadDef, Game::GfxImage* image)
+	{
+		Window::PumpLoadingEvents();
+
+		if (!ShouldStageUploads())
+		{
+			Game::Load_Texture(loadDef, image);
+			return;
+		}
+
+		ImageUploadScope scope(image);
+		Game::Load_Texture(loadDef, image);
+		scope.Finish();
+	}
+
+	bool D3D9Ex::LoadImageWithReader(Game::GfxImage* image, Game::ImageFileReader_t reader)
+	{
+		Window::PumpLoadingEvents();
+
+		if (!ShouldStageUploads())
+		{
+			return Game::Image_LoadFromFileWithReader(image, reader);
+		}
+
+		ImageUploadScope scope(image);
+		const bool isLoaded = Game::Image_LoadFromFileWithReader(image, reader);
+		scope.Finish();
+
+		return isLoaded;
+	}
+
+	void D3D9Ex::HookImageLoads()
+	{
+		for (const std::uintptr_t site : Image_LoadFromFileWithReaderCalls)
+		{
+			if (!Utils::Hook::BranchesTo(site, Image_LoadFromFileWithReader, HOOK_CALL))
+			{
+				Logger::Error("d3d9ex: 0x{:X} no longer calls Image_LoadFromFileWithReader, no image load is staged\n", site);
+				return;
+			}
+		}
+
+		bool isSeated = true;
+
+		for (std::size_t i = 0; i < std::size(Image_LoadFromFileWithReaderCalls); ++i)
+		{
+			isSeated = imageLoadHooks[i].Initialize(Image_LoadFromFileWithReaderCalls[i], reinterpret_cast<void*>(LoadImageWithReader), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+		}
+
+		if (!isSeated)
+		{
+			for (auto& hook : imageLoadHooks)
+			{
+				hook.Uninstall();
+			}
+
+			Logger::Error("d3d9ex: could not seat every image load hook, no image load is staged\n");
+			return;
+		}
+
+		for (auto& hook : imageLoadHooks)
+		{
+			hook.Quick();
+		}
 	}
 
 	D3D9Ex::D3D9Ex()
 	{
-		if (Dedicated::IsEnabled()) return;
+		if (Dedicated::IsEnabled())
+		{
+			return;
+		}
 
-		RUseD3D9Ex = Dvar::Register<bool>("r_useD3D9Ex", false, Game::DVAR_ARCHIVE, "Use extended d3d9 interface!");
+		Events::OnDvarInit([]
+		{
+			r_useD3D9Ex = Dvar::Register("r_useD3D9Ex", false, Game::DVAR_ARCHIVE, "Use extended d3d9 interface!");
 
-		// Hook Interface creation
-		Utils::Hook::Set(0x6D74D0, Direct3DCreate9Stub);
+			if (!TryRedirectCreate())
+			{
+				Logger::Error("d3d9ex: the Direct3DCreate9 import does not read as expected, r_useD3D9Ex does nothing\n");
+			}
+		});
 
-		// These encompass full loose-image mip chains, including delayed images.
-		Utils::Hook(0x51F486, LoadImageWithReader, HOOK_CALL).install()->quick();
-		Utils::Hook(0x51F595, LoadImageWithReader, HOOK_CALL).install()->quick();
-		Utils::Hook(0x51F809, LoadImageWithReader, HOOK_CALL).install()->quick();
-		Utils::Hook(0x51F896, LoadImageWithReader, HOOK_CALL).install()->quick();
+		HookImageLoads();
+
 		Scheduler::Loop([]
 		{
-			if (!MapTextureUploads.load(std::memory_order_relaxed)) return;
-			const auto state = *reinterpret_cast<Game::connstate_t*>(0xB2C540);
-			if (state >= Game::CA_CONNECTING && state < Game::CA_ACTIVE) MapSawConnection = true;
-			if (MapSawConnection && (state == Game::CA_ACTIVE || (state == Game::CA_DISCONNECTED && FastFiles::Ready())))
+			if (!isMapUpload.load(std::memory_order_relaxed))
 			{
-				MapTextureUploads.store(false, std::memory_order_relaxed);
-				LoadingMap.clear();
+				return;
+			}
+
+			const Game::connstate_t state = Game::CL_GetLocalClientConnectionState(0);
+
+			if (state >= Game::CA_CONNECTING && state < Game::CA_ACTIVE)
+			{
+				hasSeenConnection = true;
+			}
+
+			const bool isLoadOver = state == Game::CA_ACTIVE || (state == Game::CA_DISCONNECTED && FastFiles::Ready());
+
+			if (hasSeenConnection && isLoadOver)
+			{
+				isMapUpload.store(false, std::memory_order_relaxed);
+				loadingMap.clear();
 			}
 		}, Scheduler::Pipeline::MAIN);
+
 		Scheduler::OnGameInitialized([]
 		{
-			StartupTextureUploads.store(false, std::memory_order_relaxed);
+			isStartupUpload.store(false, std::memory_order_relaxed);
 		}, Scheduler::Pipeline::MAIN);
 	}
 }

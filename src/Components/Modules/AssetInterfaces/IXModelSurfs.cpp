@@ -1,22 +1,27 @@
+#include "STDInclude.hpp"
+
+#include "Components/Modules/AssetHandler.hpp"
+
 #include "IXModelSurfs.hpp"
 
 namespace Assets
 {
-	void IXModelSurfs::saveXSurfaceCollisionTree(Game::XSurfaceCollisionTree* entry, Components::ZoneBuilder::Zone* builder)
+	void IXModelSurfs::SaveXSurfaceCollisionTree(const Game::XSurfaceCollisionTree* entry, Components::ZoneBuilder::Zone* builder)
 	{
-		AssertSize(Game::XSurfaceCollisionTree, 40);
+		AssertSize(Game::X86::XSurfaceCollisionTree, 40);
 
-		Utils::Stream* buffer = builder->getBuffer();
+		auto* const buffer = builder->GetBuffer();
 
-		Game::XSurfaceCollisionTree* destEntry = buffer->dest<Game::XSurfaceCollisionTree>();
-		buffer->save(entry);
+		auto* const destEntry = buffer->Dest<Game::X86::XSurfaceCollisionTree>();
+		const auto record = Game::X86::Convert(*entry);
+		buffer->Save(&record);
 
 		if (entry->nodes)
 		{
 			AssertSize(Game::XSurfaceCollisionNode, 16);
 
-			buffer->align(Utils::Stream::ALIGN_16);
-			buffer->saveArray(entry->nodes, entry->nodeCount);
+			buffer->Align(Utils::Stream::ALIGN_16);
+			buffer->SaveArray(entry->nodes, entry->nodeCount);
 			Utils::Stream::ClearPointer(&destEntry->nodes);
 		}
 
@@ -24,86 +29,97 @@ namespace Assets
 		{
 			AssertSize(Game::XSurfaceCollisionLeaf, 2);
 
-			buffer->align(Utils::Stream::ALIGN_2);
-			buffer->saveArray(entry->leafs, entry->leafCount);
+			buffer->Align(Utils::Stream::ALIGN_2);
+			buffer->SaveArray(entry->leafs, entry->leafCount);
 			Utils::Stream::ClearPointer(&destEntry->leafs);
 		}
 	}
 
-	void IXModelSurfs::saveXSurface(Game::XSurface* surf, Game::XSurface* destSurf, Components::ZoneBuilder::Zone* builder)
+	void IXModelSurfs::SaveXSurface(const Game::XSurface* surf, Game::X86::XSurface* destSurf, Components::ZoneBuilder::Zone* builder)
 	{
-		Utils::Stream* buffer = builder->getBuffer();
+		auto* const buffer = builder->GetBuffer();
 
 		if (surf->vertInfo.vertsBlend)
 		{
-			if (builder->hasPointer(surf->vertInfo.vertsBlend))
+			if (builder->HasPointer(surf->vertInfo.vertsBlend))
 			{
-				destSurf->vertInfo.vertsBlend = builder->getPointer(surf->vertInfo.vertsBlend);
+				destSurf->vertInfo.vertsBlend = builder->GetPointer(surf->vertInfo.vertsBlend);
 			}
 			else
 			{
+				const auto& vertCount = surf->vertInfo.vertCount;
+				const int blendCount = vertCount[0] + (vertCount[1] * 3) + (vertCount[2] * 5) + (vertCount[3] * 7);
 
-				buffer->align(Utils::Stream::ALIGN_2);
-				builder->storePointer(surf->vertInfo.vertsBlend);
-				buffer->saveArray(surf->vertInfo.vertsBlend, surf->vertInfo.vertCount[0] + (surf->vertInfo.vertCount[1] * 3) + (surf->vertInfo.vertCount[2] * 5) + (surf->vertInfo.vertCount[3] * 7));
+				buffer->Align(Utils::Stream::ALIGN_2);
+				builder->StorePointer(surf->vertInfo.vertsBlend);
+				buffer->SaveArray(surf->vertInfo.vertsBlend, static_cast<std::size_t>(blendCount));
 				Utils::Stream::ClearPointer(&destSurf->vertInfo.vertsBlend);
 			}
 		}
 
-		// Access vertex block
-		buffer->pushBlock(Game::XFILE_BLOCK_VERTEX);
+		buffer->PushBlock(Game::XFILE_BLOCK_VERTEX);
+
 		if (surf->verts0)
 		{
 			AssertSize(Game::GfxPackedVertex, 32);
+			AssertSize(Game::X86::GfxPackedVertex, 32);
 
-			if (builder->hasPointer(surf->verts0))
+			if (builder->HasPointer(surf->verts0))
 			{
-				destSurf->verts0 = builder->getPointer(surf->verts0);
+				destSurf->verts0 = builder->GetPointer(surf->verts0);
 			}
 			else
 			{
-				buffer->align(Utils::Stream::ALIGN_16);
-				builder->storePointer(surf->verts0);
-				buffer->saveArray(surf->verts0, surf->vertCount);
+				buffer->Align(Utils::Stream::ALIGN_16);
+				builder->StorePointer(surf->verts0);
+				buffer->SaveArray(surf->verts0, surf->vertCount);
 				Utils::Stream::ClearPointer(&destSurf->verts0);
 			}
 		}
-		buffer->popBlock();
 
-		// Save_XRigidVertListArray
+		buffer->PopBlock();
+
 		if (surf->vertList)
 		{
-			AssertSize(Game::XRigidVertList, 12);
+			AssertSize(Game::X86::XRigidVertList, 12);
 
-			if (builder->hasPointer(surf->vertList))
+			if (builder->HasPointer(surf->vertList))
 			{
-				destSurf->vertList = builder->getPointer(surf->vertList);
+				destSurf->vertList = builder->GetPointer(surf->vertList);
 			}
 			else
 			{
-				buffer->align(Utils::Stream::ALIGN_4);
-				builder->storePointer(surf->vertList);
+				buffer->Align(Utils::Stream::ALIGN_4);
+				builder->StorePointer(surf->vertList);
 
-				Game::XRigidVertList* destCt = buffer->dest<Game::XRigidVertList>();
-				buffer->saveArray(surf->vertList, surf->vertListCount);
+				auto* const destLists = buffer->Dest<Game::X86::XRigidVertList>();
 
 				for (unsigned int i = 0; i < surf->vertListCount; ++i)
 				{
-					Game::XRigidVertList* destRigidVertList = &destCt[i];
-					Game::XRigidVertList* rigidVertList = &surf->vertList[i];
+					const auto listRecord = Game::X86::Convert(surf->vertList[i]);
+					buffer->Save(&listRecord);
+				}
 
-					if (rigidVertList->collisionTree)
+				for (unsigned int i = 0; i < surf->vertListCount; ++i)
+				{
+					auto* const destRigidVertList = &destLists[i];
+					const auto* const rigidVertList = &surf->vertList[i];
+
+					if (!rigidVertList->collisionTree)
 					{
-						if (builder->hasPointer(rigidVertList->collisionTree))
-						{
-							destRigidVertList->collisionTree = builder->getPointer(rigidVertList->collisionTree);
-						}
-						else {
-							buffer->align(Utils::Stream::ALIGN_4);
-							builder->storePointer(rigidVertList->collisionTree);
-							this->saveXSurfaceCollisionTree(rigidVertList->collisionTree, builder);
-							Utils::Stream::ClearPointer(&destRigidVertList->collisionTree);
-						}
+						continue;
+					}
+
+					if (builder->HasPointer(rigidVertList->collisionTree))
+					{
+						destRigidVertList->collisionTree = builder->GetPointer(rigidVertList->collisionTree);
+					}
+					else
+					{
+						buffer->Align(Utils::Stream::ALIGN_4);
+						builder->StorePointer(rigidVertList->collisionTree);
+						this->SaveXSurfaceCollisionTree(rigidVertList->collisionTree, builder);
+						Utils::Stream::ClearPointer(&destRigidVertList->collisionTree);
 					}
 				}
 
@@ -111,56 +127,63 @@ namespace Assets
 			}
 		}
 
-		// Access index block
-		buffer->pushBlock(Game::XFILE_BLOCK_INDEX);
-		if (builder->hasPointer(surf->triIndices))
+		buffer->PushBlock(Game::XFILE_BLOCK_INDEX);
+
+		if (builder->HasPointer(surf->triIndices))
 		{
-			destSurf->triIndices = builder->getPointer(surf->triIndices);
+			destSurf->triIndices = builder->GetPointer(surf->triIndices);
 		}
 		else
 		{
-			buffer->align(Utils::Stream::ALIGN_16);
-			builder->storePointer(surf->triIndices);
-			buffer->saveArray(surf->triIndices, surf->triCount * 3);
+			buffer->Align(Utils::Stream::ALIGN_16);
+			builder->StorePointer(surf->triIndices);
+			buffer->SaveArray(surf->triIndices, surf->triCount * 3);
 			Utils::Stream::ClearPointer(&destSurf->triIndices);
 		}
-		buffer->popBlock();
+
+		buffer->PopBlock();
 	}
 
-	void IXModelSurfs::save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
+	void IXModelSurfs::Save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
 	{
-		AssertSize(Game::XModelSurfs, 36);
+		AssertSize(Game::X86::XModelSurfs, 36);
 
-		Utils::Stream* buffer = builder->getBuffer();
-		Game::XModelSurfs* asset = header.modelSurfs;
-		Game::XModelSurfs* dest = buffer->dest<Game::XModelSurfs>();
-		buffer->save(asset);
+		auto* const buffer = builder->GetBuffer();
+		const auto* const asset = header.modelSurfs;
+		auto* const dest = buffer->Dest<Game::X86::XModelSurfs>();
+		const auto record = Game::X86::Convert(*asset);
+		buffer->Save(&record);
 
-		buffer->pushBlock(Game::XFILE_BLOCK_VIRTUAL);
+		buffer->PushBlock(Game::XFILE_BLOCK_VIRTUAL);
 
 		if (asset->name)
 		{
-			buffer->saveString(builder->getAssetName(this->getType(), asset->name));
+			buffer->SaveString(builder->GetAssetName(this->GetType(), asset->name));
 			Utils::Stream::ClearPointer(&dest->name);
 		}
 
 		if (asset->surfs)
 		{
-			AssertSize(Game::XSurface, 64);
+			AssertSize(Game::X86::XSurface, 64);
 
-			buffer->align(Utils::Stream::ALIGN_4);
+			buffer->Align(Utils::Stream::ALIGN_4);
 
-			Game::XSurface* destSurfaces = buffer->dest<Game::XSurface>();
-			buffer->saveArray(asset->surfs, asset->numsurfs);
+			auto* const destSurfaces = buffer->Dest<Game::X86::XSurface>();
 
 			for (int i = 0; i < asset->numsurfs; ++i)
 			{
-				this->saveXSurface(&asset->surfs[i], &destSurfaces[i], builder);
+				const auto surfaceRecord = Game::X86::Convert(asset->surfs[i]);
+				buffer->Save(&surfaceRecord);
+			}
+
+			for (int i = 0; i < asset->numsurfs; ++i)
+			{
+				this->SaveXSurface(&asset->surfs[i], &destSurfaces[i], builder);
 			}
 
 			Utils::Stream::ClearPointer(&dest->surfs);
 		}
 
-		buffer->popBlock();
+		buffer->PopBlock();
 	}
 }

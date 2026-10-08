@@ -1,105 +1,75 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
 namespace Controller
 {
-  enum class button : uint8_t
-  {
-    face_south,
-    face_east,
-    face_west,
-    face_north,
+	enum class Button : std::uint8_t
+	{
+		FaceSouth,
+		FaceEast,
+		FaceWest,
+		FaceNorth,
 
-    dpad_up,
-    dpad_down,
-    dpad_left,
-    dpad_right,
+		DpadUp,
+		DpadDown,
+		DpadLeft,
+		DpadRight,
 
-    l1,
-    r1,
-    l2,
-    r2,
-    l3,
-    r3,
+		L1,
+		R1,
+		L2,
+		R2,
+		L3,
+		R3,
 
-    start,
-    back,
-    guide,
+		Start,
+		Back,
+		Guide,
 
-    touchpad,
-    mute,
+		Touchpad,
+		Mute,
 
-    edge_paddle_left,
-    edge_paddle_right,
-    edge_fn_left,
-    edge_fn_right,
+		EdgePaddleLeft,
+		EdgePaddleRight,
+		EdgeFnLeft,
+		EdgeFnRight,
 
-    count,
-  };
+		Count,
+	};
 
-  static_assert (static_cast<size_t> (button::count) <= 32,
-                 "button_set stores buttons in a 32-bit mask");
+	static_assert(static_cast<std::size_t>(Button::Count) <= 32, "ButtonSet stores buttons in a 32-bit mask");
 
-  const char*
-  to_string (button) noexcept;
+	class ButtonSet
+	{
+	public:
+		constexpr ButtonSet() = default;
 
-  class button_set
-  {
-  public:
-    constexpr button_set () = default;
+		constexpr bool IsDown(Button button) const noexcept
+		{
+			return (this->bits & Mask(button)) != 0;
+		}
 
-    constexpr bool
-    down (button b) const noexcept
-    {
-      return (bits_ & mask (b)) != 0;
-    }
+		constexpr void Set(Button button, bool isDown) noexcept
+		{
+			if (isDown)
+			{
+				this->bits |= Mask(button);
+			}
+			else
+			{
+				this->bits &= ~Mask(button);
+			}
+		}
 
-    constexpr void
-    set (button b, bool on) noexcept
-    {
-      if (on)
-        bits_ |= mask (b);
-      else
-        bits_ &= ~mask (b);
-    }
+		friend constexpr bool operator==(ButtonSet, ButtonSet) noexcept = default;
 
-    constexpr bool
-    any () const noexcept {return bits_ != 0;}
+	private:
+		static constexpr std::uint32_t Mask(Button button) noexcept
+		{
+			return std::uint32_t{ 1 } << static_cast<std::uint32_t>(button);
+		}
 
-    constexpr uint32_t
-    value () const noexcept {return bits_;}
-
-    constexpr button_set
-    pressed_since (button_set prev) const noexcept
-    {
-      return from_bits (bits_ & ~prev.bits_);
-    }
-
-    constexpr button_set
-    released_since (button_set prev) const noexcept
-    {
-      return from_bits (prev.bits_ & ~bits_);
-    }
-
-    friend constexpr bool
-    operator== (button_set, button_set) noexcept = default;
-
-  private:
-    static constexpr uint32_t
-    mask (button b) noexcept
-    {
-      return uint32_t {1} << static_cast<uint32_t> (b);
-    }
-
-    static constexpr button_set
-    from_bits (uint32_t b) noexcept
-    {
-      button_set s;
-      s.bits_ = b;
-      return s;
-    }
-
-    uint32_t bits_ {0};
-  };
+		std::uint32_t bits = 0;
+	};
 }

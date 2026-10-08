@@ -1,14 +1,10 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "Profile.hpp"
+#include "Controller/Calibration/Profile.hpp"
 
-namespace Controller
+namespace Controller::Calibration
 {
-  namespace calibration
-  {
-    bool
-    validate (const profile&, std::string& why) noexcept;
-  }
+	bool IsValid(const Profile& profile, std::string& why);
 }

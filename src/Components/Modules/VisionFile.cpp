@@ -1,13 +1,40 @@
+#include "STDInclude.hpp"
+
 #include "VisionFile.hpp"
+#include "Logger.hpp"
+
+extern "C"
+{
+	void LoadVisionSettingsFromBufferStub();
+
+	std::uintptr_t VisionFile_ParseDone = 0;
+
+	void VisionFile_LoadVisionSettingsFromBuffer(const char* buffer, const char* filename, Game::visionSetVars_t* settings)
+	{
+		Components::VisionFile::LoadVisionSettingsFromBuffer(buffer, filename, settings);
+	}
+}
 
 namespace Components
 {
-	std::vector<std::string> VisionFile::DvarExceptions =
+	constexpr std::uintptr_t LoadVisionFile_Parse = 0x1400BFDA2;
+	constexpr std::uintptr_t LoadVisionFile_PathLea = 0x1400BFDAF;
+	constexpr std::uintptr_t LoadVisionFile_EndParseCall = 0x1400BFF06;
+	constexpr std::uintptr_t LoadVisionFile_ParseDone = 0x1400BFF0B;
+	static const std::uint8_t parseStart[] = { 0x33, 0xC0, 0x48, 0x89, 0x5C, 0x24, 0x30 };
+	static const std::uint8_t pathLea[] = { 0x48, 0x8D, 0x4D, 0xF7 };
+	static const std::uint8_t endParseCall[] = { 0xE8, 0x35, 0xAE, 0x1C, 0x00 };
+
+	constexpr unsigned int visionDefFieldCount = 21;
+
+	static Utils::Hook parseHook;
+
+	std::vector<std::string> VisionFile::dvarExceptions =
 	{
 		"r_pretess",
 	};
 
-	std::unordered_map<std::string, std::string> VisionFile::VisionReplacements
+	std::unordered_map<std::string, std::string> VisionFile::visionReplacements
 	{
 		{"511", "r_glow"},
 		{"516", "r_glowRadius0"},
@@ -30,20 +57,22 @@ namespace Components
 
 	bool VisionFile::ApplyExemptDvar(const char* dvarName, const char** buffer, const char* filename)
 	{
-		for (auto& exceptions : DvarExceptions)
+		for (const auto& exception : dvarExceptions)
 		{
-			if (!_stricmp(dvarName, exceptions.data()))
+			if (!_stricmp(dvarName, exception.data()))
 			{
 				const auto* dvar = Game::Dvar_FindVar(dvarName);
-				const auto* parsedValue = Game::Com_ParseOnLine(buffer);
 
-				assert(dvar);
-				assert(parsedValue);
+				if (!dvar)
+				{
+					return false;
+				}
+
+				const auto* parsedValue = Game::Com_ParseOnLine(buffer);
 
 				Game::Dvar_SetFromStringFromSource(dvar, parsedValue, Game::DVAR_SOURCE_INTERNAL);
 				Logger::Print("Overriding '{}' from '{}'\n", dvar->name, filename);
 
-				// Successfully found and tried to apply the string value to the dvar
 				return true;
 			}
 		}
@@ -51,29 +80,76 @@ namespace Components
 		return false;
 	}
 
+	bool VisionFile::ApplyTokenToField(unsigned int fieldNum, const char* token, Game::visionSetVars_t* settings)
+	{
+		const Game::visField_t& field = Game::visionDefFields[fieldNum];
+		char* const target = reinterpret_cast<char*>(settings) + field.offset;
+
+		if (field.fieldType == 0)
+		{
+			int value = 0;
+
+			if (sscanf_s(token, "%i", &value) != 1)
+			{
+				return false;
+			}
+
+			*reinterpret_cast<bool*>(target) = value != 0;
+			return true;
+		}
+
+		if (field.fieldType == 1)
+		{
+			float value = 0.0f;
+
+			if (sscanf_s(token, "%f", &value) != 1)
+			{
+				return false;
+			}
+
+			*reinterpret_cast<float*>(target) = value;
+			return true;
+		}
+
+		float values[3]{};
+
+		if (sscanf_s(token, "%f %f %f", &values[0], &values[1], &values[2]) != 3)
+		{
+			return false;
+		}
+
+		std::memcpy(target, values, sizeof(values));
+		return true;
+	}
+
 	bool VisionFile::LoadVisionSettingsFromBuffer(const char* buffer, const char* filename, Game::visionSetVars_t* settings)
 	{
-		assert(settings);
-
-		bool wasRead[21]{};
+		bool wasRead[visionDefFieldCount]{};
 		Game::Com_BeginParseSession(filename);
 
 		while (true)
 		{
-			auto* token = Game::Com_Parse(&buffer);
+			const char* token = Game::Com_Parse(&buffer);
 
 			if (!*token)
 			{
 				break;
 			}
 
-			auto found = false;
-			auto fieldNum = 0;
+			bool found = false;
+			unsigned int fieldNum = 0;
 
-			const auto it = VisionReplacements.find(token);
-			for (fieldNum = 0; fieldNum < 21; ++fieldNum)
+			const char* fieldName = token;
+			const auto replacement = visionReplacements.find(token);
+
+			if (replacement != visionReplacements.end())
 			{
-				if (!wasRead[fieldNum] && !_stricmp((it == VisionReplacements.end()) ? token : it->second.data(), Game::visionDefFields[fieldNum].name))
+				fieldName = replacement->second.data();
+			}
+
+			for (fieldNum = 0; fieldNum < visionDefFieldCount; ++fieldNum)
+			{
+				if (!wasRead[fieldNum] && !_stricmp(fieldName, Game::visionDefFields[fieldNum].name))
 				{
 					found = true;
 					break;
@@ -84,20 +160,22 @@ namespace Components
 			{
 				if (!ApplyExemptDvar(token, &buffer, filename))
 				{
-					Logger::Warning(Game::CON_CHANNEL_SYSTEM, "WARNING: unknown dvar '{}' in file '{}'\n", token, filename);
+					Logger::Warning("unknown dvar '{}' in file '{}'\n", token, filename);
 					Game::Com_SkipRestOfLine(&buffer);
 				}
+
 				continue;
 			}
 
 			token = Game::Com_ParseOnLine(&buffer);
+
 			if (ApplyTokenToField(fieldNum, token, settings))
 			{
 				wasRead[fieldNum] = true;
 			}
 			else
 			{
-				Logger::Warning(Game::CON_CHANNEL_SYSTEM, "WARNING: malformed dvar '{}' in file '{}'\n", token, filename);
+				Logger::Warning("malformed dvar '{}' in file '{}'\n", token, filename);
 				Game::Com_SkipRestOfLine(&buffer);
 			}
 		}
@@ -106,32 +184,26 @@ namespace Components
 		return true;
 	}
 
-	__declspec(naked) bool VisionFile::LoadVisionSettingsFromBuffer_Stub()
-	{
-		__asm
-		{
-			push eax
-			pushad
-
-			push [esp + 0x24 + 0x8] // settings
-			push ebx // filename
-			push [esp + 0x24 + 0xC] // buffer
-			call LoadVisionSettingsFromBuffer
-			add esp, 0xC
-
-			mov [esp + 0x20], eax
-			popad
-			pop eax
-
-			ret
-		}
-	}
-
 	VisionFile::VisionFile()
 	{
-		AssertSize(Game::visField_t, 12);
+		const bool isExpected = Utils::Hook::MatchesBytes(LoadVisionFile_Parse, parseStart, sizeof(parseStart))
+			&& Utils::Hook::MatchesBytes(LoadVisionFile_PathLea, pathLea, sizeof(pathLea))
+			&& Utils::Hook::MatchesBytes(LoadVisionFile_EndParseCall, endParseCall, sizeof(endParseCall));
 
-		// Place hook in LoadVisionFile function
-		Utils::Hook(0x59A98A, LoadVisionSettingsFromBuffer_Stub, HOOK_CALL).install()->quick();
+		if (!isExpected)
+		{
+			Logger::Error("visionfile: LoadVisionFile does not read as expected, the engine's parser stays\n");
+			return;
+		}
+
+		VisionFile_ParseDone = Utils::Hook::Rebase(LoadVisionFile_ParseDone);
+
+		if (!parseHook.Initialize(LoadVisionFile_Parse, LoadVisionSettingsFromBufferStub, HOOK_CALL)->Install()->IsInstalled())
+		{
+			Logger::Error("visionfile: could not seat the vision parse hook, the engine's parser stays\n");
+			return;
+		}
+
+		Utils::Hook::Nop(LoadVisionFile_Parse + 5, sizeof(parseStart) - 5);
 	}
 }

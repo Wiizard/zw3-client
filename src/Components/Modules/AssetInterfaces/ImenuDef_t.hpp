@@ -1,45 +1,30 @@
 #pragma once
 
+#include "../AssetHandler.hpp"
+
 namespace Assets
 {
 	class ImenuDef_t : public Components::AssetHandler::IAsset
 	{
 	public:
-		Game::XAssetType getType() override { return Game::XAssetType::ASSET_TYPE_MENU; }
+		Game::XAssetType GetType() override
+		{
+			return Game::ASSET_TYPE_MENU;
+		}
 
-		void save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder) override;
-		void mark(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder) override;
-		void load(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder) override;
-
-		static std::unordered_map<std::string, Game::menuDef_t*> LoadedMenus;
+		void Save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder) override;
+		void Mark(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder) override;
+		void Load(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder) override;
 
 	private:
-		template <typename T> void save_windowDef_t(Game::windowDef_t* asset, T* dest, Components::ZoneBuilder::Zone* builder)
-		{
-			Utils::Stream* buffer = builder->getBuffer();
-
-			if (asset->name)
-			{
-				buffer->saveString(asset->name);
-				Utils::Stream::ClearPointer(&dest->window.name);
-			}
-
-			if (asset->group)
-			{
-				buffer->saveString(asset->group);
-				Utils::Stream::ClearPointer(&dest->window.group);
-			}
-
-			if (asset->background)
-			{
-				dest->window.background = builder->saveSubAsset(Game::XAssetType::ASSET_TYPE_MATERIAL, asset->background).material;
-			}
-		}
-		void save_ExpressionSupportingData(Game::ExpressionSupportingData* asset, Components::ZoneBuilder::Zone* builder);
-		void save_Statement_s(Game::Statement_s* asset, Components::ZoneBuilder::Zone* builder);
-		void save_MenuEventHandlerSet(Game::MenuEventHandlerSet* asset, Components::ZoneBuilder::Zone* builder);
-		void save_ItemKeyHandler(Game::ItemKeyHandler* asset, Components::ZoneBuilder::Zone* builder);
-		void save_itemDefData_t(Game::itemDefData_t* asset, int type, Game::itemDef_s* dest, Components::ZoneBuilder::Zone* builder);
-		void save_itemDef_s(Game::itemDef_s* asset, Components::ZoneBuilder::Zone* builder);
+		void Save_windowDef_t(const Game::windowDef_t* asset, Game::X86::windowDef_t* dest, Components::ZoneBuilder::Zone* builder);
+		void Save_ExpressionSupportingData(const Game::ExpressionSupportingData* asset, Components::ZoneBuilder::Zone* builder);
+		void Save_Statement_s(const Game::Statement_s* asset, Components::ZoneBuilder::Zone* builder);
+		void Save_StatementPtr(const Game::Statement_s* asset, std::uint32_t* dest, Components::ZoneBuilder::Zone* builder);
+		void Save_MenuEventHandlerSet(const Game::MenuEventHandlerSet* asset, Components::ZoneBuilder::Zone* builder);
+		void Save_MenuEventHandlerSetPtr(const Game::MenuEventHandlerSet* asset, std::uint32_t* dest, Components::ZoneBuilder::Zone* builder);
+		void Save_ItemKeyHandler(const Game::ItemKeyHandler* asset, Components::ZoneBuilder::Zone* builder);
+		void Save_itemDefData_t(const Game::itemDefData_t* asset, int type, Game::X86::itemDef_s* dest, Components::ZoneBuilder::Zone* builder);
+		void Save_itemDef_s(const Game::itemDef_s* asset, Components::ZoneBuilder::Zone* builder);
 	};
 }

@@ -1,58 +1,65 @@
+#include "STDInclude.hpp"
 
-#include "Events.hpp"
 #include "StartupMessages.hpp"
-
-/*
-  "StartupMessages::Show()" is initially called by the "checkFirstLaunch" UIScript in News.cpp,
-  which is called from main_text.menu once the main menu loads.
-  Multiple messages can be added using StartupMessages::AddMessage(message, [overload] title)
-  Messages are shown in the order they were added.
-*/
+#include "Command.hpp"
+#include "Events.hpp"
+#include "UIScript.hpp"
 
 namespace Components
 {
-	int StartupMessages::TotalMessages = -1;
-	std::list<std::tuple<std::string, std::string>> StartupMessages::MessageList; // (title, message)
+	int StartupMessages::totalMessages = -1;
+	std::list<std::tuple<std::string, std::string>> StartupMessages::messageList;
 
-	Dvar::Var StartupMessages::UIStartupMessage;
-	Dvar::Var StartupMessages::UIStartupMessageTitle;
-	Dvar::Var StartupMessages::UIStartupNextButtonText;
+	Dvar::Var StartupMessages::ui_startupMessage;
+	Dvar::Var StartupMessages::ui_startupMessageTitle;
+	Dvar::Var StartupMessages::ui_startupNextButtonText;
 
 	StartupMessages::StartupMessages()
 	{
 		Events::OnDvarInit([]
 		{
-			UIStartupMessage = Dvar::Register<const char*>("ui_startupMessage", "", Game::DVAR_NONE, "");
-			UIStartupMessageTitle = Dvar::Register<const char*>("ui_startupMessageTitle", "", Game::DVAR_NONE, "");
-			UIStartupNextButtonText = Dvar::Register<const char*>("ui_startupNextButtonText", "", Game::DVAR_NONE, "");
+			ui_startupMessage = Dvar::Register("ui_startupMessage", "", Game::DVAR_NONE, "");
+			ui_startupMessageTitle = Dvar::Register("ui_startupMessageTitle", "", Game::DVAR_NONE, "");
+			ui_startupNextButtonText = Dvar::Register("ui_startupNextButtonText", "", Game::DVAR_NONE, "");
 		});
 
-		UIScript::Add("nextStartupMessage", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+		UIScript::Add("nextStartupMessage", []([[maybe_unused]] const UIScript::Token& token)
 		{
-				StartupMessages::Show();
+			Show();
 		});
 	}
 
 	void StartupMessages::Show()
 	{
-		if (MessageList.empty())
+		if (messageList.empty())
+		{
 			return;
+		}
 
-		int MessageListSize = static_cast<int>(MessageList.size());
-		if (TotalMessages < 1)
-			TotalMessages = MessageListSize;
+		const int messageListSize = static_cast<int>(messageList.size());
 
-		const auto& [title, body] = MessageList.front();
+		if (totalMessages < 1)
+		{
+			totalMessages = messageListSize;
+		}
 
-		const int MessageIndex = TotalMessages - MessageListSize + 1;
-		const std::string formattedTitle = std::format("{} ({}/{})", title, MessageIndex, TotalMessages);
-		const std::string nextButtonText = (MessageListSize <= 1) ? "Close" : "Next";
+		const auto& [title, body] = messageList.front();
 
-		UIStartupMessage.set(body);
-		UIStartupMessageTitle.set(formattedTitle);
-		UIStartupNextButtonText.set(nextButtonText);
+		const int messageIndex = totalMessages - messageListSize + 1;
+		const std::string formattedTitle = std::format("{} ({}/{})", title, messageIndex, totalMessages);
 
-		MessageList.pop_front();
+		std::string nextButtonText = "Next";
+
+		if (messageListSize <= 1)
+		{
+			nextButtonText = "Close";
+		}
+
+		ui_startupMessage.Set(body);
+		ui_startupMessageTitle.Set(formattedTitle);
+		ui_startupNextButtonText.Set(nextButtonText);
+
+		messageList.pop_front();
 		Command::Execute("openmenu startup_messages", false);
 	}
 
@@ -63,6 +70,6 @@ namespace Components
 
 	void StartupMessages::AddMessage(const std::string& message, const std::string& title)
 	{
-		MessageList.emplace_back(title, message);
+		messageList.emplace_back(title, message);
 	}
 }

@@ -1,100 +1,105 @@
 #pragma once
 
-#define OUTPUT_HEIGHT 250
-#define OUTPUT_MAX_TOP (OUTPUT_HEIGHT - (Console::Height - 2))
-
 namespace Components
 {
 	class Console : public Component
 	{
 	public:
-		Console();
-		~Console();
+		struct Color
+		{
+			float r;
+			float g;
+			float b;
+			float a;
+		};
 
-		static void SetSkipShutdown();
+		Console();
+
+		static bool IsOpen();
+
+		using KeyObserver = std::function<bool(int key, int down)>;
+		static void OnKey(const KeyObserver& observer);
+
+		static void Print(const char* text);
 
 		static void FreeNativeConsole();
 
-		static HWND GetWindow();
-
-		static void ShowAsyncConsole();
-
 	private:
+		static bool isOpen;
+		static std::vector<KeyObserver> keyObservers;
+		static bool isBig;
+		static bool isInstalled;
 
-		static constexpr int OUTPUT_BOX = 0x64;
-		static constexpr int INPUT_BOX = 0x65;
+		static Utils::Hook keyEventHook;
+		static Utils::Hook charEventHook;
+		static Utils::Hook consolePrintHooks[3];
 
-		static int Width;
-		static int Height;
+		static std::atomic_bool isShutdownRequested;
+		static std::atomic_bool isWatchdogStarted;
 
-		static int OutputTop;
-		static int OutBuffer;
-		static int LastRefresh;
+		static void RequestShutdown(DWORD watchdogDelayMs);
+		static void StartShutdownWatchdog(DWORD watchdogDelayMs);
+		static BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType);
 
-		static COLORREF TextColor;
-		static COLORREF BackgroundColor;
-		static HBRUSH ForegroundBrush;
-		static HBRUSH BackgroundBrush;
-
-		static HANDLE CustomConsoleFont;
-
-		static char LineBuffer[1024];
-		static char LineBuffer2[1024];
-		static int LineBufferIndex;
-
-		static bool HasConsole;
-		static bool SkipShutdown;
-		static std::atomic_bool ShutdownRequested;
-		static std::atomic_bool ShutdownWatchdogStarted;
-
-		static std::thread ConsoleThread;
-
-		static Game::SafeArea OriginalSafeArea;
-
-		static bool isCommand;
-
+		static void Create();
+		static const char* Input();
+		static void Error(const char* fmt, ...);
+		static void PrintCurses(const char* text);
 		static void ShowPrompt();
 		static void RefreshStatus();
 		static void RefreshOutput();
 		static void ScrollOutput(int amount);
 
-		static const char* Input();
-		static void Print(const char* message);
-		static void Error(const char* fmt, ...);
-		static void Create();
-		static void Destroy();
+		static void PushLine(const char* text, int length);
+		static void ClearScrollback();
+		static void ScrollBy(int lines);
 
-		static void StdOutPrint(const char* message);
-		static void StdOutError(const char* fmt, ...);
+		static void ResetInput();
+		static void LoadInput(const char* text);
+		static void InsertInputChar(char character);
+		static int MeasureInput(int from, int count);
+		static void AdjustInputScroll(float fieldWidth);
 
-		static void ConsoleRunner();
+		static void PushHistory(const char* text);
+		static void HistoryUp();
+		static void HistoryDown();
+		static void ExecuteInput();
 
-		static void RequestShutdown(DWORD watchdogDelayMs = 10000);
-		static void StartShutdownWatchdog(DWORD watchdogDelayMs);
-		static BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType);
+		static void AddMatch(const char* name);
+		static void CollectMatches(const char* prefix);
+		static const char* NamePrefix();
+		static bool IsTypingName();
+		static void* FindDvar(const char* name);
+		static void* FindCommand(const char* name);
+		static void DvarValueString(void* dvar, int valueOffset, char* out, std::size_t outSize);
+		static const char* FindBuiltinDescription(const char* name);
 
-		static void DrawSolidConsoleStub();
-		static void StoreSafeArea();
-		static void RestoreSafeArea();
+		static void SetOpen(bool open);
+		static void FollowEngineClose();
+		static void ToggleMode(bool big);
+		static bool HandleKey(int key, int down);
+		static void HandleChar(int character);
 
-		static const char** GetAutoCompleteFileList(const char *path, const char *extension, Game::FsListBehavior_e behavior, int *numfiles, int allocTrackType);
+		static Game::Material* WhiteMaterial();
+		static Game::Font_s* ConsoleFont();
+		static bool IsRenderReady();
+		static int TextWidth(const char* text);
+		static int TextHeight();
 
-		static void Con_ToggleConsole();
-		static void AddConsoleCommand();
+		static void DrawRect(float x, float y, float w, float h, const Color& color);
+		static void DrawText(const char* text, float x, float y, const Color& color);
+		static void DrawTextWithCursor(const char* text, int maxChars, float x, float y,
+			const Color& color, int cursorPos, char cursorChar);
+		static void DrawBox(float x, float y, float w, float h, const Color& color);
+		static void DrawHintBox(float x, float curY, int rows);
+		static void DrawHintText(const char* text, float x, float curY, const Color& color);
+		static void UpdateConsoleRect();
+		static void DrawFrame();
+		static void DrawInputHints(float hintX, float hintY, float inputY);
 
-		static Game::dvar_t* RegisterConColor(const char* dvarName, float r, float g, float b, float a, float min, float max, unsigned __int16 flags, const char* description);
-
-		static bool Con_IsDvarCommand_Stub(const char* cmd);
-		static void Cmd_ForEach_Stub(void(*callback)(const char* str));
-
-		static LRESULT CALLBACK ConWndProc(HWND hWnd, UINT Msg, WPARAM wParam, unsigned int lParam);
-		static ATOM CALLBACK RegisterClassHook(WNDCLASSA* lpWndClass);
-		static BOOL CALLBACK ResizeChildWindow(HWND hwndChild, LPARAM lParam);
-		static HFONT CALLBACK ReplaceFont(int cHeight, int cWidth, int cEscapement, int cOrientation, int cWeight, DWORD bItalic, DWORD bUnderline, DWORD bStrikeOut, DWORD iCharSet, DWORD iOutPrecision, DWORD iClipPrecision, DWORD iQuality, DWORD iPitchAndFamily, LPCSTR pszFaceName);
-		static void ApplyConsoleStyle();
-		static void GetWindowPos(HWND hWnd, int* x, int* y);
-		static void Sys_PrintStub();
-		static void MakeRoomForText(int addedCharacters);
-		static float GetDpiScale(const HWND hWnd);
+		static void CL_KeyEvent_Hook(int localClientNum, int key, int down, unsigned int time);
+		static void CL_CharEvent_Hook(int localClientNum, int character);
+		static void* CL_ConsolePrint_AddLine_Hook(int localClientNum, int channel, const char* text,
+			int duration, int pixelWidth, unsigned char color, int flags);
 	};
 }

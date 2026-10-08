@@ -1,476 +1,585 @@
-#include <cmath>
-#include <array>
-#include <algorithm>
+#include "STDInclude.hpp"
 
-#include "Materials.hpp"
-#include "AssetHandler.hpp"
-#include "FastFiles.hpp"
+#include <objidl.h>
 
 #pragma push_macro("min")
 #pragma push_macro("max")
-
-#ifndef min
 #define min std::min
-#endif
-
-#ifndef max
 #define max std::max
-#endif
-
 #include <gdiplus.h>
-
 #pragma pop_macro("max")
 #pragma pop_macro("min")
 
 #pragma comment(lib, "gdiplus.lib")
 
+#include "Materials.hpp"
+#include "AssetHandler.hpp"
+#include "FastFiles.hpp"
+#include "Logger.hpp"
+#include "Renderer.hpp"
+
+extern "C"
+{
+	void IwiVersionStub();
+}
+
 namespace Components
 {
-	Utils::Hook Materials::ImageVersionCheckHook;
+	constexpr std::uintptr_t Image_LoadFromFileWithReader_VersionTest = 0x14006A212;
+	static const std::uint8_t versionTest[] = { 0x80, 0x7D, 0xE9, 0x69, 0x75, 0xDE, 0x80, 0x7D, 0xEA, 0x08 };
 
-	std::vector<Game::GfxImage*> Materials::ImageTable;
-	std::vector<Game::Material*> Materials::MaterialTable;
-	std::unordered_map<std::string, Game::Material*> RuntimeMaterialTable;
+	constexpr std::uintptr_t Material_Process2DTextureCoordsForAtlasing = 0x14001A6C0;
+	constexpr std::uintptr_t r_atlasAnimFPS = 0x148C285D8;
 
-	namespace
+	constexpr std::uintptr_t Com_Error = 0x1401F38F0;
+	constexpr std::uintptr_t R_DelayLoadImage_Com_ErrorCall = 0x140037AE3;
+	constexpr std::uintptr_t Load_Texture_Com_ErrorCall = 0x140037BE9;
+
+	static const std::uintptr_t atlasCalls[] =
 	{
+		0x1400F4246,
+		0x1400F4376,
+		0x1400F443C,
+		0x1400F451D,
+		0x1400F463C,
+	};
+
+	constexpr unsigned char textureSemantic2d = 0;
+	constexpr unsigned char textureSemanticColorMap = 2;
+
+	constexpr unsigned int writableImageFlags = 0x1000003;
+
+	constexpr std::uintptr_t DB_LoadXAssets_UnloadDirtyCall = 0x14012EFFA;
+	constexpr std::uintptr_t Material_DirtyTechniqueSetOverrides = 0x14003AE10;
+	constexpr std::uintptr_t Material_OverrideTechniqueSets = 0x14003ABE0;
+
+	static Utils::Hook unloadOverridesHook;
+
+	static Utils::Hook versionHook;
+	static Utils::Hook atlasHooks[std::size(atlasCalls)];
+
+	std::vector<Game::GfxImage*> Materials::imageTable;
+	std::vector<Game::Material*> Materials::materialTable;
+
+	static std::unordered_map<std::string, Game::Material*> runtimeMaterials;
+	static std::recursive_mutex tableMutex;
+
+	static ULONG_PTR gdiPlusToken = 0;
 
 #pragma pack(push, 1)
-		struct NewsIwiHeader
-		{
-			std::uint8_t format;
-			std::uint8_t flags;
-			std::uint16_t width;
-			std::uint16_t height;
-			std::uint16_t depth;
-		};
+	struct NewsIwiHeader
+	{
+		std::uint8_t format;
+		std::uint8_t flags;
+		std::uint16_t width;
+		std::uint16_t height;
+		std::uint16_t depth;
+	};
 #pragma pack(pop)
 
+	constexpr std::size_t iwiHeaderOffset = 8;
+	constexpr std::size_t iwiDataOffset = iwiHeaderOffset + sizeof(NewsIwiHeader) + 16;
 
-		ULONG_PTR GdiPlusToken = 0;
+	constexpr std::uint8_t iwiFormatArgb32 = 0x01;
+	constexpr std::uint8_t iwiFormatDxt5 = 0x0D;
+	constexpr std::uint8_t iwiFormatDxt5Alt = 0x0E;
 
-		void CropMatchmakingVotePreview(const Game::Material* material,
-			float* s0, float* s1, float* t0, float* t1)
+	static const char* VoteDvarString(const char* name)
+	{
+		const Game::dvar_t* const dvar = Game::Dvar_FindVar(name);
+
+		if (!dvar || dvar->type != Game::DVAR_TYPE_STRING || !dvar->current.string)
 		{
-			if (!material || !material->info.name || !material->textureTable ||
-				*s0 != 0.0f || *s1 != 1.0f || *t0 != 0.0f || *t1 != 1.0f)
+			return "";
+		}
+
+		return dvar->current.string;
+	}
+
+	static bool IsPreviewOf(const char* materialName, const char* mapId)
+	{
+		return *mapId && !_strnicmp(materialName, "preview_", 8) && !_stricmp(materialName + 8, mapId);
+	}
+
+	static void CropMatchmakingVotePreview(const Game::Material* material, float* s0, float* s1, float* t0, float* t1)
+	{
+		const bool isWholeImage = *s0 == 0.0f && *s1 == 1.0f && *t0 == 0.0f && *t1 == 1.0f;
+
+		if (!material || !material->info.name || !material->textureTable || !isWholeImage)
+		{
+			return;
+		}
+
+		const Game::dvar_t* const voteActive = Game::Dvar_FindVar("zwnet_vote_active");
+
+		if (!voteActive)
+		{
+			return;
+		}
+
+		const bool isVoteActive = voteActive->current.enabled;
+		bool isWinner = false;
+
+		if (!isVoteActive)
+		{
+			const char* const winnerId = VoteDvarString("zwnet_vote_winner_id");
+
+			if (!*winnerId)
 			{
 				return;
 			}
 
-			const auto* voteActive = Game::Dvar_FindVar("zwnet_vote_active");
-			if (!voteActive) return;
-			const auto* winner = Game::Dvar_FindVar("zwnet_vote_winner_image");
-			const auto* winnerId = Game::Dvar_FindVar("zwnet_vote_winner_id");
-			const auto winnerFallback = std::string("preview_") +
-				(winnerId && winnerId->current.string ? winnerId->current.string : "");
-			const auto isWinner = !voteActive->current.enabled && winnerId &&
-				winnerId->current.string && *winnerId->current.string &&
-				((winner && winner->current.string && !_stricmp(material->info.name, winner->current.string)) ||
-				 !_stricmp(material->info.name, winnerFallback.c_str()));
-			if (!voteActive->current.enabled && !isWinner) return;
+			const char* const winnerImage = VoteDvarString("zwnet_vote_winner_image");
+			isWinner = !_stricmp(material->info.name, winnerImage) || IsPreviewOf(material->info.name, winnerId);
 
-			const auto* mapA = Game::Dvar_FindVar("zwnet_vote_map_a_image");
-			const auto* mapB = Game::Dvar_FindVar("zwnet_vote_map_b_image");
-			const auto* mapAId = Game::Dvar_FindVar("zwnet_vote_map_a_id");
-			const auto* mapBId = Game::Dvar_FindVar("zwnet_vote_map_b_id");
-			const auto mapAFallback = std::string("preview_") +
-				(mapAId && mapAId->current.string ? mapAId->current.string : "");
-			const auto mapBFallback = std::string("preview_") +
-				(mapBId && mapBId->current.string ? mapBId->current.string : "");
-
-			const auto isMapA = (mapA && mapA->current.string && !_stricmp(material->info.name, mapA->current.string)) ||
-				(mapAId && mapAId->current.string && *mapAId->current.string && !_stricmp(material->info.name, mapAFallback.c_str()));
-			const auto isMapB = (mapB && mapB->current.string && !_stricmp(material->info.name, mapB->current.string)) ||
-				(mapBId && mapBId->current.string && *mapBId->current.string && !_stricmp(material->info.name, mapBFallback.c_str()));
-			if (!isWinner && !isMapA && !isMapB) return;
-
-			auto* menu = Game::Menus_FindByName(Game::uiContext, "zwnet_matchmaking");
-			if (!menu || !Game::Menus_MenuIsInStack(Game::uiContext, menu)) return;
-
-			const Game::GfxImage* image = nullptr;
-			for (auto i = 0; i < material->textureCount; ++i)
+			if (!isWinner)
 			{
-				if (material->textureTable[i].semantic == Game::TS_2D ||
-					material->textureTable[i].semantic == Game::TS_COLOR_MAP)
-				{
-					image = material->textureTable[i].u.image;
-					break;
-				}
-			}
-			if (!image || !image->width || !image->height) return;
-
-			const auto* itemName = isWinner ? "image_map_preview_winner" :
-				(isMapA ? "image_map_preview_vote_a" : "image_map_preview_vote_b");
-			const auto* fallbackName = isWinner ? "image_map_preview_winner_fallback" :
-				(isMapA ? "image_map_preview_vote_a_fallback" : "image_map_preview_vote_b_fallback");
-			for (auto i = 0; i < menu->itemCount; ++i)
-			{
-				const auto* item = menu->items[i];
-				if (!item || !item->window.name) continue;
-				if (_stricmp(item->window.name, itemName) && _stricmp(item->window.name, fallbackName)) continue;
-				const auto& rect = item->window.rect;
-				if (rect.w <= 0.0f || rect.h <= 0.0f) return;
-
-				const auto imageAspect = static_cast<float>(image->width) / image->height;
-				const auto cardAspect = rect.w / rect.h;
-				if (imageAspect < cardAspect)
-				{
-					const auto span = imageAspect / cardAspect;
-					*t0 = (1.0f - span) * 0.5f;
-					*t1 = (1.0f + span) * 0.5f;
-				}
-				else
-				{
-					const auto span = cardAspect / imageAspect;
-					*s0 = (1.0f - span) * 0.5f;
-					*s1 = (1.0f + span) * 0.5f;
-				}
 				return;
 			}
 		}
 
-		void Process2DTextureCoordsForAnimatedAtlases(const Game::Material* material,
-			float* s0, float* s1, float* t0, float* t1)
+		const char* const mapA = VoteDvarString("zwnet_vote_map_a_image");
+		const char* const mapB = VoteDvarString("zwnet_vote_map_b_image");
+		const char* const mapAId = VoteDvarString("zwnet_vote_map_a_id");
+		const char* const mapBId = VoteDvarString("zwnet_vote_map_b_id");
+		const bool isMapA = !_stricmp(material->info.name, mapA) || IsPreviewOf(material->info.name, mapAId);
+		const bool isMapB = !_stricmp(material->info.name, mapB) || IsPreviewOf(material->info.name, mapBId);
+
+		if (!isWinner && !isMapA && !isMapB)
 		{
-			if (!material || !material->info.name ||
-				_stricmp(material->info.name, "searching_for_player"))
+			return;
+		}
+
+		Game::menuDef_t* const menu = Game::Menus_FindByName(Game::uiContext, "zwnet_matchmaking");
+
+		if (!menu || !Game::Menus_MenuIsInStack(Game::uiContext, menu))
+		{
+			return;
+		}
+
+		const Game::GfxImage* image = nullptr;
+
+		for (int i = 0; i < material->textureCount; ++i)
+		{
+			const unsigned char semantic = material->textureTable[i].semantic;
+
+			if (semantic == textureSemantic2d || semantic == textureSemanticColorMap)
 			{
-				Game::Material_Process2DTextureCoordsForAtlasing(
-					material, s0, s1, t0, t1);
-				CropMatchmakingVotePreview(material, s0, s1, t0, t1);
+				image = material->textureTable[i].u.image;
+				break;
+			}
+		}
+
+		if (!image || !image->width || !image->height)
+		{
+			return;
+		}
+
+		const char* itemName = "image_map_preview_vote_b";
+		const char* fallbackName = "image_map_preview_vote_b_fallback";
+
+		if (isWinner)
+		{
+			itemName = "image_map_preview_winner";
+			fallbackName = "image_map_preview_winner_fallback";
+		}
+		else if (isMapA)
+		{
+			itemName = "image_map_preview_vote_a";
+			fallbackName = "image_map_preview_vote_a_fallback";
+		}
+
+		for (int i = 0; i < menu->itemCount; ++i)
+		{
+			const Game::itemDef_s* const item = menu->items[i];
+
+			if (!item || !item->window.name)
+			{
+				continue;
+			}
+
+			if (_stricmp(item->window.name, itemName) && _stricmp(item->window.name, fallbackName))
+			{
+				continue;
+			}
+
+			const Game::rectDef_s& rect = item->window.rect;
+
+			if (rect.w <= 0.0f || rect.h <= 0.0f)
+			{
 				return;
 			}
 
-			constexpr auto columnCount = 8u;
-			constexpr auto rowCount = 4u;
-			constexpr auto frameCount = 30u;
+			const float imageAspect = static_cast<float>(image->width) / static_cast<float>(image->height);
+			const float cardAspect = rect.w / rect.h;
 
-			const auto* atlasState = *reinterpret_cast<const unsigned char**>(0x69F0DF4);
-			const auto frameRate = atlasState
-				? std::max(*reinterpret_cast<const int*>(atlasState + 0x10), 1)
-				: 15;
-			const auto frame = static_cast<unsigned int>(
-				(static_cast<std::uint64_t>(timeGetTime()) * frameRate / 1000u) % frameCount);
-			const auto column = frame % columnCount;
-			const auto row = frame / columnCount;
-
-			const auto sourceS0 = *s0;
-			const auto sourceS1 = *s1;
-			const auto sourceT0 = *t0;
-			const auto sourceT1 = *t1;
-			const auto cellWidth = 1.0f / static_cast<float>(columnCount);
-			const auto cellHeight = 1.0f / static_cast<float>(rowCount);
-
-			*s0 = (static_cast<float>(column) + sourceS0) * cellWidth;
-			*s1 = (static_cast<float>(column) + sourceS1) * cellWidth;
-			*t0 = (static_cast<float>(row) + sourceT0) * cellHeight;
-			*t1 = (static_cast<float>(row) + sourceT1) * cellHeight;
-		}
-
-		bool EnsureGdiPlusStarted()
-		{
-			if (GdiPlusToken)
+			if (imageAspect < cardAspect)
 			{
-				return true;
+				const float span = imageAspect / cardAspect;
+				*t0 = (1.0f - span) * 0.5f;
+				*t1 = (1.0f + span) * 0.5f;
+			}
+			else
+			{
+				const float span = cardAspect / imageAspect;
+				*s0 = (1.0f - span) * 0.5f;
+				*s1 = (1.0f + span) * 0.5f;
 			}
 
-			Gdiplus::GdiplusStartupInput input;
-			return Gdiplus::GdiplusStartup(&GdiPlusToken, &input, nullptr) == Gdiplus::Ok;
+			return;
 		}
-		std::uint16_t ColorTo565(const unsigned char* bgra)
-		{
-			const auto r = bgra[2] >> 3;
-			const auto g = bgra[1] >> 2;
-			const auto b = bgra[0] >> 3;
-			return static_cast<std::uint16_t>((r << 11) | (g << 5) | b);
-		}
+	}
 
-		void ColorFrom565(std::uint16_t c, unsigned char out[3])
+	static void ProcessAtlasCoords(const Game::Material* material, float* s0, float* s1, float* t0, float* t1)
+	{
+		const bool isSpinner = material && material->info.name && _stricmp(material->info.name, "searching_for_player") == 0;
+
+		if (!isSpinner)
 		{
-			out[0] = static_cast<unsigned char>(((c >> 11) & 31) * 255 / 31);
-			out[1] = static_cast<unsigned char>(((c >> 5) & 63) * 255 / 63);
-			out[2] = static_cast<unsigned char>((c & 31) * 255 / 31);
+			reinterpret_cast<void(*)(const Game::Material*, float*, float*, float*, float*)>(
+				Utils::Hook::Rebase(Material_Process2DTextureCoordsForAtlasing))(material, s0, s1, t0, t1);
+			CropMatchmakingVotePreview(material, s0, s1, t0, t1);
+			return;
 		}
 
-		void WriteLe16(std::string& out, std::uint16_t value)
+		constexpr unsigned int columnCount = 8;
+		constexpr unsigned int rowCount = 4;
+		constexpr unsigned int frameCount = 30;
+
+		const auto* const atlasFps = Utils::Hook::Get<Game::dvar_t*>(r_atlasAnimFPS);
+		int frameRate = 15;
+
+		if (atlasFps)
 		{
-			out.push_back(static_cast<char>(value & 0xFF));
-			out.push_back(static_cast<char>((value >> 8) & 0xFF));
+			frameRate = std::max(atlasFps->current.integer, 1);
 		}
 
-		void WriteLe32(std::string& out, std::uint32_t value)
+		const auto frame = static_cast<unsigned int>((static_cast<std::uint64_t>(timeGetTime()) * frameRate / 1000u) % frameCount);
+		const auto column = frame % columnCount;
+		const auto row = frame / columnCount;
+
+		const float cellWidth = 1.0f / static_cast<float>(columnCount);
+		const float cellHeight = 1.0f / static_cast<float>(rowCount);
+
+		*s0 = (static_cast<float>(column) + *s0) * cellWidth;
+		*s1 = (static_cast<float>(column) + *s1) * cellWidth;
+		*t0 = (static_cast<float>(row) + *t0) * cellHeight;
+		*t1 = (static_cast<float>(row) + *t1) * cellHeight;
+	}
+
+	static bool EnsureGdiPlusStarted()
+	{
+		if (gdiPlusToken)
 		{
-			out.push_back(static_cast<char>(value & 0xFF));
-			out.push_back(static_cast<char>((value >> 8) & 0xFF));
-			out.push_back(static_cast<char>((value >> 16) & 0xFF));
-			out.push_back(static_cast<char>((value >> 24) & 0xFF));
-		}
-
-		std::uint16_t ReadLe16(const unsigned char* data)
-		{
-			return static_cast<std::uint16_t>(data[0] | (data[1] << 8));
-		}
-
-		std::uint32_t ReadLe32(const unsigned char* data)
-		{
-			return static_cast<std::uint32_t>(data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24));
-		}
-
-		std::string EncodeNewsDxt5(const std::vector<unsigned char>& pixels, unsigned int width, unsigned int height)
-		{
-			std::string out;
-
-			const auto blockCountX = (width + 3) / 4;
-			const auto blockCountY = (height + 3) / 4;
-			out.reserve(blockCountX * blockCountY * 16);
-
-			for (auto by = 0u; by < blockCountY; ++by)
-			{
-				for (auto bx = 0u; bx < blockCountX; ++bx)
-				{
-					unsigned char block[16][4]{};
-
-					for (auto y = 0u; y < 4; ++y)
-					{
-						for (auto x = 0u; x < 4; ++x)
-						{
-							const auto sx = std::min((bx * 4) + x, width - 1);
-							const auto sy = std::min((by * 4) + y, height - 1);
-							std::memcpy(block[(y * 4) + x], pixels.data() + (((sy * width) + sx) * 4), 4);
-						}
-					}
-
-					unsigned char minA = 255;
-					unsigned char maxA = 0;
-
-					for (const auto& px : block)
-					{
-						minA = std::min(minA, px[3]);
-						maxA = std::max(maxA, px[3]);
-					}
-
-					out.push_back(static_cast<char>(maxA));
-					out.push_back(static_cast<char>(minA));
-
-					unsigned char alphaPalette[8]{};
-					alphaPalette[0] = maxA;
-					alphaPalette[1] = minA;
-
-					if (maxA > minA)
-					{
-						for (auto i = 1; i <= 6; ++i)
-						{
-							alphaPalette[i + 1] = static_cast<unsigned char>(((7 - i) * maxA + i * minA) / 7);
-						}
-					}
-					else
-					{
-						for (auto i = 1; i <= 4; ++i)
-						{
-							alphaPalette[i + 1] = static_cast<unsigned char>(((5 - i) * maxA + i * minA) / 5);
-						}
-
-						alphaPalette[6] = 0;
-						alphaPalette[7] = 255;
-					}
-
-					std::uint64_t alphaMask = 0;
-
-					for (auto i = 0u; i < 16; ++i)
-					{
-						auto bestIndex = 0u;
-						auto bestDistance = 999999u;
-
-						for (auto a = 0u; a < 8; ++a)
-						{
-							const auto distance = static_cast<unsigned int>(std::abs(static_cast<int>(block[i][3]) - static_cast<int>(alphaPalette[a])));
-
-							if (distance < bestDistance)
-							{
-								bestDistance = distance;
-								bestIndex = a;
-							}
-						}
-
-						alphaMask |= (static_cast<std::uint64_t>(bestIndex) << (i * 3));
-					}
-
-					for (auto i = 0u; i < 6; ++i)
-					{
-						out.push_back(static_cast<char>((alphaMask >> (8 * i)) & 0xFF));
-					}
-
-					const unsigned char* minColor = block[0];
-					const unsigned char* maxColor = block[0];
-					auto minLuma = 999999;
-					auto maxLuma = -1;
-
-					for (const auto& px : block)
-					{
-						const auto luma = static_cast<int>(px[2]) * 299 + static_cast<int>(px[1]) * 587 + static_cast<int>(px[0]) * 114;
-
-						if (luma < minLuma)
-						{
-							minLuma = luma;
-							minColor = px;
-						}
-
-						if (luma > maxLuma)
-						{
-							maxLuma = luma;
-							maxColor = px;
-						}
-					}
-
-					auto color0 = ColorTo565(maxColor);
-					auto color1 = ColorTo565(minColor);
-
-					if (color0 <= color1)
-					{
-						std::swap(color0, color1);
-					}
-
-					WriteLe16(out, color0);
-					WriteLe16(out, color1);
-
-					unsigned char palette[4][3]{};
-					ColorFrom565(color0, palette[0]);
-					ColorFrom565(color1, palette[1]);
-
-					for (auto c = 0; c < 3; ++c)
-					{
-						palette[2][c] = static_cast<unsigned char>((2 * palette[0][c] + palette[1][c]) / 3);
-						palette[3][c] = static_cast<unsigned char>((palette[0][c] + 2 * palette[1][c]) / 3);
-					}
-
-					std::uint32_t colorMask = 0;
-
-					for (auto i = 0u; i < 16; ++i)
-					{
-						auto bestIndex = 0u;
-						auto bestDistance = 0xFFFFFFFFu;
-
-						for (auto c = 0u; c < 4; ++c)
-						{
-							const auto db = static_cast<int>(block[i][0]) - static_cast<int>(palette[c][2]);
-							const auto dg = static_cast<int>(block[i][1]) - static_cast<int>(palette[c][1]);
-							const auto dr = static_cast<int>(block[i][2]) - static_cast<int>(palette[c][0]);
-							const auto distance = static_cast<unsigned int>((dr * dr) + (dg * dg) + (db * db));
-
-							if (distance < bestDistance)
-							{
-								bestDistance = distance;
-								bestIndex = c;
-							}
-						}
-
-						colorMask |= (bestIndex << (i * 2));
-					}
-
-					WriteLe32(out, colorMask);
-				}
-			}
-
-			return out;
-		}
-
-		bool DecodeNewsDxt5(const unsigned char* data, std::size_t size, unsigned int width, unsigned int height, std::vector<unsigned char>& pixels)
-		{
-			const auto blockCountX = (width + 3) / 4;
-			const auto blockCountY = (height + 3) / 4;
-			const auto expectedSize = static_cast<std::size_t>(blockCountX) * static_cast<std::size_t>(blockCountY) * 16u;
-
-			if (size < expectedSize)
-			{
-				return false;
-			}
-
-			pixels.assign(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u, 0);
-
-			auto* src = data;
-
-			for (auto by = 0u; by < blockCountY; ++by)
-			{
-				for (auto bx = 0u; bx < blockCountX; ++bx)
-				{
-					const auto a0 = src[0];
-					const auto a1 = src[1];
-
-					unsigned char alphaPalette[8]{};
-					alphaPalette[0] = a0;
-					alphaPalette[1] = a1;
-
-					if (a0 > a1)
-					{
-						for (auto i = 1; i <= 6; ++i)
-						{
-							alphaPalette[i + 1] = static_cast<unsigned char>(((7 - i) * a0 + i * a1) / 7);
-						}
-					}
-					else
-					{
-						for (auto i = 1; i <= 4; ++i)
-						{
-							alphaPalette[i + 1] = static_cast<unsigned char>(((5 - i) * a0 + i * a1) / 5);
-						}
-
-						alphaPalette[6] = 0;
-						alphaPalette[7] = 255;
-					}
-
-					std::uint64_t alphaMask = 0;
-					for (auto i = 0u; i < 6; ++i)
-					{
-						alphaMask |= static_cast<std::uint64_t>(src[2 + i]) << (8 * i);
-					}
-
-					const auto color0 = ReadLe16(src + 8);
-					const auto color1 = ReadLe16(src + 10);
-					const auto colorMask = ReadLe32(src + 12);
-
-					unsigned char palette[4][3]{};
-					ColorFrom565(color0, palette[0]);
-					ColorFrom565(color1, palette[1]);
-
-					for (auto c = 0; c < 3; ++c)
-					{
-						palette[2][c] = static_cast<unsigned char>((2 * palette[0][c] + palette[1][c]) / 3);
-						palette[3][c] = static_cast<unsigned char>((palette[0][c] + 2 * palette[1][c]) / 3);
-					}
-
-					for (auto y = 0u; y < 4; ++y)
-					{
-						for (auto x = 0u; x < 4; ++x)
-						{
-							const auto px = (bx * 4) + x;
-							const auto py = (by * 4) + y;
-
-							if (px >= width || py >= height)
-							{
-								continue;
-							}
-
-							const auto i = (y * 4) + x;
-							const auto colorIndex = (colorMask >> (i * 2)) & 0x3;
-							const auto alphaIndex = (alphaMask >> (i * 3)) & 0x7;
-							auto* dst = pixels.data() + (((py * width) + px) * 4);
-
-							dst[0] = palette[colorIndex][2];
-							dst[1] = palette[colorIndex][1];
-							dst[2] = palette[colorIndex][0];
-							dst[3] = alphaPalette[alphaIndex];
-						}
-					}
-
-					src += 16;
-				}
-			}
-
 			return true;
 		}
 
+		const Gdiplus::GdiplusStartupInput input;
+		return Gdiplus::GdiplusStartup(&gdiPlusToken, &input, nullptr) == Gdiplus::Ok;
+	}
 
+	static std::uint16_t ColorTo565(const unsigned char* bgra)
+	{
+		const auto r = bgra[2] >> 3;
+		const auto g = bgra[1] >> 2;
+		const auto b = bgra[0] >> 3;
+
+		return static_cast<std::uint16_t>((r << 11) | (g << 5) | b);
+	}
+
+	static void ColorFrom565(std::uint16_t color, unsigned char out[3])
+	{
+		out[0] = static_cast<unsigned char>(((color >> 11) & 31) * 255 / 31);
+		out[1] = static_cast<unsigned char>(((color >> 5) & 63) * 255 / 63);
+		out[2] = static_cast<unsigned char>((color & 31) * 255 / 31);
+	}
+
+	static void WriteLe16(std::string& out, std::uint16_t value)
+	{
+		out.push_back(static_cast<char>(value & 0xFF));
+		out.push_back(static_cast<char>((value >> 8) & 0xFF));
+	}
+
+	static void WriteLe32(std::string& out, std::uint32_t value)
+	{
+		out.push_back(static_cast<char>(value & 0xFF));
+		out.push_back(static_cast<char>((value >> 8) & 0xFF));
+		out.push_back(static_cast<char>((value >> 16) & 0xFF));
+		out.push_back(static_cast<char>((value >> 24) & 0xFF));
+	}
+
+	static std::uint16_t ReadLe16(const unsigned char* data)
+	{
+		return static_cast<std::uint16_t>(data[0] | (data[1] << 8));
+	}
+
+	static std::uint32_t ReadLe32(const unsigned char* data)
+	{
+		return static_cast<std::uint32_t>(data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24));
+	}
+
+	static void BuildAlphaPalette(unsigned char first, unsigned char second, unsigned char palette[8])
+	{
+		palette[0] = first;
+		palette[1] = second;
+
+		if (first > second)
+		{
+			for (int i = 1; i <= 6; ++i)
+			{
+				palette[i + 1] = static_cast<unsigned char>(((7 - i) * first + i * second) / 7);
+			}
+
+			return;
+		}
+
+		for (int i = 1; i <= 4; ++i)
+		{
+			palette[i + 1] = static_cast<unsigned char>(((5 - i) * first + i * second) / 5);
+		}
+
+		palette[6] = 0;
+		palette[7] = 255;
+	}
+
+	static void BuildColorPalette(std::uint16_t color0, std::uint16_t color1, unsigned char palette[4][3])
+	{
+		ColorFrom565(color0, palette[0]);
+		ColorFrom565(color1, palette[1]);
+
+		for (int c = 0; c < 3; ++c)
+		{
+			palette[2][c] = static_cast<unsigned char>((2 * palette[0][c] + palette[1][c]) / 3);
+			palette[3][c] = static_cast<unsigned char>((palette[0][c] + 2 * palette[1][c]) / 3);
+		}
+	}
+
+	static std::string EncodeNewsDxt5(const std::vector<unsigned char>& pixels, unsigned int width, unsigned int height)
+	{
+		std::string out;
+
+		const auto blockCountX = (width + 3) / 4;
+		const auto blockCountY = (height + 3) / 4;
+		out.reserve(blockCountX * blockCountY * 16);
+
+		for (unsigned int by = 0; by < blockCountY; ++by)
+		{
+			for (unsigned int bx = 0; bx < blockCountX; ++bx)
+			{
+				unsigned char block[16][4]{};
+
+				for (unsigned int y = 0; y < 4; ++y)
+				{
+					for (unsigned int x = 0; x < 4; ++x)
+					{
+						const auto sx = std::min((bx * 4) + x, width - 1);
+						const auto sy = std::min((by * 4) + y, height - 1);
+						std::memcpy(block[(y * 4) + x], pixels.data() + (((sy * width) + sx) * 4), 4);
+					}
+				}
+
+				unsigned char minAlpha = 255;
+				unsigned char maxAlpha = 0;
+
+				for (const auto& texel : block)
+				{
+					minAlpha = std::min(minAlpha, texel[3]);
+					maxAlpha = std::max(maxAlpha, texel[3]);
+				}
+
+				out.push_back(static_cast<char>(maxAlpha));
+				out.push_back(static_cast<char>(minAlpha));
+
+				unsigned char alphaPalette[8]{};
+				BuildAlphaPalette(maxAlpha, minAlpha, alphaPalette);
+
+				std::uint64_t alphaMask = 0;
+
+				for (unsigned int i = 0; i < 16; ++i)
+				{
+					unsigned int bestIndex = 0;
+					unsigned int bestDistance = 999999;
+
+					for (unsigned int a = 0; a < 8; ++a)
+					{
+						const auto distance = static_cast<unsigned int>(std::abs(static_cast<int>(block[i][3]) - static_cast<int>(alphaPalette[a])));
+
+						if (distance < bestDistance)
+						{
+							bestDistance = distance;
+							bestIndex = a;
+						}
+					}
+
+					alphaMask |= static_cast<std::uint64_t>(bestIndex) << (i * 3);
+				}
+
+				for (unsigned int i = 0; i < 6; ++i)
+				{
+					out.push_back(static_cast<char>((alphaMask >> (8 * i)) & 0xFF));
+				}
+
+				const unsigned char* minColor = block[0];
+				const unsigned char* maxColor = block[0];
+				int minLuma = 999999;
+				int maxLuma = -1;
+
+				for (const auto& texel : block)
+				{
+					const int luma = static_cast<int>(texel[2]) * 299 + static_cast<int>(texel[1]) * 587 + static_cast<int>(texel[0]) * 114;
+
+					if (luma < minLuma)
+					{
+						minLuma = luma;
+						minColor = texel;
+					}
+
+					if (luma > maxLuma)
+					{
+						maxLuma = luma;
+						maxColor = texel;
+					}
+				}
+
+				auto color0 = ColorTo565(maxColor);
+				auto color1 = ColorTo565(minColor);
+
+				if (color0 <= color1)
+				{
+					std::swap(color0, color1);
+				}
+
+				WriteLe16(out, color0);
+				WriteLe16(out, color1);
+
+				unsigned char palette[4][3]{};
+				BuildColorPalette(color0, color1, palette);
+
+				std::uint32_t colorMask = 0;
+
+				for (unsigned int i = 0; i < 16; ++i)
+				{
+					unsigned int bestIndex = 0;
+					unsigned int bestDistance = 0xFFFFFFFFu;
+
+					for (unsigned int c = 0; c < 4; ++c)
+					{
+						const int db = static_cast<int>(block[i][0]) - static_cast<int>(palette[c][2]);
+						const int dg = static_cast<int>(block[i][1]) - static_cast<int>(palette[c][1]);
+						const int dr = static_cast<int>(block[i][2]) - static_cast<int>(palette[c][0]);
+						const auto distance = static_cast<unsigned int>((dr * dr) + (dg * dg) + (db * db));
+
+						if (distance < bestDistance)
+						{
+							bestDistance = distance;
+							bestIndex = c;
+						}
+					}
+
+					colorMask |= bestIndex << (i * 2);
+				}
+
+				WriteLe32(out, colorMask);
+			}
+		}
+
+		return out;
+	}
+
+	static bool DecodeNewsDxt5(const unsigned char* data, std::size_t size, unsigned int width, unsigned int height, std::vector<unsigned char>& pixels)
+	{
+		const auto blockCountX = (width + 3) / 4;
+		const auto blockCountY = (height + 3) / 4;
+		const auto expectedSize = static_cast<std::size_t>(blockCountX) * static_cast<std::size_t>(blockCountY) * 16u;
+
+		if (size < expectedSize)
+		{
+			return false;
+		}
+
+		pixels.assign(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u, 0);
+
+		const auto* source = data;
+
+		for (unsigned int by = 0; by < blockCountY; ++by)
+		{
+			for (unsigned int bx = 0; bx < blockCountX; ++bx)
+			{
+				unsigned char alphaPalette[8]{};
+				BuildAlphaPalette(source[0], source[1], alphaPalette);
+
+				std::uint64_t alphaMask = 0;
+
+				for (unsigned int i = 0; i < 6; ++i)
+				{
+					alphaMask |= static_cast<std::uint64_t>(source[2 + i]) << (8 * i);
+				}
+
+				unsigned char palette[4][3]{};
+				BuildColorPalette(ReadLe16(source + 8), ReadLe16(source + 10), palette);
+
+				const auto colorMask = ReadLe32(source + 12);
+
+				for (unsigned int y = 0; y < 4; ++y)
+				{
+					for (unsigned int x = 0; x < 4; ++x)
+					{
+						const auto px = (bx * 4) + x;
+						const auto py = (by * 4) + y;
+
+						if (px >= width || py >= height)
+						{
+							continue;
+						}
+
+						const auto i = (y * 4) + x;
+						const auto colorIndex = (colorMask >> (i * 2)) & 0x3;
+						const auto alphaIndex = (alphaMask >> (i * 3)) & 0x7;
+						auto* const target = pixels.data() + (((py * width) + px) * 4);
+
+						target[0] = palette[colorIndex][2];
+						target[1] = palette[colorIndex][1];
+						target[2] = palette[colorIndex][0];
+						target[3] = alphaPalette[alphaIndex];
+					}
+				}
+
+				source += 16;
+			}
+		}
+
+		return true;
+	}
+
+	static Game::GfxImage* CreateFilledImage(const std::string& name, const std::vector<unsigned char>& pixels, unsigned int width, unsigned int height)
+	{
+		auto* const image = Materials::CreateImage(name, width, height, 1, writableImageFlags, D3DFMT_A8R8G8B8);
+
+		if (!image->texture.map)
+		{
+			Materials::DeleteImage(image);
+			return nullptr;
+		}
+
+		D3DLOCKED_RECT lockedRect{};
+
+		if (FAILED(image->texture.map->LockRect(0, &lockedRect, nullptr, 0)))
+		{
+			Materials::DeleteImage(image);
+			return nullptr;
+		}
+
+		const auto sourceStride = width * 4;
+		auto* const target = static_cast<unsigned char*>(lockedRect.pBits);
+
+		for (unsigned int y = 0; y < height; ++y)
+		{
+			std::memcpy(target + (y * lockedRect.Pitch), pixels.data() + (y * sourceStride), sourceStride);
+		}
+
+		image->texture.map->UnlockRect(0);
+
+		return image;
 	}
 
 	Game::Material* Materials::Create(const std::string& name, Game::GfxImage* image)
@@ -480,52 +589,53 @@ namespace Components
 			return nullptr;
 		}
 
-		if (auto* existing = Materials::GetRuntimeMaterial(name))
+		std::lock_guard lock(tableMutex);
+
+		if (auto* const existing = GetRuntimeMaterial(name))
 		{
 			return existing;
 		}
 
-		RuntimeMaterialTable.erase(name);
+		const Game::Material* base = nullptr;
 
-		auto* baseMaterial = Game::DB_FindXAssetHeader(Game::ASSET_TYPE_MATERIAL, "white").material;
-
-		if (!baseMaterial)
+		for (const char* baseName : { "white", "ui_cursor", "default" })
 		{
-			baseMaterial = Game::DB_FindXAssetHeader(Game::ASSET_TYPE_MATERIAL, "ui_cursor").material;
+			base = static_cast<Game::Material*>(Game::DB_FindXAssetHeader(Game::ASSET_TYPE_MATERIAL, baseName));
+
+			if (base)
+			{
+				break;
+			}
 		}
 
-		if (!baseMaterial)
-		{
-			baseMaterial = Game::DB_FindXAssetHeader(Game::ASSET_TYPE_MATERIAL, "default").material;
-		}
-
-		if (!baseMaterial || !baseMaterial->textureTable || !baseMaterial->textureCount)
+		if (!base || !base->textureTable || !base->textureCount)
 		{
 			return nullptr;
 		}
 
-		auto* material = Utils::Memory::GetAllocator()->allocate<Game::Material>();
-		std::memcpy(material, baseMaterial, sizeof(Game::Material));
+		auto* const allocator = Utils::Memory::GetAllocator();
 
-		material->info.name = Utils::Memory::GetAllocator()->duplicateString(name);
-		material->info.sortKey = baseMaterial->info.sortKey;
+		auto* const material = allocator->Allocate<Game::Material>();
+		auto* const texture = allocator->Allocate<Game::MaterialTextureDef>();
+
+		*material = *base;
+		*texture = base->textureTable[0];
+
+		material->info.name = allocator->DuplicateString(name);
 		material->info.textureAtlasColumnCount = 1;
 		material->info.textureAtlasRowCount = 1;
-		Materials::ConfigureAnimatedAtlas(material);
+		ConfigureAnimatedAtlas(material);
 
 		material->textureCount = 1;
-		material->textureTable = Utils::Memory::GetAllocator()->allocate<Game::MaterialTextureDef>();
-		std::memcpy(material->textureTable, baseMaterial->textureTable, sizeof(Game::MaterialTextureDef));
+		material->textureTable = texture;
 
-		material->textureTable->nameHash = Game::R_HashString("colorMap");
-		material->textureTable->nameStart = 'c';
-		material->textureTable->nameEnd = 'p';
-		material->textureTable->u.image = image;
+		texture->nameHash = Game::R_HashString("colorMap");
+		texture->nameStart = 'c';
+		texture->nameEnd = 'p';
+		texture->u.image = image;
 
-		Materials::MaterialTable.push_back(material);
-		RuntimeMaterialTable[name] = material;
-		AssetHandler::StoreTemporaryAsset(Game::ASSET_TYPE_MATERIAL, { material });
-		AssetHandler::ExposeTemporaryAssets(true);
+		materialTable.push_back(material);
+		runtimeMaterials[name] = material;
 
 		return material;
 	}
@@ -537,26 +647,27 @@ namespace Components
 			return;
 		}
 
-		if (!_stricmp(material->info.name, "searching_for_player"))
+		if (_stricmp(material->info.name, "searching_for_player") == 0)
 		{
 			material->info.textureAtlasRowCount = 4;
 			material->info.textureAtlasColumnCount = 8;
 		}
 	}
 
-
 	Game::Material* Materials::GetRuntimeMaterial(const std::string& materialName)
 	{
-		const auto entry = RuntimeMaterialTable.find(materialName);
+		std::lock_guard lock(tableMutex);
 
-		if (entry == RuntimeMaterialTable.end())
+		const auto entry = runtimeMaterials.find(materialName);
+
+		if (entry == runtimeMaterials.end())
 		{
 			return nullptr;
 		}
 
-		if (!Materials::IsValid(entry->second))
+		if (!IsValid(entry->second))
 		{
-			RuntimeMaterialTable.erase(entry);
+			runtimeMaterials.erase(entry);
 			return nullptr;
 		}
 
@@ -565,131 +676,145 @@ namespace Components
 
 	void Materials::Delete(Game::Material* material, bool deleteImage)
 	{
-		if (!material) return;
+		if (!material)
+		{
+			return;
+		}
+
+		std::lock_guard lock(tableMutex);
 
 		if (deleteImage)
 		{
-			for (char i = 0; i < material->textureCount; ++i)
+			for (int i = 0; i < material->textureCount; ++i)
 			{
-				Materials::DeleteImage(material->textureTable[i].u.image);
+				DeleteImage(material->textureTable[i].u.image);
 			}
 		}
 
-		Utils::Memory::GetAllocator()->free(material->textureTable);
-		Utils::Memory::GetAllocator()->free(material->info.name);
-		Utils::Memory::GetAllocator()->free(material);
-
-		for (auto entry = RuntimeMaterialTable.begin(); entry != RuntimeMaterialTable.end();)
+		std::erase_if(runtimeMaterials, [material](const auto& entry)
 		{
-			if (entry->second == material)
-			{
-				entry = RuntimeMaterialTable.erase(entry);
-			}
-			else
-			{
-				++entry;
-			}
-		}
+			return entry.second == material;
+		});
 
-		auto mat = std::find(Materials::MaterialTable.begin(), Materials::MaterialTable.end(), material);
-		if (mat != Materials::MaterialTable.end())
-		{
-			Materials::MaterialTable.erase(mat);
-		}
+		std::erase(materialTable, material);
+
+		auto* const allocator = Utils::Memory::GetAllocator();
+		allocator->Free(material->textureTable);
+		allocator->Free(material->info.name);
+		allocator->Free(material);
 	}
 
-	Game::GfxImage* Materials::CreateImage(const std::string& name, unsigned int width, unsigned int height, unsigned int depth, unsigned int flags, _D3DFORMAT format)
+	Game::GfxImage* Materials::CreateImage(const std::string& name, unsigned int width, unsigned int height, unsigned int depth, unsigned int flags, D3DFORMAT format)
 	{
-		Game::GfxImage* image = Utils::Memory::GetAllocator()->allocate<Game::GfxImage>();
-		image->name = Utils::Memory::GetAllocator()->duplicateString(name);
+		auto* const allocator = Utils::Memory::GetAllocator();
 
-		Game::Image_Setup(image, width, height, depth, flags, format);
+		auto* const image = allocator->Allocate<Game::GfxImage>();
+		image->name = allocator->DuplicateString(name);
 
-		Materials::ImageTable.push_back(image);
-		AssetHandler::StoreTemporaryAsset(Game::ASSET_TYPE_IMAGE, { image });
-		AssetHandler::ExposeTemporaryAssets(true);
+		Game::Image_Setup(image, static_cast<int>(width), static_cast<int>(height), static_cast<int>(depth), flags, format);
+
+		std::lock_guard lock(tableMutex);
+		imageTable.push_back(image);
 
 		return image;
 	}
 
 	Game::GfxImage* Materials::LoadPreviewImage(const std::string& name)
 	{
-		auto* allocator = Utils::Memory::GetAllocator();
-		auto* image = allocator->allocate<Game::GfxImage>();
-		// Only query the resident table when the database is idle. A regular
-		// DB_FindXAssetHeader miss can wait for the entire incoming map to load.
-		auto* entry = FastFiles::Ready() ? Game::DB_FindXAssetEntry(Game::ASSET_TYPE_IMAGE, name.c_str()) : nullptr;
-		if (entry && entry->asset.header.image && !entry->asset.header.image->delayLoadPixels && entry->asset.header.image->texture.basemap)
+		auto* const allocator = Utils::Memory::GetAllocator();
+		auto* const image = allocator->Allocate<Game::GfxImage>();
+
+		const Game::XAssetEntry* entry = nullptr;
+
+		if (FastFiles::Ready())
 		{
-			*image = *entry->asset.header.image;
+			entry = Game::DB_FindXAssetEntry(Game::ASSET_TYPE_IMAGE, name.data());
+		}
+
+		const auto* const loaded = entry ? static_cast<const Game::GfxImage*>(entry->asset.header.data) : nullptr;
+
+		if (loaded && !loaded->delayLoadPixels && loaded->texture.basemap)
+		{
+			*image = *loaded;
 			image->texture.basemap->AddRef();
-			// The original image owns the engine's allocation accounting; this
-			// header owns only an extra COM reference to the same GPU allocation.
-			image->cardMemory = {};
-			image->name = allocator->duplicateString(name);
+			image->cardMemory.platform[0] = 0;
+			image->cardMemory.platform[1] = 0;
+			image->name = allocator->DuplicateString(name);
 		}
 		else
 		{
-			image->name = allocator->duplicateString(name);
-			image->semantic = Game::TS_COLOR_MAP;
+			image->name = allocator->DuplicateString(name);
+			image->semantic = textureSemanticColorMap;
 			image->category = Game::IMG_CATEGORY_LOAD_FROM_FILE;
 			image->noPicmip = true;
+
 			if (!Game::Image_LoadFromFileWithReader(image, Game::FS_FOpenFileReadCurrentThread))
 			{
-				if (image->texture.basemap) Game::Image_Release(image);
-				allocator->free(image->name);
-				allocator->free(image);
+				if (image->texture.basemap)
+				{
+					Game::Image_Release(image);
+				}
+
+				allocator->Free(image->name);
+				allocator->Free(image);
 				return nullptr;
 			}
 		}
-		ImageTable.push_back(image);
+
+		std::lock_guard lock(tableMutex);
+		imageTable.push_back(image);
+
 		return image;
 	}
 
 	void Materials::DeleteImage(Game::GfxImage* image)
 	{
-		if (!image) return;
+		if (!image)
+		{
+			return;
+		}
 
 		Game::Image_Release(image);
 
-		Utils::Memory::GetAllocator()->free(image->name);
-		Utils::Memory::GetAllocator()->free(image);
+		std::lock_guard lock(tableMutex);
+		std::erase(imageTable, image);
 
-		auto img = std::find(Materials::ImageTable.begin(), Materials::ImageTable.end(), image);
-		if (img != Materials::ImageTable.end())
-		{
-			Materials::ImageTable.erase(img);
-		}
+		auto* const allocator = Utils::Memory::GetAllocator();
+		allocator->Free(image->name);
+		allocator->Free(image);
 	}
 
 	void Materials::DeleteAll()
 	{
-		std::vector<Game::Material*> materials;
-		Utils::Merge(&materials, Materials::MaterialTable);
-		Materials::MaterialTable.clear();
+		std::lock_guard lock(tableMutex);
 
-		for (auto& material : materials)
+		const std::vector<Game::Material*> materials = materialTable;
+
+		for (auto* material : materials)
 		{
-			Materials::Delete(material);
+			Delete(material);
 		}
 
-		std::vector<Game::GfxImage*> images;
-		Utils::Merge(&images, Materials::ImageTable);
-		Materials::ImageTable.clear();
+		const std::vector<Game::GfxImage*> images = imageTable;
 
-		for (auto& image : images)
+		for (auto* image : images)
 		{
-			Materials::DeleteImage(image);
+			DeleteImage(image);
 		}
 	}
 
 	bool Materials::IsValid(Game::Material* material)
 	{
-		if (!material || !material->textureCount || !material->textureTable) return false;
-
-		for (char i = 0; i < material->textureCount; ++i)
+		if (!material || !material->textureCount || !material->textureTable)
 		{
-			if (!material->textureTable[i].u.image || !material->textureTable[i].u.image->texture.map)
+			return false;
+		}
+
+		for (int i = 0; i < material->textureCount; ++i)
+		{
+			const Game::GfxImage* image = material->textureTable[i].u.image;
+
+			if (!image || !image->texture.map)
 			{
 				return false;
 			}
@@ -704,23 +829,20 @@ namespace Components
 		width = 0;
 		height = 0;
 
-		if (imageData.empty() || imageData.size() > 2 * 1024 * 1024)
+		if (imageData.empty() || imageData.size() > 2 * 1024 * 1024 || !EnsureGdiPlusStarted())
 		{
 			return false;
 		}
 
-		if (!EnsureGdiPlusStarted())
-		{
-			return false;
-		}
+		const HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, imageData.size());
 
-		HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, imageData.size());
 		if (!memory)
 		{
 			return false;
 		}
 
-		void* memoryData = GlobalLock(memory);
+		void* const memoryData = GlobalLock(memory);
+
 		if (!memoryData)
 		{
 			GlobalFree(memory);
@@ -731,60 +853,57 @@ namespace Components
 		GlobalUnlock(memory);
 
 		IStream* stream = nullptr;
+
 		if (FAILED(CreateStreamOnHGlobal(memory, TRUE, &stream)) || !stream)
 		{
 			GlobalFree(memory);
 			return false;
 		}
 
+		const std::unique_ptr<IStream, void(*)(IStream*)> ownedStream(stream, [](IStream* owned)
+		{
+			owned->Release();
+		});
+
 		Gdiplus::Bitmap bitmap(stream, FALSE);
+
 		if (bitmap.GetLastStatus() != Gdiplus::Ok)
 		{
-			stream->Release();
 			return false;
 		}
 
-		width = bitmap.GetWidth();
-		height = bitmap.GetHeight();
+		const auto bitmapWidth = bitmap.GetWidth();
+		const auto bitmapHeight = bitmap.GetHeight();
 
-		if (!width || !height || width > 1024 || height > 1024)
+		if (!bitmapWidth || !bitmapHeight || bitmapWidth > 1024 || bitmapHeight > 1024)
 		{
-			stream->Release();
-			pixels.clear();
-			width = 0;
-			height = 0;
 			return false;
 		}
 
-		Gdiplus::Rect rect(0, 0, static_cast<INT>(width), static_cast<INT>(height));
+		Gdiplus::Rect rect(0, 0, static_cast<INT>(bitmapWidth), static_cast<INT>(bitmapHeight));
 		Gdiplus::BitmapData bitmapData{};
 
 		if (bitmap.LockBits(&rect, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &bitmapData) != Gdiplus::Ok)
 		{
-			stream->Release();
-			pixels.clear();
-			width = 0;
-			height = 0;
 			return false;
 		}
 
-		const auto stride = width * 4;
-		pixels.resize(stride * height);
+		const auto stride = bitmapWidth * 4;
+		pixels.resize(static_cast<std::size_t>(stride) * bitmapHeight);
 
-		const auto* srcBase = static_cast<const unsigned char*>(bitmapData.Scan0);
-		for (unsigned int y = 0; y < height; ++y)
+		const auto* const sourceBase = static_cast<const unsigned char*>(bitmapData.Scan0);
+
+		for (unsigned int y = 0; y < bitmapHeight; ++y)
 		{
-			const auto* src = srcBase + (y * bitmapData.Stride);
-			auto* dst = pixels.data() + (y * stride);
-			std::memcpy(dst, src, stride);
+			std::memcpy(pixels.data() + (y * stride), sourceBase + (static_cast<std::ptrdiff_t>(y) * bitmapData.Stride), stride);
 		}
 
 		bitmap.UnlockBits(&bitmapData);
-		stream->Release();
 
+		width = bitmapWidth;
+		height = bitmapHeight;
 		return true;
 	}
-
 
 	std::string Materials::ConvertNewsImageBytesToIwi(const std::string& imageData)
 	{
@@ -797,7 +916,7 @@ namespace Components
 			return {};
 		}
 
-		auto dxtData = EncodeNewsDxt5(pixels, width, height);
+		const auto dxtData = EncodeNewsDxt5(pixels, width, height);
 
 		if (dxtData.empty())
 		{
@@ -805,32 +924,23 @@ namespace Components
 		}
 
 		NewsIwiHeader header{};
-		header.format = 0x0D;
+		header.format = iwiFormatDxt5;
 		header.flags = 0x03;
 		header.width = static_cast<std::uint16_t>(width);
 		header.height = static_cast<std::uint16_t>(height);
 		header.depth = 1;
 
-		const auto fileSize = static_cast<std::uint32_t>(4 + 4 + sizeof(header) + 16 + dxtData.size());
+		const auto fileSize = static_cast<std::uint32_t>(iwiDataOffset + dxtData.size());
 
-		std::string iwi;
+		std::string iwi = "IWi";
 		iwi.reserve(fileSize);
-
-		iwi.push_back('I');
-		iwi.push_back('W');
-		iwi.push_back('i');
 		iwi.push_back(0x08);
-
-		for (auto i = 0; i < 4; ++i)
-		{
-			iwi.push_back(0);
-		}
-
+		iwi.append(4, '\0');
 		iwi.append(reinterpret_cast<const char*>(&header), sizeof(header));
 
-		for (auto i = 0; i < 4; ++i)
+		for (int i = 0; i < 4; ++i)
 		{
-			iwi.append(reinterpret_cast<const char*>(&fileSize), sizeof(fileSize));
+			WriteLe32(iwi, fileSize);
 		}
 
 		iwi.append(dxtData);
@@ -840,42 +950,42 @@ namespace Components
 
 	Game::GfxImage* Materials::CreateNewsImageFromIwiBytes(const std::string& imageName, const std::string& iwiData)
 	{
-		if (imageName.empty() || iwiData.size() < 4 + 4 + sizeof(NewsIwiHeader) + 16)
+		if (imageName.empty() || iwiData.size() < iwiDataOffset)
 		{
 			return nullptr;
 		}
 
-		if (iwiData[0] != 'I' || iwiData[1] != 'W' || iwiData[2] != 'i' || static_cast<unsigned char>(iwiData[3]) != 0x08)
+		if (!iwiData.starts_with("IWi") || static_cast<unsigned char>(iwiData[3]) != 0x08)
 		{
 			return nullptr;
 		}
-
-		const auto headerOffset = 4 + 4;
-		const auto dataOffset = headerOffset + sizeof(NewsIwiHeader) + 16;
 
 		NewsIwiHeader header{};
-		std::memcpy(&header, iwiData.data() + headerOffset, sizeof(header));
+		std::memcpy(&header, iwiData.data() + iwiHeaderOffset, sizeof(header));
 
 		if (header.width == 0 || header.height == 0 || header.depth != 1)
 		{
 			return nullptr;
 		}
 
+		const auto* const data = reinterpret_cast<const unsigned char*>(iwiData.data() + iwiDataOffset);
+		const auto dataSize = iwiData.size() - iwiDataOffset;
 		std::vector<unsigned char> pixels;
 
-		if (header.format == 0x01)
+		if (header.format == iwiFormatArgb32)
 		{
 			const auto expectedSize = static_cast<std::size_t>(header.width) * static_cast<std::size_t>(header.height) * 4u;
-			if (iwiData.size() < dataOffset + expectedSize)
+
+			if (dataSize < expectedSize)
 			{
 				return nullptr;
 			}
 
-			pixels.assign(reinterpret_cast<const unsigned char*>(iwiData.data() + dataOffset), reinterpret_cast<const unsigned char*>(iwiData.data() + dataOffset + expectedSize));
+			pixels.assign(data, data + expectedSize);
 		}
-		else if (header.format == 0x0D || header.format == 0x0E)
+		else if (header.format == iwiFormatDxt5 || header.format == iwiFormatDxt5Alt)
 		{
-			if (!DecodeNewsDxt5(reinterpret_cast<const unsigned char*>(iwiData.data() + dataOffset), iwiData.size() - dataOffset, header.width, header.height, pixels))
+			if (!DecodeNewsDxt5(data, dataSize, header.width, header.height, pixels))
 			{
 				return nullptr;
 			}
@@ -885,35 +995,20 @@ namespace Components
 			return nullptr;
 		}
 
-		auto* image = Materials::CreateImage(imageName, header.width, header.height, 1, 0x1000003, D3DFMT_A8R8G8B8);
-		if (!image || !image->texture.map)
+		return CreateFilledImage(imageName, pixels, header.width, header.height);
+	}
+
+	static Game::Material* FindValidMaterial(const std::vector<Game::Material*>& materials, const std::string& materialName)
+	{
+		for (auto* const material : materials)
 		{
-			if (image)
+			if (material && material->info.name && materialName == material->info.name && Materials::IsValid(material))
 			{
-				Materials::DeleteImage(image);
+				return material;
 			}
-
-			return nullptr;
 		}
 
-		D3DLOCKED_RECT lockedRect{};
-		if (FAILED(image->texture.map->LockRect(0, &lockedRect, nullptr, 0)))
-		{
-			Materials::DeleteImage(image);
-			return nullptr;
-		}
-
-		const auto srcStride = static_cast<std::uint32_t>(header.width) * 4u;
-		auto* dst = static_cast<unsigned char*>(lockedRect.pBits);
-
-		for (auto y = 0u; y < header.height; ++y)
-		{
-			std::memcpy(dst + (y * lockedRect.Pitch), pixels.data() + (y * srcStride), srcStride);
-		}
-
-		image->texture.map->UnlockRect(0);
-
-		return image;
+		return nullptr;
 	}
 
 	Game::Material* Materials::CreateNewsMaterialFromIwiBytes(const std::string& materialName, const std::string& iwiData)
@@ -923,28 +1018,29 @@ namespace Components
 			return nullptr;
 		}
 
-		if (auto* existing = Materials::GetRuntimeMaterial(materialName))
+		if (auto* const existing = GetRuntimeMaterial(materialName))
 		{
 			return existing;
 		}
 
-		for (auto* material : Materials::MaterialTable)
 		{
-			if (material && material->info.name && materialName == material->info.name && Materials::IsValid(material))
+			std::lock_guard lock(tableMutex);
+
+			if (auto* const existing = FindValidMaterial(materialTable, materialName))
 			{
-				return material;
+				return existing;
 			}
 		}
 
-		auto* image = Materials::CreateNewsImageFromIwiBytes(materialName + "_image", iwiData);
+		auto* const image = CreateNewsImageFromIwiBytes(materialName + "_image", iwiData);
+
 		if (!image)
 		{
 			return nullptr;
 		}
 
-		return Materials::Create(materialName, image);
+		return Create(materialName, image);
 	}
-
 
 	Game::GfxImage* Materials::CreateNewsImageFromImageBytes(const std::string& imageName, const std::string& imageData)
 	{
@@ -962,35 +1058,7 @@ namespace Components
 			return nullptr;
 		}
 
-		auto* image = Materials::CreateImage(imageName, width, height, 1, 0x1000003, D3DFMT_A8R8G8B8);
-		if (!image || !image->texture.map)
-		{
-			if (image)
-			{
-				Materials::DeleteImage(image);
-			}
-
-			return nullptr;
-		}
-
-		D3DLOCKED_RECT lockedRect{};
-		if (FAILED(image->texture.map->LockRect(0, &lockedRect, nullptr, 0)))
-		{
-			Materials::DeleteImage(image);
-			return nullptr;
-		}
-
-		const auto srcStride = width * 4;
-		auto* dst = static_cast<unsigned char*>(lockedRect.pBits);
-
-		for (unsigned int y = 0; y < height; ++y)
-		{
-			std::memcpy(dst + (y * lockedRect.Pitch), pixels.data() + (y * srcStride), srcStride);
-		}
-
-		image->texture.map->UnlockRect(0);
-
-		return image;
+		return CreateFilledImage(imageName, pixels, width, height);
 	}
 
 	Game::Material* Materials::CreateNewsMaterialFromImageBytes(const std::string& materialName, const std::string& imageData)
@@ -1000,26 +1068,28 @@ namespace Components
 			return nullptr;
 		}
 
-		if (auto* existing = Materials::GetRuntimeMaterial(materialName))
+		if (auto* const existing = GetRuntimeMaterial(materialName))
 		{
 			return existing;
 		}
 
-		for (auto* material : Materials::MaterialTable)
 		{
-			if (material && material->info.name && materialName == material->info.name && Materials::IsValid(material))
+			std::lock_guard lock(tableMutex);
+
+			if (auto* const existing = FindValidMaterial(materialTable, materialName))
 			{
-				return material;
+				return existing;
 			}
 		}
 
-		auto* image = Materials::CreateNewsImageFromImageBytes(materialName + "_image", imageData);
+		auto* const image = CreateNewsImageFromImageBytes(materialName + "_image", imageData);
+
 		if (!image)
 		{
 			return nullptr;
 		}
 
-		return Materials::Create(materialName, image);
+		return Create(materialName, image);
 	}
 
 	Game::Material* Materials::UpdateNewsMaterialFromImageBytes(const std::string& materialName, const std::string& imageData)
@@ -1029,224 +1099,180 @@ namespace Components
 			return nullptr;
 		}
 
-		auto* image = Materials::CreateNewsImageFromImageBytes(materialName + "_image_" + Utils::String::VA("%i", Game::Sys_Milliseconds()), imageData);
-		if (!image || !image->texture.map)
+		auto* const image = CreateNewsImageFromImageBytes(std::format("{}_image_{}", materialName, Game::Sys_Milliseconds()), imageData);
+
+		if (!image)
 		{
 			return nullptr;
 		}
 
-		auto* material = Materials::GetRuntimeMaterial(materialName);
+		auto* const material = GetRuntimeMaterial(materialName);
+
 		if (!material)
 		{
-			material = Materials::Create(materialName, image);
-			return material;
-		}
-
-		if (!material->textureTable)
-		{
-			return nullptr;
+			return Create(materialName, image);
 		}
 
 		material->textureTable[0].u.image = image;
-		AssetHandler::StoreTemporaryAsset(Game::ASSET_TYPE_MATERIAL, { material });
-		AssetHandler::ExposeTemporaryAssets(true);
 
 		return material;
 	}
 
-
-	__declspec(naked) void Materials::ImageVersionCheck()
+	Materials::~Materials()
 	{
-		__asm
+		DeleteAll();
+
+		if (gdiPlusToken)
 		{
-			cmp eax, 9
-			je returnSafely
-
-			jmp Materials::ImageVersionCheckHook.original
-
-			returnSafely :
-			mov al, 1
-				add esp, 18h
-				retn
+			Gdiplus::GdiplusShutdown(gdiPlusToken);
+			gdiPlusToken = 0;
 		}
 	}
 
-	int Materials::WriteDeathMessageIcon(char* string, int offset, Game::Material* material)
+	struct ImageBufferSite
 	{
-		if (!material)
-		{
-			material = Game::DB_FindXAssetHeader(Game::XAssetType::ASSET_TYPE_MATERIAL, "default").material;
-		}
+		std::uintptr_t address;
+		std::uint8_t bytes[6];
+		std::size_t length;
+	};
 
-		int length = strlen(material->info.name);
-		string[offset++] = static_cast<char>(length);
-
-		strncpy_s(string + offset, 1024 - offset, material->info.name, length);
-
-		return offset + length;
-	}
-
-	__declspec(naked) void Materials::DeathMessageStub()
+	static const ImageBufferSite imageBufferSites[] =
 	{
-		__asm
-		{
-			push eax
-			pushad
+		{ 0x140069AD5, { 0x3D, 0x00, 0x00, 0xC0, 0x00 }, 5 },
+		{ 0x140069B17, { 0xB9, 0x00, 0x00, 0xC0, 0x00 }, 5 },
+		{ 0x140069C74, { 0x81, 0xF9, 0x00, 0x00, 0xC0, 0x00 }, 6 },
+		{ 0x140069CB6, { 0xB9, 0x00, 0x00, 0xC0, 0x00 }, 5 },
+	};
 
-			push edx
-			push eax
-			push ecx
+	constexpr std::uint32_t imageBufferSize = 0x4000000;
 
-			call Materials::WriteDeathMessageIcon
-			add esp, 0Ch
-
-			mov[esp + 20h], eax
-			popad
-			pop eax
-
-			add esp, 8h
-			retn
-		}
-	}
-
-	int Materials::FormatImagePath(char* buffer, size_t size, int, int, const char* image)
+	static void RaiseImageBuffer()
 	{
-#if 0
-		if (Utils::String::StartsWith(image, "preview_"))
+		for (const auto& site : imageBufferSites)
 		{
-			std::string newImage = image;
-			Utils::String::Replace(newImage, "preview_", "loadscreen_");
-
-			if (FileSystem::FileReader(fmt::sprintf("images/%s.iwi", newImage.data())).exists())
+			if (!Utils::Hook::MatchesBytes(site.address, site.bytes, site.length))
 			{
-				image = Utils::String::VA("%s", newImage.data());
+				Logger::Error("materials: 0x{:X} does not read as expected, the image load buffer stays 12 MiB\n", site.address);
+				return;
 			}
 		}
-#endif
 
-		return _snprintf_s(buffer, size, size, "images/%s.iwi", image);
-	}
-
-	int Materials::MaterialComparePrint(Game::Material* m1, Game::Material* m2)
-	{
-		return Utils::Hook::Call<int(Game::Material*, Game::Material*)>(0x5235B0)(m1, m2);
-	}
-
-#ifdef DEBUG
-	void Materials::DumpImageCfg(int, const char*, const char* material)
-	{
-		Materials::DumpImageCfgPath(0, nullptr, Utils::String::VA("images/%s.iwi", material));
-	}
-
-	void Materials::DumpImageCfgPath(int, const char*, const char* material)
-	{
-		FILE* fp = nullptr;
-		if (!fopen_s(&fp, "dump.cfg", "a") && fp)
+		for (const auto& site : imageBufferSites)
 		{
-			fprintf(fp, "dumpraw %s\n", material);
-			fclose(fp);
+			Utils::Hook::Set<std::uint32_t>(site.address + site.length - sizeof(std::uint32_t), imageBufferSize);
 		}
 	}
 
-#endif
+	static void IgnoreMissingImages()
+	{
+		const bool areCallsIntact = Utils::Hook::BranchesTo(R_DelayLoadImage_Com_ErrorCall, Com_Error, HOOK_CALL)
+			&& Utils::Hook::BranchesTo(Load_Texture_Com_ErrorCall, Com_Error, HOOK_CALL);
+
+		if (!areCallsIntact)
+		{
+			Logger::Error("materials: the image load errors do not read as expected, a missing image still drops to the menu\n");
+			return;
+		}
+
+		Utils::Hook::Nop(R_DelayLoadImage_Com_ErrorCall, 5);
+		Utils::Hook::Nop(Load_Texture_Com_ErrorCall, 5);
+	}
+
+	static void DB_LoadXAssets_UnloadOverrides_Hk()
+	{
+		reinterpret_cast<void(*)()>(Utils::Hook::Rebase(Material_DirtyTechniqueSetOverrides))();
+		reinterpret_cast<void(*)()>(Utils::Hook::Rebase(Material_OverrideTechniqueSets))();
+	}
 
 	Materials::Materials()
 	{
 		EnsureGdiPlusStarted();
+		RaiseImageBuffer();
+		IgnoreMissingImages();
 
-		Materials::ImageVersionCheckHook.initialize(0x53A456, Materials::ImageVersionCheck, HOOK_CALL)->install();
-
-		Utils::Hook(0x5A30D9, Materials::DeathMessageStub, HOOK_JUMP).install()->quick();
-
-		Utils::Hook(0x53AC19, Materials::FormatImagePath, HOOK_CALL).install()->quick();
-
-		Utils::Hook::Set<void*>(0x523894, Materials::MaterialComparePrint);
-
-		// The stock atlas renderer assumes every grid cell is populated. This
-		// spinner contains 30 frames in an 8x4 sheet, so select its cells with
-		// the real frame count while retaining the engine's atlas frame rate.
-		Utils::Hook(0x441462, Process2DTextureCoordsForAnimatedAtlases, HOOK_CALL).install()->quick();
-		Utils::Hook(0x46524A, Process2DTextureCoordsForAnimatedAtlases, HOOK_CALL).install()->quick();
-		Utils::Hook(0x4BFF2A, Process2DTextureCoordsForAnimatedAtlases, HOOK_CALL).install()->quick();
-		Utils::Hook(0x4FC13A, Process2DTextureCoordsForAnimatedAtlases, HOOK_CALL).install()->quick();
-		Utils::Hook(0x5061A8, Process2DTextureCoordsForAnimatedAtlases, HOOK_CALL).install()->quick();
-
-		AssetHandler::ExposeTemporaryAssets(true);
-
-		AssetHandler::OnFind(Game::ASSET_TYPE_MATERIAL, [](Game::XAssetType, const std::string& filename)
-			{
-				if (auto* material = Materials::GetRuntimeMaterial(filename))
-				{
-					return Game::XAssetHeader{ material };
-				}
-
-				return Game::XAssetHeader{ nullptr };
-			});
-
-		AssetHandler::OnLoad(Game::ASSET_TYPE_MATERIAL, [](Game::XAssetType type, Game::XAssetHeader asset,
-			const std::string_view, bool*)
-			{
-				if (type == Game::ASSET_TYPE_MATERIAL)
-				{
-					Materials::ConfigureAnimatedAtlas(asset.material);
-				}
-			});
-
-		AssetHandler::OnFind(Game::ASSET_TYPE_IMAGE, [](Game::XAssetType, const std::string& filename)
-			{
-				for (auto* image : Materials::ImageTable)
-				{
-					if (image && image->name && !_stricmp(image->name, filename.data()))
-					{
-						return Game::XAssetHeader{ image };
-					}
-				}
-
-				return Game::XAssetHeader{ nullptr };
-			});
-
-#ifdef DEBUG
-		if (Flags::HasFlag("dump"))
+		AssetHandler::OnFind(Game::ASSET_TYPE_MATERIAL, [](unsigned int, const std::string& name) -> void*
 		{
-			Utils::Hook(0x51F5AC, Materials::DumpImageCfg, HOOK_CALL).install()->quick();
-			Utils::Hook(0x51F4C4, Materials::DumpImageCfg, HOOK_CALL).install()->quick();
-			Utils::Hook(0x53AC62, Materials::DumpImageCfgPath, HOOK_CALL).install()->quick();
+			return GetRuntimeMaterial(name);
+		});
+
+		AssetHandler::OnLoad(Game::ASSET_TYPE_MATERIAL, [](unsigned int, void* asset, const std::string&, bool*)
+		{
+			ConfigureAnimatedAtlas(static_cast<Game::Material*>(asset));
+		});
+
+		Renderer::OnDeviceRecoveryBegin([]
+		{
+			Game::Dvar_SetFromStringByName("zw3_ui_news_image", "");
+			Game::Dvar_SetFromStringByName("zw3_ui_news_has_image", "0");
+
+			std::lock_guard lock(tableMutex);
+
+			for (auto* const image : imageTable)
+			{
+				Game::Image_Release(image);
+				image->texture.map = nullptr;
+			}
+
+			runtimeMaterials.clear();
+		});
+
+		const bool areAtlasCallsIntact = std::ranges::all_of(atlasCalls, [](std::uintptr_t site)
+		{
+			return Utils::Hook::BranchesTo(site, Material_Process2DTextureCoordsForAtlasing, HOOK_CALL);
+		});
+
+		if (!areAtlasCallsIntact)
+		{
+			Logger::Error("materials: a call to Material_Process2DTextureCoordsForAtlasing does not read as expected, the spinner plays 32 frames and the map vote previews are stretched, not cropped\n");
 		}
 		else
 		{
-			Utils::Hook::Nop(0x51F5AC, 5);
-			Utils::Hook::Nop(0x51F4C4, 5);
-		}
-#else
-		Utils::Hook::Nop(0x51F5AC, 5);
-		Utils::Hook::Nop(0x51F4C4, 5);
-#endif
+			bool isSeated = true;
 
-		Renderer::OnDeviceRecoveryBegin([]()
+			for (std::size_t i = 0; i < std::size(atlasCalls); ++i)
 			{
-				Dvar::Var("zw3_ui_news_image").set("");
-				Dvar::Var("zw3_ui_news_has_image").set(false);
+				isSeated = atlasHooks[i].Initialize(atlasCalls[i], reinterpret_cast<void*>(ProcessAtlasCoords), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+			}
 
-				for (auto& image : Materials::ImageTable)
+			if (!isSeated)
+			{
+				for (auto& hook : atlasHooks)
 				{
-					Game::Image_Release(image);
-					image->texture.map = nullptr;
+					hook.Uninstall();
 				}
 
-				RuntimeMaterialTable.clear();
-			});
-	}
-
-	Materials::~Materials()
-	{
-		Materials::DeleteAll();
-
-		Materials::ImageVersionCheckHook.uninstall();
-
-		if (GdiPlusToken)
-		{
-			Gdiplus::GdiplusShutdown(GdiPlusToken);
-			GdiPlusToken = 0;
+				Logger::Error("materials: could not seat the atlas hooks, the spinner plays 32 frames and the map vote previews are stretched, not cropped\n");
+			}
+			else
+			{
+				for (auto& hook : atlasHooks)
+				{
+					hook.Quick();
+				}
+			}
 		}
+
+		if (!Utils::Hook::BranchesTo(DB_LoadXAssets_UnloadDirtyCall, Material_DirtyTechniqueSetOverrides, HOOK_CALL))
+		{
+			Logger::Error("materials: DB_LoadXAssets' unload no longer calls Material_DirtyTechniqueSetOverrides, a render thread sort after an unload can still read a freed remapped techset\n");
+		}
+		else if (!unloadOverridesHook.Initialize(DB_LoadXAssets_UnloadDirtyCall, reinterpret_cast<void*>(DB_LoadXAssets_UnloadOverrides_Hk), HOOK_CALL)->Install()->IsInstalled())
+		{
+			Logger::Error("materials: could not seat the unload override hook, a render thread sort after an unload can still read a freed remapped techset\n");
+		}
+
+		if (!Utils::Hook::MatchesBytes(Image_LoadFromFileWithReader_VersionTest, versionTest, sizeof(versionTest)))
+		{
+			Logger::Error("materials: Image_LoadFromFileWithReader does not read as expected, version 9 images stay refused\n");
+			return;
+		}
+
+		if (!versionHook.Initialize(Image_LoadFromFileWithReader_VersionTest, IwiVersionStub, HOOK_CALL)->Install()->IsInstalled())
+		{
+			Logger::Error("materials: could not seat the image version hook, version 9 images stay refused\n");
+			return;
+		}
+
+		Utils::Hook::Nop(Image_LoadFromFileWithReader_VersionTest + 5, sizeof(versionTest) - 5);
 	}
 }

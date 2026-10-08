@@ -7,23 +7,20 @@ namespace Components
 	public:
 		Stats();
 
-		static bool IsMaxLevel();
+		static bool IsInstalled();
 
 	private:
-		static void UpdateClasses([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
+		static bool isInstalled;
 
 		static void SendStats();
-
-		static std::int64_t* GetStatsID();
-
 		static void AddScriptFunctions();
 
-		static void SprintfLiveStorageFilename(char* target, size_t size);
-		static void SprintfLiveStorageFilenameWithFsGame(char* target, size_t size, const char* fsGame);
-		
+		static const std::int64_t* GetStatsID();
+		static void SprintfLiveStorageFilename(char* target, std::size_t size);
+		static void SprintfLiveStorageFilenameWithFsGame(char* target, std::size_t size, const char* modName);
 		static void MoveOldStatsToNewFolder();
 
-		static uint32_t HashFilename();
-		static void HashFilenameStub();
+		static void Steam_FileRead_Core_Checksum(const void* data, unsigned int size, unsigned int key, void* checksum);
+		static void Steam_FileWrite_Core_Checksum(const void* data, unsigned int size, unsigned int key, void* checksum);
 	};
 }

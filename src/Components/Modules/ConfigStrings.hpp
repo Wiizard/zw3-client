@@ -1,28 +1,18 @@
 #pragma once
 
-#include "Weapon.hpp"
-#include "ModelCache.hpp"
-#include "Controller.hpp"
-
 namespace Components
 {
 	class ConfigStrings : public Component
 	{
 	public:
-		static const int BASEGAME_MAX_CONFIGSTRINGS = Game::MAX_CONFIGSTRINGS;
-		static const int DEV_DVAR_CONFIGSTRINGS_CAPACITY = 512;
-		static const int MAX_CONFIGSTRINGS =
-			(BASEGAME_MAX_CONFIGSTRINGS
-				+ Weapon::ADDED_WEAPONS
-				+ ModelCache::ADDITIONAL_GMODELS
-				+ Controller::RUMBLE_CONFIGSTRINGS_COUNT
-				+ 1
-				+ (DEV_DVAR_CONFIGSTRINGS_CAPACITY * 2)
-			);
-
-		static_assert(MAX_CONFIGSTRINGS < USHRT_MAX);
+		static constexpr int DEV_DVAR_CONFIGSTRINGS_CAPACITY = 512;
+		static constexpr int MAX_CONFIGSTRINGS = 5883 + 1 + DEV_DVAR_CONFIGSTRINGS_CAPACITY * 2;
 
 		ConfigStrings();
+
+		static bool HasRaisedTables();
+
+		static bool HasServerModelStrings();
 
 		static const char* CL_GetRumbleConfigString(int index);
 		static unsigned int SV_GetRumbleConfigStringConst(int index);
@@ -30,24 +20,18 @@ namespace Components
 
 	private:
 		static void PatchConfigStrings();
+		static void PatchModelConfigStrings();
+		static void PatchServerConfigStrings();
+		static void PatchServerModelConfigStrings();
+		static void* SV_ClearServer_Memset_Hook(void* dest, int value, std::size_t size);
 
-		static void SV_SetConfigString(int index, const char* data, Game::ConfigString basegameLastPosition, int extendedFirstPosition);
-		static unsigned int SV_GetConfigString(int index, Game::ConfigString basegameLastPosition, int extendedFirstPosition);
-		static const char* CL_GetConfigString(int index, Game::ConfigString basegameLastPosition, int extendedFirstPosition);
-
-		static const char* CL_GetCachedModelConfigString(int index);
-		static int SV_GetCachedModelConfigStringConst(int index);
+		static unsigned int SV_GetCachedModelConfigStringConst(int index);
 		static void SV_SetCachedModelConfigString(int index, const char* data);
 
-		static const char* CL_GetWeaponConfigString(int index);
-		static int SV_GetWeaponConfigStringConst(int index);
-		static void SV_SetWeaponConfigString(int index, const char* data);
+		static const char* CL_GetCachedModelConfigString(int index);
+		static void CG_ConfigStringModified_Hook(int localClientNum);
 
-		static int CG_ParseExtraConfigStrings();
-		static void CG_ParseConfigStrings();
-		static int SV_ClearConfigStrings(void* dest, int value, int size);
-
-		static void RelocateDevDvarConfigStrings(int* range);
-		static void RelocateDevDvarConfigStringsStub();
+		static void PatchDevDvarConfigStrings();
+		static void SV_SetConfig_Hook(int start, int max, int bit);
 	};
 }

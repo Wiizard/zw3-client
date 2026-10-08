@@ -8,21 +8,18 @@ namespace Utils
 		InfoString() = default;
 		explicit InfoString(const std::string& buffer);
 
-		void set(const std::string& key, const std::string& value);
-		void remove(const std::string& key);
+		void Set(const std::string& key, const std::string& value);
+		void Remove(const std::string& key);
 
-		[[nodiscard]] std::string get(const std::string& key) const;
-		[[nodiscard]] std::string build() const;
+		[[nodiscard]] std::string Get(const std::string& key) const;
+		[[nodiscard]] bool Has(const std::string& key) const;
+		[[nodiscard]] std::string Build() const;
 
-#ifdef _DEBUG
-		void dump();
-#endif
-
-		[[nodiscard]] nlohmann::json to_json() const;
+		[[nodiscard]] nlohmann::json ToJson() const;
 
 	private:
-		std::unordered_map<std::string, std::string> keyValuePairs_;
+		std::unordered_map<std::string, std::string> pairs;
 
-		void parse(std::string buffer);
+		void Parse(std::string buffer);
 	};
 }

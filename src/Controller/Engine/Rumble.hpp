@@ -1,18 +1,10 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "Engine.hpp"
-#include "../Haptic/Effect.hpp"
+#include "Controller/Haptic/Effect.hpp"
 
-namespace Controller
+namespace Controller::Engine
 {
-  namespace engine
-  {
-    bool
-    effect_from_rumble (const Game::RumbleInfo&,
-                        float scale,
-                        bool loop,
-                        haptic::effect& out) noexcept;
-  }
+	bool TryEffectFromRumble(const Game::RumbleInfo& info, float scale, bool shouldLoop, Haptic::Effect& out) noexcept;
 }

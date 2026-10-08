@@ -1,5 +1,10 @@
 #pragma once
 
+#include "Dvar.hpp"
+#include "Network.hpp"
+
+#include <Steam/Steam.hpp>
+
 namespace Components
 {
 	class Party : public Component
@@ -7,48 +12,55 @@ namespace Components
 	public:
 		Party();
 
+		static bool IsInLobby();
+		static bool IsInUserMapLobby();
+		static bool IsEnabled();
+
+		static bool IsHostingParty();
+		static bool IsPrivateMatchClient();
+
+		static void Connect(const Network::Address& target, bool downloadOnly = false, bool isUnmanagedRequired = false);
+
+		static std::uint64_t GetLocalPlayerXuid();
+
 		static Network::Address Target();
-		static void Connect(Network::Address target, bool downloadOnly = false,
-			bool requireUnmanagedProof = false);
-		static const char* GetLobbyInfo(SteamID lobby, const std::string& key);
-		static void RemoveLobby(SteamID lobby);
+
+		static std::string GetHostName();
+		static std::string GetMotd();
+		static int GetMaxClients();
+
+		static void ConnectError(const std::string& message);
+
+		static bool HandleJoinResponse(const Network::Address& address, const Utils::InfoString& info);
+
+		static const char* GetLobbyInfo(::Steam::SteamID lobby, const std::string& key);
+		static void RemoveLobby(::Steam::SteamID lobby);
 
 		static bool PlaylistAwaiting();
 		static void PlaylistContinue();
 		static void PlaylistError(const std::string& error);
 
-		static void ConnectError(const std::string& message);
-
-		static bool IsInUserMapLobby();
-		static bool IsInLobby();
-
-		static bool IsEnabled();
-
-		static std::string GetMotd();
-		static std::string GetHostName();
-		static int GetMaxClients();
-
-		// ZW3 - Real-time dvar broadcasting
-		static void BroadcastDvarUpdate();
-		static std::map<uint64_t, std::vector<Network::Address>> g_xuidToPublicAddressMap;
-		static void TrackClientAddress(uint64_t xuid, const Network::Address& address);
-
-		static uint64_t GetLocalPlayerXUID();
-
-		// ZW3 - Character management
-		static void RandomizeCharactersForClients();
-		static std::string GetPlayerName(int slot_index);
-
 	private:
-		static std::map<std::uint64_t, Network::Address> LobbyMap;
+		struct JoinContainer
+		{
+			Network::Address target;
+			std::string challenge;
+			int startTime;
+			int requestTime;
+			bool isValid;
+			bool isAwaitingPlaylist;
+			bool isDownloadOnly;
+			bool isUnmanagedRequired;
+			Utils::InfoString info;
+			std::string motd;
+		};
 
-		static Dvar::Var PartyEnable;
-		static Dvar::Var ServerVersion;
+		static JoinContainer joinContainer;
+		static std::map<std::uint64_t, Network::Address> lobbyMap;
 
-		static SteamID GenerateLobbyId();
+		static Dvar::Var party_enable;
 
-		static DWORD UIDvarIntStub(char* dvar);
-
-		static bool IsServerBrowserOpen();
+		static void HandleGetInfo(Network::Address& address, const std::string& data);
+		static ::Steam::SteamID GenerateLobbyId();
 	};
 }

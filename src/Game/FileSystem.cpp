@@ -1,46 +1,35 @@
+#include "STDInclude.hpp"
 
 namespace Game
 {
-	FS_FileExists_t FS_FileExists = FS_FileExists_t(0x4DEFA0);
-	FS_FreeFile_t FS_FreeFile = FS_FreeFile_t(0x4416B0);
-	FS_ReadFile_t FS_ReadFile = FS_ReadFile_t(0x4F4B90);
-	FS_ListFiles_t FS_ListFiles = FS_ListFiles_t(0x441BB0);
-	FS_FreeFileList_t FS_FreeFileList = FS_FreeFileList_t(0x4A5DE0);
-	FS_FOpenFileAppend_t FS_FOpenFileAppend = FS_FOpenFileAppend_t(0x410BB0);
-	FS_FOpenFileWrite_t FS_FOpenFileWrite = FS_FOpenFileWrite_t(0x4BA530);
-	FS_FOpenTextFileWrite_t FS_FOpenTextFileWrite = FS_FOpenTextFileWrite_t(0x43FD90);
-	FS_FileOpenReadText_t FS_FileOpenReadText = FS_FileOpenReadText_t(0x446B60);
-	FS_FOpenFileRead_t FS_FOpenFileRead = FS_FOpenFileRead_t(0x46CBF0);
-	FS_FOpenFileReadDatabase_t FS_FOpenFileReadDatabase = FS_FOpenFileReadDatabase_t(0x42ECA0);
-	FS_FOpenFileReadForThread_t FS_FOpenFileReadForThread = FS_FOpenFileReadForThread_t(0x643270);
-	FS_FOpenFileByMode_t FS_FOpenFileByMode = FS_FOpenFileByMode_t(0x4C0700);
-	FS_FCloseFile_t FS_FCloseFile = FS_FCloseFile_t(0x462000);
-	FS_WriteFile_t FS_WriteFile = FS_WriteFile_t(0x426450);
-	FS_WriteToDemo_t  FS_WriteToDemo = FS_WriteToDemo_t(0x4C06E0);
-	FS_Write_t FS_Write = FS_Write_t(0x4576C0);
-	FS_Printf_t FS_Printf = FS_Printf_t(0x459320);
-	FS_Read_t FS_Read = FS_Read_t(0x4A04C0);
-	FS_Seek_t FS_Seek = FS_Seek_t(0x4A63D0);
-	FS_FTell_t FS_FTell = FS_FTell_t(0x4E6760);
-	FS_Remove_t FS_Remove = FS_Remove_t(0x4660F0);
-	FS_Restart_t FS_Restart = FS_Restart_t(0x461A50);
-	FS_BuildPathToFile_t FS_BuildPathToFile = FS_BuildPathToFile_t(0x4702C0);
-	FS_IsShippedIWD_t FS_IsShippedIWD = FS_IsShippedIWD_t(0x642440);
-	FS_Delete_t FS_Delete = FS_Delete_t(0x48A5B0);
-	FS_BuildOSPath_t FS_BuildOSPath = FS_BuildOSPath_t(0x4702C0);
+	FS_FreeFile_t FS_FreeFile = nullptr;
+	FS_ReadFile_t FS_ReadFile = nullptr;
+	FS_ListFiles_t FS_ListFiles = nullptr;
+	FS_FOpenFileWrite_t FS_FOpenFileWrite = nullptr;
+	FS_FOpenFileRead_t FS_FOpenFileRead = nullptr;
+	FS_FOpenFileRead_t FS_FOpenFileReadDatabase = nullptr;
+	FS_FOpenFileReadForThread_t FS_FOpenFileReadForThread = nullptr;
+	FS_FOpenFileByMode_t FS_FOpenFileByMode = nullptr;
+	FS_FCloseFile_t FS_FCloseFile = nullptr;
+	FS_WriteToDemo_t FS_WriteToDemo = nullptr;
+	FS_Write_t FS_Write = nullptr;
+	FS_Printf_t FS_Printf = nullptr;
+	FS_Read_t FS_Read = nullptr;
+	FS_Seek_t FS_Seek = nullptr;
+	FS_FTell_t FS_FTell = nullptr;
+	FS_Restart_t FS_Restart = nullptr;
+	FS_Delete_t FS_Delete = nullptr;
 
-	searchpath_s** fs_searchpaths = reinterpret_cast<searchpath_s**>(0x63D96E0);
+	searchpath_s** fs_searchpaths = nullptr;
 
-	char* fs_gamedir = reinterpret_cast<char*>(0x63D0BB8);
-
-	int FS_FOpenFileReadCurrentThread(const char* filename, int* file)
+	int FS_FOpenFileReadCurrentThread(const char* filename, fileHandle_t* file)
 	{
-		if (GetCurrentThreadId() == *reinterpret_cast<DWORD*>(0x1CDE7FC))
+		if (Sys_IsMainThread())
 		{
 			return FS_FOpenFileRead(filename, file);
 		}
 
-		if (GetCurrentThreadId() == *reinterpret_cast<DWORD*>(0x1CDE814))
+		if (Sys_IsDatabaseThread())
 		{
 			return FS_FOpenFileReadDatabase(filename, file);
 		}
@@ -49,17 +38,26 @@ namespace Game
 		return -1;
 	}
 
-	void FS_AddLocalizedGameDirectory(const char* path, const char* dir)
+	void BindFileSystem()
 	{
-		static DWORD FS_AddLocalizedGameDirectory_t = 0x642EF0;
+		FS_FreeFile = BindFunction<FS_FreeFile_t>(0x140279000);
+		FS_ReadFile = BindFunction<FS_ReadFile_t>(0x140279050);
+		FS_ListFiles = BindFunction<FS_ListFiles_t>(0x140279020);
+		FS_FOpenFileWrite = BindFunction<FS_FOpenFileWrite_t>(0x140276A10);
+		FS_FOpenFileRead = BindFunction<FS_FOpenFileRead_t>(0x140275BB0);
+		FS_FOpenFileReadDatabase = BindFunction<FS_FOpenFileRead_t>(0x140275BD0);
+		FS_FOpenFileReadForThread = BindFunction<FS_FOpenFileReadForThread_t>(0x140275BE0);
+		FS_FOpenFileByMode = BindFunction<FS_FOpenFileByMode_t>(0x1402759C0);
+		FS_FCloseFile = BindFunction<FS_FCloseFile_t>(0x140275920);
+		FS_WriteToDemo = BindFunction<FS_WriteToDemo_t>(0x140278E50);
+		FS_Write = BindFunction<FS_Write_t>(0x140278CA0);
+		FS_Printf = BindFunction<FS_Printf_t>(0x140277BD0);
+		FS_Read = BindFunction<FS_Read_t>(0x140277CB0);
+		FS_Seek = BindFunction<FS_Seek_t>(0x1402782F0);
+		FS_FTell = BindFunction<FS_FTell_t>(0x140276B70);
+		FS_Restart = BindFunction<FS_Restart_t>(0x140277FB0);
+		FS_Delete = BindFunction<FS_Delete_t>(0x140275870);
 
-		__asm
-		{
-			pushad
-			mov ebx, path
-			mov eax, dir
-			call FS_AddLocalizedGameDirectory_t
-			popad
-		}
+		fs_searchpaths = reinterpret_cast<searchpath_s**>(Utils::Hook::Rebase(0x146644B90));
 	}
 }

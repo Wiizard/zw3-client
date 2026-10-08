@@ -1,73 +1,104 @@
 #pragma once
 
 #include <zlib.h>
-#include <algorithm>
-#include <cstring>
-#include <memory>
 
 namespace Utils
 {
-	// For the engine's serial compressed-memory reader, which requests individual
-	// bytes. Input/checksum progress may run ahead of delivered output. This is
-	// deliberately not a general replacement for zlib's public streaming API.
 	class InflateReadAhead
 	{
 	public:
 		void Reset()
 		{
-			buffer_.reset();
-			begin_ = end_ = 0;
-			status_ = Z_OK;
+			this->buffer.reset();
+			this->begin = 0;
+			this->end = 0;
+			this->status = Z_OK;
 		}
 
 		int Read(z_streamp stream, int flush)
 		{
-			if (!stream || !stream->next_out || !stream->avail_out) return Z_BUF_ERROR;
+			if (!stream || !stream->next_out || !stream->avail_out)
+			{
+				return Z_BUF_ERROR;
+			}
+
 			const auto requested = stream->avail_out;
+
 			while (stream->avail_out)
 			{
-				if (begin_ != end_)
+				if (this->begin != this->end)
 				{
-					const auto count = (std::min)(stream->avail_out, end_ - begin_);
-					std::memcpy(stream->next_out, buffer_.get() + begin_, count);
-					begin_ += count;
+					const auto count = std::min(stream->avail_out, this->end - this->begin);
+					std::memcpy(stream->next_out, this->buffer.get() + this->begin, count);
+					this->begin += count;
 					stream->next_out += count;
 					stream->avail_out -= count;
 					stream->total_out += count;
-					if (begin_ != end_) return Z_OK;
+
+					if (this->begin != this->end)
+					{
+						return Z_OK;
+					}
 				}
-				if (status_ != Z_OK && status_ != Z_BUF_ERROR) return status_;
-				if (!stream->avail_out) return Z_OK;
-				if (stream->avail_out >= Capacity)
+
+				if (this->status != Z_OK && this->status != Z_BUF_ERROR)
 				{
-					status_ = inflate(stream, flush);
-					return status_;
+					return this->status;
 				}
-				if (!buffer_)
+
+				if (!stream->avail_out)
 				{
-					buffer_.reset(new (std::nothrow) unsigned char[Capacity]);
-					if (!buffer_) return inflate(stream, flush);
+					return Z_OK;
 				}
-				auto* output = stream->next_out;
+
+				if (stream->avail_out >= capacity)
+				{
+					this->status = inflate(stream, flush);
+					return this->status;
+				}
+
+				if (!this->buffer)
+				{
+					this->buffer.reset(new (std::nothrow) unsigned char[capacity]);
+
+					if (!this->buffer)
+					{
+						return inflate(stream, flush);
+					}
+				}
+
+				auto* const output = stream->next_out;
 				const auto available = stream->avail_out;
-				stream->next_out = buffer_.get();
-				stream->avail_out = Capacity;
-				status_ = inflate(stream, flush);
-				begin_ = 0;
-				end_ = Capacity - stream->avail_out;
-				stream->total_out -= end_;
+
+				stream->next_out = this->buffer.get();
+				stream->avail_out = capacity;
+				this->status = inflate(stream, flush);
+				this->begin = 0;
+				this->end = capacity - stream->avail_out;
+				stream->total_out -= this->end;
 				stream->next_out = output;
 				stream->avail_out = available;
-				if (!end_)
-					return requested != available && status_ == Z_BUF_ERROR ? Z_OK : status_;
+
+				if (!this->end)
+				{
+					if (requested != available && this->status == Z_BUF_ERROR)
+					{
+						return Z_OK;
+					}
+
+					return this->status;
+				}
 			}
+
 			return Z_OK;
 		}
 
 	private:
-		static constexpr unsigned Capacity = 32 * 1024;
-		std::unique_ptr<unsigned char[]> buffer_;
-		unsigned begin_ = 0, end_ = 0;
-		int status_ = Z_OK;
+		static constexpr unsigned int capacity = 32 * 1024;
+
+		std::unique_ptr<unsigned char[]> buffer;
+		unsigned int begin = 0;
+		unsigned int end = 0;
+		int status = Z_OK;
 	};
 }

@@ -1,51 +1,41 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Context.hpp"
-#include "../Device/Id.hpp"
-#include "../Haptic/Effect.hpp"
+#include "Controller/Context.hpp"
+#include "Controller/Device/Id.hpp"
+#include "Controller/Haptic/Effect.hpp"
 
-namespace Controller
+namespace Controller::Transport
 {
-  namespace transport
-  {
-    class audio_endpoint
-    {
-    public:
-      using source = std::function<void (std::span<haptic::frame>)>;
+	class AudioEndpoint
+	{
+	public:
+		using Source = std::function<void(std::span<Haptic::Frame> frames, std::uint32_t rate)>;
 
-      audio_endpoint (const context&, device_id, const std::wstring& hid_path,
-                      source);
+		AudioEndpoint(const Context& context, DeviceId device, const std::wstring& hidPath, Source fill);
 
-      audio_endpoint (const audio_endpoint&) = delete;
-      audio_endpoint& operator= (const audio_endpoint&) = delete;
+		AudioEndpoint(const AudioEndpoint&) = delete;
+		AudioEndpoint& operator=(const AudioEndpoint&) = delete;
 
-      bool
-      running () const noexcept {return running_.load (std::memory_order_acquire);}
+		bool IsRunning() const noexcept
+		{
+			return this->isRunning.load(std::memory_order_acquire);
+		}
 
-      uint32_t
-      sample_rate () const noexcept {return rate_.load (std::memory_order_acquire);}
+		std::string Status() const;
 
-      std::string
-      status () const;
+	private:
+		void Run(const std::stop_token& stop, const Context& context, DeviceId device, const std::wstring& hidPath);
+		void Note(std::string text) const;
 
-    private:
-      void
-      run (std::stop_token, context, device_id, std::wstring) noexcept;
+		Source fill;
 
-      void
-      note (std::string) const;
+		std::atomic<bool> isRunning{ false };
 
-      source source_;
+		mutable std::mutex statusMutex;
+		mutable std::string status = "not started";
 
-      std::atomic<uint32_t> rate_ {0};
-      std::atomic<bool> running_ {false};
-
-      mutable std::mutex status_mutex_;
-      mutable std::string status_ {"not started"};
-
-      std::jthread thread_;
-    };
-  }
+		std::jthread thread;
+	};
 }

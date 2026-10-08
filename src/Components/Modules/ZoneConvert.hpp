@@ -7,8 +7,10 @@ namespace Components
 	public:
 		ZoneConvert();
 
-    static std::string
-    SearchPath (std::string_view group);
-  };
-}
+		static bool IsEnabled();
+		static std::string SearchPath(std::string_view group);
 
+	private:
+		static bool isEnabled;
+	};
+}

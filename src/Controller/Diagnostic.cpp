@@ -1,81 +1,69 @@
-#include "Diagnostic.hpp"
+#include "STDInclude.hpp"
 
-#include "Types.hpp"
+#include "Controller/Diagnostic.hpp"
 
-#include "../Components/Modules/Logger.hpp"
+#include "Components/Modules/Logger.hpp"
 
 namespace Controller
 {
-  const char*
-  to_string (facility f) noexcept
-  {
-    switch (f)
-    {
-      case facility::runtime:     return "runtime";
-      case facility::discovery:   return "discovery";
-      case facility::transport:   return "transport";
-      case facility::driver:      return "driver";
-      case facility::decode:      return "decode";
-      case facility::sample:      return "sample";
-      case facility::calibration: return "calibration";
-      case facility::mapping:     return "mapping";
-      case facility::aim:         return "aim";
-      case facility::steam:       return "steam";
-      case facility::engine:      return "engine";
-      case facility::debug:       return "debug";
-    }
+	const char* ToString(Facility facility) noexcept
+	{
+		switch (facility)
+		{
+		case Facility::Runtime:
+			return "runtime";
+		case Facility::Discovery:
+			return "discovery";
+		case Facility::Transport:
+			return "transport";
+		case Facility::Driver:
+			return "driver";
+		case Facility::Decode:
+			return "decode";
+		case Facility::Sample:
+			return "sample";
+		case Facility::Calibration:
+			return "calibration";
+		case Facility::Mapping:
+			return "mapping";
+		case Facility::Aim:
+			return "aim";
+		case Facility::Steam:
+			return "steam";
+		case Facility::Engine:
+			return "engine";
+		case Facility::Debug:
+			return "debug";
+		}
 
-    return "runtime";
-  }
+		return "runtime";
+	}
 
-  const char*
-  to_string (severity s) noexcept
-  {
-    switch (s)
-    {
-      case severity::info:    return "info";
-      case severity::warning: return "warning";
-      case severity::error:   return "error";
-    }
+	void LoggingSink::Consume(const Diagnostic& diagnostic)
+	{
+		std::string line = std::format("controller: {}: {}", ToString(diagnostic.origin), diagnostic.message);
 
-    return "info";
-  }
+		if (diagnostic.code != ErrorCode::None)
+		{
+			line += std::format(" [{}]", ToString(diagnostic.code));
+		}
 
-  void
-  logging_sink::
-  consume (const diagnostic& d)
-  {
-    std::ostringstream line;
-    line << "controller: " << to_string (d.origin) << ": " << d.message;
+		if (diagnostic.device)
+		{
+			line += std::format(" device({})", diagnostic.device.Value());
+		}
 
-    if (d.code != errc::none)
-      line << " [" << d.code << ']';
-
-    if (d.device)
-      line << ' ' << d.device;
-
-    switch (d.level)
-    {
-      case severity::info:
-        Components::Logger::Print (Game::CON_CHANNEL_SYSTEM, "{}\n", line.str ());
-        break;
-      case severity::warning:
-        Components::Logger::Warning (Game::CON_CHANNEL_SYSTEM, "{}\n", line.str ());
-        break;
-      case severity::error:
-        Components::Logger::PrintError (Game::CON_CHANNEL_ERROR, "{}\n", line.str ());
-        break;
-    }
-  }
-
-  void
-  report (diagnostic_sink& sink,
-          severity level,
-          facility origin,
-          errc code,
-          device_id device,
-          std::string message)
-  {
-    sink.consume (diagnostic {level, origin, code, device, std::move (message)});
-  }
+		switch (diagnostic.level)
+		{
+		case Severity::Info:
+			Components::Logger::Print("{}\n", line);
+			break;
+		case Severity::Warning:
+			Components::Logger::Warning("{}\n", line);
+			break;
+		case Severity::Error:
+			Components::Logger::Error("{}\n", line);
+			break;
+		}
+	}
 }

@@ -1,49 +1,68 @@
+#include "STDInclude.hpp"
+
 #include "Entity.hpp"
 #include "Script.hpp"
 
 namespace Components::GSC
 {
+	constexpr std::uintptr_t cm_numSubModels = 0x141BD3280;
+
+	constexpr std::uintptr_t Scr_GetConstLowercaseString = 0x140229BD0;
+	constexpr std::uintptr_t SV_DObjExists = 0x140233090;
+	constexpr std::uintptr_t G_DObjGetWorldTagMatrix = 0x1401AA720;
+
+	constexpr char modelTypeBrush = 4;
+
 	void Entity::AddScriptMethods()
 	{
-		Script::AddMethod("SetBrushModel", [](const Game::scr_entref_t entref) // gsc: <entity> SetBrushModel(<index>)
+		Script::AddMethod("SetBrushModel", [](const Game::scr_entref_t entref)
+		{
+			if (Game::Scr_GetNumParam() != 1)
 			{
-				if (Game::Scr_GetNumParam() != 1)
-				{
-					Game::Scr_Error("usage: <entity> SetBrushModel( <index> )\n");
-					return;
-				}
+				Script::Scr_Error("usage: <entity> SetBrushModel( <index> )\n");
+				return;
+			}
 
-				auto* ent = Game::GetEntity(entref);
-				const auto index = Game::Scr_GetInt(0);
+			auto* const ent = Game::GetEntity(entref);
+			const int index = Game::Scr_GetInt(0);
+			const auto subModelCount = Utils::Hook::Get<unsigned int>(cm_numSubModels);
 
-				if (index < 0 || static_cast<unsigned int>(index) >= Game::cm->numSubModels)
-				{
-					Game::Scr_ParamError(0, "brush model index out of range");
-					return;
-				}
+			if (index < 0 || static_cast<unsigned int>(index) >= subModelCount)
+			{
+				Script::Scr_ParamError(0, "brush model index out of range");
+				return;
+			}
 
-				Game::SV_UnlinkEntity(ent);
-				ent->s.index.brushModel = index;
-				ent->r.modelType = Game::MODELTYPE_BRUSH;
+			Game::SV_UnlinkEntity(ent);
+			ent->s.index = index;
+			ent->r.modelType = modelTypeBrush;
 
-				Game::SV_SetBrushModel(ent);
-				Game::SV_LinkEntity(ent);
-			});
+			Game::SV_SetBrushModel(ent);
+			Game::SV_LinkEntity(ent);
+		});
 
 		Script::AddMethod("TagExists", [](const Game::scr_entref_t entref)
+		{
+			if (Game::Scr_GetNumParam() != 1)
 			{
-				if (Game::Scr_GetNumParam() != 1)
-				{
-					Game::Scr_Error("usage: <entity> TagExists( <tag name> )\n");
-					return;
-				}
+				Script::Scr_Error("usage: <entity> TagExists( <tag name> )\n");
+				return;
+			}
 
-				auto* ent = Game::GetEntity(entref);
-				const auto tagName = Utils::Hook::Call<unsigned int(unsigned int)>(0x47C720)(0);
+			auto* const ent = Game::GetEntity(entref);
+			const auto tagName = Utils::Hook::Call<unsigned int(unsigned int)>(Scr_GetConstLowercaseString)(0);
 
-				const auto exists = Utils::Hook::Call<int(Game::gentity_s*, unsigned int, void*, int)>(0x501120)(ent, tagName, reinterpret_cast<void*>(0x1A860C0), 0);
-				Game::Scr_AddBool(exists != 0);
-			});
+			if (!Utils::Hook::Call<int(Game::gentity_s*)>(SV_DObjExists)(ent))
+			{
+				Game::Scr_AddBool(false);
+				return;
+			}
+
+			float tagMatrix[4][3]{};
+			const int hasTag = Utils::Hook::Call<int(Game::gentity_s*, unsigned int, float(*)[3])>(G_DObjGetWorldTagMatrix)(ent, tagName, tagMatrix);
+
+			Game::Scr_AddBool(hasTag != 0);
+		});
 	}
 
 	Entity::Entity()

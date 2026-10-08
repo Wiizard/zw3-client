@@ -1,118 +1,73 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
 namespace Controller
 {
-  class device_id
-  {
-  public:
-    constexpr device_id () = default;
+	class DeviceId
+	{
+	public:
+		constexpr DeviceId() = default;
 
-    constexpr explicit
-    device_id (uint32_t v) noexcept: value_ (v) {}
+		constexpr explicit DeviceId(std::uint32_t value) noexcept : value(value)
+		{
+		}
 
-    constexpr uint32_t
-    value () const noexcept {return value_;}
+		constexpr std::uint32_t Value() const noexcept
+		{
+			return this->value;
+		}
 
-    constexpr explicit
-    operator bool () const noexcept {return value_ != 0;}
+		constexpr explicit operator bool() const noexcept
+		{
+			return this->value != 0;
+		}
 
-    friend constexpr bool
-    operator== (device_id, device_id) noexcept = default;
+		friend constexpr bool operator==(DeviceId, DeviceId) noexcept = default;
 
-    friend constexpr std::strong_ordering
-    operator<=> (device_id, device_id) noexcept = default;
+	private:
+		std::uint32_t value = 0;
+	};
 
-  private:
-    uint32_t value_ {0};
-  };
+	inline constexpr DeviceId noDevice{};
 
-  inline constexpr device_id no_device {};
+	enum class TransportKind : std::uint8_t
+	{
+		Unknown,
+		XInput,
+		RawInput,
+		Hid,
+	};
 
-  std::ostream&
-  operator<< (std::ostream&, device_id);
+	const char* ToString(TransportKind transport) noexcept;
 
-  enum class transport_kind : uint8_t
-  {
-    unknown,
-    xinput,
-    raw_input,
-    hid,
-  };
+	enum class Connection : std::uint8_t
+	{
+		Unknown,
+		Usb,
+		Bluetooth,
+		Virtualized,
+	};
 
-  const char*
-  to_string (transport_kind) noexcept;
+	const char* ToString(Connection link) noexcept;
 
-  std::ostream&
-  operator<< (std::ostream&, transport_kind);
+	class UserIndex
+	{
+	public:
+		static constexpr std::uint8_t count = 4;
 
-  enum class connection : uint8_t
-  {
-    unknown,
-    usb,
-    bluetooth,
-    virtualized,
-  };
+		constexpr explicit UserIndex(std::uint8_t value) noexcept : value(value)
+		{
+		}
 
-  const char*
-  to_string (connection) noexcept;
+		constexpr std::uint8_t Value() const noexcept
+		{
+			return this->value;
+		}
 
-  std::ostream&
-  operator<< (std::ostream&, connection);
+		friend constexpr bool operator==(UserIndex, UserIndex) noexcept = default;
 
-  class user_index
-  {
-  public:
-    static constexpr uint8_t count {4};
-
-    constexpr explicit
-    user_index (uint8_t v) noexcept: value_ (v) {}
-
-    static constexpr std::optional<user_index>
-    try_from (int v) noexcept
-    {
-      if (v < 0 || v >= count)
-        return std::nullopt;
-
-      return user_index (static_cast<uint8_t> (v));
-    }
-
-    constexpr uint8_t
-    value () const noexcept {return value_;}
-
-    friend constexpr bool
-    operator== (user_index, user_index) noexcept = default;
-
-    friend constexpr std::strong_ordering
-    operator<=> (user_index, user_index) noexcept = default;
-
-  private:
-    uint8_t value_;
-  };
-
-  class report_id
-  {
-  public:
-    constexpr report_id () = default;
-
-    constexpr explicit
-    report_id (uint8_t v) noexcept: value_ (v) {}
-
-    constexpr uint8_t
-    value () const noexcept {return value_;}
-
-    friend constexpr bool
-    operator== (report_id, report_id) noexcept = default;
-
-    friend constexpr std::strong_ordering
-    operator<=> (report_id, report_id) noexcept = default;
-
-  private:
-    uint8_t value_ {0};
-  };
-
-  static_assert (sizeof (report_id) == 1);
-  static_assert (static_cast<uint8_t> (transport_kind::hid) < 4);
-  static_assert (static_cast<uint8_t> (connection::virtualized) < 4);
+	private:
+		std::uint8_t value;
+	};
 }

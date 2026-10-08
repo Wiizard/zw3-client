@@ -1,15 +1,6 @@
 #pragma once
 
-#include <api.hpp>
-
-#define XFILE_MAGIC_UNSIGNED 0x3030317566665749
-#define XFILE_VERSION 276
-
-#define XFILE_HEADER_IW4X 0x78345749 // 'IW4x'
-#define XFILE_VERSION_IW4X 3
-
-#define XFILE_HEADER_ZW3 0x4633575A // 'ZW3F'
-#define XFILE_VERSION_ZW3 1
+#include "Dvar.hpp"
 
 namespace Components
 {
@@ -22,86 +13,92 @@ namespace Components
 			class AssetRecursionMarker
 			{
 			public:
-				AssetRecursionMarker(Zone* _builder) : builder(_builder)
+				AssetRecursionMarker(Zone* zone) : builder(zone)
 				{
-					this->builder->increaseAssetDepth();
+					this->builder->IncreaseAssetDepth();
 				}
 
 				~AssetRecursionMarker()
 				{
-					this->builder->decreaseAssetDepth();
+					this->builder->DecreaseAssetDepth();
 				}
 
 			private:
 				Zone* builder;
 			};
 
-			Zone(const std::string& zoneName, const std::string& sourceName, const std::string& destination);
-			Zone(const std::string& zoneName);
+			Zone(const std::string& name, const std::string& sourceName, const std::string& destinationPath);
+			Zone(const std::string& name);
 			~Zone();
 
-			void build();
+			void Build();
 
-			Utils::Stream* getBuffer();
-			Utils::Memory::Allocator* getAllocator();
-			iw4of::api* getIW4OfApi();
+			Utils::Stream* GetBuffer();
+			Utils::Memory::Allocator* GetAllocator();
 
-			bool hasPointer(const void* pointer);
-			void storePointer(const void* pointer);
+			bool HasPointer(const void* pointer);
+			void StorePointer(const void* pointer);
 
-			template<typename T>
-			T* getPointer(const T* pointer) { return reinterpret_cast<T*>(this->safeGetPointer(pointer)); }
+			std::uint32_t GetPointer(const void* pointer);
 
-			int findAsset(Game::XAssetType type, std::string name);
-			Game::XAssetHeader findSubAsset(Game::XAssetType type, std::string name);
-			Game::XAsset* getAsset(int index);
-			uint32_t getAssetTableOffset(int index);
+			int FindAsset(Game::XAssetType type, std::string name);
+			Game::XAssetHeader FindSubAsset(Game::XAssetType type, std::string name);
+			Game::XAsset* GetAsset(int index);
+			std::uint32_t GetAssetTableOffset(int index);
 
-			bool hasAlias(Game::XAsset asset);
-			Game::XAssetHeader saveSubAsset(Game::XAssetType type, void* ptr);
-			bool loadAssetByName(Game::XAssetType type, const std::string& name, bool isSubAsset = true);
-			bool loadAsset(Game::XAssetType type, void* data, bool isSubAsset = true);
+			bool HasAlias(Game::XAsset asset);
+			std::uint32_t SaveSubAsset(Game::XAssetType type, void* ptr);
+			bool LoadAssetByName(Game::XAssetType type, const std::string& name, bool isSubAsset = true);
+			bool LoadAsset(Game::XAssetType type, void* data, bool isSubAsset = true);
 
-			int addScriptString(unsigned short gameIndex);
-			int addScriptString(const std::string& str);
-			int findScriptString(const std::string& str);
-			void addRawAsset(Game::XAssetType type, void* ptr);
+			int AddScriptString(unsigned short gameIndex);
+			int AddScriptString(const std::string& str);
+			int FindScriptString(const std::string& str);
+			void AddRawAsset(Game::XAssetType type, void* ptr);
 
-			void mapScriptString(unsigned short& gameIndex);
+			void MapScriptString(unsigned short& gameIndex);
 
-			void renameAsset(Game::XAssetType type, const std::string& asset, const std::string& newName);
-			std::string getAssetName(Game::XAssetType type, const std::string& asset);
+			void RenameAsset(Game::XAssetType type, const std::string& asset, const std::string& newName);
+			std::string GetAssetName(Game::XAssetType type, const std::string& asset);
 
-			void store(Game::XAssetHeader header);
+			void Store(Game::XAssetHeader header);
 
-			void incrementExternalSize(unsigned int size);
+			void IncrementExternalSize(unsigned int size);
 
-			void increaseAssetDepth() { ++this->assetDepth; }
-			void decreaseAssetDepth() { --this->assetDepth; }
-			bool isPrimaryAsset() { return this->assetDepth <= 1; }
+			void IncreaseAssetDepth()
+			{
+				++this->assetDepth;
+			}
+
+			void DecreaseAssetDepth()
+			{
+				--this->assetDepth;
+			}
+
+			bool IsPrimaryAsset()
+			{
+				return this->assetDepth <= 1;
+			}
 
 		private:
-			void loadFastFiles() const;
+			void LoadFastFiles() const;
 
-			bool loadAssets();
-			bool loadAssetByName(const std::string& type, std::string name, bool isSubAsset = true);
+			bool LoadAssets();
+			bool LoadAssetByName(const std::string& typeName, std::string name, bool isSubAsset = true);
 
-			void saveData();
-			void writeZone();
+			bool TrySaveData();
+			void WriteZone();
 
-			unsigned int getAlias(Game::XAsset asset);
-			void storeAlias(Game::XAsset asset);
+			std::uint32_t GetAlias(Game::XAsset asset);
+			void StoreAlias(Game::XAsset asset);
 
-			void addBranding();
+			void AddBranding();
 
-			iw4of::params_t getIW4OfApiParams();
-
-			uint32_t safeGetPointer(const void* pointer);
+			std::uint32_t SafeGetPointer(const void* pointer);
 
 			int indexStart;
 			unsigned int externalSize;
 			Utils::Stream buffer;
-			iw4of::api iw4ofApi;
 
 			std::string zoneName;
 			std::string destination;
@@ -116,14 +113,14 @@ namespace Components
 
 			std::map<unsigned short, unsigned int> scriptStringMap;
 
-			std::map<std::string, std::string> renameMap[Game::XAssetType::ASSET_TYPE_COUNT];
+			std::map<std::string, std::string> renameMap[Game::ASSET_TYPE_COUNT];
 
-			std::map<const void*, uint32_t> pointerMap;
-			std::vector<std::pair<Game::XAsset, uint32_t>> aliasList;
+			std::map<const void*, std::uint32_t> pointerMap;
+			std::vector<std::pair<Game::XAsset, std::uint32_t>> aliasList;
 
 			Game::RawFile branding;
 
-			size_t assetDepth;
+			std::size_t assetDepth;
 		};
 
 		struct NamedAsset
@@ -131,25 +128,31 @@ namespace Components
 			Game::XAssetType type;
 			std::string name;
 
-			bool operator==(const NamedAsset& other) const {
-				return type == other.type && name == other.name;
-			};
+			bool operator==(const NamedAsset& other) const
+			{
+				return this->type == other.type && this->name == other.name;
+			}
 
-			struct Hash {
-				size_t operator()(const NamedAsset& k) const {
-					return static_cast<size_t>(k.type) ^ std::hash<std::string>{}(k.name);
+			struct Hash
+			{
+				std::size_t operator()(const NamedAsset& asset) const
+				{
+					return static_cast<std::size_t>(asset.type) ^ std::hash<std::string>{}(asset.name);
 				}
 			};
 		};
 
 		ZoneBuilder();
-		~ZoneBuilder();
 
 		static bool IsEnabled();
-		static bool IsDumpingZone() { return DumpingZone.length() > 0; };
 
-		static std::string TraceZone;
-		static std::vector<NamedAsset> TraceAssets;
+		static bool IsDumpingZone()
+		{
+			return !dumpingZone.empty();
+		}
+
+		static std::string traceZone;
+		static std::vector<NamedAsset> traceAssets;
 
 		static void BeginAssetTrace(const std::string& zone);
 		static std::vector<NamedAsset> EndAssetTrace();
@@ -158,43 +161,17 @@ namespace Components
 
 		static Game::XAssetHeader GetEmptyAssetIfCommon(Game::XAssetType type, const std::string& name, Zone* builder);
 		static std::string GetDumpingZonePath();
-		static void RefreshExporterWorkDirectory();
-
-		static iw4of::api* GetExporter();
 
 	private:
-		static int StoreTexture(Game::GfxImageLoadDef** loadDef, Game::GfxImage* image);
+		static std::string dumpingZone;
+
+		static bool ApplyEnginePatches();
+
+		static void StoreTexture(Game::GfxImageLoadDef** loadDef, Game::GfxImage* image);
 		static void ReleaseTexture(Game::XAssetHeader header);
-
-		static std::string FindMaterialByTechnique(const std::string& name);
-		static void ReallocateLoadedSounds(void*& data, void* a2);
-
-		static BOOL APIENTRY EntryPoint(HINSTANCE /*hInstance*/, HINSTANCE /*hPrevInstance*/, LPSTR /*lpCmdLine*/, int /*nShowCmd*/);
-		static void HandleError(Game::errorParm_t code, const char* fmt, ...);
-		static void SoftErrorAssetOverflow();
-
-		static void AssumeMainThreadRole();
-		static void ResetThreadRole();
-
-		static bool IsThreadMainThreadHook();
-		static Game::Sys_File Sys_CreateFile_Stub(const char* dir, const char* filename);
-
-		static iw4of::params_t GetExporterAPIParams();
 
 		static void DumpZone(const std::string& zone);
 
-		static std::function<void()> LoadZoneWithTrace(const std::string& zone, OUT std::vector<NamedAsset>& assets);
-
-		static void Com_Quitf_t();
-
-		static void CommandThreadCallback();
-
-		static bool MainThreadInterrupted;
-		static DWORD InterruptingThreadId;
-
-		static volatile bool CommandThreadTerminate;
-		static std::thread CommandThread;
-		static iw4of::api ExporterAPI;
-		static std::string DumpingZone;
+		static std::function<void()> LoadZoneWithTrace(const std::string& zone, std::vector<NamedAsset>& assets);
 	};
 }

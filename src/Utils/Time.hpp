@@ -4,14 +4,14 @@ namespace Utils::Time
 {
 	class Interval
 	{
-	protected:
-		std::chrono::high_resolution_clock::time_point lastPoint;
-
 	public:
 		Interval() : lastPoint(std::chrono::high_resolution_clock::now()) {}
 
-		void update();
-		bool elapsed(std::chrono::nanoseconds nsecs) const;
+		void Update();
+		[[nodiscard]] bool Elapsed(std::chrono::nanoseconds duration) const;
+
+	protected:
+		std::chrono::high_resolution_clock::time_point lastPoint;
 	};
 
 	class Point
@@ -19,10 +19,10 @@ namespace Utils::Time
 	public:
 		Point();
 
-		void update();
-		int diff(Point point) const;
-		bool after(Point point) const;
-		bool elapsed(int milliseconds) const;
+		void Update();
+		[[nodiscard]] int Diff(Point point) const;
+		[[nodiscard]] bool After(Point point) const;
+		[[nodiscard]] bool Elapsed(int milliseconds) const;
 
 	private:
 		int lastPoint;

@@ -1,15 +1,21 @@
 #pragma once
 
+#include "Network.hpp"
+#include "UIScript.hpp"
+
 namespace Components
 {
 	class ServerInfo : public Component
 	{
 	public:
 		ServerInfo();
-		~ServerInfo();
 
 		static Utils::InfoString GetHostInfo();
 		static Utils::InfoString GetInfo();
+
+		static int GetProtocol();
+
+		static std::string ParseChallenge(const std::string& data);
 
 	private:
 		class Container
@@ -40,10 +46,10 @@ namespace Components
 			Network::Address target;
 		};
 
-		static Container PlayerContainer;
+		static Container playerContainer;
 
-		static void ServerStatus([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
-		static void RefreshScoreboard([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
+		static void ServerStatus(const UIScript::Token& token);
+		static void RefreshScoreboard(const UIScript::Token& token);
 		static void ApplyScoreboardSnapshot(const std::string& data);
 		static void WriteScoreboardRowDvars();
 		static void NormalisePlayerDownState(Container::Player& player);
@@ -52,7 +58,7 @@ namespace Components
 		static const char* GetPlayerText(unsigned int index, int column);
 		static void SelectPlayer(unsigned int index);
 
-		static void DrawScoreboardInfo(int localClientNum);
-		static void DrawScoreboardStub();
+		static void HandleGetStatus(Network::Address& address, const std::string& data);
+		static void HandleStatusResponse(Network::Address& address, const std::string& data);
 	};
 }

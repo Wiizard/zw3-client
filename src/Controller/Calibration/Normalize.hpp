@@ -1,15 +1,11 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "Profile.hpp"
-#include "../Sample/Sample.hpp"
+#include "Controller/Calibration/Profile.hpp"
+#include "Controller/Sample/Sample.hpp"
 
-namespace Controller
+namespace Controller::Calibration
 {
-  namespace calibration
-  {
-    void
-    apply (const profile&, const raw_sample&, canonical_sample&) noexcept;
-  }
+	void ApplyProfile(const Profile& profile, const RawSample& raw, CanonicalSample& canonical) noexcept;
 }

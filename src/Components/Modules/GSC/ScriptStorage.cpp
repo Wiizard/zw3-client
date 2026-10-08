@@ -1,115 +1,120 @@
+#include "STDInclude.hpp"
 
 #include "ScriptStorage.hpp"
 #include "Script.hpp"
+#include "../FileSystem.hpp"
+#include "../Logger.hpp"
 
 namespace Components::GSC
 {
-	std::unordered_map<std::string, std::string> ScriptStorage::Data;
+	std::unordered_map<std::string, std::string> ScriptStorage::data;
 
 	void ScriptStorage::AddScriptFunctions()
 	{
-		Script::AddFunction("StorageSet", [] // gsc: StorageSet(<str key>, <str data>);
+		Script::AddFunction("StorageSet", []
 		{
 			const auto* key = Game::Scr_GetString(0);
 			const auto* value = Game::Scr_GetString(1);
 
 			if (!key || !value)
 			{
-				Game::Scr_Error("StorageSet: Illegal parameters!");
+				Script::Scr_Error("StorageSet: Illegal parameters!");
 				return;
 			}
 
-			Data.insert_or_assign(key, value);
+			data.insert_or_assign(key, value);
 		});
 
-		Script::AddFunction("StorageRemove", [] // gsc: StorageRemove(<str key>);
+		Script::AddFunction("StorageRemove", []
 		{
 			const auto* key = Game::Scr_GetString(0);
 
 			if (!key)
 			{
-				Game::Scr_ParamError(0, "StorageRemove: Illegal parameter!");
+				Script::Scr_ParamError(0, "StorageRemove: Illegal parameter!");
 				return;
 			}
 
-			if (!Data.contains(key))
+			if (!data.contains(key))
 			{
-				Game::Scr_Error(Utils::String::VA("StorageRemove: Store does not have key '%s'!", key));
+				Script::Scr_Error(Utils::String::VA("StorageRemove: Store does not have key '%s'!", key));
 				return;
 			}
 
-			Data.erase(key);
+			data.erase(key);
 		});
 
-		Script::AddFunction("StorageGet", [] // gsc: StorageGet(<str key>);
+		Script::AddFunction("StorageGet", []
 		{
 			const auto* key = Game::Scr_GetString(0);
 
 			if (!key)
 			{
-				Game::Scr_ParamError(0, "StorageGet: Illegal parameter!");
+				Script::Scr_ParamError(0, "StorageGet: Illegal parameter!");
 				return;
 			}
 
-			if (!Data.contains(key))
+			if (!data.contains(key))
 			{
-				Game::Scr_Error(Utils::String::VA("StorageGet: Store does not have key '%s'!", key));
+				Script::Scr_Error(Utils::String::VA("StorageGet: Store does not have key '%s'!", key));
 			}
 
-			const auto& data = Data.at(key);
-			Game::Scr_AddString(data.data());
+			const auto& value = data.at(key);
+			Game::Scr_AddString(value.data());
 		});
 
-		Script::AddFunction("StorageHas", [] // gsc: StorageHas(<str key>);
+		Script::AddFunction("StorageHas", []
 		{
 			const auto* key = Game::Scr_GetString(0);
 
 			if (!key)
 			{
-				Game::Scr_ParamError(0, "StorageHas: Illegal parameter!");
+				Script::Scr_ParamError(0, "StorageHas: Illegal parameter!");
 				return;
 			}
 
-			Game::Scr_AddBool(Data.contains(key));
+			Game::Scr_AddBool(data.contains(key));
 		});
 
-		Script::AddFunction("StorageDump", [] // gsc: StorageDump();
+		Script::AddFunction("StorageDump", []
 		{
-			if (Data.empty())
+			if (data.empty())
 			{
-				Game::Scr_Error("StorageDump: ScriptStorage is empty!");
+				Script::Scr_Error("StorageDump: ScriptStorage is empty!");
 				return;
 			}
 
-			const nlohmann::json json = Data;
+			const nlohmann::json json = data;
 
-			FileSystem::FileWriter(Game::SCRIPTDATA_DIR + "/scriptstorage.json"s).write(json.dump());
+			FileSystem::FileWriter(Game::SCRIPTDATA_DIR + "/scriptstorage.json"s).Write(json.dump());
 		});
 
-		Script::AddFunction("StorageLoad", [] // gsc: StorageLoad();
+		Script::AddFunction("StorageLoad", []
 		{
 			FileSystem::File storageFile(Game::SCRIPTDATA_DIR + "/scriptstorage.json"s);
-			if (!storageFile.exists())
+
+			if (!storageFile.Exists())
 			{
 				return;
 			}
 
-			const auto& buffer = storageFile.getBuffer();
+			const auto& buffer = storageFile.GetBuffer();
+
 			try
 			{
 				const nlohmann::json storageDef = nlohmann::json::parse(buffer);
 				const auto& newData = storageDef.get<std::unordered_map<std::string, std::string>>();
-				Data.insert(newData.begin(), newData.end());
+				data.insert(newData.begin(), newData.end());
 			}
 			catch (const std::exception& ex)
 			{
-				Logger::PrintError(Game::CON_CHANNEL_ERROR, "JSON Parse Error: {}. File {} is invalid\n", ex.what(), storageFile.getName());
+				Logger::Error("JSON Parse Error: {}. File {} is invalid\n", ex.what(), storageFile.GetName());
 			}
 		});
 
-		Script::AddFunction("StorageClear", [] // gsc: StorageClear();
+		Script::AddFunction("StorageClear", []
 		{
-			Data.clear();
+			data.clear();
 		});
 	}
 

@@ -1,37 +1,37 @@
+#include "STDInclude.hpp"
 
 namespace Utils::Time
 {
-	void Interval::update()
+	void Interval::Update()
 	{
 		this->lastPoint = std::chrono::high_resolution_clock::now();
 	}
 
-	bool Interval::elapsed(std::chrono::nanoseconds nsecs) const
+	bool Interval::Elapsed(std::chrono::nanoseconds duration) const
 	{
-		return ((std::chrono::high_resolution_clock::now() - this->lastPoint) >= nsecs);
+		return (std::chrono::high_resolution_clock::now() - this->lastPoint) >= duration;
 	}
 
 	Point::Point() : lastPoint(Game::Sys_Milliseconds())
 	{
-
 	}
 
-	void Point::update()
+	void Point::Update()
 	{
 		this->lastPoint = Game::Sys_Milliseconds();
 	}
 
-	int Point::diff(Point point) const
+	int Point::Diff(Point point) const
 	{
 		return point.lastPoint - this->lastPoint;
 	}
 
-	bool Point::after(Point point) const
+	bool Point::After(Point point) const
 	{
-		return this->diff(point) < 0;
+		return this->Diff(point) < 0;
 	}
 
-	bool Point::elapsed(int milliseconds) const
+	bool Point::Elapsed(int milliseconds) const
 	{
 		return (Game::Sys_Milliseconds() - this->lastPoint) >= milliseconds;
 	}

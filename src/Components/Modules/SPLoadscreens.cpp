@@ -1,212 +1,222 @@
+#include "STDInclude.hpp"
+
 #include "SPLoadscreens.hpp"
-#include "Command.hpp"
-#include "Events.hpp"
 #include "AssetHandler.hpp"
+#include "Command.hpp"
+#include "D3D9Ex.hpp"
+#include "Dedicated.hpp"
+#include "Dvar.hpp"
+#include "Events.hpp"
 #include "FastFiles.hpp"
+#include "LobbyScene.hpp"
+#include "Logger.hpp"
 #include "Maps.hpp"
 #include "Materials.hpp"
 #include "Menus.hpp"
-#include "D3D9Ex.hpp"
-#include "LobbyScene.hpp"
-#include <Utils/MapPreview.hpp>
+#include "Renderer.hpp"
+#include "Scheduler.hpp"
+
+#include "Utils/MapPreview.hpp"
 
 namespace Components
 {
-	namespace
+	constexpr std::uintptr_t Cmd_ExecuteSingleCommand_WaitServerCall = 0x1401E78B8;
+	constexpr std::uintptr_t SV_WaitServer = 0x14023D9E0;
+
+	struct Preview
 	{
-		struct Preview
+		std::string map;
+		Game::GfxImage* image;
+		Game::Material* material;
+	};
+
+	struct MenuPatch
+	{
+		Game::menuDef_t* menu;
+		Game::Material** slot;
+		Game::Material* original;
+		float* alpha;
+		float originalAlpha;
+	};
+
+	static std::atomic<std::shared_ptr<const Preview>> activePreview;
+
+	static std::unordered_map<std::string, Game::GfxImage*> previewImages;
+	static std::vector<MenuPatch> menuPatches;
+	static std::string loadingMap;
+	static bool isTransitionPending = false;
+	static bool didSeeLoadingState = false;
+	static unsigned int mapCommandDepth = 0;
+
+	static std::atomic_bool shouldClearPreview = false;
+
+	static Utils::Hook waitServerHook;
+
+	static bool IsMainMenuOpen()
+	{
+		const auto* const context = Game::uiContext;
+		const int openCount = std::min(context->openMenuCount, static_cast<int>(std::size(context->menuStack)));
+
+		for (int i = 0; i < openCount; ++i)
 		{
-			std::string map;
-			Game::GfxImage* image;
-			Game::Material* material;
-		};
+			const auto* const menu = context->menuStack[i];
 
-		struct MenuPatch
-		{
-			Game::menuDef_t* menu;
-			Game::Material** slot;
-			Game::Material* original;
-			float* alpha;
-			float originalAlpha;
-		};
-
-		std::atomic<std::shared_ptr<const Preview>> ActivePreview;
-		std::unordered_map<std::string, Game::GfxImage*> PreviewImages;
-		std::vector<MenuPatch> MenuPatches;
-		std::string LoadingMap;
-		bool TransitionPending = false;
-		bool SawLoadingState = false;
-		unsigned int MapCommandDepth = 0;
-		void (*NativeDevmapCommand)() = nullptr;
-
-		bool IsMainMenuOpen()
-		{
-			if (!Game::uiContext) return false;
-
-			for (int i = 0; i < Game::uiContext->openMenuCount; ++i)
+			if (menu && menu->window.name && Utils::String::Compare(menu->window.name, "main_text"))
 			{
-				const auto* menu = Game::uiContext->menuStack[i];
-				if (menu && menu->window.name && Utils::String::Compare(menu->window.name, "main_text"))
-				{
-					return true;
-				}
-			}
-
-			return false;
-		}
-
-		void RestoreMenus(Game::menuDef_t* only = nullptr)
-		{
-			std::erase_if(MenuPatches, [only](const MenuPatch& patch)
-				{
-					if (only && patch.menu != only) return false;
-
-					*patch.slot = patch.original;
-					*patch.alpha = patch.originalAlpha;
-					return true;
-				});
-		}
-
-		void ClearPreview()
-		{
-			ActivePreview.store(nullptr);
-			RestoreMenus();
-			LoadingMap.clear();
-			TransitionPending = SawLoadingState = false;
-		}
-
-		bool IsPreviewMaterial(const std::string_view name)
-		{
-			return name == "$levelbriefing"
-				|| name == "level_loadscreen"
-				|| name == "loading_image"
-				|| name.starts_with("loadscreen_")
-				|| name.starts_with("preview_")
-				|| name.starts_with("zw3_sp_preview_");
-		}
-
-		void PatchConnectMenu()
-		{
-			const auto preview = ActivePreview.load();
-			if (!preview) return;
-
-			auto* menu = Menus::FindDiskMenu("connect");
-			if (!menu) return;
-
-			auto patchWindow = [&](Game::windowDef_t& window)
-				{
-					if (std::ranges::any_of(MenuPatches, [&](const MenuPatch& patch)
-						{
-							return patch.slot == &window.background;
-						}))
-					{
-						return;
-					}
-
-					auto* material = window.background;
-
-					const bool namedPreview = window.name
-						&& (strstr(window.name, "loadscreen") || strstr(window.name, "preview"));
-
-					const bool realPreview = material
-						&& material->info.name
-						&& IsPreviewMaterial(material->info.name);
-
-					if (!namedPreview && !realPreview) return;
-
-					MenuPatches.push_back(
-						{
-							menu,
-							&window.background,
-							material,
-							&window.foreColor[3],
-							window.foreColor[3]
-						});
-
-					window.background = preview->material;
-					window.foreColor[3] = 1.0f;
-				};
-
-			patchWindow(menu->window);
-
-			for (int i = 0; i < menu->itemCount; ++i)
-			{
-				if (menu->items[i])
-				{
-					patchWindow(menu->items[i]->window);
-				}
+				return true;
 			}
 		}
 
-		void RunMapCommand()
-		{
-			Command::ClientParams params;
-
-			++MapCommandDepth;
-			const auto guard = gsl::finally([]
-				{
-					--MapCommandDepth;
-				});
-
-			if (params.size() > 1
-				&& (Utils::String::Compare(params[0], "map")
-					|| Utils::String::Compare(params[0], "devmap")))
-			{
-				Maps::SynchronizeMapDvars(params[1]);
-				SPLoadscreens::SetLoadingMap(params[1]);
-			}
-
-			Utils::Hook::Call<void()>(0x4256F0)();
-		}
-
-		void RunDevmapCommand()
-		{
-			Command::ClientParams params;
-			++MapCommandDepth;
-			const auto guard = gsl::finally([] { --MapCommandDepth; });
-			if (params.size() > 1)
-			{
-				Maps::SynchronizeMapDvars(params[1]);
-				SPLoadscreens::SetLoadingMap(params[1]);
-			}
-			NativeDevmapCommand();
-		}
+		return false;
 	}
 
-	void SPLoadscreens::OnMenuFreed(Game::menuDef_t* menu)
+	static void RestoreMenus()
 	{
-		RestoreMenus(menu);
+		for (const MenuPatch& patch : menuPatches)
+		{
+			*patch.slot = patch.original;
+			*patch.alpha = patch.originalAlpha;
+		}
+
+		menuPatches.clear();
+	}
+
+	static void ClearPreview()
+	{
+		shouldClearPreview = false;
+		activePreview.store(nullptr);
+		RestoreMenus();
+		loadingMap.clear();
+		isTransitionPending = false;
+		didSeeLoadingState = false;
+	}
+
+	static bool IsPreviewMaterial(const std::string_view name)
+	{
+		if (name == "$levelbriefing" || name == "level_loadscreen" || name == "loading_image")
+		{
+			return true;
+		}
+
+		return name.starts_with("loadscreen_") || name.starts_with("preview_") || name.starts_with("zw3_sp_preview_");
+	}
+
+	static void RunMapCommand()
+	{
+		const Command::ClientParams params;
+
+		++mapCommandDepth;
+
+		const bool isMapCommand = Utils::String::Compare(params.Get(0), "map") || Utils::String::Compare(params.Get(0), "devmap");
+
+		if (params.Size() > 1 && isMapCommand && Game::IsMapOnDisk(params.Get(1)))
+		{
+			SPLoadscreens::SetLoadingMap(params.Get(1));
+		}
+
+		reinterpret_cast<void(*)()>(waitServerHook.GetOriginal())();
+
+		--mapCommandDepth;
+	}
+
+	void SPLoadscreens::OnMenusFreed()
+	{
+		RestoreMenus();
+	}
+
+	void SPLoadscreens::PatchConnectMenu()
+	{
+		const std::shared_ptr<const Preview> preview = activePreview.load();
+
+		if (!preview)
+		{
+			return;
+		}
+
+		Game::menuDef_t* const menu = Menus::FindDiskMenu("connect");
+
+		if (!menu)
+		{
+			return;
+		}
+
+		const auto patchWindow = [&menu, &preview](Game::windowDef_t& window)
+		{
+			const bool isPatched = std::ranges::any_of(menuPatches, [&window](const MenuPatch& patch)
+			{
+				return patch.slot == &window.background;
+			});
+
+			if (isPatched)
+			{
+				return;
+			}
+
+			Game::Material* const material = window.background;
+
+			const bool isNamedPreview = window.name && (std::strstr(window.name, "loadscreen") || std::strstr(window.name, "preview"));
+			const bool isPreviewMaterial = material && material->info.name && IsPreviewMaterial(material->info.name);
+
+			if (!isNamedPreview && !isPreviewMaterial)
+			{
+				return;
+			}
+
+			menuPatches.push_back({ menu, &window.background, material, &window.foreColor[3], window.foreColor[3] });
+
+			window.background = preview->material;
+			window.foreColor[3] = 1.0f;
+		};
+
+		patchWindow(menu->window);
+
+		for (int i = 0; i < menu->itemCount; ++i)
+		{
+			if (menu->items[i])
+			{
+				patchWindow(menu->items[i]->window);
+			}
+		}
 	}
 
 	void SPLoadscreens::SetLoadingMap(const std::string& name)
 	{
-		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled()) return;
+		if (Dedicated::IsEnabled())
+		{
+			return;
+		}
 
 		Maps::SynchronizeMapDvars(name);
 
-		const auto map = Utils::MapPreview::Normalize(name);
+		const std::string map = Utils::MapPreview::Normalize(name);
+
 		D3D9Ex::BeginMapLoading(map);
-		// The engine loads the lightweight *_load zone before the main map
-		// zone.  Start both reads as soon as map/devmap is issued so large
-		// maps (notably the MW3 conversions) can warm the file cache in
-		// parallel with the disconnect/loading-screen transition.
-		if (!map.empty() && !map.ends_with("_load"))
+
+		const bool isLoadZone = map.ends_with("_load");
+
+		if (!map.empty() && !isLoadZone)
 		{
 			FastFiles::PrefetchZone(map + "_load");
 		}
+
 		FastFiles::PrefetchZone(map);
-		if (!map.empty() && !map.ends_with("_load")) FastFiles::PrefetchZone("patch_" + map);
+
+		if (!map.empty() && !isLoadZone)
+		{
+			FastFiles::PrefetchZone("patch_" + map);
+		}
+
 		FastFiles::PrefetchPath(std::filesystem::path("main") / "video" / (map + "_load.bik"));
 
 		if (LobbyScene::IsTransitionActive())
 		{
 			ClearPreview();
-			LoadingMap = map;
-			TransitionPending = false;
-			if (*Game::ui_mapname)
-			{
-				Game::Dvar_SetString(*Game::ui_mapname, map.c_str());
-			}
+			loadingMap = map;
+			isTransitionPending = false;
+
+			const Dvar::Var ui_mapname("ui_mapname");
+			ui_mapname.Set(map);
+
 			LobbyScene::StartTransition();
 			return;
 		}
@@ -217,7 +227,7 @@ namespace Components
 			return;
 		}
 
-		if (TransitionPending && LoadingMap == map && ActivePreview.load())
+		if (isTransitionPending && loadingMap == map && activePreview.load())
 		{
 			PatchConnectMenu();
 			Game::Key_RemoveCatcher(0, ~Game::KEYCATCH_CONSOLE);
@@ -227,17 +237,15 @@ namespace Components
 
 		ClearPreview();
 
-		LoadingMap = map;
-		TransitionPending = true;
+		loadingMap = map;
+		isTransitionPending = true;
 
-		if (*Game::ui_mapname)
-		{
-			Game::Dvar_SetString(*Game::ui_mapname, map.c_str());
-		}
+		const Dvar::Var ui_mapname("ui_mapname");
+		ui_mapname.Set(map);
 
 		PreloadMapPreview(map);
 
-		if (ActivePreview.load())
+		if (activePreview.load())
 		{
 			Game::Key_RemoveCatcher(0, ~Game::KEYCATCH_CONSOLE);
 			Menus::OpenLoadingScreen();
@@ -246,19 +254,25 @@ namespace Components
 
 	void SPLoadscreens::PreloadMapPreview(const std::string& name)
 	{
-		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled()) return;
+		if (Dedicated::IsEnabled())
+		{
+			return;
+		}
 
-		const auto map = Utils::MapPreview::Normalize(name);
+		const std::string map = Utils::MapPreview::Normalize(name);
 
-		if (map.empty() || Utils::MapPreview::IsMultiplayer(map)) return;
+		if (map.empty() || Utils::MapPreview::IsMultiplayer(map))
+		{
+			return;
+		}
 
 		Game::GfxImage* image = nullptr;
 
-		for (const auto& variant : Utils::MapPreview::ImageNames(map))
+		for (const std::string& variant : Utils::MapPreview::ImageNames(map))
 		{
-			const auto cached = PreviewImages.find(variant);
+			const auto cached = previewImages.find(variant);
 
-			if (cached != PreviewImages.end() && cached->second->texture.basemap)
+			if (cached != previewImages.end() && cached->second->texture.basemap)
 			{
 				image = cached->second;
 			}
@@ -268,121 +282,135 @@ namespace Components
 
 				if (image)
 				{
-					PreviewImages[variant] = image;
+					previewImages[variant] = image;
 				}
 			}
 
-			if (image) break;
-		}
-
-		if (image)
-		{
-			auto* material = Materials::Create("zw3_sp_preview_" + map, image);
-
-			if (material)
+			if (image)
 			{
-				material->textureTable[0].u.image = image;
-
-				ActivePreview.store(
-					std::make_shared<const Preview>(
-						Preview{ map, image, material }));
-
-				PatchConnectMenu();
+				break;
 			}
 		}
+
+		if (!image)
+		{
+			return;
+		}
+
+		Game::Material* const material = Materials::Create("zw3_sp_preview_" + map, image);
+
+		if (!material)
+		{
+			return;
+		}
+
+		material->textureTable[0].u.image = image;
+
+		activePreview.store(std::make_shared<const Preview>(Preview{ map, image, material }));
+
+		PatchConnectMenu();
 	}
 
 	SPLoadscreens::SPLoadscreens()
 	{
-		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled()) return;
-
-		Utils::Hook(0x609666, RunMapCommand, HOOK_CALL).install()->quick();
-		Scheduler::OnGameInitialized([]
+		if (Dedicated::IsEnabled())
 		{
-			// Unlike map, devmap can use a direct client handler rather than the
-			// server-command dispatch path above. Select its preview before teardown.
-			const auto command = Command::Find("devmap");
-			if (command && command->function && command->function != Game::Cbuf_AddServerText_f)
-			{
-				NativeDevmapCommand = command->function;
-				command->function = RunDevmapCommand;
-			}
-		}, Scheduler::Pipeline::MAIN);
+			return;
+		}
+
+		const bool canSeatMapHook = Utils::Hook::BranchesTo(Cmd_ExecuteSingleCommand_WaitServerCall, SV_WaitServer, HOOK_CALL);
+
+		if (canSeatMapHook && waitServerHook.Initialize(Cmd_ExecuteSingleCommand_WaitServerCall, RunMapCommand, HOOK_CALL)->Install()->IsInstalled())
+		{
+			waitServerHook.Quick();
+		}
+		else
+		{
+			Logger::Error("sploadscreens: could not hook the map command, a preview only shows once the map's _load zone loads\n");
+		}
 
 		Events::OnCLDisconnected([](bool)
+		{
+			if (!mapCommandDepth && (!isTransitionPending || didSeeLoadingState))
 			{
-				/*
-				 * Preserve the preview during the internal disconnect generated
-				 * by map/devmap before the new connection begins.
-				 *
-				 * Normal disconnects are handled here without replacing the
-				 * engine's global "disconnect" command.
-				 */
-				if (!MapCommandDepth && (!TransitionPending || SawLoadingState))
-				{
-					ClearPreview();
-				}
-			});
+				ClearPreview();
+			}
+		});
 
-		Events::AfterUIInit(PatchConnectMenu);
-
-		Renderer::OnDeviceRecoveryBegin(ClearPreview);
-
-		AssetHandler::OnFind(
-			Game::ASSET_TYPE_MATERIAL,
-			[](Game::XAssetType, const std::string& name) -> Game::XAssetHeader
+		Renderer::OnDeviceRecoveryBegin([]
+		{
+			if (Game::Sys_IsMainThread())
 			{
-				if (!name.starts_with("loadscreen_")
-					&& !name.starts_with("preview_"))
-				{
-					return { nullptr };
-				}
+				ClearPreview();
+				return;
+			}
 
-				const auto preview = ActivePreview.load();
+			activePreview.store(nullptr);
+			shouldClearPreview = true;
+		});
 
-				if (!preview
-					|| !Utils::MapPreview::MatchesMaterial(name, preview->map))
-				{
-					return { nullptr };
-				}
+		const bool isFindAnswered = AssetHandler::OnFind(Game::ASSET_TYPE_MATERIAL, [](unsigned int, const std::string& name) -> void*
+		{
+			if (!name.starts_with("loadscreen_") && !name.starts_with("preview_"))
+			{
+				return nullptr;
+			}
 
-				return { preview->material };
-			});
+			const std::shared_ptr<const Preview> preview = activePreview.load();
+
+			if (!preview || !Utils::MapPreview::MatchesMaterial(name, preview->map))
+			{
+				return nullptr;
+			}
+
+			return preview->material;
+		});
+
+		if (!isFindAnswered)
+		{
+			Logger::Error("sploadscreens: a menu's preview_ or loadscreen_ material keeps its stock image\n");
+		}
 
 		Scheduler::Loop([]
-			{
-			if (IsMainMenuOpen())
+		{
+			if (IsMainMenuOpen() || Game::CL_GetLocalClientConnectionState(0) == Game::CA_ACTIVE)
 			{
 				FastFiles::MarkMainMenuReady();
 			}
 
-				const auto state =
-					*reinterpret_cast<Game::connstate_t*>(0xB2C540);
+			if (shouldClearPreview.exchange(false))
+			{
+				ClearPreview();
+			}
 
-				if (!TransitionPending) return;
+			if (!isTransitionPending)
+			{
+				return;
+			}
 
-				if (state >= Game::CA_CONNECTING && state < Game::CA_ACTIVE)
-				{
-					SawLoadingState = true;
-				}
+			const Game::connstate_t state = Game::CL_GetLocalClientConnectionState(0);
 
-				if (!MapCommandDepth
-					&& SawLoadingState
-					&& (state == Game::CA_ACTIVE
-						|| state == Game::CA_DISCONNECTED))
-				{
-					ClearPreview();
-					return;
-				}
+			if (state >= Game::CA_CONNECTING && state < Game::CA_ACTIVE)
+			{
+				didSeeLoadingState = true;
+			}
 
-				PatchConnectMenu();
-			}, Scheduler::Pipeline::MAIN);
+			if (!mapCommandDepth && didSeeLoadingState && (state == Game::CA_ACTIVE || state == Game::CA_DISCONNECTED))
+			{
+				ClearPreview();
+				return;
+			}
+
+			if (!mapCommandDepth && !didSeeLoadingState && state == Game::CA_ACTIVE)
+			{
+				ClearPreview();
+				Menus::CloseLoadingScreen();
+				return;
+			}
+
+			PatchConnectMenu();
+		}, Scheduler::Pipeline::MAIN);
+
+		Scheduler::OnShutdown(ClearPreview);
 	}
-
-	void SPLoadscreens::preDestroy()
-	{
-		ClearPreview();
-	}
-
-	SPLoadscreens::~SPLoadscreens() = default;
 }

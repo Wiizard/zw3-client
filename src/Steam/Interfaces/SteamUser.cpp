@@ -1,99 +1,70 @@
-#include "Components/Modules/Auth.hpp"
+#include "STDInclude.hpp"
 
-STEAM_IGNORE_WARNINGS_START
+#include "Steam/Steam.hpp"
+#include "SteamUser.hpp"
+
+#include "Components/Modules/Auth.hpp"
+#include "Components/Modules/Dedicated.hpp"
+#include "Components/Modules/Singleton.hpp"
 
 namespace Steam
 {
-	int User::GetHSteamUser()
+	void* const User::vtable[] =
 	{
-		return NULL;
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(BLoggedOn),
+		reinterpret_cast<void*>(GetSteamID),
+		reinterpret_cast<void*>(InitiateGameConnection),
+		reinterpret_cast<void*>(TerminateGameConnection),
+	};
+
+	Interface User::object = { User::vtable };
+
+	Interface* User::Get()
+	{
+		static_assert(std::size(vtable) == 5);
+		return &object;
 	}
 
-	bool User::LoggedOn()
+	SteamID User::LocalId()
 	{
-		return true;
-	}
-
-	SteamID User::GetSteamID()
-	{
-		static unsigned __int64 idBits = 0;
-
-		SteamID id;
+		static std::uint64_t idBits = 0;
 
 		if (!idBits)
 		{
-			if (Components::Singleton::IsFirstInstance() && !Components::Dedicated::IsEnabled()) // ECDSA guid
+			if (Components::Singleton::IsFirstInstance() && !Components::Dedicated::IsEnabled())
 			{
 				idBits = Components::Auth::GetKeyHash();
 			}
-			else // Random guid
+			else
 			{
-				idBits = (static_cast<unsigned __int64>(Game::Sys_Milliseconds()) << 32) | timeGetTime();
+				idBits = (static_cast<std::uint64_t>(Game::Sys_Milliseconds()) << 32) | timeGetTime();
 			}
 		}
 
+		SteamID id;
 		id.bits = idBits;
 		return id;
 	}
 
-	int User::InitiateGameConnection(void *pAuthBlob, int cbMaxAuthBlob, SteamID steamIDGameServer, unsigned int unIPServer, unsigned short usPortServer, bool bSecure)
+	bool User::BLoggedOn([[maybe_unused]] Interface* self)
+	{
+		return true;
+	}
+
+	SteamID* User::GetSteamID([[maybe_unused]] Interface* self, SteamID* result)
+	{
+		*result = LocalId();
+		return result;
+	}
+
+	int User::InitiateGameConnection([[maybe_unused]] Interface* self, [[maybe_unused]] void* authBlob, [[maybe_unused]] int maxAuthBlob,
+		[[maybe_unused]] SteamID gameServer, [[maybe_unused]] unsigned int serverIp, [[maybe_unused]] unsigned short serverPort, [[maybe_unused]] bool isSecure)
 	{
 		return 0;
 	}
 
-	void User::TerminateGameConnection(unsigned int unIPServer, unsigned short usPortServer)
+	void User::TerminateGameConnection([[maybe_unused]] Interface* self, [[maybe_unused]] unsigned int serverIp, [[maybe_unused]] unsigned short serverPort)
 	{
-	}
-
-	void User::TrackAppUsageEvent(SteamID gameID, int eAppUsageEvent, const char *pchExtraInfo)
-	{
-	}
-
-	bool User::GetUserDataFolder(char *pchBuffer, int cubBuffer)
-	{
-		return false;
-	}
-
-	void User::StartVoiceRecording()
-	{
-	}
-
-	void User::StopVoiceRecording()
-	{
-	}
-
-	int User::GetCompressedVoice(void *pDestBuffer, unsigned int cbDestBufferSize, unsigned int *nBytesWritten)
-	{
-		return 0;
-	}
-
-	int User::DecompressVoice(void *pCompressed, unsigned int cbCompressed, void *pDestBuffer, unsigned int cbDestBufferSize, unsigned int *nBytesWritten)
-	{
-		return 0;
-	}
-
-	unsigned int User::GetAuthSessionTicket(void *pTicket, int cbMaxTicket, unsigned int *pcbTicket)
-	{
-		return 0;
-	}
-
-	int User::BeginAuthSession(const void *pAuthTicket, int cbAuthTicket, SteamID steamID)
-	{
-		return 0;
-	}
-
-	void User::EndAuthSession(SteamID steamID)
-	{
-	}
-
-	void User::CancelAuthTicket(unsigned int hAuthTicket)
-	{
-	}
-
-	unsigned int User::UserHasLicenseForApp(SteamID steamID, unsigned int appID)
-	{
-		return 0;
 	}
 }
-
-STEAM_IGNORE_WARNINGS_END

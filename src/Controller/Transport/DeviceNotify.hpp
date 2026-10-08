@@ -1,39 +1,35 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include <thread>
-#include <atomic>
+#include "Controller/Context.hpp"
 
-#include "../Context.hpp"
-
-namespace Controller
+namespace Controller::Transport
 {
-  namespace transport
-  {
-    class device_notifier
-    {
-    public:
-      explicit
-      device_notifier (const context&);
+	class DeviceNotifier
+	{
+	public:
+		explicit DeviceNotifier(const Context& context);
 
-      device_notifier (const device_notifier&) = delete;
-      device_notifier& operator= (const device_notifier&) = delete;
+		DeviceNotifier(const DeviceNotifier&) = delete;
+		DeviceNotifier& operator=(const DeviceNotifier&) = delete;
 
-      bool
-      consume () noexcept {return pending_.exchange (false, std::memory_order_acquire);}
+		bool Consume() noexcept
+		{
+			return this->isPending.exchange(false, std::memory_order_acquire);
+		}
 
-      bool
-      failed () const noexcept {return failed_.load (std::memory_order_acquire);}
+		bool HasFailed() const noexcept
+		{
+			return this->hasFailed.load(std::memory_order_acquire);
+		}
 
-    private:
-      void
-      run (std::stop_token, context) noexcept;
+	private:
+		void Run(const std::stop_token& stop, const Context& context);
 
-      std::atomic<bool> pending_ {false};
-      std::atomic<bool> failed_ {false};
+		std::atomic<bool> isPending{ false };
+		std::atomic<bool> hasFailed{ false };
 
-      std::jthread thread_;
-    };
-  }
+		std::jthread thread;
+	};
 }

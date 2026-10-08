@@ -7,13 +7,13 @@ namespace Components
 	public:
 		VisionFile();
 
+		static bool LoadVisionSettingsFromBuffer(const char* buffer, const char* filename, Game::visionSetVars_t* settings);
+
 	private:
-		static std::vector<std::string> DvarExceptions;
-		static std::unordered_map<std::string, std::string> VisionReplacements;
+		static std::vector<std::string> dvarExceptions;
+		static std::unordered_map<std::string, std::string> visionReplacements;
 
 		static bool ApplyExemptDvar(const char* dvarName, const char** buffer, const char* filename);
-
-		static bool LoadVisionSettingsFromBuffer(const char* buffer, const char* filename, Game::visionSetVars_t* settings);
-		static bool LoadVisionSettingsFromBuffer_Stub();
+		static bool ApplyTokenToField(unsigned int fieldNum, const char* token, Game::visionSetVars_t* settings);
 	};
 }

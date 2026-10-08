@@ -1,80 +1,78 @@
+#include "STDInclude.hpp"
+
 #include "ScopedCriticalSection.hpp"
 
 namespace Game::Engine
 {
-	ScopedCriticalSection::ScopedCriticalSection(const CriticalSection s, const ScopedCriticalSectionType type)
-		: s_(s), isScopedRelease_(false)
+	ScopedCriticalSection::ScopedCriticalSection(CriticalSection section, ScopedCriticalSectionType type)
+		: section(section), hasOwnership(false), isScopedRelease(false)
 	{
 		if (type == SCOPED_CRITSECT_NORMAL)
 		{
-			Sys_EnterCriticalSection(this->s_);
-			this->hasOwnership_ = true;
+			Sys_EnterCriticalSection(this->section);
+			this->hasOwnership = true;
 			return;
 		}
 
 		if (type == SCOPED_CRITSECT_TRY)
 		{
-			this->hasOwnership_ = Sys_TryEnterCriticalSection(this->s_);
+			this->hasOwnership = Sys_TryEnterCriticalSection(this->section);
+			return;
 		}
-		else
-		{
-			if (type == SCOPED_CRITSECT_RELEASE)
-			{
-				Sys_LeaveCriticalSection(this->s_);
-				this->isScopedRelease_ = true;
-			}
 
-			this->hasOwnership_ = false;
+		if (type == SCOPED_CRITSECT_RELEASE)
+		{
+			Sys_LeaveCriticalSection(this->section);
+			this->isScopedRelease = true;
 		}
 	}
 
 	ScopedCriticalSection::~ScopedCriticalSection()
 	{
-		if (!this->hasOwnership_ || this->isScopedRelease_)
+		if (this->hasOwnership && !this->isScopedRelease)
 		{
-			if (!this->hasOwnership_ && this->isScopedRelease_)
-			{
-				Sys_EnterCriticalSection(this->s_);
-			}
+			Sys_LeaveCriticalSection(this->section);
+			return;
 		}
-		else
+
+		if (!this->hasOwnership && this->isScopedRelease)
 		{
-			Sys_LeaveCriticalSection(this->s_);
+			Sys_EnterCriticalSection(this->section);
 		}
 	}
 
-	void ScopedCriticalSection::enterCritSect()
+	void ScopedCriticalSection::EnterCritSect()
 	{
-		assert(!this->hasOwnership_);
+		assert(!this->hasOwnership);
 
-		this->hasOwnership_ = true;
-		Sys_EnterCriticalSection(this->s_);
+		this->hasOwnership = true;
+		Sys_EnterCriticalSection(this->section);
 	}
 
-	void ScopedCriticalSection::leaveCritSect()
+	void ScopedCriticalSection::LeaveCritSect()
 	{
-		assert(this->hasOwnership_);
+		assert(this->hasOwnership);
 
-		this->hasOwnership_ = false;
-		Sys_LeaveCriticalSection(this->s_);
+		this->hasOwnership = false;
+		Sys_LeaveCriticalSection(this->section);
 	}
 
-	bool ScopedCriticalSection::tryEnterCritSect()
+	bool ScopedCriticalSection::TryEnterCritSect()
 	{
-		assert(!this->hasOwnership_);
+		assert(!this->hasOwnership);
 
-		const auto result = Sys_TryEnterCriticalSection(this->s_);
-		this->hasOwnership_ = result;
-		return result;
+		const bool isEntered = Sys_TryEnterCriticalSection(this->section);
+		this->hasOwnership = isEntered;
+		return isEntered;
 	}
 
-	bool ScopedCriticalSection::hasOwnership() const
+	bool ScopedCriticalSection::HasOwnership() const
 	{
-		return this->hasOwnership_;
+		return this->hasOwnership;
 	}
 
-	bool ScopedCriticalSection::isScopedRelease() const
+	bool ScopedCriticalSection::IsScopedRelease() const
 	{
-		return this->isScopedRelease_;
+		return this->isScopedRelease;
 	}
 }

@@ -1,67 +1,61 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Support/FunctionRef.hpp"
+#include "Controller/Context.hpp"
+#include "Controller/Device/Registry.hpp"
+#include "Controller/Driver/Driver.hpp"
+#include "Controller/Transport/Hid.hpp"
+#include "Controller/Transport/XInputModule.hpp"
 
-#include "../Context.hpp"
-#include "../Device/Registry.hpp"
-#include "Driver.hpp"
-#include "../Transport/Hid.hpp"
-#include "../Transport/XInputModule.hpp"
-
-namespace Controller
+namespace Controller::Driver
 {
-  namespace driver
-  {
-    class set
-    {
-    public:
-      set (const context&, const transport::xinput_module&);
+	class DriverSet
+	{
+	public:
+		DriverSet(const Context& context, const Transport::XInputModule& xinput);
+		~DriverSet();
 
-      ~set ();
+		DriverSet(const DriverSet&) = delete;
+		DriverSet& operator=(const DriverSet&) = delete;
 
-      set (const set&) = delete;
-      set& operator= (const set&) = delete;
+		void Reconcile(const Registry& registry);
 
-      void
-      reconcile (const registry&);
+		void ForEach(const std::function<void(Driver&, const DeviceConnection&)>& visit);
 
-      void
-      for_each (function_ref<void (driver&, const device_connection&)>);
+		void Submit(DeviceId id, const OutputRequest& request);
 
-      void
-      submit (device_id, const output_request&);
+		std::size_t Size() const noexcept
+		{
+			return this->entries.size();
+		}
 
-      size_t
-      size () const noexcept {return entries_.size ();}
+		void Configure(const OutputPolicy& policy);
 
-      void
-      configure (const output_policy&);
+		void StopHaptic(DeviceId id, std::uint32_t tag);
 
-      void
-      stop_haptic (device_id, uint32_t tag);
+		std::string Diagnostics(DeviceId id) const;
 
-      std::string
-      diagnostics (device_id) const;
+	private:
+		struct Entry
+		{
+			Entry(DeviceConnection connection, std::unique_ptr<Transport::HidDevice> opened, std::unique_ptr<Driver> bound);
 
-    private:
-      struct entry
-      {
-        device_connection device;
-        std::unique_ptr<transport::hid_device> hid;
-        std::unique_ptr<driver> drv;
-      };
+			Entry(Entry&& other) = default;
+			Entry& operator=(Entry&& other);
 
-      std::unique_ptr<driver>
-      bind (const device_connection&, std::unique_ptr<transport::hid_device>&);
+			DeviceConnection device;
+			std::unique_ptr<Transport::HidDevice> hid;
+			std::unique_ptr<Driver> driver;
+		};
 
-      const context& ctx_;
-      const transport::xinput_module& xinput_;
+		std::unique_ptr<Driver> TryBind(const DeviceConnection& device, const std::unique_ptr<Transport::HidDevice>& hid);
 
-      uint64_t generation_ {0};
-      bool reconciled_ {false};
-      std::vector<entry> entries_;
-    };
-  }
+		const Context& context;
+		const Transport::XInputModule& xinput;
+
+		std::uint64_t generation = 0;
+		bool isReconciled = false;
+		std::vector<Entry> entries;
+	};
 }

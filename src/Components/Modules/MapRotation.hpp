@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Dvar.hpp"
+
 namespace Components
 {
 	class MapRotation : public Component
@@ -9,84 +11,52 @@ namespace Components
 
 		static bool Contains(const std::string& key, const std::string& value);
 
-		static nlohmann::json to_json();
+		static nlohmann::json ToJson();
 
 	private:
-		class MapRotationParseError : public std::runtime_error
-		{
-		private:
-			static std::string fmt(const std::string& message)
-			{
-				std::string error = "Map Rotation Parse Error";
-
-				if (!message.empty())
-				{
-					error.append(": ");
-					error.append(message);
-				}
-
-				return error;
-			}
-
-		public:
-			MapRotationParseError(const std::string& message)
-				: std::runtime_error(fmt(message))
-			{
-			}
-		};
-
 		class RotationData
 		{
 		public:
-			using rotationEntry = std::pair<std::string, std::string>;
+			using RotationEntry = std::pair<std::string, std::string>;
+			using RotationCallback = std::function<void(const std::string&)>;
 
-			using rotationCallback = std::function<void(const std::string&)>;
+			void Randomize();
 
-			RotationData();
+			void AddEntry(const std::string& key, const std::string& value);
 
-			void randomize();
+			[[nodiscard]] std::size_t GetEntriesSize() const;
+			const RotationEntry& GetNextEntry();
+			[[nodiscard]] const RotationEntry& PeekNextEntry() const;
 
-			// In case a new way to enrich the map rotation is added (other than sv_mapRotation)
-			// this method should be called to add a new entry (gamemode/map & value)
-			void addEntry(const std::string& key, const std::string& value);
+			void SetHandler(const std::string& key, const RotationCallback& callback);
+			void CallHandler(const RotationEntry& entry) const;
 
-			[[nodiscard]] std::size_t getEntriesSize() const noexcept;
-			rotationEntry& getNextEntry();
-			rotationEntry& peekNextEntry();
+			bool TryParse(const std::string& data, std::string& invalidKey);
 
-			void setHandler(const std::string& key, const rotationCallback& callback);
-			void callHandler(const rotationEntry& entry) const;
+			[[nodiscard]] bool IsEmpty() const;
+			[[nodiscard]] bool Contains(const std::string& key, const std::string& value) const;
+			[[nodiscard]] bool ContainsHandler(const std::string& key) const;
 
-			void parse(const std::string& data);
-
-			[[nodiscard]] bool empty() const noexcept;
-			[[nodiscard]] bool contains(const std::string& key, const std::string& value) const;
-			[[nodiscard]] bool containsHandler(const std::string& key) const;
-
-			void clear() noexcept;
-
-			[[nodiscard]] nlohmann::json to_json() const;
+			[[nodiscard]] nlohmann::json ToJson() const;
 
 		private:
-			std::vector<rotationEntry> rotationEntries_;
-			std::unordered_map<std::string, rotationCallback> rotationHandlers_;
-
-			std::size_t index_;
+			std::vector<RotationEntry> entries;
+			std::unordered_map<std::string, RotationCallback> handlers;
+			std::size_t index = 0;
 		};
 
-		// Rotation Dvars
-		static Dvar::Var SVRandomMapRotation;
-		static Dvar::Var SVDontRotate;
-		static Dvar::Var SVNextMap;
+		static Dvar::Var sv_mapRotation;
+		static Dvar::Var sv_mapRotationCurrent;
+		static Dvar::Var sv_randomMapRotation;
+		static Dvar::Var sv_dontRotate;
+		static Dvar::Var sv_nextMap;
 
-		// Holds the parsed data from sv_mapRotation
-		static RotationData DedicatedRotation;
+		static RotationData dedicatedRotation;
 
 		static void RandomizeMapRotation();
 		static void ParseRotation(const std::string& data);
 		static void LoadMapRotation();
 
-		// Use these commands before SV_MapRotate_f is called
 		static void AddMapRotationCommands();
 		static void RegisterMapRotationDvars();
 
@@ -98,11 +68,12 @@ namespace Components
 		static void ApplyRotation(RotationData& rotation);
 		static void ApplyMapRotationCurrent(const std::string& data);
 
-		// Utils functions
-		static void SetNextMap(RotationData& rotation); // Only call this after ApplyRotation
+		static void SetNextMap(const RotationData& rotation);
 		static void SetNextMap(const char* value);
 		static void ClearNextMap();
 
 		static void SV_MapRotate_f();
+
+		static void ExitLevel_Hk();
 	};
 }

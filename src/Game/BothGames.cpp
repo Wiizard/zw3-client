@@ -1,16 +1,30 @@
+#include "STDInclude.hpp"
 
 namespace Game
 {
-	BG_GetNumWeapons_t BG_GetNumWeapons = BG_GetNumWeapons_t(0x4F5CC0);
-	BG_GetWeaponName_t BG_GetWeaponName = BG_GetWeaponName_t(0x4E6EC0);
-	BG_LoadWeaponDef_LoadObj_t BG_LoadWeaponDef_LoadObj = BG_LoadWeaponDef_LoadObj_t(0x57B5F0);
-	BG_LoadWeaponCompleteDefInternal_t BG_LoadWeaponCompleteDefInternal = BG_LoadWeaponCompleteDefInternal_t(0x4B5F10);
-	BG_GetWeaponDef_t BG_GetWeaponDef = BG_GetWeaponDef_t(0x440EB0);
-	BG_GetEntityTypeName_t BG_GetEntityTypeName = BG_GetEntityTypeName_t(0x43A0E0);
-	BG_IsWeaponValid_t BG_IsWeaponValid = BG_IsWeaponValid_t(0x415BA0);
-	BG_GetEquippedWeaponIndex_t BG_GetEquippedWeaponIndex = BG_GetEquippedWeaponIndex_t(0x4D8BA0);
-	BG_GetViewModelWeaponIndex_t BG_GetViewModelWeaponIndex = BG_GetViewModelWeaponIndex_t(0x4BE4D0);
-	BG_GetEquippedWeaponState_t BG_GetEquippedWeaponState = BG_GetEquippedWeaponState_t(0x4E79E0);
-	BG_PlayerHasWeapon_t BG_PlayerHasWeapon = BG_PlayerHasWeapon_t(0x4AB530);
-	BG_GetWeaponCompleteDef_t BG_GetWeaponCompleteDef = BG_GetWeaponCompleteDef_t(0x44CE00);
+	BG_GetNumWeapons_t BG_GetNumWeapons = nullptr;
+	BG_GetWeaponName_t BG_GetWeaponName = nullptr;
+	BG_GetWeaponDef_t BG_GetWeaponDef = nullptr;
+	BG_IsWeaponValid_t BG_IsWeaponValid = nullptr;
+	BG_GetViewmodelWeaponIndex_t BG_GetViewmodelWeaponIndex = nullptr;
+	BG_GetEquippedWeaponState_t BG_GetEquippedWeaponState = nullptr;
+	BG_PlayerHasWeapon_t BG_PlayerHasWeapon = nullptr;
+	BG_GetWeaponCompleteDef_t BG_GetWeaponCompleteDef = nullptr;
+
+	unsigned int BG_GetPerkCodeIndexForName(const char* perkName)
+	{
+		return reinterpret_cast<unsigned int(*)(const char*)>(Utils::Hook::Rebase(0x14008D7E0))(perkName);
+	}
+
+	void BindBothGames()
+	{
+		BG_GetNumWeapons = BindFunction<BG_GetNumWeapons_t>(0x14009C7F0);
+		BG_GetWeaponName = BindFunction<BG_GetWeaponName_t>(0x14009CA30);
+		BG_GetWeaponDef = BindFunction<BG_GetWeaponDef_t>(0x14009C8A0);
+		BG_IsWeaponValid = BindFunction<BG_IsWeaponValid_t>(0x14009D8A0);
+		BG_GetViewmodelWeaponIndex = BindFunction<BG_GetViewmodelWeaponIndex_t>(0x14009C870);
+		BG_GetEquippedWeaponState = BindFunction<BG_GetEquippedWeaponState_t>(0x1401876A0);
+		BG_PlayerHasWeapon = BindFunction<BG_PlayerHasWeapon_t>(0x14008ABA0);
+		BG_GetWeaponCompleteDef = BindFunction<BG_GetWeaponCompleteDef_t>(0x14009C890);
+	}
 }

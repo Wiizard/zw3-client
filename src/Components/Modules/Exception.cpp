@@ -1,372 +1,354 @@
+#include "STDInclude.hpp"
+
 #include "Exception.hpp"
-#include "Console.hpp"
-#include "Window.hpp"
+#include "Dedicated.hpp"
+#include "Dvar.hpp"
+#include "Flags.hpp"
+#include "Network.hpp"
 #include "Party.hpp"
 #include "TextRenderer.hpp"
-#include "Discord.hpp"
-
-#include <cwctype>
-#include <version.hpp>
-#include "GameVersion.hpp"
 
 namespace Components
 {
-	constexpr auto CLIPBOARD_MSG = "Do you want to copy this message to the clipboard?";
+	int Exception::miniDumpType = MiniDumpNormal | MiniDumpWithHandleData | MiniDumpScanMemory
+		| MiniDumpWithProcessThreadData | MiniDumpWithFullMemoryInfo | MiniDumpWithThreadInfo;
 
-	Utils::Hook Exception::SetFilterHook;
-	int Exception::MiniDumpType;
+	LPTOP_LEVEL_EXCEPTION_FILTER Exception::previousFilter = nullptr;
+	PVOID Exception::importThunk = nullptr;
 
-	__declspec(noreturn) void Exception::LongJmp_Internal_Stub(jmp_buf env, int status)
+	void Exception::SetMiniDumpType(bool codeSegment, bool dataSegment)
 	{
-		AssetHandler::ResetBypassState();
-		Game::longjmp_internal(env, status);
-	}
+		miniDumpType = MiniDumpIgnoreInaccessibleMemory | MiniDumpWithHandleData | MiniDumpScanMemory
+			| MiniDumpWithProcessThreadData | MiniDumpWithFullMemoryInfo | MiniDumpWithThreadInfo;
 
-	void Exception::SuspendProcess()
-	{
-		FreeConsole();
-
-		if (IsWindow(Console::GetWindow()) != FALSE)
+		if (codeSegment)
 		{
-			CloseWindow(Console::GetWindow());
-			DestroyWindow(Console::GetWindow());
+			miniDumpType |= MiniDumpWithCodeSegs;
 		}
 
-		if (IsWindow(Window::GetWindow()) != FALSE)
+		if (dataSegment)
 		{
-			CloseWindow(Window::GetWindow());
-			DestroyWindow(Window::GetWindow());
+			miniDumpType |= MiniDumpWithDataSegs;
+		}
+	}
 
-			std::this_thread::sleep_for(2s);
+	std::string Exception::DescribeException(LPEXCEPTION_POINTERS exceptionInfo)
+	{
+		const auto* const record = exceptionInfo->ExceptionRecord;
+		const auto address = reinterpret_cast<std::uintptr_t>(record->ExceptionAddress);
 
-			// This makes sure we either destroy the windows or wait till they are destroyed
-			MSG msg;
-			Utils::Time::Interval interval;
-			while (IsWindow(Window::GetWindow()) != FALSE && !interval.elapsed(2s))
+		std::string description = Utils::String::VA("code 0x%08X at 0x%llX",
+			record->ExceptionCode, static_cast<unsigned long long>(address));
+
+		if (Utils::Hook::IsBound())
+		{
+			MEMORY_BASIC_INFORMATION information{};
+
+			if (VirtualQuery(record->ExceptionAddress, &information, sizeof(information)))
 			{
-				if (PeekMessageA(&msg, nullptr, NULL, NULL, PM_REMOVE))
+				char moduleName[MAX_PATH]{};
+				const auto module = reinterpret_cast<HMODULE>(information.AllocationBase);
+
+				if (GetModuleFileNameA(module, moduleName, MAX_PATH))
 				{
-					TranslateMessage(&msg);
-					DispatchMessageA(&msg);
-				}
+					PathStripPathA(moduleName);
 
-				std::this_thread::sleep_for(10ms);
-			}
-		}
+					description.append(Utils::String::VA(" in %s+0x%llX", moduleName,
+						static_cast<unsigned long long>(address - reinterpret_cast<std::uintptr_t>(module))));
 
-		// This only suspends the main game threads, which is enough for us
-		Game::Sys_SuspendOtherThreads();
-	}
-
-	std::wstring Exception::GetErrorMessage(const std::string& error)
-	{
-		const std::string clientVersion = ZW3_GAME_VERSION;
-		const auto osVersion = Utils::IsWineEnvironment() ? "Wine" : Utils::GetWindowsVersion();
-		const auto launchParams = Utils::String::Convert(Utils::GetLaunchParameters());
-
-		std::string clientInfo = std::format(R"(
-			Client Info:
-			ZW3 Version: {}
-			OS Version: {}
-			Parameters: {})",
-			clientVersion, osVersion, launchParams);
-
-		if (!Game::CL_IsCgameInitialized())
-		{
-			std::string msg = std::format("{}\n\n{}\n\n{}", clientInfo, error, CLIPBOARD_MSG);
-			std::wstring message(msg.begin(), msg.end());
-			return message;
-		}
-
-		const auto* gameType = (*Game::sv_gametype)->current.string;
-		const auto* mapName  = (*Game::sv_mapname)->current.string;
-		const auto* fsGame   = (*Game::fs_gameDirVar)->current.string[0] != '\0' ? (*Game::fs_gameDirVar)->current.string : "None";
-
-		char modName[256]{ 0 };
-		TextRenderer::StripColors(fsGame, modName, sizeof(modName));
-		TextRenderer::StripAllTextIcons(modName, modName, sizeof(modName));
-
-		// Get info for a private match
-		{
-			if (Dedicated::IsRunning())
-			{
-				std::string privateMatchInfo = std::format(R"(
-					Host Info:
-					Type: Private Match
-					Gametype: {}
-					Map Name: {}
-					Mod Name: {})",
-					gameType, mapName, modName);
-
-				std::string msg = std::format("{}\n{}\n\n{}\n\n{}", clientInfo, privateMatchInfo, error, CLIPBOARD_MSG);
-				std::wstring message(msg.begin(), msg.end());
-				return message;
-			}
-		}
-
-		// Get info for a dedicated server
-		{
-			//const auto serverVersion = Dvar::Var("sv_version").get<std::string>();
-			const std::string serverVersion = "2.0.0";
-			const auto ipAddress = Network::Address(*Game::connectedHost).getString();
-
-			char serverName[256]{ 0 };
-			TextRenderer::StripColors(Party::GetHostName().data(), serverName, sizeof(serverName));
-			TextRenderer::StripAllTextIcons(serverName, serverName, sizeof(serverName));
-
-			std::string serverInfo = std::format(R"(
-				Server Info:
-				Type: Dedicated Server
-				ZW3 Version: {}
-				Server Name: {}
-				IP Address: {}
-				Gametype: {}
-				Map Name: {}
-				Mod Name: {})",
-				serverVersion, serverName, ipAddress, gameType, mapName, modName);
-
-			std::string msg = std::format("{}\n{}\n\n{}\n\n{}", clientInfo, serverInfo, error, CLIPBOARD_MSG);
-			std::wstring message(msg.begin(), msg.end());
-			return message;
-		}
-	}
-
-	std::string Exception::FormatMessageForClipboard(const std::wstring& message)
-	{
-		std::wstringstream ss(message);
-		std::wstring line;
-		std::wostringstream result;
-
-		// Trim all the whitespaces from the message
-		auto trim = [](std::wstring& s)
-		{
-			s.erase(s.begin(), std::find_if_not(s.begin(), s.end(), [](wchar_t ch) { return std::iswspace(ch); })); // trim left
-			s.erase(std::find_if_not(s.rbegin(), s.rend(), [](wchar_t ch) { return std::iswspace(ch); }).base());	// trim right
-		};
-
-		// Construct a corrected version and get rid of the last line
-		while (std::getline(ss, line))
-		{
-			trim(line);
-
-			if (line != Utils::String::Convert(CLIPBOARD_MSG))
-			{
-				if (!line.empty())
-				{
-					result << line << L'\n';
+					if (module == GetModuleHandleA(nullptr))
+					{
+						description.append(Utils::String::VA(", IDB 0x%llX",
+							static_cast<unsigned long long>(Utils::Hook::Unrebase(address))));
+					}
 				}
 			}
 		}
 
-		// Enough wide strings for today
-		return Utils::String::Convert(result.str());
+		return description;
 	}
 
-	void Exception::DisplayErrorMessage(const std::wstring& title, const std::wstring& message, const std::string& crashDumpFolder)
+	constexpr const char* clipboardQuestion = "Do you want to copy this message to the clipboard?";
+
+	static std::string StripName(const char* name)
 	{
-		const std::wstring footerText = std::format(
-			L"Join the official <a href=\"{}\">Discord Server</a> for additional support.\n"
-			L"Open the <a href=\"{}\">Crash Dump Folder</a> (and share these files with the support team).",
-			Utils::String::Convert(Discord::GetDiscordServerLink()),
-			Utils::String::Convert(crashDumpFolder));
-
-		TASKDIALOGCONFIG taskDialogConfig = { 0 };
-		taskDialogConfig.cbSize				= sizeof(taskDialogConfig);
-		taskDialogConfig.hInstance			= GetModuleHandleA(nullptr);
-		taskDialogConfig.hwndParent			= Window::GetWindow();
-		taskDialogConfig.pszWindowTitle		= L"Unhandled Exception";
-		taskDialogConfig.pszMainIcon		= MAKEINTRESOURCEW(-7); // Red bar with a shield icon
-		taskDialogConfig.pszMainInstruction = title.c_str();
-		taskDialogConfig.pszContent			= message.c_str();
-		taskDialogConfig.dwCommonButtons	= TDCBF_YES_BUTTON | TDCBF_NO_BUTTON;
-		taskDialogConfig.nDefaultButton		= IDYES;
-		taskDialogConfig.pszFooterIcon		= TD_INFORMATION_ICON;
-        taskDialogConfig.pszFooter			= footerText.c_str();
-		taskDialogConfig.dwFlags			= TDF_ENABLE_HYPERLINKS | TDF_POSITION_RELATIVE_TO_WINDOW | TDF_SIZE_TO_CONTENT;
-		taskDialogConfig.lpCallbackData		= reinterpret_cast<LONG_PTR>(&message);
-		taskDialogConfig.pfCallback			= Exception::TaskDialogCallbackProc;
-
-		::TaskDialogIndirect(&taskDialogConfig, nullptr, nullptr, nullptr);
+		return TextRenderer::StripAllTextIcons(TextRenderer::StripColors(std::string(name)));
 	}
 
-	HRESULT CALLBACK Exception::TaskDialogCallbackProc(HWND, UINT notification, WPARAM clickedButton, LPARAM lParam, LONG_PTR data)
+	static std::string DvarString(const char* name)
 	{
-		const auto* msg = reinterpret_cast<const std::wstring*>(data);
+		const Dvar::Var dvar(name);
 
-		if (notification == TDN_HYPERLINK_CLICKED)
+		if (!dvar.IsValid())
 		{
-			const wchar_t* link = reinterpret_cast<const wchar_t*>(lParam);
-			Utils::OpenUrl(Utils::String::Convert(link));
+			return "";
 		}
 
-		if (notification == TDN_BUTTON_CLICKED)
-		{
-			if (clickedButton == IDYES)
-			{
-				std::string formattedMessage = Exception::FormatMessageForClipboard(*msg);
-				Exception::CopyMessageToClipboard(formattedMessage.c_str());
-			}
-		}
-
-		return S_OK;
+		return dvar.Get<std::string>();
 	}
 
-	void Exception::CopyMessageToClipboard(const char* error)
+	std::string Exception::GetErrorMessage(const std::string& error)
 	{
-		const auto hWndNewOwner = GetDesktopWindow();
-		const auto result = OpenClipboard(hWndNewOwner);
+		std::string osVersion = "Wine";
 
-		if (result == FALSE)
+		if (!Utils::IsWineEnvironment())
+		{
+			osVersion = Utils::GetWindowsVersion();
+		}
+
+		const auto launchParameters = Utils::String::Convert(Utils::GetLaunchParameters());
+
+		const std::string clientVersion = "4.0.0";
+		const std::string clientInfo = std::format("Client Info:\nZW3 Version: {}\nOS Version: {}\nParameters: {}",
+			clientVersion, osVersion, launchParameters);
+
+		if (!Game::CL_IsCgameInitialized(0))
+		{
+			return std::format("{}\n\n{}", clientInfo, error);
+		}
+
+		const auto gameType = DvarString("g_gametype");
+		const auto mapName = DvarString("mapname");
+
+		std::string modName = "None";
+
+		if (*Game::fs_gameDirVar && (*Game::fs_gameDirVar)->current.string[0] != '\0')
+		{
+			modName = StripName((*Game::fs_gameDirVar)->current.string);
+		}
+
+		if (Dedicated::IsRunning())
+		{
+			const std::string hostInfo = std::format("Host Info:\nType: Private Match\nGametype: {}\nMap Name: {}\nMod Name: {}",
+				gameType, mapName, modName);
+
+			return std::format("{}\n\n{}\n\n{}", clientInfo, hostInfo, error);
+		}
+
+		const std::string serverVersion = "2.0.0";
+		const auto* const serverAddress = Game::clc_serverAddress;
+		const auto serverName = StripName(Party::GetHostName().data());
+
+		const std::string serverInfo = std::format(
+			"Server Info:\nType: Dedicated Server\nZW3 Version: {}\nServer Name: {}\nIP Address: {}\nGametype: {}\nMap Name: {}\nMod Name: {}",
+			serverVersion, serverName, Network::Address(serverAddress).GetString(), gameType, mapName, modName);
+
+		return std::format("{}\n\n{}\n\n{}", clientInfo, serverInfo, error);
+	}
+
+	bool Exception::WriteMiniDump(LPEXCEPTION_POINTERS exceptionInfo, std::string& path)
+	{
+		char executable[MAX_PATH]{};
+		GetModuleFileNameA(nullptr, executable, MAX_PATH);
+		PathStripPathA(executable);
+		PathRemoveExtensionA(executable);
+
+		char stamp[MAX_PATH]{};
+		__time64_t now;
+		tm local{};
+		_time64(&now);
+		_localtime64_s(&local, &now);
+		strftime(stamp, sizeof(stamp) - 1, "%Y%m%d%H%M%S", &local);
+
+		CreateDirectoryA("minidumps", nullptr);
+
+		path = Utils::String::VA("minidumps\\%s-%s.dmp", executable, stamp);
+
+		const HANDLE file = CreateFileA(path.data(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+			CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+
+		if (file == INVALID_HANDLE_VALUE)
+		{
+			return false;
+		}
+
+		MINIDUMP_EXCEPTION_INFORMATION information{};
+		information.ThreadId = GetCurrentThreadId();
+		information.ExceptionPointers = exceptionInfo;
+		information.ClientPointers = FALSE;
+
+		const BOOL written = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file,
+			static_cast<MINIDUMP_TYPE>(miniDumpType), &information, nullptr, nullptr);
+
+		CloseHandle(file);
+
+		return written == TRUE;
+	}
+
+	void Exception::CopyToClipboard(const std::string& text)
+	{
+		if (!OpenClipboard(GetDesktopWindow()))
 		{
 			return;
 		}
-
-		const auto _0 = gsl::finally([]
-		{
-			CloseClipboard();
-		});
 
 		EmptyClipboard();
 
-		const auto len = std::strlen(error);
-		auto* hMem = GlobalAlloc(GMEM_MOVEABLE, len + 1);
+		const HGLOBAL block = GlobalAlloc(GMEM_MOVEABLE, text.size() + 1);
 
-		if (!hMem)
+		if (block)
 		{
-			return;
+			void* const locked = GlobalLock(block);
+
+			if (locked)
+			{
+				std::memcpy(locked, text.data(), text.size() + 1);
+				GlobalUnlock(block);
+
+				if (!SetClipboardData(CF_TEXT, block))
+				{
+					GlobalFree(block);
+				}
+			}
+			else
+			{
+				GlobalFree(block);
+			}
 		}
 
-		auto* lock = GlobalLock(hMem);
-		if (lock)
-		{
-			std::memcpy(lock, error, len + 1);
-			GlobalUnlock(hMem);
-			SetClipboardData(CF_TEXT, hMem);
-		}
-
-		GlobalFree(hMem);
+		CloseClipboard();
 	}
 
-	LONG WINAPI Exception::ExceptionFilter(LPEXCEPTION_POINTERS ExceptionInfo)
+	LONG WINAPI Exception::ExceptionFilter(LPEXCEPTION_POINTERS exceptionInfo)
 	{
-		// Pass on harmless errors
-		if (ExceptionInfo->ExceptionRecord->ExceptionCode == STATUS_INTEGER_OVERFLOW ||
-			ExceptionInfo->ExceptionRecord->ExceptionCode == STATUS_FLOAT_OVERFLOW)
+		const auto code = exceptionInfo->ExceptionRecord->ExceptionCode;
+
+		if (code == STATUS_INTEGER_OVERFLOW || code == STATUS_FLOAT_OVERFLOW)
 		{
 			return EXCEPTION_CONTINUE_EXECUTION;
 		}
 
-		if (ExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW)
-		{
-			const auto error = std::format("Termination because of a stack overflow.\n{}", CLIPBOARD_MSG);
+		const auto description = DescribeException(exceptionInfo);
 
-			// Message should be copied to the clipboard if no button is pressed
-			if (MessageBoxA(nullptr, error.c_str(), nullptr, MB_YESNO | MB_ICONERROR) == IDYES)
+		if (code == EXCEPTION_STACK_OVERFLOW)
+		{
+			const auto notice = std::format("Termination because of a stack overflow.\n{}", clipboardQuestion);
+
+			if (MessageBoxA(nullptr, notice.data(), nullptr, MB_YESNO | MB_ICONERROR) == IDYES)
 			{
-				CopyMessageToClipboard(Utils::String::VA("0x%08X", ExceptionInfo->ExceptionRecord->ExceptionAddress));
+				CopyToClipboard(description);
 			}
 		}
 
-		// Current executable name
-		char exeFileName[MAX_PATH];
-		GetModuleFileNameA(nullptr, exeFileName, MAX_PATH);
-		PathStripPathA(exeFileName);
-		PathRemoveExtensionA(exeFileName);
+		std::string dumpPath;
+		const bool wroteDump = WriteMiniDump(exceptionInfo, dumpPath);
 
-		// Generate filename
-		char filenameFriendlyTime[MAX_PATH]{};
-		__time64_t time;
-		tm ltime;
-		_time64(&time);
-		_localtime64_s(&ltime, &time);
-		strftime(filenameFriendlyTime, sizeof(filenameFriendlyTime) - 1, "%Y%m%d%H%M%S", &ltime);
+		std::string error = description;
+		error.append("\n");
 
-		// Combine with queued MinidumpsFolder
-		char filename[MAX_PATH]{};
-		CreateDirectoryA("minidumps", nullptr);
-		PathCombineA(filename, "minidumps\\", Utils::String::VA("%s-" REVISION_STR "-%s.dmp", exeFileName, filenameFriendlyTime));
-
-		if (Flags::HasFlag("bigminidumps"))
+		if (wroteDump)
 		{
-			SetMiniDumpType(true, false);
+			error.append("A minidump was written to ");
+			error.append(dumpPath);
+		}
+		else
+		{
+			error.append("A minidump could not be written.");
 		}
 
-		HANDLE dumpFile = INVALID_HANDLE_VALUE;
-		if ((dumpFile = CreateFileA(filename, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr)) != INVALID_HANDLE_VALUE)
+		const auto report = GetErrorMessage(error);
+		const auto message = std::format("zw3 crashed.\n\n{}\n\n{}", report, clipboardQuestion);
+
+		if (MessageBoxA(nullptr, message.data(), "Zombie Warfare 3", MB_YESNO | MB_ICONERROR) == IDYES)
 		{
-			MINIDUMP_EXCEPTION_INFORMATION ex = { GetCurrentThreadId(), ExceptionInfo, FALSE };
-			if (MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), dumpFile, static_cast<MINIDUMP_TYPE>(MiniDumpType), &ex, nullptr, nullptr))
+			CopyToClipboard(report);
+		}
+
+		return EXCEPTION_EXECUTE_HANDLER;
+	}
+
+	LPTOP_LEVEL_EXCEPTION_FILTER WINAPI Exception::SetUnhandledExceptionFilter_Stub(
+		LPTOP_LEVEL_EXCEPTION_FILTER filter)
+	{
+		return filter;
+	}
+
+	bool Exception::LockExceptionFilter()
+	{
+		const auto base = reinterpret_cast<std::uint8_t*>(GetModuleHandleA(nullptr));
+
+		if (!base)
+		{
+			return false;
+		}
+
+		const auto* const dosHeader = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+
+		if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE)
+		{
+			return false;
+		}
+
+		const auto* const ntHeaders = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dosHeader->e_lfanew);
+
+		if (ntHeaders->Signature != IMAGE_NT_SIGNATURE)
+		{
+			return false;
+		}
+
+		const auto& directory = ntHeaders->OptionalHeader
+			.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+
+		if (!directory.VirtualAddress)
+		{
+			return false;
+		}
+
+		const auto* descriptor = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base + directory.VirtualAddress);
+
+		for (; descriptor->Name; ++descriptor)
+		{
+			if (!descriptor->OriginalFirstThunk)
 			{
-				const auto code = ExceptionInfo->ExceptionRecord->ExceptionCode;
-				const auto address = reinterpret_cast<std::uintptr_t>(ExceptionInfo->ExceptionRecord->ExceptionAddress);
+				continue;
+			}
 
-				std::wstring message = Exception::GetErrorMessage(std::format("Error: 0x{:X} at 0x{:X}", code, address));
-				std::wstring title = Utils::String::Convert(std::format("Fatal error (0x{:X}) at 0x{:X}", code, address));
-				std::string crashDump = std::format("file:\\\\{}\\minidumps", (*Game::fs_basepath)->current.string);
-				Exception::DisplayErrorMessage(title, message, crashDump);
+			const auto* nameThunk = reinterpret_cast<IMAGE_THUNK_DATA*>(base + descriptor->OriginalFirstThunk);
+			auto* addressThunk = reinterpret_cast<IMAGE_THUNK_DATA*>(base + descriptor->FirstThunk);
 
-				TerminateProcess(GetCurrentProcess(), ExceptionInfo->ExceptionRecord->ExceptionCode);
-				return EXCEPTION_CONTINUE_SEARCH;
+			for (; nameThunk->u1.AddressOfData; ++nameThunk, ++addressThunk)
+			{
+				if (IMAGE_SNAP_BY_ORDINAL(nameThunk->u1.Ordinal))
+				{
+					continue;
+				}
+
+				const auto* const import = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(
+					base + nameThunk->u1.AddressOfData);
+
+				if (std::strcmp(import->Name, "SetUnhandledExceptionFilter") != 0)
+				{
+					continue;
+				}
+
+				DWORD oldProtect;
+
+				if (!VirtualProtect(addressThunk, sizeof(*addressThunk), PAGE_READWRITE, &oldProtect))
+				{
+					return false;
+				}
+
+				importThunk = addressThunk;
+				addressThunk->u1.Function = reinterpret_cast<ULONGLONG>(SetUnhandledExceptionFilter_Stub);
+
+				VirtualProtect(addressThunk, sizeof(*addressThunk), oldProtect, &oldProtect);
+
+				return true;
 			}
 		}
 
-		MessageBoxA(nullptr, Utils::String::Format("There was an error creating the minidump ({})! Hit OK to close the program.", Utils::GetLastWindowsError()), "ERROR", MB_OK | MB_ICONERROR);
-
-		#ifdef _DEBUG
-		OutputDebugStringA("Failed to create new minidump!");
-		Utils::OutputDebugLastError();
-		#endif
-
-		TerminateProcess(GetCurrentProcess(), ExceptionInfo->ExceptionRecord->ExceptionCode);
-		return EXCEPTION_CONTINUE_SEARCH;
-	}
-
-	void Exception::SetMiniDumpType(bool codeseg, bool dataseg)
-	{
-		MiniDumpType = MiniDumpIgnoreInaccessibleMemory;
-		MiniDumpType |= MiniDumpWithHandleData;
-		MiniDumpType |= MiniDumpScanMemory;
-		MiniDumpType |= MiniDumpWithProcessThreadData;
-		MiniDumpType |= MiniDumpWithFullMemoryInfo;
-		MiniDumpType |= MiniDumpWithThreadInfo;
-
-		if (codeseg)
-		{
-			MiniDumpType |= MiniDumpWithCodeSegs;
-		}
-
-		if (dataseg)
-		{
-			MiniDumpType |= MiniDumpWithDataSegs;
-		}
-	}
-
-	LPTOP_LEVEL_EXCEPTION_FILTER WINAPI Exception::SetUnhandledExceptionFilter_Stub(LPTOP_LEVEL_EXCEPTION_FILTER)
-	{
-		SetFilterHook.uninstall();
-		LPTOP_LEVEL_EXCEPTION_FILTER result = ::SetUnhandledExceptionFilter(&ExceptionFilter);
-		SetFilterHook.install();
-		return result;
+		return false;
 	}
 
 	Exception::Exception()
 	{
-		SetMiniDumpType(Flags::HasFlag("bigminidumps"), Flags::HasFlag("reallybigminidumps"));
+		const bool isBigDump = Flags::HasFlag("bigminidumps");
+		const bool isReallyBigDump = Flags::HasFlag("reallybigminidumps");
 
-		SetFilterHook.initialize(::SetUnhandledExceptionFilter, SetUnhandledExceptionFilter_Stub, HOOK_JUMP);
-		SetFilterHook.install();
+		SetMiniDumpType(isBigDump, isReallyBigDump && !isBigDump);
 
-		::SetUnhandledExceptionFilter(&ExceptionFilter);
+		previousFilter = SetUnhandledExceptionFilter(ExceptionFilter);
 
-		Utils::Hook(0x4B241F, LongJmp_Internal_Stub, HOOK_CALL).install()->quick();
-		Utils::Hook(0x61DB44, LongJmp_Internal_Stub, HOOK_CALL).install()->quick();
-		Utils::Hook(0x61F17D, LongJmp_Internal_Stub, HOOK_CALL).install()->quick();
-		Utils::Hook(0x61F248, LongJmp_Internal_Stub, HOOK_CALL).install()->quick();
-		Utils::Hook(0x61F5E7, LongJmp_Internal_Stub, HOOK_CALL).install()->quick();
-	}
-
-	Exception::~Exception()
-	{
-		SetFilterHook.uninstall();
+		LockExceptionFilter();
 	}
 }

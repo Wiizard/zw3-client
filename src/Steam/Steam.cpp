@@ -1,90 +1,132 @@
-#include "Components/Modules/StartupMessages.hpp"
+#include "STDInclude.hpp"
+
+#include "Steam.hpp"
+#include "Proxy.hpp"
+#include "Components/Modules/Logger.hpp"
+#include "Components/Modules/Flags.hpp"
+#include "Interfaces/SteamApps.hpp"
+#include "Interfaces/SteamFriends.hpp"
+#include "Interfaces/SteamGameServer.hpp"
+#include "Interfaces/SteamMatchmaking.hpp"
+#include "Interfaces/SteamNetworking.hpp"
+#include "Interfaces/SteamRemoteStorage.hpp"
+#include "Interfaces/SteamUser.hpp"
+#include "Interfaces/SteamUtils.hpp"
+
+#include "Components/Modules/Logger.hpp"
 
 namespace Steam
 {
-	uint64_t Callbacks::CallID = 0;
-	std::map<uint64_t, bool> Callbacks::Calls;
-	std::map<uint64_t, Callbacks::Base*> Callbacks::ResultHandlers;
+	std::uint64_t Callbacks::CallID = 0;
+	std::map<std::uint64_t, bool> Callbacks::Calls;
+	std::map<std::uint64_t, Callbacks::Base*> Callbacks::ResultHandlers;
 	std::vector<Callbacks::Result> Callbacks::Results;
 	std::vector<Callbacks::Base*> Callbacks::CallbackList;
 	std::recursive_mutex Callbacks::Mutex;
 
-	uint64_t Callbacks::RegisterCall()
+	std::uint64_t Callbacks::RegisterCall()
 	{
-		std::lock_guard<std::recursive_mutex> _(Callbacks::Mutex);
-		Callbacks::Calls[++Callbacks::CallID] = false;
-		return Callbacks::CallID;
+		std::lock_guard _(Mutex);
+
+		Calls[++CallID] = false;
+
+		return CallID;
 	}
 
-	void Callbacks::RegisterCallback(Callbacks::Base* handler, int callback)
+	void Callbacks::RegisterCallback(Base* handler, int callback)
 	{
-		std::lock_guard<std::recursive_mutex> _(Callbacks::Mutex);
-		if (!handler) return;
+		std::lock_guard _(Mutex);
+
+		if (!handler)
+		{
+			return;
+		}
+
 		handler->SetICallback(callback);
 		handler->SetRegistered(true);
-		if (std::find(CallbackList.begin(), CallbackList.end(), handler) == CallbackList.end())
-			Callbacks::CallbackList.push_back(handler);
+
+		if (std::ranges::find(CallbackList, handler) == CallbackList.end())
+		{
+			CallbackList.push_back(handler);
+		}
 	}
 
-	void Callbacks::RegisterCallResult(uint64_t call, Callbacks::Base* result)
+	void Callbacks::RegisterCallResult(std::uint64_t call, Base* result)
 	{
-		std::lock_guard<std::recursive_mutex> _(Callbacks::Mutex);
-		if (!result) return;
-		Callbacks::ResultHandlers[call] = result;
+		std::lock_guard _(Mutex);
+
+		if (!result)
+		{
+			return;
+		}
+
+		ResultHandlers[call] = result;
 	}
 
 	void Callbacks::UnregisterCallback(Base* handler)
 	{
-		std::lock_guard<std::recursive_mutex> _(Mutex);
+		std::lock_guard _(Mutex);
+
 		std::erase(CallbackList, handler);
-		if (handler) handler->SetRegistered(false);
+
+		if (handler)
+		{
+			handler->SetRegistered(false);
+		}
 	}
 
-	void Callbacks::UnregisterCallResult(Base* handler, uint64_t call)
+	void Callbacks::UnregisterCallResult(Base* result, std::uint64_t call)
 	{
-		std::lock_guard<std::recursive_mutex> _(Mutex);
-		const auto found = ResultHandlers.find(call);
-		if (found != ResultHandlers.end() && found->second == handler) ResultHandlers.erase(found);
+		std::lock_guard _(Mutex);
+
+		const auto entry = ResultHandlers.find(call);
+
+		if (entry != ResultHandlers.end() && entry->second == result)
+		{
+			ResultHandlers.erase(entry);
+		}
 	}
 
-	void Callbacks::ReturnCall(void* data, int size, int type, uint64_t call)
+	void Callbacks::ReturnCall(void* data, int size, int type, std::uint64_t call)
 	{
-		std::lock_guard<std::recursive_mutex> _(Callbacks::Mutex);
+		std::lock_guard _(Mutex);
 
-		Callbacks::Result result;
+		Calls[call] = true;
 
-		Callbacks::Calls[call] = true;
-
+		Result result{};
 		result.call = call;
 		result.data = data;
 		result.size = size;
 		result.type = type;
 
-		Callbacks::Results.push_back(result);
+		Results.push_back(result);
 	}
 
 	void Callbacks::RunCallbacks()
 	{
-		std::lock_guard<std::recursive_mutex> _(Callbacks::Mutex);
+		std::lock_guard _(Mutex);
 
-		auto results = Callbacks::Results;
-		Callbacks::Results.clear();
+		const auto pending = Results;
+		Results.clear();
 
-		for (auto result : results)
+		for (const auto& result : pending)
 		{
-			if (const auto found = ResultHandlers.find(result.call); found != ResultHandlers.end())
+			const auto handler = ResultHandlers.find(result.call);
+
+			if (handler != ResultHandlers.end())
 			{
-				auto* handler = found->second;
-				ResultHandlers.erase(found); // A call result is delivered once, including reentrant dispatch.
-				handler->Run(result.data, false, result.call);
+				auto* const resultHandler = handler->second;
+				ResultHandlers.erase(handler);
+				resultHandler->Run(result.data, false, result.call);
 			}
 
 			const auto callbacks = CallbackList;
-			for (auto callback : callbacks)
+
+			for (auto* const callback : callbacks)
 			{
-				// Run may unregister/destroy another callback or grow the live vector.
-				if (callback && std::find(CallbackList.begin(), CallbackList.end(), callback) != CallbackList.end() &&
-					callback->GetICallback() == result.type)
+				const bool isStillRegistered = std::ranges::find(CallbackList, callback) != CallbackList.end();
+
+				if (isStillRegistered && callback->GetICallback() == result.type)
 				{
 					callback->Run(result.data, false, 0);
 				}
@@ -97,26 +139,28 @@ namespace Steam
 		}
 	}
 
-	void Callbacks::RunCallback(int32_t callback, void* data)
+	void Callbacks::RunCallback(int callback, void* data)
 	{
-		std::lock_guard<std::recursive_mutex> _(Callbacks::Mutex);
+		std::lock_guard _(Mutex);
 
-		const auto callbacks = CallbackList;
-		for (auto cb : callbacks)
+		const auto handlers = CallbackList;
+
+		for (auto* const handler : handlers)
 		{
-			if (cb && std::find(CallbackList.begin(), CallbackList.end(), cb) != CallbackList.end() &&
-				cb->GetICallback() == callback)
+			const bool isStillRegistered = std::ranges::find(CallbackList, handler) != CallbackList.end();
+
+			if (handler && isStillRegistered && handler->GetICallback() == callback)
 			{
-				cb->Run(data);
+				handler->Run(data);
 			}
 		}
 	}
 
 	void Callbacks::Uninitialize()
 	{
-		std::lock_guard<std::recursive_mutex> _(Callbacks::Mutex);
+		std::lock_guard _(Mutex);
 
-		for (auto result : Callbacks::Results)
+		for (const auto& result : Results)
 		{
 			if (result.data)
 			{
@@ -124,137 +168,130 @@ namespace Steam
 			}
 		}
 
-		Callbacks::Results.clear();
+		Results.clear();
 	}
 
-	bool Enabled()
+	bool SteamAPI_Init()
 	{
-		static std::optional<bool> flag;
-
-		if (!flag.has_value())
+		if (!Components::Flags::HasFlag("steam"))
 		{
-			flag = Components::Flags::HasFlag("steam");
-		}
-
-		return flag.value();
-	}
-
-	extern "C"
-	{
-		bool SteamAPI_Init()
-		{
-			if (Steam::Enabled()) {
-				Proxy::SetGame(10190);
-
-				if (!Proxy::Inititalize())
-				{
-#ifdef _DEBUG
-					OutputDebugStringA("Steam proxy not initialized properly");
-#endif
-				}
-				else
-				{
-					Proxy::SetMod("Call of Duty: Zombie Warfare 3");
-					Proxy::RunGame();
-				}
-			}
-
+			Components::Logger::Print("steam: not proxying a Steam client, -steam turns it on\n");
 			return true;
 		}
 
-		void SteamAPI_RegisterCallResult(Callbacks::Base* result, uint64_t call)
+		Proxy::SetGame(10190);
+
+		if (Proxy::Initialize())
 		{
-			Callbacks::RegisterCallResult(call, result);
+			Components::Logger::Print("steam: proxying the running Steam client\n");
+		}
+		else
+		{
+			Components::Logger::Print("steam: no Steam client to proxy\n");
 		}
 
-		void SteamAPI_RegisterCallback(Callbacks::Base* handler, int callback)
+		return true;
+	}
+
+	void SteamAPI_RegisterCallResult(Callbacks::Base* result, std::uint64_t call)
+	{
+		Callbacks::RegisterCallResult(call, result);
+	}
+
+	void SteamAPI_RegisterCallback(Callbacks::Base* handler, int callback)
+	{
+		Callbacks::RegisterCallback(handler, callback);
+	}
+
+	void SteamAPI_RunCallbacks()
+	{
+		Callbacks::RunCallbacks();
+		Proxy::RunFrame();
+	}
+
+	void SteamAPI_Shutdown()
+	{
+		Proxy::UnInitialize();
+		Callbacks::Uninitialize();
+	}
+
+	void SteamAPI_UnregisterCallResult(Callbacks::Base* result, std::uint64_t call)
+	{
+		Callbacks::UnregisterCallResult(result, call);
+	}
+
+	void SteamAPI_UnregisterCallback(Callbacks::Base* handler)
+	{
+		Callbacks::UnregisterCallback(handler);
+	}
+
+	bool SteamGameServer_Init()
+	{
+		return true;
+	}
+
+	void SteamGameServer_RunCallbacks()
+	{
+	}
+
+	void SteamGameServer_Shutdown()
+	{
+	}
+
+	std::uint64_t UnusedSlot()
+	{
+		static std::mutex mutex;
+		static std::unordered_set<std::uintptr_t> reportedSites;
+
+		const auto callSite = ::Utils::Hook::Unrebase(reinterpret_cast<std::uintptr_t>(_ReturnAddress()));
+
+		std::lock_guard _(mutex);
+
+		if (reportedSites.insert(callSite).second)
 		{
-			Callbacks::RegisterCallback(handler, callback);
+			Components::Logger::Error("steam: a vtable slot nothing was mapped to call was called, returning to IDB {:#x}\n", callSite);
 		}
 
-		void SteamAPI_RunCallbacks()
-		{
-			Callbacks::RunCallbacks();
-			Proxy::RunFrame();
-		}
+		return 0;
+	}
 
-		void SteamAPI_Shutdown()
-		{
-			Proxy::Uninititalize();
-			Callbacks::Uninitialize();
-		}
+	Interface* SteamApps()
+	{
+		return Apps::Get();
+	}
 
-		void SteamAPI_UnregisterCallResult(Callbacks::Base* handler, uint64_t call)
-		{
-			Callbacks::UnregisterCallResult(handler, call);
-		}
+	Interface* SteamFriends()
+	{
+		return Friends::Get();
+	}
 
-		void SteamAPI_UnregisterCallback(Callbacks::Base* handler)
-		{
-			Callbacks::UnregisterCallback(handler);
-		}
+	Interface* SteamGameServer()
+	{
+		return GameServer::Get();
+	}
 
+	Interface* SteamMatchmaking()
+	{
+		return Matchmaking::Get();
+	}
 
-		bool SteamGameServer_Init()
-		{
-			return true;
-		}
+	Interface* SteamNetworking()
+	{
+		return Networking::Get();
+	}
 
-		void SteamGameServer_RunCallbacks()
-		{
-		}
+	Interface* SteamRemoteStorage()
+	{
+		return RemoteStorage::Get();
+	}
 
-		void SteamGameServer_Shutdown()
-		{
-		}
+	Interface* SteamUser()
+	{
+		return User::Get();
+	}
 
-
-		Steam::Friends* SteamFriends()
-		{
-			static Steam::Friends iFriends;
-			return &iFriends;
-		}
-
-		Steam::Matchmaking* SteamMatchmaking()
-		{
-			static Steam::Matchmaking iMatchmaking;
-			return &iMatchmaking;
-		}
-
-		Steam::GameServer* SteamGameServer()
-		{
-			static Steam::GameServer iGameServer;
-			return &iGameServer;
-		}
-
-		Steam::MasterServerUpdater* SteamMasterServerUpdater()
-		{
-			static Steam::MasterServerUpdater iMasterServerUpdater;
-			return &iMasterServerUpdater;
-		}
-
-		Steam::Networking* SteamNetworking()
-		{
-			static Steam::Networking iNetworking;
-			return &iNetworking;
-		}
-
-		Steam::RemoteStorage* SteamRemoteStorage()
-		{
-			static Steam::RemoteStorage iRemoteStorage;
-			return &iRemoteStorage;
-		}
-
-		Steam::User* SteamUser()
-		{
-			static Steam::User iUser;
-			return &iUser;
-		}
-
-		Steam::Utils* SteamUtils()
-		{
-			static Steam::Utils iUtils;
-			return &iUtils;
-		}
+	Interface* SteamUtils()
+	{
+		return Utils::Get();
 	}
 }

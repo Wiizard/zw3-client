@@ -1,50 +1,31 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Support/FunctionRef.hpp"
+#include "Controller/Mapping/Key.hpp"
+#include "Controller/Mapping/Logical.hpp"
 
-#include "Key.hpp"
-#include "Logical.hpp"
-
-namespace Controller
+namespace Controller::Mapping
 {
-  namespace mapping
-  {
-    class binding_table
-    {
-    public:
-      void
-      bind (engine_key, std::string command);
+	class BindingTable
+	{
+	public:
+		void Bind(EngineKey key, std::string command);
+		void Bind(EngineKey key, Action action);
 
-      void
-      bind (engine_key, action);
+		void Clear() noexcept;
 
-      void
-      unbind (engine_key) noexcept;
+		const std::string* CommandFor(EngineKey key) const noexcept;
 
-      void
-      clear () noexcept;
+		void ForEach(const std::function<void(EngineKey, const std::string&)>& visit) const;
 
-      const std::string*
-      command_for (engine_key) const noexcept;
+		std::size_t Size() const noexcept;
 
-      void
-      for_each (function_ref<void (engine_key, const std::string&)>) const;
+	private:
+		std::array<std::string, engineKeyCount> commands;
+	};
 
-      size_t
-      size () const noexcept;
+	void ApplyButtonLayout(BindingTable& table, std::string_view name);
 
-    private:
-      static constexpr size_t count {engine_key_count};
-
-      std::array<std::string, count> commands_;
-    };
-
-    void
-    apply_button_layout (binding_table&, std::string_view name);
-
-    bool
-    matches_button_layout (const binding_table&);
-  }
+	bool MatchesButtonLayout(const BindingTable& table);
 }

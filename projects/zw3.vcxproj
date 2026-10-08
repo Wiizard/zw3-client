@@ -1,0 +1,910 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{69C9880B-D5D2-887C-5E4E-9F7CCA56947C}</ProjectGuid>
+    <IgnoreWarnCompileDuplicatedFilename>true</IgnoreWarnCompileDuplicatedFilename>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>zw3</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <CharacterSet>NotSet</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <CharacterSet>NotSet</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\masm.props" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <LinkIncremental>false</LinkIncremental>
+    <OutDir>$(ProjectDir)..\build\bin\x64\Debug\</OutDir>
+    <IntDir>$(ProjectDir)..\build\obj\zw3\x64\Debug\</IntDir>
+    <TargetName>zw3</TargetName>
+    <TargetExt>.dll</TargetExt>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <LinkIncremental>false</LinkIncremental>
+    <OutDir>$(ProjectDir)..\build\bin\x64\Release\</OutDir>
+    <IntDir>$(ProjectDir)..\build\obj\zw3\x64\Release\</IntDir>
+    <TargetName>zw3</TargetName>
+    <TargetExt>.dll</TargetExt>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>STDInclude.hpp</PrecompiledHeaderFile>
+      <WarningLevel>Level4</WarningLevel>
+      <PreprocessorDefinitions>_WINDOWS;WIN32;_WIN64;DEBUG;_DEBUG;LTC_NO_FAST;LTC_NO_PROTOTYPES;LTC_NO_RSA_BLINDING;LTC_NO_FILE;ARGTYPE=4;LTM_DESC;__STDC_IEC_559__;MP_NO_DEV_URANDOM;RAPIDJSON_HAS_STDSTRING;ZLIB_CONST;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\src;..\build\src;..\lib\include;..\deps\discord-rpc\include;..\deps\json\single_include\nlohmann;..\deps\x64\libtomcrypt\src\headers;..\deps\x64\libtommath;..\deps\libwebp\src;..\deps\mongoose;..\deps\x64\pdcurses;..\deps\protobuf\src;..\deps\x64\rapidjson\include;..\deps\stb;..\deps\x64\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ForcedIncludeFiles>STDInclude.hpp</ForcedIncludeFiles>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <Optimization>Disabled</Optimization>
+      <MinimalRebuild>false</MinimalRebuild>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <ExternalWarningLevel>Level3</ExternalWarningLevel>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>_WINDOWS;WIN32;_WIN64;DEBUG;_DEBUG;LTC_NO_FAST;LTC_NO_PROTOTYPES;LTC_NO_RSA_BLINDING;LTC_NO_FILE;ARGTYPE=4;LTM_DESC;__STDC_IEC_559__;MP_NO_DEV_URANDOM;RAPIDJSON_HAS_STDSTRING;ZLIB_CONST;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\src;..\build\src;..\lib\include;..\deps\discord-rpc\include;..\deps\json\single_include\nlohmann;..\deps\x64\libtomcrypt\src\headers;..\deps\x64\libtommath;..\deps\libwebp\src;..\deps\mongoose;..\deps\x64\pdcurses;..\deps\protobuf\src;..\deps\x64\rapidjson\include;..\deps\stb;..\deps\x64\zlib;$(ProjectDir)..\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <ImportLibrary>..\build\bin\x64\Debug\zw3.lib</ImportLibrary>
+    </Link>
+    <PreBuildEvent>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjectDir)..\scripts\buildinfo.ps1&quot;</Command>
+    </PreBuildEvent>
+    <ProjectReference>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>STDInclude.hpp</PrecompiledHeaderFile>
+      <WarningLevel>Level4</WarningLevel>
+      <PreprocessorDefinitions>_WINDOWS;WIN32;_WIN64;NDEBUG;LTC_NO_FAST;LTC_NO_PROTOTYPES;LTC_NO_RSA_BLINDING;LTC_NO_FILE;ARGTYPE=4;LTM_DESC;__STDC_IEC_559__;MP_NO_DEV_URANDOM;RAPIDJSON_HAS_STDSTRING;ZLIB_CONST;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\src;..\build\src;..\lib\include;..\deps\discord-rpc\include;..\deps\json\single_include\nlohmann;..\deps\x64\libtomcrypt\src\headers;..\deps\x64\libtommath;..\deps\libwebp\src;..\deps\mongoose;..\deps\x64\pdcurses;..\deps\protobuf\src;..\deps\x64\rapidjson\include;..\deps\stb;..\deps\x64\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ForcedIncludeFiles>STDInclude.hpp</ForcedIncludeFiles>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <Optimization>MinSpace</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <MinimalRebuild>false</MinimalRebuild>
+      <StringPooling>true</StringPooling>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <RuntimeTypeInfo>false</RuntimeTypeInfo>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalOptions>/GL %(AdditionalOptions)</AdditionalOptions>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <ExternalWarningLevel>Level3</ExternalWarningLevel>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>_WINDOWS;WIN32;_WIN64;NDEBUG;LTC_NO_FAST;LTC_NO_PROTOTYPES;LTC_NO_RSA_BLINDING;LTC_NO_FILE;ARGTYPE=4;LTM_DESC;__STDC_IEC_559__;MP_NO_DEV_URANDOM;RAPIDJSON_HAS_STDSTRING;ZLIB_CONST;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\src;..\build\src;..\lib\include;..\deps\discord-rpc\include;..\deps\json\single_include\nlohmann;..\deps\x64\libtomcrypt\src\headers;..\deps\x64\libtommath;..\deps\libwebp\src;..\deps\mongoose;..\deps\x64\pdcurses;..\deps\protobuf\src;..\deps\x64\rapidjson\include;..\deps\stb;..\deps\x64\zlib;$(ProjectDir)..\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <ImportLibrary>..\build\bin\x64\Release\zw3.lib</ImportLibrary>
+      <AdditionalOptions>/IGNORE:4702 /LTCG %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+    <PreBuildEvent>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjectDir)..\scripts\buildinfo.ps1&quot;</Command>
+    </PreBuildEvent>
+    <ProjectReference>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClInclude Include="..\src\Components\Loader.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ArenaLength.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetHandler.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\ILoadedSound.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\ISndCurve.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\Isnd_alias_list_t.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\ITracerDef.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IWeapon.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IFxEffectDef.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IPhysCollmap.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IPhysPreset.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IXAnimParts.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IXModel.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IXModelSurfs.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IclipMap_t.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IComWorld.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IFxWorld.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IGameWorldMp.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IGameWorldSp.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IGfxWorld.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IMapEnts.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IFont_s.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IGfxImage.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IGfxLightDef.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\ILocalizeEntry.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IMaterial.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IMaterialPixelShader.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IMaterialTechniqueSet.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IMaterialVertexDeclaration.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IMaterialVertexShader.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IMenuList.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IRawFile.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IStringTable.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IStructuredDataDefSet.hpp" />
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\ImenuDef_t.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Auth.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Bans.hpp" />
+    <ClInclude Include="..\src\Components\Modules\BotAI\BotAI.hpp" />
+    <ClInclude Include="..\src\Components\Modules\BotAI\BotControl.hpp" />
+    <ClInclude Include="..\src\Components\Modules\BotAI\Control\Ai.hpp" />
+    <ClInclude Include="..\src\Components\Modules\BotAI\Control\Identity.hpp" />
+    <ClInclude Include="..\src\Components\Modules\BotAI\Control\Loadout.hpp" />
+    <ClInclude Include="..\src\Components\Modules\BotAI\Control\Lobby.hpp" />
+    <ClInclude Include="..\src\Components\Modules\BotAI\Control\Objectives.hpp" />
+    <ClInclude Include="..\src\Components\Modules\BotAI\Control\Personality.hpp" />
+    <ClInclude Include="..\src\Components\Modules\BotAI\Control\Skill.hpp" />
+    <ClInclude Include="..\src\Components\Modules\BotAI\Control\State.hpp" />
+    <ClInclude Include="..\src\Components\Modules\BotAI\Control\Tasks.hpp" />
+    <ClInclude Include="..\src\Components\Modules\BotAI\Control\WeaponData.hpp" />
+    <ClInclude Include="..\src\Components\Modules\BotAI\Iw4.hpp" />
+    <ClInclude Include="..\src\Components\Modules\BotAI\Navgen\Internal.hpp" />
+    <ClInclude Include="..\src\Components\Modules\BotAI\Navgen\Navgen.hpp" />
+    <ClInclude Include="..\src\Components\Modules\BotAI\Waypoints\Waypoints.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Bots.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Branding.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Bullet.hpp" />
+    <ClInclude Include="..\src\Components\Modules\CardTitles.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Ceg.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Changelog.hpp" />
+    <ClInclude Include="..\src\Components\Modules\CharacterAssignments.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Chat.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ClanTags.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ClientCommand.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ClientSlots.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Command.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ConfigStrings.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ConnectProtocol.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Console.hpp" />
+    <ClInclude Include="..\src\Components\Modules\D3D9Ex.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Debug.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Dedicated.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Discord.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Discovery.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Download.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Dvar.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Elevators.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Events.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Exception.hpp" />
+    <ClInclude Include="..\src\Components\Modules\FastFiles.hpp" />
+    <ClInclude Include="..\src\Components\Modules\FileSystem.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Flags.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Friends.hpp" />
+    <ClInclude Include="..\src\Components\Modules\GSC\Entity.hpp" />
+    <ClInclude Include="..\src\Components\Modules\GSC\Field.hpp" />
+    <ClInclude Include="..\src\Components\Modules\GSC\GSC.hpp" />
+    <ClInclude Include="..\src\Components\Modules\GSC\IO.hpp" />
+    <ClInclude Include="..\src\Components\Modules\GSC\Int64.hpp" />
+    <ClInclude Include="..\src\Components\Modules\GSC\Script.hpp" />
+    <ClInclude Include="..\src\Components\Modules\GSC\ScriptError.hpp" />
+    <ClInclude Include="..\src\Components\Modules\GSC\ScriptExtension.hpp" />
+    <ClInclude Include="..\src\Components\Modules\GSC\ScriptPatches.hpp" />
+    <ClInclude Include="..\src\Components\Modules\GSC\ScriptStorage.hpp" />
+    <ClInclude Include="..\src\Components\Modules\GSC\String.hpp" />
+    <ClInclude Include="..\src\Components\Modules\GSC\UserInfo.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Gamepad.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Handshake.hpp" />
+    <ClInclude Include="..\src\Components\Modules\HudParallax.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Huffman.hpp" />
+    <ClInclude Include="..\src\Components\Modules\IPCPipe.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Leaderboard.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Lean.hpp" />
+    <ClInclude Include="..\src\Components\Modules\LobbyAudio.hpp" />
+    <ClInclude Include="..\src\Components\Modules\LobbyScene.hpp" />
+    <ClInclude Include="..\src\Components\Modules\LobbyCombat.hpp" />
+    <ClInclude Include="..\src\Components\Modules\LobbyTransition.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Localization.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Logger.hpp" />
+    <ClInclude Include="..\src\Components\Modules\MapDump.hpp" />
+    <ClInclude Include="..\src\Components\Modules\MapRotation.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Maps.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Materials.hpp" />
+    <ClInclude Include="..\src\Components\Modules\MenuDvarList.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Menus.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ModList.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ModelCache.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ModelSurfs.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Network.hpp" />
+    <ClInclude Include="..\src\Components\Modules\NetworkDebug.hpp" />
+    <ClInclude Include="..\src\Components\Modules\News.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Node.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Party.hpp" />
+    <ClInclude Include="..\src\Components\Modules\PlayerMovement.hpp" />
+    <ClInclude Include="..\src\Components\Modules\PlayerName.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Playlist.hpp" />
+    <ClInclude Include="..\src\Components\Modules\QuickPatch.hpp" />
+    <ClInclude Include="..\src\Components\Modules\RCon.hpp" />
+    <ClInclude Include="..\src\Components\Modules\RawFiles.hpp" />
+    <ClInclude Include="..\src\Components\Modules\RawMouse.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Renderer.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Rumble.hpp" />
+    <ClInclude Include="..\src\Components\Modules\SPLoadscreens.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Scheduler.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Security.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ServerCommands.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ServerInfo.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ServerList.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Session.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Singleton.hpp" />
+    <ClInclude Include="..\src\Components\Modules\SlowMotion.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Sound.hpp" />
+    <ClInclude Include="..\src\Components\Modules\StartupMessages.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Stats.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Steam.hpp" />
+    <ClInclude Include="..\src\Components\Modules\StringTable.hpp" />
+    <ClInclude Include="..\src\Components\Modules\StructuredData.hpp" />
+    <ClInclude Include="..\src\Components\Modules\TextRenderer.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Theatre.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Threading.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Toast.hpp" />
+    <ClInclude Include="..\src\Components\Modules\UIFeeder.hpp" />
+    <ClInclude Include="..\src\Components\Modules\UIScript.hpp" />
+    <ClInclude Include="..\src\Components\Modules\UPnP.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Updater.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ViewModelFxSetup.hpp" />
+    <ClInclude Include="..\src\Components\Modules\VisionFile.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Voice.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Vote.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Weapon.hpp" />
+    <ClInclude Include="..\src\Components\Modules\WeaponFields.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Window.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ZW3Changelog.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ZWNet.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ZoneBuilder.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ZoneConvert.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Zones.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ZonesLayouts.hpp" />
+    <ClInclude Include="..\src\Controller\Aim\Assist.hpp" />
+    <ClInclude Include="..\src\Controller\Aim\Calibration.hpp" />
+    <ClInclude Include="..\src\Controller\Aim\Deadzone.hpp" />
+    <ClInclude Include="..\src\Controller\Aim\Graph.hpp" />
+    <ClInclude Include="..\src\Controller\Aim\Integrator.hpp" />
+    <ClInclude Include="..\src\Controller\Aim\Types.hpp" />
+    <ClInclude Include="..\src\Controller\Calibration\Normalize.hpp" />
+    <ClInclude Include="..\src\Controller\Calibration\Profile.hpp" />
+    <ClInclude Include="..\src\Controller\Calibration\Store.hpp" />
+    <ClInclude Include="..\src\Controller\Calibration\Validate.hpp" />
+    <ClInclude Include="..\src\Controller\Clock.hpp" />
+    <ClInclude Include="..\src\Controller\Context.hpp" />
+    <ClInclude Include="..\src\Controller\Device\Capability.hpp" />
+    <ClInclude Include="..\src\Controller\Device\Connection.hpp" />
+    <ClInclude Include="..\src\Controller\Device\Discovery.hpp" />
+    <ClInclude Include="..\src\Controller\Device\Id.hpp" />
+    <ClInclude Include="..\src\Controller\Device\Identity.hpp" />
+    <ClInclude Include="..\src\Controller\Device\Registry.hpp" />
+    <ClInclude Include="..\src\Controller\Diagnostic.hpp" />
+    <ClInclude Include="..\src\Controller\Driver\Decode.hpp" />
+    <ClInclude Include="..\src\Controller\Driver\Driver.hpp" />
+    <ClInclude Include="..\src\Controller\Driver\DualSense.hpp" />
+    <ClInclude Include="..\src\Controller\Driver\DualSenseEdge.hpp" />
+    <ClInclude Include="..\src\Controller\Driver\DualShock4.hpp" />
+    <ClInclude Include="..\src\Controller\Driver\Output.hpp" />
+    <ClInclude Include="..\src\Controller\Driver\OutputReport.hpp" />
+    <ClInclude Include="..\src\Controller\Driver\PlayStation.hpp" />
+    <ClInclude Include="..\src\Controller\Driver\Set.hpp" />
+    <ClInclude Include="..\src\Controller\Driver\XInput.hpp" />
+    <ClInclude Include="..\src\Controller\Engine\Bind.hpp" />
+    <ClInclude Include="..\src\Controller\Engine\Command.hpp" />
+    <ClInclude Include="..\src\Controller\Engine\Dvar.hpp" />
+    <ClInclude Include="..\src\Controller\Engine\Engine.hpp" />
+    <ClInclude Include="..\src\Controller\Engine\Feedback.hpp" />
+    <ClInclude Include="..\src\Controller\Engine\Hook.hpp" />
+    <ClInclude Include="..\src\Controller\Engine\Key.hpp" />
+    <ClInclude Include="..\src\Controller\Engine\NetMove.hpp" />
+    <ClInclude Include="..\src\Controller\Engine\Rumble.hpp" />
+    <ClInclude Include="..\src\Controller\Engine\View.hpp" />
+    <ClInclude Include="..\src\Controller\Error.hpp" />
+    <ClInclude Include="..\src\Controller\Haptic\Effect.hpp" />
+    <ClInclude Include="..\src\Controller\Haptic\Mixer.hpp" />
+    <ClInclude Include="..\src\Controller\Haptic\Stream.hpp" />
+    <ClInclude Include="..\src\Controller\Mapping\Binding.hpp" />
+    <ClInclude Include="..\src\Controller\Mapping\Glyph.hpp" />
+    <ClInclude Include="..\src\Controller\Mapping\Key.hpp" />
+    <ClInclude Include="..\src\Controller\Mapping\Logical.hpp" />
+    <ClInclude Include="..\src\Controller\Mapping\Physical.hpp" />
+    <ClInclude Include="..\src\Controller\Mapping\StickLayout.hpp" />
+    <ClInclude Include="..\src\Controller\Runtime.hpp" />
+    <ClInclude Include="..\src\Controller\Sample\Axis.hpp" />
+    <ClInclude Include="..\src\Controller\Sample\Button.hpp" />
+    <ClInclude Include="..\src\Controller\Sample\Frame.hpp" />
+    <ClInclude Include="..\src\Controller\Sample\Motion.hpp" />
+    <ClInclude Include="..\src\Controller\Sample\Sample.hpp" />
+    <ClInclude Include="..\src\Controller\Sample\Touch.hpp" />
+    <ClInclude Include="..\src\Controller\Sample\Trigger.hpp" />
+    <ClInclude Include="..\src\Controller\Transport\Audio.hpp" />
+    <ClInclude Include="..\src\Controller\Transport\DeviceNotify.hpp" />
+    <ClInclude Include="..\src\Controller\Transport\Hid.hpp" />
+    <ClInclude Include="..\src\Controller\Transport\ReportStream.hpp" />
+    <ClInclude Include="..\src\Controller\Transport\XInputModule.hpp" />
+    <ClInclude Include="..\src\Controller\Types.hpp" />
+    <ClInclude Include="..\src\Game\BothGames.hpp" />
+    <ClInclude Include="..\src\Game\Client.hpp" />
+    <ClInclude Include="..\src\Game\Common.hpp" />
+    <ClInclude Include="..\src\Game\Database.hpp" />
+    <ClInclude Include="..\src\Game\Dvars.hpp" />
+    <ClInclude Include="..\src\Game\Engine\FastCriticalSection.hpp" />
+    <ClInclude Include="..\src\Game\Engine\Hunk.hpp" />
+    <ClInclude Include="..\src\Game\Engine\LargeLocal.hpp" />
+    <ClInclude Include="..\src\Game\Engine\ScopedCriticalSection.hpp" />
+    <ClInclude Include="..\src\Game\FileSystem.hpp" />
+    <ClInclude Include="..\src\Game\Functions.hpp" />
+    <ClInclude Include="..\src\Game\Game.hpp" />
+    <ClInclude Include="..\src\Game\PlayerMovement.hpp" />
+    <ClInclude Include="..\src\Game\Script.hpp" />
+    <ClInclude Include="..\src\Game\Scripting\Function.hpp" />
+    <ClInclude Include="..\src\Game\Scripting\StackIsolation.hpp" />
+    <ClInclude Include="..\src\Game\Server.hpp" />
+    <ClInclude Include="..\src\Game\Structs.hpp" />
+    <ClInclude Include="..\src\Game\StructsX86.hpp" />
+    <ClInclude Include="..\src\Game\System.hpp" />
+    <ClInclude Include="..\src\Game\Zone.hpp" />
+    <ClInclude Include="..\src\STDInclude.hpp" />
+    <ClInclude Include="..\src\Steam\Interfaces\SteamApps.hpp" />
+    <ClInclude Include="..\src\Steam\Interfaces\SteamFriends.hpp" />
+    <ClInclude Include="..\src\Steam\Interfaces\SteamGameServer.hpp" />
+    <ClInclude Include="..\src\Steam\Interfaces\SteamMatchmaking.hpp" />
+    <ClInclude Include="..\src\Steam\Interfaces\SteamNetworking.hpp" />
+    <ClInclude Include="..\src\Steam\Interfaces\SteamRemoteStorage.hpp" />
+    <ClInclude Include="..\src\Steam\Interfaces\SteamUser.hpp" />
+    <ClInclude Include="..\src\Steam\Interfaces\SteamUtils.hpp" />
+    <ClInclude Include="..\src\Steam\Proxy.hpp" />
+    <ClInclude Include="..\src\Steam\Steam.hpp" />
+    <ClInclude Include="..\src\Utils\Cache.hpp" />
+    <ClInclude Include="..\src\Utils\CSV.hpp" />
+    <ClInclude Include="..\src\Utils\Chain.hpp" />
+    <ClInclude Include="..\src\Utils\Compression.hpp" />
+    <ClInclude Include="..\src\Utils\Concurrency.hpp" />
+    <ClInclude Include="..\src\Utils\CrashMarker.hpp" />
+    <ClInclude Include="..\src\Utils\Cryptography.hpp" />
+    <ClInclude Include="..\src\Utils\Entities.hpp" />
+    <ClInclude Include="..\src\Utils\Hooking.hpp" />
+    <ClInclude Include="..\src\Utils\Huffman.hpp" />
+    <ClInclude Include="..\src\Utils\HuffmanTree.hpp" />
+    <ClInclude Include="..\src\Utils\IO.hpp" />
+    <ClInclude Include="..\src\Utils\AesCtr.hpp" />
+    <ClInclude Include="..\src\Utils\IW4xZoneDecoder.hpp" />
+    <ClInclude Include="..\src\Utils\InflateReadAhead.hpp" />
+    <ClInclude Include="..\src\Utils\InfoString.hpp" />
+    <ClInclude Include="..\src\Utils\JSON.hpp" />
+    <ClInclude Include="..\src\Utils\Library.hpp" />
+    <ClInclude Include="..\src\Utils\MapPreview.hpp" />
+    <ClInclude Include="..\src\Utils\Maths.hpp" />
+    <ClInclude Include="..\src\Utils\Memory.hpp" />
+    <ClInclude Include="..\src\Utils\MenuPreprocessor.hpp" />
+    <ClInclude Include="..\src\Utils\NamedMutex.hpp" />
+    <ClInclude Include="..\src\Utils\StagedTextureUpload.hpp" />
+    <ClInclude Include="..\src\Utils\Stream.hpp" />
+    <ClInclude Include="..\src\Utils\String.hpp" />
+    <ClInclude Include="..\src\Utils\Thread.hpp" />
+    <ClInclude Include="..\src\Utils\Time.hpp" />
+    <ClInclude Include="..\src\Utils\Utils.hpp" />
+    <ClInclude Include="..\src\Utils\WebIO.hpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\src\Components\Loader.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ArenaLength.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetHandler.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\ILoadedSound.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\ISndCurve.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\Isnd_alias_list_t.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\ITracerDef.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IWeapon.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IFxEffectDef.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IPhysCollmap.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IPhysPreset.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IXAnimParts.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IXModel.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IXModelSurfs.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IclipMap_t.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IComWorld.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IFxWorld.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IGameWorldMp.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IGameWorldSp.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IGfxWorld.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IMapEnts.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IFont_s.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IGfxImage.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IGfxLightDef.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\ILocalizeEntry.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IMaterial.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IMaterialPixelShader.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IMaterialTechniqueSet.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IMaterialVertexDeclaration.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IMaterialVertexShader.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IMenuList.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IRawFile.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IStringTable.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IStructuredDataDefSet.cpp" />
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\ImenuDef_t.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Auth.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Bans.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\BotAI.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Ai.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Combat.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Engine.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Goals.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Identity.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Killstreaks.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Loadout.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Lobby.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Memory.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Objectives.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Perception.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Personality.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Targeting.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Tasks.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Walk.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\WeaponData.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Weapons.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Iw4.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Navgen\Annotate.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Navgen\Fill.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Navgen\Graph.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Navgen\Output.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Navgen\Prune.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Navgen\Sight.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Navgen\Tools.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Navgen\Trace.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Navgen\Walls.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Navgen\World.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_abandon.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_afghan.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_bloc.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_boneyard.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_brecourt.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_checkpoint.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_compact.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_complex.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_crash.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_derail.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_estate.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_favela.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_fuel2.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_highrise.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_invasion.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_nightshift.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_overgrown.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_quarry.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_rundown.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_rust.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_storm.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_strike.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_subbase.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_terminal.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_trailerpark.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_underpass.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_vacant.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Registry.cpp" />
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Waypoints.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Bots.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Branding.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Bullet.cpp" />
+    <ClCompile Include="..\src\Components\Modules\CardTitles.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Ceg.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Changelog.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Chat.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ClanTags.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ClientCommand.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ClientSlots.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Command.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ConfigStrings.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ConnectProtocol.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Console.cpp" />
+    <ClCompile Include="..\src\Components\Modules\D3D9Ex.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Debug.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Dedicated.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Discord.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Discovery.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Download.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Dvar.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Elevators.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Events.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Exception.cpp" />
+    <ClCompile Include="..\src\Components\Modules\FastFiles.cpp" />
+    <ClCompile Include="..\src\Components\Modules\FileSystem.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Flags.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Friends.cpp" />
+    <ClCompile Include="..\src\Components\Modules\GSC\Entity.cpp" />
+    <ClCompile Include="..\src\Components\Modules\GSC\Field.cpp" />
+    <ClCompile Include="..\src\Components\Modules\GSC\GSC.cpp" />
+    <ClCompile Include="..\src\Components\Modules\GSC\IO.cpp" />
+    <ClCompile Include="..\src\Components\Modules\GSC\Int64.cpp" />
+    <ClCompile Include="..\src\Components\Modules\GSC\Script.cpp" />
+    <ClCompile Include="..\src\Components\Modules\GSC\ScriptError.cpp" />
+    <ClCompile Include="..\src\Components\Modules\GSC\ScriptExtension.cpp" />
+    <ClCompile Include="..\src\Components\Modules\GSC\ScriptPatches.cpp" />
+    <ClCompile Include="..\src\Components\Modules\GSC\ScriptStorage.cpp" />
+    <ClCompile Include="..\src\Components\Modules\GSC\String.cpp" />
+    <ClCompile Include="..\src\Components\Modules\GSC\UserInfo.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Gamepad.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Handshake.cpp" />
+    <ClCompile Include="..\src\Components\Modules\HudParallax.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Huffman.cpp" />
+    <ClCompile Include="..\src\Components\Modules\IPCPipe.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Leaderboard.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Lean.cpp" />
+    <ClCompile Include="..\src\Components\Modules\LobbyAudio.cpp" />
+    <ClCompile Include="..\src\Components\Modules\LobbyScene.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Localization.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Logger.cpp" />
+    <ClCompile Include="..\src\Components\Modules\MapDump.cpp" />
+    <ClCompile Include="..\src\Components\Modules\MapRotation.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Maps.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Materials.cpp" />
+    <ClCompile Include="..\src\Components\Modules\MenuDvarList.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Menus.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ModList.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ModelCache.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ModelSurfs.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Network.cpp" />
+    <ClCompile Include="..\src\Components\Modules\NetworkDebug.cpp" />
+    <ClCompile Include="..\src\Components\Modules\News.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Node.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Party.cpp" />
+    <ClCompile Include="..\src\Components\Modules\PlayerMovement.cpp" />
+    <ClCompile Include="..\src\Components\Modules\PlayerName.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Playlist.cpp" />
+    <ClCompile Include="..\src\Components\Modules\QuickPatch.cpp" />
+    <ClCompile Include="..\src\Components\Modules\RCon.cpp" />
+    <ClCompile Include="..\src\Components\Modules\RawFiles.cpp" />
+    <ClCompile Include="..\src\Components\Modules\RawMouse.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Renderer.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Rumble.cpp" />
+    <ClCompile Include="..\src\Components\Modules\SPLoadscreens.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Scheduler.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Security.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ServerCommands.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ServerInfo.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ServerList.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Session.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Singleton.cpp" />
+    <ClCompile Include="..\src\Components\Modules\SlowMotion.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Sound.cpp" />
+    <ClCompile Include="..\src\Components\Modules\StartupMessages.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Stats.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Steam.cpp" />
+    <ClCompile Include="..\src\Components\Modules\StringTable.cpp" />
+    <ClCompile Include="..\src\Components\Modules\StructuredData.cpp" />
+    <ClCompile Include="..\src\Components\Modules\TextRenderer.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Theatre.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Threading.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Toast.cpp" />
+    <ClCompile Include="..\src\Components\Modules\UIFeeder.cpp" />
+    <ClCompile Include="..\src\Components\Modules\UIScript.cpp" />
+    <ClCompile Include="..\src\Components\Modules\UPnP.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Updater.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ViewModelFx.cpp" />
+    <ClCompile Include="..\src\Components\Modules\VisionFile.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Voice.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Vote.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Weapon.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Window.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ZW3Changelog.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ZWNet.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ZoneBuilder.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ZoneConvert.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Zones.cpp" />
+    <ClCompile Include="..\src\Controller\Aim\Assist.cpp">
+      <ObjectFileName>$(IntDir)\ControllerAimAssist.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Aim\Calibration.cpp">
+      <ObjectFileName>$(IntDir)\ControllerAimCalibration.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Aim\Deadzone.cpp">
+      <ObjectFileName>$(IntDir)\ControllerAimDeadzone.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Aim\Graph.cpp">
+      <ObjectFileName>$(IntDir)\ControllerAimGraph.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Aim\Integrator.cpp">
+      <ObjectFileName>$(IntDir)\ControllerAimIntegrator.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Calibration\Normalize.cpp">
+      <ObjectFileName>$(IntDir)\ControllerCalibrationNormalize.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Calibration\Profile.cpp">
+      <ObjectFileName>$(IntDir)\ControllerCalibrationProfile.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Calibration\Store.cpp">
+      <ObjectFileName>$(IntDir)\ControllerCalibrationStore.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Calibration\Validate.cpp">
+      <ObjectFileName>$(IntDir)\ControllerCalibrationValidate.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Context.cpp">
+      <ObjectFileName>$(IntDir)\ControllerContext.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Device\Connection.cpp">
+      <ObjectFileName>$(IntDir)\ControllerDeviceConnection.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Device\Discovery.cpp">
+      <ObjectFileName>$(IntDir)\ControllerDeviceDiscovery.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Device\Id.cpp">
+      <ObjectFileName>$(IntDir)\ControllerDeviceId.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Device\Identity.cpp">
+      <ObjectFileName>$(IntDir)\ControllerDeviceIdentity.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Device\Registry.cpp">
+      <ObjectFileName>$(IntDir)\ControllerDeviceRegistry.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Diagnostic.cpp">
+      <ObjectFileName>$(IntDir)\ControllerDiagnostic.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Driver\Decode.cpp">
+      <ObjectFileName>$(IntDir)\ControllerDriverDecode.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Driver\DualSense.cpp">
+      <ObjectFileName>$(IntDir)\ControllerDriverDualSense.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Driver\DualSenseEdge.cpp">
+      <ObjectFileName>$(IntDir)\ControllerDriverDualSenseEdge.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Driver\DualShock4.cpp">
+      <ObjectFileName>$(IntDir)\ControllerDriverDualShock4.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Driver\OutputReport.cpp">
+      <ObjectFileName>$(IntDir)\ControllerDriverOutputReport.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Driver\PlayStation.cpp">
+      <ObjectFileName>$(IntDir)\ControllerDriverPlayStation.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Driver\Set.cpp">
+      <ObjectFileName>$(IntDir)\ControllerDriverSet.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Driver\XInput.cpp">
+      <ObjectFileName>$(IntDir)\ControllerDriverXInput.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Engine\Bind.cpp">
+      <ObjectFileName>$(IntDir)\ControllerEngineBind.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Engine\Command.cpp">
+      <ObjectFileName>$(IntDir)\ControllerEngineCommand.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Engine\Dvar.cpp">
+      <ObjectFileName>$(IntDir)\ControllerEngineDvar.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Engine\Engine.cpp">
+      <ObjectFileName>$(IntDir)\ControllerEngineEngine.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Engine\Feedback.cpp">
+      <ObjectFileName>$(IntDir)\ControllerEngineFeedback.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Engine\Hook.cpp">
+      <ObjectFileName>$(IntDir)\ControllerEngineHook.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Engine\Key.cpp">
+      <ObjectFileName>$(IntDir)\ControllerEngineKey.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Engine\NetMove.cpp">
+      <ObjectFileName>$(IntDir)\ControllerEngineNetMove.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Engine\Rumble.cpp">
+      <ObjectFileName>$(IntDir)\ControllerEngineRumble.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Engine\View.cpp">
+      <ObjectFileName>$(IntDir)\ControllerEngineView.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Error.cpp">
+      <ObjectFileName>$(IntDir)\ControllerError.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Haptic\Effect.cpp">
+      <ObjectFileName>$(IntDir)\ControllerHapticEffect.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Haptic\Mixer.cpp">
+      <ObjectFileName>$(IntDir)\ControllerHapticMixer.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Haptic\Stream.cpp">
+      <ObjectFileName>$(IntDir)\ControllerHapticStream.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Mapping\Binding.cpp">
+      <ObjectFileName>$(IntDir)\ControllerMappingBinding.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Mapping\Glyph.cpp">
+      <ObjectFileName>$(IntDir)\ControllerMappingGlyph.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Mapping\Key.cpp">
+      <ObjectFileName>$(IntDir)\ControllerMappingKey.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Mapping\Logical.cpp">
+      <ObjectFileName>$(IntDir)\ControllerMappingLogical.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Mapping\Physical.cpp">
+      <ObjectFileName>$(IntDir)\ControllerMappingPhysical.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Mapping\StickLayout.cpp">
+      <ObjectFileName>$(IntDir)\ControllerMappingStickLayout.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Runtime.cpp">
+      <ObjectFileName>$(IntDir)\ControllerRuntime.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Sample\Axis.cpp">
+      <ObjectFileName>$(IntDir)\ControllerSampleAxis.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Transport\Audio.cpp">
+      <ObjectFileName>$(IntDir)\ControllerTransportAudio.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Transport\DeviceNotify.cpp">
+      <ObjectFileName>$(IntDir)\ControllerTransportDeviceNotify.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Transport\Hid.cpp">
+      <ObjectFileName>$(IntDir)\ControllerTransportHid.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Transport\ReportStream.cpp">
+      <ObjectFileName>$(IntDir)\ControllerTransportReportStream.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Transport\XInputModule.cpp">
+      <ObjectFileName>$(IntDir)\ControllerTransportXInputModule.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\DllMain.cpp" />
+    <ClCompile Include="..\src\Game\BothGames.cpp" />
+    <ClCompile Include="..\src\Game\Client.cpp" />
+    <ClCompile Include="..\src\Game\Common.cpp" />
+    <ClCompile Include="..\src\Game\Database.cpp" />
+    <ClCompile Include="..\src\Game\Dvars.cpp" />
+    <ClCompile Include="..\src\Game\Engine\FastCriticalSection.cpp" />
+    <ClCompile Include="..\src\Game\Engine\Hunk.cpp" />
+    <ClCompile Include="..\src\Game\Engine\LargeLocal.cpp" />
+    <ClCompile Include="..\src\Game\Engine\ScopedCriticalSection.cpp" />
+    <ClCompile Include="..\src\Game\FileSystem.cpp">
+      <ObjectFileName>$(IntDir)\FileSystem1.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\Functions.cpp" />
+    <ClCompile Include="..\src\Game\Game.cpp" />
+    <ClCompile Include="..\src\Game\PlayerMovement.cpp">
+      <ObjectFileName>$(IntDir)\PlayerMovement1.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\Script.cpp">
+      <ObjectFileName>$(IntDir)\Script1.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\Scripting\Function.cpp" />
+    <ClCompile Include="..\src\Game\Scripting\StackIsolation.cpp" />
+    <ClCompile Include="..\src\Game\Server.cpp" />
+    <ClCompile Include="..\src\Game\System.cpp" />
+    <ClCompile Include="..\src\Game\Zone.cpp" />
+    <ClCompile Include="..\src\STDInclude.cpp">
+      <PrecompiledHeader>Create</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\src\Steam\Interfaces\SteamApps.cpp" />
+    <ClCompile Include="..\src\Steam\Interfaces\SteamFriends.cpp" />
+    <ClCompile Include="..\src\Steam\Interfaces\SteamGameServer.cpp" />
+    <ClCompile Include="..\src\Steam\Interfaces\SteamMatchmaking.cpp" />
+    <ClCompile Include="..\src\Steam\Interfaces\SteamNetworking.cpp" />
+    <ClCompile Include="..\src\Steam\Interfaces\SteamRemoteStorage.cpp" />
+    <ClCompile Include="..\src\Steam\Interfaces\SteamUser.cpp" />
+    <ClCompile Include="..\src\Steam\Interfaces\SteamUtils.cpp" />
+    <ClCompile Include="..\src\Steam\Proxy.cpp" />
+    <ClCompile Include="..\src\Steam\Steam.cpp">
+      <ObjectFileName>$(IntDir)\Steam1.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\Cache.cpp" />
+    <ClCompile Include="..\src\Utils\CSV.cpp" />
+    <ClCompile Include="..\src\Utils\Compression.cpp" />
+    <ClCompile Include="..\src\Utils\CrashMarker.cpp" />
+    <ClCompile Include="..\src\Utils\Cryptography.cpp" />
+    <ClCompile Include="..\src\Utils\Entities.cpp" />
+    <ClCompile Include="..\src\Utils\Hooking.cpp" />
+    <ClCompile Include="..\src\Utils\Huffman.cpp">
+      <ObjectFileName>$(IntDir)\Huffman1.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\IO.cpp">
+      <ObjectFileName>$(IntDir)\IO1.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\InfoString.cpp" />
+    <ClCompile Include="..\src\Utils\JSON.cpp" />
+    <ClCompile Include="..\src\Utils\Library.cpp" />
+    <ClCompile Include="..\src\Utils\Maths.cpp" />
+    <ClCompile Include="..\src\Utils\Memory.cpp">
+      <ObjectFileName>$(IntDir)\Memory1.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\MenuPreprocessor.cpp" />
+    <ClCompile Include="..\src\Utils\NamedMutex.cpp" />
+    <ClCompile Include="..\src\Utils\String.cpp">
+      <ObjectFileName>$(IntDir)\String1.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\Stream.cpp" />
+    <ClCompile Include="..\src\Utils\Thread.cpp" />
+    <ClCompile Include="..\src\Utils\Time.cpp" />
+    <ClCompile Include="..\src\Utils\Utils.cpp" />
+    <ClCompile Include="..\src\Utils\WebIO.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="..\src\Resource.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Masm Include="..\src\Components\Modules\ArenaLengthStubs.asm" />
+    <Masm Include="..\src\Components\Modules\AssetHandlerStubs.asm" />
+    <Masm Include="..\src\Components\Modules\AuthStubs.asm" />
+    <Masm Include="..\src\Components\Modules\BotsStubs.asm" />
+    <Masm Include="..\src\Components\Modules\CardTitlesStubs.asm" />
+    <Masm Include="..\src\Components\Modules\ClanTagsStubs.asm" />
+    <Masm Include="..\src\Components\Modules\ClientSlotsStubs.asm" />
+    <Masm Include="..\src\Components\Modules\DedicatedStubs.asm" />
+    <Masm Include="..\src\Components\Modules\ElevatorsStubs.asm" />
+    <Masm Include="..\src\Components\Modules\GSC\ScriptExtensionStubs.asm" />
+    <Masm Include="..\src\Components\Modules\GamepadStubs.asm" />
+    <Masm Include="..\src\Components\Modules\MapsStubs.asm" />
+    <Masm Include="..\src\Components\Modules\MaterialsStubs.asm" />
+    <Masm Include="..\src\Components\Modules\NetworkStubs.asm" />
+    <Masm Include="..\src\Components\Modules\PlayerMovementStubs.asm" />
+    <Masm Include="..\src\Components\Modules\QuickPatchStubs.asm" />
+    <Masm Include="..\src\Components\Modules\RendererStubs.asm" />
+    <Masm Include="..\src\Components\Modules\RumbleStubs.asm" />
+    <Masm Include="..\src\Components\Modules\SlowMotionStubs.asm" />
+    <Masm Include="..\src\Components\Modules\SoundStubs.asm" />
+    <Masm Include="..\src\Components\Modules\TheatreStubs.asm" />
+    <Masm Include="..\src\Components\Modules\ThreadingStubs.asm" />
+    <Masm Include="..\src\Components\Modules\VisionFileStubs.asm" />
+    <Masm Include="..\src\Components\Modules\VoiceStubs.asm" />
+    <Masm Include="..\src\Components\Modules\WeaponStubs.asm" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="discord-rpc.vcxproj">
+      <Project>{DFD4EACE-4B8A-63C4-D47E-5D9B40335AC8}</Project>
+    </ProjectReference>
+    <ProjectReference Include="libtomcrypt.vcxproj">
+      <Project>{1E3156E2-8AE6-CED7-13DB-C8AE7F8FC5DB}</Project>
+    </ProjectReference>
+    <ProjectReference Include="libtommath.vcxproj">
+      <Project>{36F6A20E-22AE-E45B-8BB5-BDB7778C7F4C}</Project>
+    </ProjectReference>
+    <ProjectReference Include="libwebp.vcxproj">
+      <Project>{0A466F79-7625-EE14-7F3D-79EBEB9B5476}</Project>
+    </ProjectReference>
+    <ProjectReference Include="mongoose.vcxproj">
+      <Project>{0C5C597C-F828-B487-2142-A22F0D6EE915}</Project>
+    </ProjectReference>
+    <ProjectReference Include="pdcurses.vcxproj">
+      <Project>{EE8AB4D9-DA57-0FE5-0371-FD8CEF9C4473}</Project>
+    </ProjectReference>
+    <ProjectReference Include="protobuf.vcxproj">
+      <Project>{16C14D2B-028E-A836-2BA7-96DE17D3DDC4}</Project>
+    </ProjectReference>
+    <ProjectReference Include="zlib.vcxproj">
+      <Project>{16CFA17C-0206-A30D-ABF2-881097081F0F}</Project>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\masm.targets" />
+  </ImportGroup>
+</Project>

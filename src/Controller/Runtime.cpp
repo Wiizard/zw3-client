@@ -1,354 +1,349 @@
-#include "Runtime.hpp"
+#include "STDInclude.hpp"
 
-#include "Types.hpp"
-
-#include <cassert>
-#include <system_error>
-
-#include "Trace.hpp"
-#include "Calibration/Normalize.hpp"
-#include "Engine/Command.hpp"
+#include "Controller/Runtime.hpp"
+#include "Controller/Calibration/Normalize.hpp"
+#include "Controller/Engine/Command.hpp"
+#include "Controller/Engine/Engine.hpp"
 
 namespace Controller
 {
-  namespace
-  {
-    std::filesystem::path
-    calibration_directory ()
-    {
-      std::error_code ec;
-      const std::filesystem::path here (std::filesystem::current_path (ec));
-
-      return (ec ? std::filesystem::path () : here) / "players" / "controller";
-    }
-  }
-
-  runtime::
-  runtime (bool developer)
-    : developer_ (developer),
-      ctx_ (sink_, developer),
-      xinput_ (ctx_),
-      devices_ (ctx_),
-      discovery_ (ctx_, devices_, xinput_),
-      drivers_ (ctx_, xinput_),
-      calibration_ (ctx_, calibration_directory ()),
-      keys_ (ctx_, dvars_),
-      binds_ (ctx_, dvars_),
-      view_ (ctx_, dvars_)
-  {
-    report (sink_, severity::info, facility::runtime, errc::none,
-            "controller runtime initialized");
-  }
-
-  runtime::
-  ~runtime () = default;
-
-  context
-  runtime::
-  make_context () noexcept
-  {
-    return context (sink_, developer_);
-  }
-
-  void
-  runtime::
-  engine_ready ()
-  {
-    if (engine_ready_)
-      return;
-
-    engine::register_commands (ctx_, *this);
-
-    binds_.apply_startup_layout ();
-
-    engine_ready_ = true;
-  }
-
-  const calibration::profile&
-  runtime::
-  profile_for (Controller::family f)
-  {
-    std::optional<calibration::profile>& slot (profiles_[static_cast<size_t> (f)]);
-
-    if (!slot)
-    {
-      std::optional<calibration::profile> stored (calibration_.load (f, std::nullopt));
-      slot = stored ? std::move (*stored) : calibration::default_profile (f);
-    }
-
-    return *slot;
-  }
-
-  bool
-  runtime::
-  advance (driver::driver& d, const device_connection& dc, input_frame& out)
-  {
-    raw_sample raw;
-    canonical_sample canonical;
-
-    const timestamp acquired (clock::now ());
-
-    if (!d.poll (raw, canonical))
-      return false;
-
-    calibration::apply (profile_for (dc.identity.family), raw, canonical);
-
-    out = input_frame {dc.id,
-                       dc.identity.family,
-                       dc.link,
-                       ++sequence_,
-                       latency_span {acquired, timestamp {}},
-                       canonical};
-    return true;
-  }
-
-  bool
-  runtime::
-  submit (const driver::output_request& r)
-  {
-    if (active_ == no_device)
-      return false;
-
-    drivers_.submit (active_, r);
-    return true;
-  }
-
-  void
-  runtime::
-  stop_haptic (uint32_t tag)
-  {
-    if (active_ != no_device)
-      drivers_.stop_haptic (active_, tag);
-  }
-
-  std::string
-  runtime::
-  active_diagnostics () const
-  {
-    return active_ != no_device ? drivers_.diagnostics (active_) : std::string ();
-  }
-
-  void
-  runtime::
-  apply_output_policy ()
-  {
-    driver::output_policy p;
-
-    p.rumble = engine::read (dvars_.enabled, true) &&
-               engine::read (dvars_.rumble, true);
-    p.haptics = engine::read (dvars_.haptics, true)
-      ? driver::haptic_mode::waveform
-      : driver::haptic_mode::emulated;
-    p.output_interval =
-      static_cast<unsigned> (std::max (0, engine::read (dvars_.output_interval, 4)));
-
-    drivers_.configure (p);
-  }
-
-  void
-  runtime::
-  apply_light_bar ()
-  {
-    const bool ps (latest_.family == Controller::family::dualshock4 ||
-                   latest_.family == Controller::family::dualsense ||
-                   latest_.family == Controller::family::dualsense_edge);
-
-    if (!ps || !latest_.state.caps.has (capability::light_bar))
-      return;
-
-    const bool on (engine::read (dvars_.light_bar, true));
-
-    if (!on)
-    {
-      lit_device_ = no_device;
-      lit_colour_ = 0;
-      return;
-    }
-
-    const float brightness (
-      std::clamp (engine::read (dvars_.light_bar_brightness, 1.0f), 0.0f, 1.0f));
-
-    const auto clamp8 = [brightness] (int v) -> uint8_t
-    {
-      const int lit (static_cast<int> (static_cast<float> (v) * brightness + 0.5f));
-      return static_cast<uint8_t> (lit < 0 ? 0 : (lit > 255 ? 255 : lit));
-    };
-
-    const uint8_t r (clamp8 (engine::read (dvars_.light_bar_r, 196)));
-    const uint8_t g (clamp8 (engine::read (dvars_.light_bar_g, 151)));
-    const uint8_t b (clamp8 (engine::read (dvars_.light_bar_b, 54)));
-
-    const uint32_t colour (static_cast<uint32_t> (r) << 16 |
-                           static_cast<uint32_t> (g) << 8 | b);
-
-    if (active_ == lit_device_ && colour == lit_colour_)
-      return;
-
-    drivers_.submit (active_, driver::light_bar_request {r, g, b});
-
-    lit_device_ = active_;
-    lit_colour_ = colour;
-  }
-
-  void
-  runtime::
-  apply_trigger_feedback ()
-  {
-    if (!latest_.state.caps.has (capability::adaptive_triggers))
-    {
-      keys_.set_trigger_engage (0.0f, 0.0f);
-      return;
-    }
-
-    driver::adaptive_trigger_request left {};
-    driver::adaptive_trigger_request right {};
-
-    if (!engine::evaluate_trigger_feedback (dvars_, engine::local_client,
-                                            left, right))
-    {
-      keys_.set_trigger_engage (0.0f, 0.0f);
-      felt_device_ = no_device;
-      return;
-    }
-
-    const auto engage_for = [] (const driver::adaptive_trigger_request& r) noexcept
-    {
-      return r.effect == driver::trigger_effect::weapon
-        ? static_cast<float> (r.end_position) /
-            static_cast<float> (driver::trigger_zone_count)
-        : 0.0f;
-    };
-
-    keys_.set_trigger_engage (engage_for (left), engage_for (right));
-
-    const auto same = [] (const driver::adaptive_trigger_request& a,
-                          const driver::adaptive_trigger_request& b) noexcept
-    {
-      return a.effect == b.effect &&
-             a.zones == b.zones &&
-             a.start_position == b.start_position &&
-             a.end_position == b.end_position &&
-             a.strength == b.strength;
-    };
-
-    const bool known (active_ == felt_device_);
-
-    if (!known || !same (left, felt_left_))
-    {
-      drivers_.submit (active_, left);
-      felt_left_ = left;
-    }
-
-    if (!known || !same (right, felt_right_))
-    {
-      drivers_.submit (active_, right);
-      felt_right_ = right;
-    }
-
-    felt_device_ = active_;
-  }
-
-  void
-  runtime::
-  frame ()
-  {
-    CONTROLLER_ZONE ("controller::frame");
-
-    if (!engine_ready_)
-    {
-      CONTROLLER_FRAME_MARK ();
-      return;
-    }
-
-    binds_.poll_configured_layout ();
-
-    const bool enabled (engine::read (dvars_.enabled, true));
-
-    if (enabled)
-    {
-      discovery_.scan ();
-      drivers_.reconcile (devices_);
-    }
-
-    engine::publish_present (dvars_, drivers_.size () != 0);
-
-    apply_output_policy ();
-
-    const device_connection* selected (nullptr);
-
-    drivers_.for_each ([this, &selected]
-                       (driver::driver&, const device_connection& dc)
-    {
-      if (selected != nullptr && selected->id == active_)
-        return;
-
-      if (dc.id == active_ || selected == nullptr ||
-          (dc.transport == transport_kind::hid &&
-           selected->transport != transport_kind::hid))
-        selected = &dc;
-    });
-
-    if (!enabled || selected == nullptr || selected->id != active_)
-    {
-      if (had_device_)
-      {
-        keys_.release_all ();
-        view_.idle ();
-        active_ = no_device;
-        had_device_ = false;
-
-        lit_device_ = no_device;
-        lit_colour_ = 0;
-        felt_device_ = no_device;
-      }
-
-      if (!enabled || selected == nullptr)
-      {
-        CONTROLLER_FRAME_MARK ();
-        return;
-      }
-    }
-
-    input_frame candidate;
-    bool have_candidate (false);
-
-    drivers_.for_each ([this, selected, &candidate, &have_candidate]
-                       (driver::driver& d, const device_connection& dc)
-    {
-      input_frame f;
-
-      if (!advance (d, dc, f))
-        return;
-
-      if (dc.id == selected->id)
-      {
-        candidate = std::move (f);
-        have_candidate = true;
-      }
-    });
-
-    if (have_candidate)
-    {
-      latest_ = std::move (candidate);
-      latest_.timing.consumed = clock::now ();
-
-      assert (latest_.sequence > last_published_);
-      last_published_ = latest_.sequence;
-
-      active_ = latest_.device;
-      had_device_ = true;
-
-      apply_trigger_feedback ();
-
-      keys_.dispatch (latest_.state);
-
-      view_.observe (latest_.state);
-
-      apply_light_bar ();
-    }
-    else if (had_device_)
-      keys_.tick ();
-
-    CONTROLLER_FRAME_MARK ();
-  }
+	static std::filesystem::path CalibrationDirectory()
+	{
+		std::error_code error;
+		const std::filesystem::path here = std::filesystem::current_path(error);
+
+		if (error)
+		{
+			return std::filesystem::path() / "players" / "controller";
+		}
+
+		return here / "players" / "controller";
+	}
+
+	static bool IsSameTriggerRequest(const Driver::AdaptiveTriggerRequest& left, const Driver::AdaptiveTriggerRequest& right) noexcept
+	{
+		return left.effect == right.effect
+			&& left.zones == right.zones
+			&& left.startPosition == right.startPosition
+			&& left.endPosition == right.endPosition
+			&& left.strength == right.strength;
+	}
+
+	static float EngageFor(const Driver::AdaptiveTriggerRequest& request) noexcept
+	{
+		if (request.effect != Driver::TriggerEffect::Weapon)
+		{
+			return 0.0f;
+		}
+
+		return static_cast<float>(request.endPosition) / static_cast<float>(Driver::triggerZoneCount);
+	}
+
+	Runtime::Runtime()
+		: context(sink),
+		xinput(context),
+		devices(context),
+		discovery(context, devices, xinput),
+		drivers(context, xinput),
+		calibrationStore(context, CalibrationDirectory()),
+		dvars(Engine::RegisteredDvars()),
+		keys(context, dvars),
+		binds(context, dvars),
+		view(context, dvars)
+	{
+		this->context.Report(Severity::Info, Facility::Runtime, ErrorCode::None, "controller runtime initialized");
+	}
+
+	Runtime::~Runtime() = default;
+
+	void Runtime::EngineReady()
+	{
+		if (this->isEngineReady)
+		{
+			return;
+		}
+
+		Engine::RegisterCommands(this->context, *this);
+
+		this->binds.ApplyStartupLayout();
+
+		this->isEngineReady = true;
+	}
+
+	const Calibration::Profile& Runtime::ProfileFor(Controller::Family family)
+	{
+		auto& slot = this->profiles[static_cast<std::size_t>(family)];
+
+		if (slot)
+		{
+			return *slot;
+		}
+
+		auto stored = this->calibrationStore.TryLoad(family, std::nullopt);
+
+		if (stored)
+		{
+			slot = std::move(*stored);
+		}
+		else
+		{
+			slot = Calibration::DefaultProfile(family);
+		}
+
+		return *slot;
+	}
+
+	bool Runtime::TryAdvance(Driver::Driver& source, const DeviceConnection& connection, InputFrame& out)
+	{
+		RawSample raw;
+		CanonicalSample canonical;
+
+		const Timestamp acquired = Clock::Now();
+
+		if (!source.TryPoll(raw, canonical))
+		{
+			return false;
+		}
+
+		Calibration::ApplyProfile(this->ProfileFor(connection.identity.family), raw, canonical);
+
+		++this->sequence;
+
+		out = InputFrame{ connection.id, connection.identity.family, connection.link, this->sequence, LatencySpan{ acquired, Timestamp{} }, canonical };
+		return true;
+	}
+
+	bool Runtime::TrySubmit(const Driver::OutputRequest& request)
+	{
+		if (this->active == noDevice)
+		{
+			return false;
+		}
+
+		this->drivers.Submit(this->active, request);
+		return true;
+	}
+
+	void Runtime::StopHaptic(std::uint32_t tag)
+	{
+		if (this->active != noDevice)
+		{
+			this->drivers.StopHaptic(this->active, tag);
+		}
+	}
+
+	std::string Runtime::ActiveDiagnostics() const
+	{
+		if (this->active == noDevice)
+		{
+			return {};
+		}
+
+		return this->drivers.Diagnostics(this->active);
+	}
+
+	void Runtime::ApplyOutputPolicy()
+	{
+		Driver::OutputPolicy policy;
+
+		policy.isRumbleEnabled = Engine::Read(this->dvars.enabled, true) && Engine::Read(this->dvars.rumble, true);
+		policy.hapticMode = Driver::HapticMode::Emulated;
+
+		if (Engine::Read(this->dvars.haptics, true))
+		{
+			policy.hapticMode = Driver::HapticMode::Waveform;
+		}
+
+		policy.outputIntervalMs = static_cast<unsigned int>(std::max(0, Engine::Read(this->dvars.outputInterval, 4)));
+
+		this->drivers.Configure(policy);
+	}
+
+	void Runtime::ApplyLightBar()
+	{
+		const bool isPlayStation = this->latest.family == Family::DualShock4 || this->latest.family == Family::DualSense || this->latest.family == Family::DualSenseEdge;
+
+		if (!isPlayStation || !this->latest.state.caps.Has(Capability::LightBar))
+		{
+			return;
+		}
+
+		if (!Engine::Read(this->dvars.lightBar, true))
+		{
+			this->litDevice = noDevice;
+			this->litColour = 0;
+			return;
+		}
+
+		const float brightness = std::clamp(Engine::Read(this->dvars.lightBarBrightness, 1.0f), 0.0f, 1.0f);
+
+		const auto dim = [brightness](int value)
+		{
+			const auto lit = static_cast<int>(static_cast<float>(value) * brightness + 0.5f);
+			return static_cast<std::uint8_t>(std::clamp(lit, 0, 255));
+		};
+
+		const std::uint8_t red = dim(Engine::Read(this->dvars.lightBarRed, 196));
+		const std::uint8_t green = dim(Engine::Read(this->dvars.lightBarGreen, 151));
+		const std::uint8_t blue = dim(Engine::Read(this->dvars.lightBarBlue, 54));
+
+		const std::uint32_t colour = static_cast<std::uint32_t>(red) << 16 | static_cast<std::uint32_t>(green) << 8 | blue;
+
+		if (this->active == this->litDevice && colour == this->litColour)
+		{
+			return;
+		}
+
+		this->drivers.Submit(this->active, Driver::LightBarRequest{ red, green, blue });
+
+		this->litDevice = this->active;
+		this->litColour = colour;
+	}
+
+	void Runtime::ApplyTriggerFeedback()
+	{
+		if (!this->latest.state.caps.Has(Capability::AdaptiveTriggers))
+		{
+			this->keys.SetTriggerEngage(0.0f, 0.0f);
+			return;
+		}
+
+		Driver::AdaptiveTriggerRequest left{};
+		Driver::AdaptiveTriggerRequest right{};
+
+		if (!Engine::TryEvaluateTriggerFeedback(this->dvars, Engine::localClient, left, right))
+		{
+			this->keys.SetTriggerEngage(0.0f, 0.0f);
+			this->feltDevice = noDevice;
+			return;
+		}
+
+		this->keys.SetTriggerEngage(EngageFor(left), EngageFor(right));
+
+		const bool isKnown = this->active == this->feltDevice;
+
+		if (!isKnown || !IsSameTriggerRequest(left, this->feltLeft))
+		{
+			this->drivers.Submit(this->active, left);
+			this->feltLeft = left;
+		}
+
+		if (!isKnown || !IsSameTriggerRequest(right, this->feltRight))
+		{
+			this->drivers.Submit(this->active, right);
+			this->feltRight = right;
+		}
+
+		this->feltDevice = this->active;
+	}
+
+	void Runtime::ForgetDevice()
+	{
+		this->keys.ReleaseAll();
+		this->view.Idle();
+		this->active = noDevice;
+		this->hadDevice = false;
+
+		this->litDevice = noDevice;
+		this->litColour = 0;
+		this->feltDevice = noDevice;
+	}
+
+	void Runtime::Frame()
+	{
+		if (!this->isEngineReady)
+		{
+			return;
+		}
+
+		this->binds.PollConfiguredLayout();
+
+		const bool isEnabled = Engine::Read(this->dvars.enabled, true);
+
+		if (isEnabled)
+		{
+			this->discovery.Scan();
+			this->drivers.Reconcile(this->devices);
+		}
+
+		Engine::PublishPresent(this->dvars, this->drivers.Size() != 0);
+
+		this->ApplyOutputPolicy();
+
+		const DeviceConnection* selected = nullptr;
+
+		this->drivers.ForEach([this, &selected](Driver::Driver&, const DeviceConnection& connection)
+		{
+			if (selected != nullptr && selected->id == this->active)
+			{
+				return;
+			}
+
+			const bool isHidPreferred = connection.transport == TransportKind::Hid && selected != nullptr && selected->transport != TransportKind::Hid;
+
+			if (connection.id == this->active || selected == nullptr || isHidPreferred)
+			{
+				selected = &connection;
+			}
+		});
+
+		if (!isEnabled || selected == nullptr || selected->id != this->active)
+		{
+			if (this->hadDevice)
+			{
+				this->ForgetDevice();
+			}
+
+			if (!isEnabled || selected == nullptr)
+			{
+				return;
+			}
+		}
+
+		InputFrame candidate;
+		bool hasCandidate = false;
+
+		this->drivers.ForEach([this, selected, &candidate, &hasCandidate](Driver::Driver& source, const DeviceConnection& connection)
+		{
+			InputFrame polled;
+
+			if (!this->TryAdvance(source, connection, polled))
+			{
+				return;
+			}
+
+			if (connection.id == selected->id)
+			{
+				candidate = std::move(polled);
+				hasCandidate = true;
+			}
+		});
+
+		if (!hasCandidate)
+		{
+			if (this->hadDevice)
+			{
+				this->keys.Tick();
+			}
+
+			return;
+		}
+
+		this->latest = std::move(candidate);
+		this->latest.timing.consumed = Clock::Now();
+
+		assert(this->latest.sequence > this->lastPublished);
+		this->lastPublished = this->latest.sequence;
+
+		this->active = this->latest.device;
+		this->hadDevice = true;
+
+		this->ApplyTriggerFeedback();
+
+		this->keys.Dispatch(this->latest.state);
+
+		this->view.Observe(this->latest.state);
+
+		this->ApplyLightBar();
+	}
 }

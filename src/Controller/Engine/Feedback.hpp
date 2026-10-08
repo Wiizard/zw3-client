@@ -1,20 +1,11 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "Engine.hpp"
-#include "../Context.hpp"
-#include "Dvar.hpp"
-#include "../Driver/Output.hpp"
+#include "Controller/Driver/Output.hpp"
+#include "Controller/Engine/Dvar.hpp"
 
-namespace Controller
+namespace Controller::Engine
 {
-  namespace engine
-  {
-    bool
-    evaluate_trigger_feedback (const dvars&,
-                               int client,
-                               driver::adaptive_trigger_request& left,
-                               driver::adaptive_trigger_request& right) noexcept;
-  }
+	bool TryEvaluateTriggerFeedback(const Dvars& dvars, int client, Driver::AdaptiveTriggerRequest& left, Driver::AdaptiveTriggerRequest& right);
 }

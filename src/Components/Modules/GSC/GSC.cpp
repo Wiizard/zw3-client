@@ -1,4 +1,7 @@
+#include "STDInclude.hpp"
 
+#include "GSC.hpp"
+#include "Entity.hpp"
 #include "Field.hpp"
 #include "Int64.hpp"
 #include "IO.hpp"
@@ -9,7 +12,6 @@
 #include "ScriptStorage.hpp"
 #include "String.hpp"
 #include "UserInfo.hpp"
-#include "Entity.hpp"
 
 namespace Components::GSC
 {

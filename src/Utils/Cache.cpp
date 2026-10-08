@@ -1,15 +1,15 @@
-#include "WebIO.hpp"
+#include "STDInclude.hpp"
 
 namespace Utils
 {
-	const char* Cache::Urls[] =
+	const char* Cache::urls[] =
 	{
 		"https://raw.githubusercontent.com/iw4x/iw4x-cache",
 		"https://iw4x.dev/v1",
 	};
 
-	std::string Cache::ValidUrl;
-	std::mutex Cache::CacheMutex;
+	std::string Cache::validUrl;
+	std::mutex Cache::cacheMutex;
 
 	std::string Cache::GetUrl(const std::string& url, const std::string& path)
 	{
@@ -18,17 +18,17 @@ namespace Utils
 
 	std::string Cache::GetFile(const std::string& path, int timeout, const std::string& useragent)
 	{
-		std::lock_guard _(CacheMutex);
+		std::lock_guard _(cacheMutex);
 
-		if (ValidUrl.empty())
+		if (validUrl.empty())
 		{
-			for (std::size_t i = 0; i < ARRAYSIZE(Urls); ++i)
+			for (const auto* url : urls)
 			{
-				std::string result = WebIO(useragent, GetUrl(Urls[i], path)).setTimeout(timeout)->get();
+				std::string result = WebIO(useragent, GetUrl(url, path)).SetTimeout(timeout)->Get();
 
 				if (!result.empty())
 				{
-					ValidUrl = Urls[i];
+					validUrl = url;
 					return result;
 				}
 			}
@@ -36,6 +36,6 @@ namespace Utils
 			return {};
 		}
 
-		return WebIO(useragent, GetUrl(ValidUrl, path)).setTimeout(timeout)->get();
+		return WebIO(useragent, GetUrl(validUrl, path)).SetTimeout(timeout)->Get();
 	}
 }

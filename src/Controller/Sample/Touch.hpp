@@ -1,21 +1,21 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
 namespace Controller
 {
-  struct touch_point
-  {
-    bool active {false};
-    uint8_t id {0};
-    uint16_t x {0};
-    uint16_t y {0};
-  };
+	struct TouchPoint
+	{
+		bool isActive = false;
+		std::uint8_t id = 0;
+		std::uint16_t x = 0;
+		std::uint16_t y = 0;
+	};
 
-  struct touchpad
-  {
-    static constexpr size_t max_points {2};
+	struct Touchpad
+	{
+		static constexpr std::size_t maxPoints = 2;
 
-    std::array<touch_point, max_points> points {};
-  };
+		std::array<TouchPoint, maxPoints> points{};
+	};
 }

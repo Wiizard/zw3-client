@@ -1,43 +1,36 @@
+#include "STDInclude.hpp"
+
 #include "SlowMotion.hpp"
+#include "Logger.hpp"
+
+extern "C"
+{
+	void SlowMotionUpdateStub();
+
+	int SlowMotion_Delay = 0;
+
+	std::uintptr_t SlowMotion_Active = 0;
+}
 
 namespace Components
 {
-	int SlowMotion::Delay = 0;
+	constexpr std::uintptr_t ScrCmd_SetSlowMotion_SetConfigstringJump = 0x140178152;
+	constexpr std::uintptr_t SV_SetConfigstring = 0x14023ACB0;
 
-	const Game::dvar_t* SlowMotion::cg_drawDisconnect;
+	constexpr std::uintptr_t Com_SetSlowMotion = 0x1401F68E0;
 
-	void SlowMotion::Com_UpdateSlowMotion(int msec)
+	constexpr std::uintptr_t Com_Frame_SlowMotionTest = 0x1401F4603;
+	constexpr std::uintptr_t slowMotionActive = 0x141BD9AE0;
+	static const std::uint8_t slowMotionTest[] = { 0x80, 0x3D, 0xD6, 0x54, 0x9E, 0x01, 0x00 };
+
+	static Utils::Hook hooks[2];
+
+	void SlowMotion::ScrCmd_SetSlowMotion_Stub(int index, const char* string)
 	{
-		if (Delay <= 0)
-		{
-			Game::Com_UpdateSlowMotion(msec);
-		}
-		else
-		{
-			Delay -= msec;
-		}
-	}
+		reinterpret_cast<void(*)(int, const char*)>(Utils::Hook::Rebase(SV_SetConfigstring))(index, string);
 
-	__declspec(naked) void SlowMotion::Com_UpdateSlowMotion_Stub()
-	{
-		__asm
-		{
-			pushad
-
-			push [esp + 0x20 + 0x4]
-			call Com_UpdateSlowMotion
-			add esp, 0x4
-
-			popad
-
-			retn
-		}
-	}
-
-	void SlowMotion::ScrCmd_SetSlowMotion_Stub()
-	{
 		auto duration = 1000;
-		auto start = Game::Scr_GetFloat(0);
+		const auto start = Game::Scr_GetFloat(0);
 		auto end = 1.0f;
 
 		if (Game::Scr_GetNumParam() >= 2)
@@ -66,33 +59,43 @@ namespace Components
 
 		duration = duration - delay;
 
-		Game::Com_SetSlowMotion(start, end, duration);
-		Delay = delay;
+		reinterpret_cast<void(*)(float, float, int)>(Utils::Hook::Rebase(Com_SetSlowMotion))(start, end, duration);
+		SlowMotion_Delay = delay;
 
-		// Set snapshot num to 1 behind (T6 does this, why shouldn't we?)
 		for (auto i = 0; i < *Game::svs_clientCount; ++i)
 		{
 			Game::svs_clients[i].nextSnapshotTime = *Game::svs_time - 1;
 		}
 	}
 
-	void SlowMotion::CG_DrawDisconnect_Stub(const int localClientNum)
-	{
-		if (cg_drawDisconnect->current.enabled)
-		{
-			Game::CG_DrawDisconnect(localClientNum);
-		}
-	}
-
 	SlowMotion::SlowMotion()
 	{
-		cg_drawDisconnect = Game::Dvar_RegisterBool("cg_drawDisconnect", false, Game::DVAR_NONE, "Draw connection interrupted");
+		const bool isExpected = Utils::Hook::BranchesTo(ScrCmd_SetSlowMotion_SetConfigstringJump, SV_SetConfigstring, true)
+			&& Utils::Hook::MatchesBytes(Com_Frame_SlowMotionTest, slowMotionTest, sizeof(slowMotionTest));
 
-		Delay = 0;
-		Utils::Hook(0x5F5FF2, ScrCmd_SetSlowMotion_Stub, HOOK_JUMP).install()->quick();
-		Utils::Hook(0x60B38A, Com_UpdateSlowMotion_Stub, HOOK_CALL).install()->quick();
+		if (!isExpected)
+		{
+			Logger::Error("slowmotion: setslowmotion or Com_Frame does not read as expected, no slow motion delay\n");
+			return;
+		}
 
-		Utils::Hook(0x4A54ED, CG_DrawDisconnect_Stub, HOOK_CALL).install()->quick();
-		Utils::Hook(0x4A54FB, CG_DrawDisconnect_Stub, HOOK_CALL).install()->quick();
+		SlowMotion_Delay = 0;
+		SlowMotion_Active = Utils::Hook::Rebase(slowMotionActive);
+
+		bool isSeated = hooks[0].Initialize(ScrCmd_SetSlowMotion_SetConfigstringJump, reinterpret_cast<void*>(ScrCmd_SetSlowMotion_Stub), HOOK_JUMP)->Install()->IsInstalled();
+		isSeated = hooks[1].Initialize(Com_Frame_SlowMotionTest, SlowMotionUpdateStub, HOOK_CALL)->Install()->IsInstalled() && isSeated;
+
+		if (!isSeated)
+		{
+			for (auto& hook : hooks)
+			{
+				hook.Uninstall();
+			}
+
+			Logger::Error("slowmotion: could not seat the slow motion hooks\n");
+			return;
+		}
+
+		Utils::Hook::Nop(Com_Frame_SlowMotionTest + 5, sizeof(slowMotionTest) - 5);
 	}
 }

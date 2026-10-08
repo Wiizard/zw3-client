@@ -1,91 +1,76 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Clock.hpp"
-#include "../Support/InplaceVector.hpp"
+#include "Controller/Clock.hpp"
 
-namespace Controller
+namespace Controller::Haptic
 {
-  namespace haptic
-  {
-    struct frame
-    {
-      float left {0.0f};
-      float right {0.0f};
-    };
+	struct Frame
+	{
+		float left = 0.0f;
+		float right = 0.0f;
+	};
 
-    enum class actuator : uint8_t
-    {
-      left,
-      right,
-      both,
-    };
+	enum class Actuator : std::uint8_t
+	{
+		Left,
+		Right,
+		Both,
+	};
 
-    const char*
-    to_string (actuator) noexcept;
+	class Envelope
+	{
+	public:
+		static constexpr std::size_t maxKnots = 16;
 
-    class envelope
-    {
-    public:
-      static constexpr size_t max_knots {16};
+		struct Knot
+		{
+			float at = 0.0f;
+			float amplitude = 0.0f;
+		};
 
-      struct knot
-      {
-        float at {0.0f};
-        float amplitude {0.0f};
-      };
+		constexpr Envelope() = default;
 
-      constexpr envelope () = default;
+		static Envelope Level(float amplitude) noexcept;
+		static Envelope From(std::span<const Knot> source) noexcept;
 
-      static envelope
-      level (float amplitude) noexcept;
+		float Evaluate(float t) const noexcept;
 
-      static envelope
-      from (std::span<const knot>) noexcept;
+		bool IsEmpty() const noexcept
+		{
+			return this->knotCount == 0;
+		}
 
-      float
-      evaluate (float t) const noexcept;
+	private:
+		std::array<Knot, maxKnots> knots{};
+		std::size_t knotCount = 0;
+	};
 
-      bool
-      empty () const noexcept {return knots_.empty ();}
+	inline constexpr float minHertz = 40.0f;
+	inline constexpr float maxHertz = 320.0f;
 
-      std::span<const knot>
-      knots () const noexcept {return {knots_.data (), knots_.size ()};}
+	float HertzFor(float sharpness) noexcept;
 
-    private:
-      inplace_vector<knot, max_knots> knots_;
-    };
+	struct Effect
+	{
+		Envelope deep;
+		Envelope crisp;
 
-    inline constexpr float min_hertz {40.0f};
-    inline constexpr float max_hertz {320.0f};
+		float deepSharpness = 0.0f;
+		float crispSharpness = 1.0f;
 
-    float
-    hertz_for (float sharpness) noexcept;
+		float intensity = 1.0f;
 
-    struct effect
-    {
-      envelope deep;
-      envelope crisp;
+		Seconds duration{ 0.25f };
 
-      float deep_sharpness {0.0f};
-      float crisp_sharpness {1.0f};
+		bool shouldLoop = false;
 
-      float intensity {1.0f};
+		Actuator where = Actuator::Both;
 
-      seconds duration {0.25f};
+		std::uint32_t tag = 0;
+	};
 
-      bool loop {false};
-
-      actuator where {actuator::both};
-
-      uint32_t tag {0};
-    };
-
-    effect
-    transient (float intensity, float sharpness) noexcept;
-
-    effect
-    continuous (float intensity, float sharpness, seconds duration) noexcept;
-  }
+	Effect Transient(float intensity, float sharpness) noexcept;
+	Effect Continuous(float intensity, float sharpness, Seconds duration) noexcept;
 }

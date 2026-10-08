@@ -15,12 +15,12 @@ namespace Components
 
 		static void CL_SanitizeClanName();
 
+		static void ClientUserinfoChanged(const char* s, int clientNum);
+
 	private:
-		static const Game::dvar_t* ClanName;
+		static const Game::dvar_t* clanName;
 
-		static const char* dvarNameList[];
-
-		static char ClientState[Game::MAX_CLIENTS][5];
+		static char clientState[Game::MAX_CLIENTS][MAX_CLAN_NAME_LENGTH];
 
 		static void ParseClanTags(const char* infoString);
 
@@ -30,16 +30,11 @@ namespace Components
 
 		static void Dvar_InfoString_Stub(char* s, const char* key, const char* value);
 
-		static void ClientUserinfoChanged(const char* s, int clientNum);
-		static void ClientUserinfoChanged_Stub();
-
-		static void DrawPlayerNameOnScoreboard();
-
 		static int PartyClient_Frame_Stub(const char* s0, const char* s1);
 		static void Party_UpdateClanName_Stub(Game::PartyData* party, const char* clanAbbrev);
 
 		static void PlayerCards_SetCachedPlayerData(Game::PlayerCardData* data, int clientNum);
-		static void PlayerCards_SetCachedPlayerData_Stub();
+		static void PlayerCards_SetCachedPlayerData_Stub(char* name, const char* source, int size);
 
 		static Game::PlayerCardData* PlayerCards_GetLiveProfileDataForClient_Stub(unsigned int clientIndex);
 		static Game::PlayerCardData* PlayerCards_GetLiveProfileDataForController_Stub(unsigned int controllerIndex);

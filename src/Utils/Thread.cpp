@@ -1,39 +1,44 @@
+#include "STDInclude.hpp"
 
 namespace Utils::Thread
 {
-	bool SetName(const HANDLE t, const std::string& name)
+	bool SetName(HANDLE thread, const std::string& name)
 	{
 		const Library kernel32("kernel32.dll");
+
 		if (!kernel32)
 		{
 			return false;
 		}
 
-		const auto setDescription = kernel32.getProc<HRESULT(WINAPI*)(HANDLE, PCWSTR)>("SetThreadDescription");
+		const auto setDescription = kernel32.GetProc<HRESULT(WINAPI*)(HANDLE, PCWSTR)>("SetThreadDescription");
+
 		if (!setDescription)
 		{
 			return false;
 		}
 
-		return SUCCEEDED(setDescription(t, String::Convert(name).data()));
+		return SUCCEEDED(setDescription(thread, String::Convert(name).data()));
 	}
 
-	bool SetName(const DWORD id, const std::string& name)
+	bool SetName(DWORD id, const std::string& name)
 	{
-		auto* const t = OpenThread(THREAD_SET_LIMITED_INFORMATION, FALSE, id);
-		if (!t) return false;
+		const HANDLE thread = OpenThread(THREAD_SET_LIMITED_INFORMATION, FALSE, id);
 
-		const auto _ = gsl::finally([t]()
+		if (!thread)
 		{
-			CloseHandle(t);
-		});
+			return false;
+		}
 
-		return SetName(t, name);
+		const bool isNamed = SetName(thread, name);
+		CloseHandle(thread);
+
+		return isNamed;
 	}
 
-	bool SetName(std::thread& t, const std::string& name)
+	bool SetName(std::jthread& thread, const std::string& name)
 	{
-		return SetName(t.native_handle(), name);
+		return SetName(thread.native_handle(), name);
 	}
 
 	bool SetName(const std::string& name)
@@ -43,37 +48,37 @@ namespace Utils::Thread
 
 	std::vector<DWORD> GetThreadIds()
 	{
-		auto* const h = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, GetCurrentProcessId());
-		if (h == INVALID_HANDLE_VALUE)
+		const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, GetCurrentProcessId());
+
+		if (snapshot == INVALID_HANDLE_VALUE)
 		{
 			return {};
 		}
-
-		const auto _ = gsl::finally([h]()
-		{
-			CloseHandle(h);
-		});
 
 		THREADENTRY32 entry{};
 		entry.dwSize = sizeof(entry);
-		if (!Thread32First(h, &entry))
-		{
-			return {};
-		}
 
 		std::vector<DWORD> ids{};
 
+		if (!Thread32First(snapshot, &entry))
+		{
+			CloseHandle(snapshot);
+			return ids;
+		}
+
 		do
 		{
-			const auto check_size = entry.dwSize < FIELD_OFFSET(THREADENTRY32, th32OwnerProcessID)
-				+ sizeof(entry.th32OwnerProcessID);
+			const bool hasOwner = entry.dwSize >= FIELD_OFFSET(THREADENTRY32, th32OwnerProcessID) + sizeof(entry.th32OwnerProcessID);
 			entry.dwSize = sizeof(entry);
 
-			if (check_size && entry.th32OwnerProcessID == GetCurrentProcessId())
+			if (hasOwner && entry.th32OwnerProcessID == GetCurrentProcessId())
 			{
 				ids.emplace_back(entry.th32ThreadID);
 			}
-		} while (Thread32Next(h, &entry));
+		}
+		while (Thread32Next(snapshot, &entry));
+
+		CloseHandle(snapshot);
 
 		return ids;
 	}

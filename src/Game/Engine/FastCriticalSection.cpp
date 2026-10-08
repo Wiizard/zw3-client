@@ -1,38 +1,40 @@
+#include "STDInclude.hpp"
+
 #include "FastCriticalSection.hpp"
 
 namespace Game::Engine
 {
-	FastCriticalSectionScopeRead::FastCriticalSectionScopeRead(FastCriticalSection* cs)
-		: cs_(cs)
+	FastCriticalSectionScopeRead::FastCriticalSectionScopeRead(FastCriticalSection* critSect)
+		: critSect(critSect)
 	{
-		if (this->cs_)
+		if (this->critSect)
 		{
-			Sys_LockRead(this->cs_);
+			Sys_LockRead(this->critSect);
 		}
 	}
 
 	FastCriticalSectionScopeRead::~FastCriticalSectionScopeRead()
 	{
-		if (this->cs_)
+		if (this->critSect)
 		{
-			Sys_UnlockRead(this->cs_);
+			Sys_UnlockRead(this->critSect);
 		}
 	}
 
-	FastCriticalSectionScopeWrite::FastCriticalSectionScopeWrite(FastCriticalSection* cs)
-		: cs_(cs)
+	FastCriticalSectionScopeWrite::FastCriticalSectionScopeWrite(FastCriticalSection* critSect)
+		: critSect(critSect)
 	{
-		if (this->cs_)
+		if (this->critSect)
 		{
-			Sys_LockWrite(this->cs_);
+			Sys_LockWrite(this->critSect);
 		}
 	}
 
 	FastCriticalSectionScopeWrite::~FastCriticalSectionScopeWrite()
 	{
-		if (this->cs_)
+		if (this->critSect)
 		{
-			Sys_UnlockWrite(this->cs_);
+			Sys_UnlockWrite(this->critSect);
 		}
 	}
 }

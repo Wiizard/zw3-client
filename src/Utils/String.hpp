@@ -9,70 +9,90 @@ namespace Utils::String
 	class VAProvider
 	{
 	public:
-		static_assert(Buffers != 0 && MinBufferSize != 0, "Buffers and MinBufferSize mustn't be 0");
+		static_assert(Buffers != 0 && MinBufferSize != 0, "Buffers and MinBufferSize must not be 0");
 
-		VAProvider() : currentBuffer_(0) {}
+		VAProvider() : currentBuffer(0) {}
 
-		[[nodiscard]] const char* get(const char* format, va_list ap)
+		[[nodiscard]] const char* Get(const char* format, va_list ap)
 		{
-			++this->currentBuffer_ %= ARRAY_COUNT(this->stringPool_);
-			auto entry = &this->stringPool_[this->currentBuffer_];
+			++this->currentBuffer %= ARRAY_COUNT(this->stringPool);
+			auto* const entry = &this->stringPool[this->currentBuffer];
 
-			if (!entry->size_ || !entry->buffer_)
+			if (!entry->size || !entry->buffer)
 			{
-				throw std::runtime_error("String pool not initialized");
+				return "";
 			}
 
 			while (true)
 			{
-				const auto res = vsnprintf_s(entry->buffer_, entry->size_, _TRUNCATE, format, ap);
-				if (res > 0) break; // Success
-				if (res == 0) return ""; // Error
+				const auto written = vsnprintf_s(entry->buffer, entry->size, _TRUNCATE, format, ap);
 
-				entry->doubleSize();
+				if (written > 0)
+				{
+					break;
+				}
+
+				if (written == 0)
+				{
+					return "";
+				}
+
+				entry->DoubleSize();
 			}
 
-			return entry->buffer_;
+			return entry->buffer;
 		}
 
 	private:
 		class Entry
 		{
 		public:
-			Entry(std::size_t size = MinBufferSize) : size_(size), buffer_(nullptr)
+			Entry(std::size_t size = MinBufferSize) : size(size), buffer(nullptr)
 			{
-				if (this->size_ < MinBufferSize) this->size_ = MinBufferSize;
-				this->allocate();
+				if (this->size < MinBufferSize)
+				{
+					this->size = MinBufferSize;
+				}
+
+				this->Allocate();
 			}
 
 			~Entry()
 			{
-				if (this->buffer_) Memory::GetAllocator()->free(this->buffer_);
-				this->size_ = 0;
-				this->buffer_ = nullptr;
+				if (this->buffer)
+				{
+					Memory::GetAllocator()->Free(this->buffer);
+				}
+
+				this->size = 0;
+				this->buffer = nullptr;
 			}
 
-			void allocate()
+			void Allocate()
 			{
-				if (this->buffer_) Memory::GetAllocator()->free(this->buffer_);
-				this->buffer_ = Memory::GetAllocator()->allocateArray<char>(this->size_ + 1);
+				if (this->buffer)
+				{
+					Memory::GetAllocator()->Free(this->buffer);
+				}
+
+				this->buffer = Memory::GetAllocator()->AllocateArray<char>(this->size + 1);
 			}
 
-			void doubleSize()
+			void DoubleSize()
 			{
-				this->size_ *= 2;
-				this->allocate();
+				this->size *= 2;
+				this->Allocate();
 			}
 
-			std::size_t size_;
-			char* buffer_;
+			std::size_t size;
+			char* buffer;
 		};
 
-		std::size_t currentBuffer_;
-		Entry stringPool_[Buffers];
+		std::size_t currentBuffer;
+		Entry stringPool[Buffers];
 	};
 
-	template <typename Arg> // This should display a nice "nullptr" instead of a number
+	template <typename Arg>
 	static void SanitizeFormatArgs(Arg& arg)
 	{
 		if constexpr (std::is_same_v<Arg, char*> || std::is_same_v<Arg, const char*>)
@@ -84,71 +104,43 @@ namespace Utils::String
 		}
 	}
 
-	[[nodiscard]] const char* VA(const char* fmt, ...);
+	[[nodiscard]] const char* VA(const char* format, ...);
 
 	template <typename... Args>
-	[[nodiscard]] const char* Format(std::string_view fmt, Args&&... args)
+	[[nodiscard]] const char* Format(std::string_view format, Args&&... args)
 	{
-		static thread_local std::string vaBuffer;
+		static thread_local std::string buffer;
 		(SanitizeFormatArgs(args), ...);
-		std::vformat(fmt, std::make_format_args(args...)).swap(vaBuffer);
-		return vaBuffer.data();
+		std::vformat(format, std::make_format_args(args...)).swap(buffer);
+
+		return buffer.data();
 	}
 
 	[[nodiscard]] std::string ToLower(const std::string& text);
 	[[nodiscard]] std::string ToUpper(const std::string& text);
 
-	template <class OutputIter>
-	[[nodiscard]] OutputIter ApplyToLower(OutputIter container)
-	{
-		OutputIter result;
-		std::ranges::transform(container, std::back_inserter(result), [](const std::string& s) -> std::string
-		{
-			return ToLower(s);
-		});
-
-		return result;
-	}
-
-	template <class OutputIter>
-	[[nodiscard]] OutputIter ApplyToUpper(OutputIter container)
-	{
-		OutputIter result;
-		std::ranges::transform(container, std::back_inserter(result), [](const std::string& s) -> std::string
-		{
-			return ToUpper(s);
-		});
-
-		return result;
-	}
-
 	[[nodiscard]] bool Compare(const std::string& lhs, const std::string& rhs);
 
-	[[nodiscard]] std::vector<std::string> Split(const std::string& str, char delim);
-	void Replace(std::string& str, const std::string& from, const std::string& to);
+	[[nodiscard]] std::vector<std::string> Split(const std::string& text, char delimiter);
+	void Replace(std::string& text, const std::string& from, const std::string& to);
 
 	[[nodiscard]] bool StartsWith(const std::string& haystack, const std::string& needle);
 	[[nodiscard]] bool EndsWith(const std::string& haystack, const std::string& needle);
 	[[nodiscard]] bool Contains(const std::string& haystack, const std::string& needle);
 
-	[[nodiscard]] bool IsNumber(const std::string& str);
+	[[nodiscard]] bool IsNumber(const std::string& text);
 
-	std::string& LTrim(std::string& str);
-	std::string& RTrim(std::string& str);
-	void Trim(std::string& str);
+	std::string& LTrim(std::string& text);
+	std::string& RTrim(std::string& text);
+	void Trim(std::string& text);
 
-	[[nodiscard]] std::string Convert(const std::wstring& wstr);
-	[[nodiscard]] std::wstring Convert(const std::string& str);
+	[[nodiscard]] std::string Convert(const std::wstring& text);
+	[[nodiscard]] std::wstring Convert(const std::string& text);
 
 	[[nodiscard]] std::string FormatTimeSpan(int milliseconds);
 	[[nodiscard]] std::string FormatBandwidth(std::size_t bytes, int milliseconds);
 
 	[[nodiscard]] std::string DumpHex(const std::string& data, const std::string& separator = " ");
 
-	[[nodiscard]] std::string XOR(std::string str, char value);
-
-	[[nodiscard]] std::string EncodeBase64(const char* input, unsigned long inputSize);
-	[[nodiscard]] std::string EncodeBase64(const std::string& input);
-
-	[[nodiscard]] std::string EncodeBase128(const std::string& input);
+	[[nodiscard]] std::string XOR(std::string text, char value);
 }

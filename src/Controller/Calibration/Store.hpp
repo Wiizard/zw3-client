@@ -1,34 +1,25 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Context.hpp"
-#include "Profile.hpp"
+#include "Controller/Context.hpp"
+#include "Controller/Calibration/Profile.hpp"
 
-namespace Controller
+namespace Controller::Calibration
 {
-  namespace calibration
-  {
-    class store
-    {
-    public:
-      store (const context&, std::filesystem::path directory);
+	class Store
+	{
+	public:
+		Store(const Context& context, std::filesystem::path directory);
 
-      std::optional<profile>
-      load (Controller::family, std::optional<uint64_t> device_key) const;
+		std::optional<Profile> TryLoad(Controller::Family family, std::optional<std::uint64_t> deviceKey) const;
 
-      bool
-      save (const profile&) const;
+	private:
+		std::filesystem::path FileFor(Controller::Family family, std::optional<std::uint64_t> deviceKey) const;
 
-      const std::filesystem::path&
-      directory () const noexcept {return dir_;}
+		std::optional<Profile> Reject(const char* why) const;
 
-    private:
-      std::filesystem::path
-      file_for (Controller::family, std::optional<uint64_t> device_key) const;
-
-      const context& ctx_;
-      std::filesystem::path dir_;
-    };
-  }
+		const Context& context;
+		std::filesystem::path directory;
+	};
 }

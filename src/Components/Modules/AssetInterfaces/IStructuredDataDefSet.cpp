@@ -1,144 +1,169 @@
+#include "STDInclude.hpp"
+
 #include "IStructuredDataDefSet.hpp"
 
 namespace Assets
 {
-	void IStructuredDataDefSet::saveStructuredDataEnumArray(Game::StructuredDataEnum* enums, int numEnums, Components::ZoneBuilder::Zone* builder)
+	void IStructuredDataDefSet::SaveStructuredDataEnumArray(const Game::StructuredDataEnum* enums, int numEnums, Components::ZoneBuilder::Zone* builder)
 	{
-		Utils::Stream* buffer = builder->getBuffer();
-
-		Game::StructuredDataEnum* destEnums = buffer->dest<Game::StructuredDataEnum>();
-		buffer->saveArray(enums, numEnums);
+		auto* const buffer = builder->GetBuffer();
+		auto* const destEnums = buffer->Dest<Game::X86::StructuredDataEnum>();
 
 		for (int i = 0; i < numEnums; ++i)
 		{
-			Game::StructuredDataEnum* destEnum = &destEnums[i];
-			Game::StructuredDataEnum* enum_ = &enums[i];
+			const auto record = Game::X86::Convert(enums[i]);
+			buffer->Save(&record);
+		}
 
-			if (enum_->entries)
+		for (int i = 0; i < numEnums; ++i)
+		{
+			auto* const destEnum = &destEnums[i];
+			const auto* const enumDef = &enums[i];
+
+			if (!enumDef->entries)
 			{
-				AssertSize(Game::StructuredDataEnumEntry, 8);
-				buffer->align(Utils::Stream::ALIGN_4);
-
-				Game::StructuredDataEnumEntry* destIndices = buffer->dest<Game::StructuredDataEnumEntry>();
-				buffer->saveArray(enum_->entries, enum_->entryCount);
-
-				for (int j = 0; j < enum_->entryCount; ++j)
-				{
-					Game::StructuredDataEnumEntry* destIndex = &destIndices[j];
-					Game::StructuredDataEnumEntry* index = &enum_->entries[j];
-
-					if (index->string)
-					{
-						buffer->saveString(index->string);
-						Utils::Stream::ClearPointer(&destIndex->string);
-					}
-				}
-
-				Utils::Stream::ClearPointer(&destEnum->entries);
+				continue;
 			}
+
+			buffer->Align(Utils::Stream::ALIGN_4);
+
+			auto* const destEntries = buffer->Dest<Game::X86::StructuredDataEnumEntry>();
+
+			for (int j = 0; j < enumDef->entryCount; ++j)
+			{
+				const auto record = Game::X86::Convert(enumDef->entries[j]);
+				buffer->Save(&record);
+			}
+
+			for (int j = 0; j < enumDef->entryCount; ++j)
+			{
+				if (enumDef->entries[j].string)
+				{
+					buffer->SaveString(enumDef->entries[j].string);
+					Utils::Stream::ClearPointer(&destEntries[j].string);
+				}
+			}
+
+			Utils::Stream::ClearPointer(&destEnum->entries);
 		}
 	}
 
-	void IStructuredDataDefSet::saveStructuredDataStructArray(Game::StructuredDataStruct* structs, int numStructs, Components::ZoneBuilder::Zone* builder)
+	void IStructuredDataDefSet::SaveStructuredDataStructArray(const Game::StructuredDataStruct* structs, int numStructs, Components::ZoneBuilder::Zone* builder)
 	{
-		Utils::Stream* buffer = builder->getBuffer();
-
-		Game::StructuredDataStruct* destStructs = buffer->dest<Game::StructuredDataStruct>();
-		buffer->saveArray(structs, numStructs);
+		auto* const buffer = builder->GetBuffer();
+		auto* const destStructs = buffer->Dest<Game::X86::StructuredDataStruct>();
 
 		for (int i = 0; i < numStructs; ++i)
 		{
-			Game::StructuredDataStruct* destStruct = &destStructs[i];
-			Game::StructuredDataStruct* struct_ = &structs[i];
+			const auto record = Game::X86::Convert(structs[i]);
+			buffer->Save(&record);
+		}
 
-			if (struct_->properties)
+		for (int i = 0; i < numStructs; ++i)
+		{
+			auto* const destStruct = &destStructs[i];
+			const auto* const structDef = &structs[i];
+
+			if (!structDef->properties)
 			{
-				AssertSize(Game::StructuredDataStructProperty, 16);
-				buffer->align(Utils::Stream::ALIGN_4);
-
-				Game::StructuredDataStructProperty* destProperties = buffer->dest<Game::StructuredDataStructProperty>();
-				buffer->saveArray(struct_->properties, struct_->propertyCount);
-
-				for (int j = 0; j < struct_->propertyCount; ++j)
-				{
-					Game::StructuredDataStructProperty* destProperty = &destProperties[j];
-					Game::StructuredDataStructProperty* property = &struct_->properties[j];
-
-					if (property->name)
-					{
-						buffer->saveString(property->name);
-						Utils::Stream::ClearPointer(&destProperty->name);
-					}
-				}
-
-				Utils::Stream::ClearPointer(&destStruct->properties);
+				continue;
 			}
+
+			buffer->Align(Utils::Stream::ALIGN_4);
+
+			auto* const destProperties = buffer->Dest<Game::X86::StructuredDataStructProperty>();
+
+			for (int j = 0; j < structDef->propertyCount; ++j)
+			{
+				const auto record = Game::X86::Convert(structDef->properties[j]);
+				buffer->Save(&record);
+			}
+
+			for (int j = 0; j < structDef->propertyCount; ++j)
+			{
+				if (structDef->properties[j].name)
+				{
+					buffer->SaveString(structDef->properties[j].name);
+					Utils::Stream::ClearPointer(&destProperties[j].name);
+				}
+			}
+
+			Utils::Stream::ClearPointer(&destStruct->properties);
 		}
 	}
 
-	void IStructuredDataDefSet::save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
+	void IStructuredDataDefSet::Save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
 	{
-		AssertSize(Game::StructuredDataDefSet, 12);
+		auto* const buffer = builder->GetBuffer();
+		const auto* const asset = header.structuredDataDefSet;
+		auto* const dest = buffer->Dest<Game::X86::StructuredDataDefSet>();
+		const auto record = Game::X86::Convert(*asset);
+		buffer->Save(&record);
 
-		Utils::Stream* buffer = builder->getBuffer();
-		Game::StructuredDataDefSet* asset = header.structuredDataDefSet;
-		Game::StructuredDataDefSet* dest = buffer->dest<Game::StructuredDataDefSet>();
-		buffer->save(asset);
-
-		buffer->pushBlock(Game::XFILE_BLOCK_VIRTUAL);
+		buffer->PushBlock(Game::XFILE_BLOCK_VIRTUAL);
 
 		if (asset->name)
 		{
-			buffer->saveString(builder->getAssetName(this->getType(), asset->name));
+			buffer->SaveString(builder->GetAssetName(this->GetType(), asset->name));
 			Utils::Stream::ClearPointer(&dest->name);
 		}
 
 		if (asset->defs)
 		{
-			AssertSize(Game::StructuredDataDef, 52);
-			buffer->align(Utils::Stream::ALIGN_4);
+			buffer->Align(Utils::Stream::ALIGN_4);
 
-			Game::StructuredDataDef* destDataArray = buffer->dest<Game::StructuredDataDef>();
-			buffer->saveArray(asset->defs, asset->defCount);
+			auto* const destDataArray = buffer->Dest<Game::X86::StructuredDataDef>();
 
 			for (unsigned int i = 0; i < asset->defCount; ++i)
 			{
-				Game::StructuredDataDef* destData = &destDataArray[i];
-				Game::StructuredDataDef* data = &asset->defs[i];
+				const auto defRecord = Game::X86::Convert(asset->defs[i]);
+				buffer->Save(&defRecord);
+			}
+
+			for (unsigned int i = 0; i < asset->defCount; ++i)
+			{
+				auto* const destData = &destDataArray[i];
+				const auto* const data = &asset->defs[i];
 
 				if (data->enums)
 				{
-					AssertSize(Game::StructuredDataEnum, 12);
-					buffer->align(Utils::Stream::ALIGN_4);
+					buffer->Align(Utils::Stream::ALIGN_4);
 
-					this->saveStructuredDataEnumArray(data->enums, data->enumCount, builder);
+					SaveStructuredDataEnumArray(data->enums, data->enumCount, builder);
 					Utils::Stream::ClearPointer(&destData->enums);
 				}
 
 				if (data->structs)
 				{
-					AssertSize(Game::StructuredDataStruct, 16);
-					buffer->align(Utils::Stream::ALIGN_4);
+					buffer->Align(Utils::Stream::ALIGN_4);
 
-					this->saveStructuredDataStructArray(data->structs, data->structCount, builder);
+					SaveStructuredDataStructArray(data->structs, data->structCount, builder);
 					Utils::Stream::ClearPointer(&destData->structs);
 				}
 
 				if (data->indexedArrays)
 				{
-					AssertSize(Game::StructuredDataIndexedArray, 16);
-					buffer->align(Utils::Stream::ALIGN_4);
+					buffer->Align(Utils::Stream::ALIGN_4);
 
-					buffer->saveArray(data->indexedArrays, data->indexedArrayCount);
+					for (int j = 0; j < data->indexedArrayCount; ++j)
+					{
+						const auto arrayRecord = Game::X86::Convert(data->indexedArrays[j]);
+						buffer->Save(&arrayRecord);
+					}
+
 					Utils::Stream::ClearPointer(&destData->indexedArrays);
 				}
 
 				if (data->enumedArrays)
 				{
-					AssertSize(Game::StructuredDataEnumedArray, 16);
-					buffer->align(Utils::Stream::ALIGN_4);
+					buffer->Align(Utils::Stream::ALIGN_4);
 
-					buffer->saveArray(data->enumedArrays, data->enumedArrayCount);
+					for (int j = 0; j < data->enumedArrayCount; ++j)
+					{
+						const auto arrayRecord = Game::X86::Convert(data->enumedArrays[j]);
+						buffer->Save(&arrayRecord);
+					}
+
 					Utils::Stream::ClearPointer(&destData->enumedArrays);
 				}
 			}
@@ -146,6 +171,6 @@ namespace Assets
 			Utils::Stream::ClearPointer(&dest->defs);
 		}
 
-		buffer->popBlock();
+		buffer->PopBlock();
 	}
 }

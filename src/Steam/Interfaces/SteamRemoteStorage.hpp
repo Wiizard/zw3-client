@@ -5,12 +5,18 @@ namespace Steam
 	class RemoteStorage
 	{
 	public:
-		virtual bool FileWrite(const char *pchFile, const void *pvData, int cubData);
-		virtual int GetFileSize(const char *pchFile);
-		virtual int FileRead(const char *pchFile, void *pvData, int cubDataToRead);
-		virtual bool FileExists(const char *pchFile);
-		virtual int GetFileCount();
-		virtual const char *GetFileNameAndSize(int iFile, int *pnFileSizeInBytes);
-		virtual bool GetQuota(int *pnTotalBytes, int *puAvailableBytes);
+		static Interface* Get();
+
+	private:
+		static void* const vtable[];
+		static Interface object;
+
+		static bool FileWrite(Interface* self, const char* file, const void* data, int size);
+		static int FileRead(Interface* self, const char* file, void* data, int size);
+		static bool FileExists(Interface* self, const char* file);
+		static int GetFileSize(Interface* self, const char* file);
+		static int GetFileCount(Interface* self);
+		static const char* GetFileNameAndSize(Interface* self, int file, int* size);
+		static bool GetQuota(Interface* self, int* totalBytes, int* availableBytes);
 	};
 }

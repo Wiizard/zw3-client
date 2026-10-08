@@ -1,9 +1,5 @@
 #pragma once
 
-#define CHUNK 16384
-#define DEFLATE_ZLIB false
-#define DEFLATE_ZSTD true
-
 namespace Utils::Compression
 {
 	class ZLib

@@ -1,7 +1,7 @@
 #pragma once
 
-#include <Game/Functions.hpp>
-#include <Utils/WebIO.hpp>
+#include "Dvar.hpp"
+#include "Network.hpp"
 
 struct mg_connection;
 struct mg_http_message;
@@ -12,45 +12,42 @@ namespace Components
 	{
 	public:
 		Download();
-		~Download();
-
-		void preDestroy() override;
 
 		static void InitiateClientDownload(const std::string& mod, bool needPassword, bool map = false, bool downloadOnly = false);
 		static void InitiateMapDownload(const std::string& map, bool needPassword);
 
-		static void ReplyError(mg_connection* connection, int code, std::string messageOverride = {});
+		static void ReplyError(mg_connection* connection, int code, const std::string& messageOverride = {});
 
-		static Dvar::Var SV_wwwDownload;
-		static Dvar::Var SV_wwwBaseUrl;
+		static Dvar::Var sv_wwwDownload;
+		static Dvar::Var sv_wwwBaseUrl;
 
-		static Dvar::Var UIDlTimeLeft;
-		static Dvar::Var UIDlProgress;
-		static Dvar::Var UIDlTransRate;
+		static Dvar::Var ui_dl_timeLeft;
+		static Dvar::Var ui_dl_progress;
+		static Dvar::Var ui_dl_transRate;
 
 	private:
 		class ClientDownload
 		{
 		public:
-			ClientDownload(bool isMap = false, bool downloadOnly = false) : running_(false), valid_(false), terminateThread_(false), isMap_(isMap), downloadOnly_(downloadOnly), totalBytes_(0), downBytes_(0), lastTimeStamp_(0), timeStampBytes_(0) {}
-			~ClientDownload() { this->clear(); }
+			ClientDownload(bool isMap = false, bool isDownloadOnly = false) : isRunning(false), isValid(false), shouldTerminate(false), isDownloadOnly(isDownloadOnly), isMap(isMap), isPrivate(false), totalBytes(0), downBytes(0), lastTimeStamp(0), timeStampBytes(0) {}
+			~ClientDownload() { this->Clear(); }
 
-			bool running_;
-			bool valid_;
-			bool terminateThread_;
-			bool downloadOnly_;
-			bool isMap_;
-			bool isPrivate_;
-			Network::Address target_;
-			std::string hashedPassword_;
-			std::string mod_;
-			std::thread thread_;
+			bool isRunning;
+			bool isValid;
+			bool shouldTerminate;
+			bool isDownloadOnly;
+			bool isMap;
+			bool isPrivate;
+			Network::Address target;
+			std::string hashedPassword;
+			std::string mod;
+			std::jthread thread;
 
-			std::size_t totalBytes_;
-			std::size_t downBytes_;
+			std::size_t totalBytes;
+			std::size_t downBytes;
 
-			int lastTimeStamp_;
-			std::size_t timeStampBytes_;
+			int lastTimeStamp;
+			std::size_t timeStampBytes;
 
 			class File
 			{
@@ -60,30 +57,25 @@ namespace Components
 				std::size_t size;
 				bool isMap;
 
-				bool allowed() const;
+				[[nodiscard]] bool IsAllowed() const;
 			};
 
-			std::vector<File> files_;
+			std::vector<File> files;
 
-			void clear()
+			void Clear()
 			{
-				this->terminateThread_ = true;
+				this->shouldTerminate = true;
 
-				if (this->thread_.joinable())
+				if (this->thread.joinable())
 				{
-					this->thread_.join();
+					this->thread.join();
 				}
 
-				this->running_ = false;
-				this->mod_.clear();
-				this->files_.clear();
-
-				if (this->valid_)
-				{
-					this->valid_ = false;
-				}
+				this->isRunning = false;
+				this->mod.clear();
+				this->files.clear();
+				this->isValid = false;
 			}
-
 		};
 
 		class FileDownload
@@ -93,7 +85,7 @@ namespace Components
 			ClientDownload::File file;
 
 			int timestamp;
-			bool downloading;
+			bool isDownloading;
 			unsigned int index;
 			std::string buffer;
 			std::size_t receivedBytes;
@@ -102,234 +94,81 @@ namespace Components
 		class ScriptDownload
 		{
 		public:
-			ScriptDownload(const std::string& _url, unsigned int _object) : url(_url), object(_object), webIO(nullptr), done(false), notifyRequired(false), totalSize(0), currentSize(0)
-			{
-				Game::AddRefToObject(this->getObject());
-			}
+			ScriptDownload(const std::string& url, unsigned int object);
+			~ScriptDownload();
 
-			ScriptDownload(ScriptDownload&& other) noexcept = delete;
-			ScriptDownload& operator=(ScriptDownload&& other) noexcept = delete;
+			ScriptDownload(const ScriptDownload&) = delete;
+			ScriptDownload& operator=(const ScriptDownload&) = delete;
 
-			~ScriptDownload()
-			{
-				if (this->getObject())
-				{
-					Game::RemoveRefToObject(this->getObject());
-					this->object = 0;
-				}
-
-				if (this->workerThread.joinable())
-				{
-					this->workerThread.join();
-				}
-
-				this->destroyWebIO();
-			}
-
-			void startWorking()
-			{
-				if (!this->isWorking())
-				{
-					this->workerThread = std::thread(std::bind(&ScriptDownload::handler, this));
-				}
-			}
-
-			bool isWorking()
-			{
-				return this->workerThread.joinable();
-			}
-
-			void notifyProgress()
-			{
-				if (this->notifyRequired)
-				{
-					this->notifyRequired = false;
-
-					if (Game::Scr_IsSystemActive())
-					{
-						Game::Scr_AddInt(static_cast<int>(this->totalSize));
-						Game::Scr_AddInt(static_cast<int>(this->currentSize));
-						Game::Scr_NotifyId(this->getObject(), static_cast<unsigned short>(Game::SL_GetString("progress", 0)), 2);
-					}
-				}
-			}
-
-			void updateProgress(size_t _currentSize, size_t _toalSize)
-			{
-				this->currentSize = _currentSize;
-				this->totalSize = _toalSize;
-				this->notifyRequired = true;
-			}
-
-			void notifyDone()
-			{
-				if (!this->isDone()) return;
-
-				if (Game::Scr_IsSystemActive())
-				{
-					Game::Scr_AddString(this->result.data()); // No binary data supported yet
-					Game::Scr_AddInt(this->success);
-					Game::Scr_NotifyId(this->getObject(), static_cast<unsigned short>(Game::SL_GetString("done", 0)), 2);
-				}
-			}
-
-			bool isDone() { return this->done; };
-
-			std::string getUrl() { return this->url; }
-			unsigned int getObject() { return this->object; }
-
-			void cancel()
-			{
-				if (this->webIO)
-				{
-					this->webIO->cancelDownload();
-				}
-			}
+			void StartWorking();
+			[[nodiscard]] bool IsWorking() const;
+			[[nodiscard]] bool IsDone() const;
+			void NotifyProgress();
+			void NotifyDone() const;
+			void Orphan();
 
 		private:
 			std::string url;
 			std::string result;
 			unsigned int object;
 			std::thread workerThread;
-			Utils::WebIO* webIO;
 
-			bool done;
-			bool success;
-			bool notifyRequired;
-			size_t totalSize;
-			size_t currentSize;
+			std::atomic<bool> isDone;
+			bool isSuccessful;
+			std::atomic<bool> isProgressPending;
+			std::atomic<std::size_t> totalSize;
+			std::atomic<std::size_t> currentSize;
 
-			void handler()
-			{
-				this->destroyWebIO();
-
-				this->webIO = new Utils::WebIO("zw3");
-				this->webIO->setProgressCallback(std::bind(&ScriptDownload::updateProgress, this, std::placeholders::_1, std::placeholders::_2));
-
-				this->result = this->webIO->get(this->url, &this->success);
-
-				this->destroyWebIO();
-				this->done = true;
-			}
-
-			void destroyWebIO()
-			{
-				if (this->webIO)
-				{
-					delete this->webIO;
-					this->webIO = nullptr;
-				}
-			}
+			void Handler();
 		};
 
 		class ScriptPost
 		{
 		public:
-			ScriptPost(const std::string& _url, const std::string& _postData, unsigned int _object)
-				: url(_url), postData(_postData), object(_object), webIO(nullptr), done(false), success(false)
-			{
-				Game::AddRefToObject(this->object);
-			}
+			ScriptPost(const std::string& url, const std::string& body, unsigned int object);
+			~ScriptPost();
 
-			~ScriptPost()
-			{
-				if (this->object)
-				{
-					Game::RemoveRefToObject(this->object);
-					this->object = 0;
-				}
+			ScriptPost(const ScriptPost&) = delete;
+			ScriptPost& operator=(const ScriptPost&) = delete;
 
-				if (this->workerThread.joinable())
-				{
-					this->workerThread.join();
-				}
-
-				this->destroyWebIO();
-			}
-
-			void startWorking()
-			{
-				if (!this->isWorking())
-				{
-					this->workerThread = std::thread(&ScriptPost::handler, this);
-				}
-			}
-
-			bool isWorking()
-			{
-				return this->workerThread.joinable();
-			}
-
-			void notifyProgress() {}
-
-			void notifyDone()
-			{
-				if (!this->done || !Game::Scr_IsSystemActive())
-					return;
-
-				Game::Scr_AddString(this->result.data());
-				Game::Scr_AddInt(this->success);
-				Game::Scr_NotifyId(this->object, static_cast<unsigned short>(Game::SL_GetString("done", 0)), 2);
-			}
-
-			bool isDone() { return this->done; }
+			void StartWorking();
+			[[nodiscard]] bool IsWorking() const;
+			[[nodiscard]] bool IsDone() const;
+			void NotifyDone() const;
+			void Orphan();
 
 		private:
 			std::string url;
-			std::string postData;
+			std::string body;
 			std::string result;
 			unsigned int object;
 			std::thread workerThread;
-			Utils::WebIO* webIO;
 
-			bool done;
-			bool success;
+			std::atomic<bool> isDone;
+			bool isSuccessful;
 
-			void handler()
-			{
-				this->destroyWebIO();
-
-				this->webIO = new Utils::WebIO("zw3");
-
-				this->result = this->webIO->post(this->url, this->postData, &this->success);
-
-				this->destroyWebIO();
-				this->done = true;
-			}
-
-			void destroyWebIO()
-			{
-				if (this->webIO)
-				{
-					delete this->webIO;
-					this->webIO = nullptr;
-				}
-			}
+			void Handler();
 		};
 
-		static ClientDownload CLDownload;
-		static std::vector<std::shared_ptr<ScriptDownload>> ScriptDownloads;
-		static std::vector<std::shared_ptr<ScriptPost>> ScriptPosts;
-		static std::thread ServerThread;
-		static volatile bool Terminate;
-		static bool ServerRunning;
+		static ClientDownload clientDownload;
+		static std::vector<std::unique_ptr<ScriptDownload>> scriptDownloads;
+		static std::vector<std::unique_ptr<ScriptPost>> scriptPosts;
 
-		static std::string MongooseLogBuffer;
-
-		static void DownloadProgress(FileDownload* fDownload, std::size_t bytes);
+		static void DownloadProgress(FileDownload* fileDownload, std::size_t bytes);
 
 		static void ModDownloader(ClientDownload* download);
 		static bool ParseModList(ClientDownload* download, const std::string& list);
 		static bool DownloadFile(ClientDownload* download, unsigned int index);
 
-		static void LogFn(char c, void* param);
+		static std::jthread serverThread;
+
 		static void Reply(mg_connection* connection, const std::string& contentType, const std::string& data);
 
-		static std::optional<std::string> FileHandler(mg_connection* c, const mg_http_message* hm);
-		static void EventHandler(mg_connection* c, const int ev, void* ev_data, void* fn_data);
-		static std::optional<std::string> ListHandler(mg_connection* c, const mg_http_message* hm);
-		static std::optional<std::string> InfoHandler(mg_connection* c, const mg_http_message* hm);
-		static std::optional<std::string> ServerListHandler(mg_connection* c, const mg_http_message* hm);
-		static std::optional<std::string> MapHandler(mg_connection* c, const mg_http_message* hm);
+		static std::optional<std::string> FileHandler(mg_connection* connection, const mg_http_message* message);
+		static std::optional<std::string> InfoHandler(mg_connection* connection, const mg_http_message* message);
+		static std::optional<std::string> ListHandler(mg_connection* connection, const mg_http_message* message);
+		static std::optional<std::string> MapHandler(mg_connection* connection, const mg_http_message* message);
+		static std::optional<std::string> ServerListHandler(mg_connection* connection, const mg_http_message* message);
+		static void EventHandler(mg_connection* connection, int event, void* eventData, void* userData);
 	};
 }

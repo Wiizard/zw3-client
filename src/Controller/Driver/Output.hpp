@@ -1,72 +1,60 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Haptic/Effect.hpp"
-#include "../Sample/Trigger.hpp"
+#include "Controller/Haptic/Effect.hpp"
+#include "Controller/Sample/Trigger.hpp"
 
-namespace Controller
+namespace Controller::Driver
 {
-  namespace driver
-  {
-    enum class haptic_mode : uint8_t
-    {
-      waveform,
-      emulated,
-    };
+	enum class HapticMode : std::uint8_t
+	{
+		Waveform,
+		Emulated,
+	};
 
-    struct rumble_request
-    {
-      float low_frequency {0.0f};
-      float high_frequency {0.0f};
-    };
+	struct RumbleRequest
+	{
+		float lowFrequency = 0.0f;
+		float highFrequency = 0.0f;
+	};
 
-    struct output_policy
-    {
-      bool rumble {true};
-      haptic_mode haptics {haptic_mode::waveform};
-      unsigned output_interval {4};
-    };
+	struct OutputPolicy
+	{
+		bool isRumbleEnabled = true;
+		HapticMode hapticMode = HapticMode::Waveform;
+		unsigned int outputIntervalMs = 4;
+	};
 
-    struct light_bar_request
-    {
-      uint8_t red {0};
-      uint8_t green {0};
-      uint8_t blue {0};
-    };
+	struct LightBarRequest
+	{
+		std::uint8_t red = 0;
+		std::uint8_t green = 0;
+		std::uint8_t blue = 0;
+	};
 
-    struct player_led_request
-    {
-      uint8_t mask {0};
-    };
+	enum class TriggerEffect : std::uint8_t
+	{
+		Off,
+		Feedback,
+		Weapon,
+	};
 
-    enum class trigger_effect : uint8_t
-    {
-      off,
-      feedback,
-      weapon,
-    };
+	inline constexpr std::size_t triggerZoneCount = 10;
 
-    constexpr size_t trigger_zone_count {10};
+	using TriggerProfile = std::array<std::uint8_t, triggerZoneCount>;
 
-    using trigger_profile = std::array<uint8_t, trigger_zone_count>;
+	struct AdaptiveTriggerRequest
+	{
+		TriggerSide side = TriggerSide::Left;
+		TriggerEffect effect = TriggerEffect::Off;
 
-    struct adaptive_trigger_request
-    {
-      trigger_side side {trigger_side::left};
-      trigger_effect effect {trigger_effect::off};
+		TriggerProfile zones{};
 
-      trigger_profile zones {};
+		std::uint8_t startPosition = 0;
+		std::uint8_t endPosition = 0;
+		std::uint8_t strength = 0;
+	};
 
-      uint8_t start_position {0};
-      uint8_t end_position {0};
-      uint8_t strength {0};
-    };
-
-    using output_request = std::variant<rumble_request,
-                                       haptic::effect,
-                                       light_bar_request,
-                                       player_led_request,
-                                       adaptive_trigger_request>;
-  }
+	using OutputRequest = std::variant<RumbleRequest, Haptic::Effect, LightBarRequest, AdaptiveTriggerRequest>;
 }

@@ -7,14 +7,10 @@ namespace Components
 	public:
 		Singleton();
 
-		void preDestroy() override;
-
 		static bool IsFirstInstance();
-		static bool InitializeMutex();
 
 	private:
-		static HANDLE Mutex;
-		static bool FirstInstance;
-		static bool MutexInitialized;
+		static HANDLE mutex;
+		static bool isFirstInstance;
 	};
 }

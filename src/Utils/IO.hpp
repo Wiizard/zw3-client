@@ -8,8 +8,9 @@ namespace Utils::IO
 	[[nodiscard]] std::string ReadFile(const std::string& file);
 	bool RemoveFile(const std::string& file);
 	[[nodiscard]] std::size_t FileSize(const std::string& file);
-	bool CreateDir(const std::string& dir);
+	bool CreateDir(const std::string& directory);
 	[[nodiscard]] bool DirectoryExists(const std::filesystem::path& directory);
 	[[nodiscard]] bool DirectoryIsEmpty(const std::filesystem::path& directory);
-	[[nodiscard]] std::vector<std::filesystem::directory_entry> ListFiles(const std::filesystem::path& directory, bool recursive = false);
+	[[nodiscard]] std::vector<std::filesystem::directory_entry> ListFiles(
+		const std::filesystem::path& directory, bool recursive = false);
 }

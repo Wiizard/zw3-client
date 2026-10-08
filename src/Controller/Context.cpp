@@ -1,28 +1,16 @@
-#include "Context.hpp"
+#include "STDInclude.hpp"
 
-#include "Types.hpp"
+#include "Controller/Context.hpp"
 
 namespace Controller
 {
-  void
-  context::
-  report (severity level,
-          facility origin,
-          errc code,
-          device_id device,
-          std::string message) const
-  {
-    Controller::report (diagnostics_, level, origin, code, device,
-                        std::move (message));
-  }
+	void Context::Report(Severity level, Facility origin, ErrorCode code, DeviceId device, std::string message) const
+	{
+		this->sink.Consume(Diagnostic{ level, origin, code, device, std::move(message) });
+	}
 
-  void
-  context::
-  report (severity level,
-          facility origin,
-          errc code,
-          std::string message) const
-  {
-    Controller::report (diagnostics_, level, origin, code, std::move (message));
-  }
+	void Context::Report(Severity level, Facility origin, ErrorCode code, std::string message) const
+	{
+		this->sink.Consume(Diagnostic{ level, origin, code, noDevice, std::move(message) });
+	}
 }

@@ -1,4 +1,8 @@
-#include <udis86.h>
+#include "STDInclude.hpp"
+
+#include "Steam/Proxy.hpp"
+#include "Components/Modules/Dedicated.hpp"
+#include "Components/Modules/Logger.hpp"
 
 namespace Steam
 {
@@ -6,551 +10,339 @@ namespace Steam
 	::Utils::Library Proxy::Overlay;
 
 	ISteamClient008* Proxy::SteamClient = nullptr;
-	IClientEngine* Proxy::ClientEngine = nullptr;
-	Interface Proxy::ClientUser;
-	Interface Proxy::ClientFriends;
 
-	Interface Proxy::Placeholder;
-
-	Proxy::Handle Proxy::SteamPipe = nullptr;
-	Proxy::Handle Proxy::SteamUser = nullptr;
+	std::int32_t Proxy::SteamPipe = 0;
+	std::int32_t Proxy::SteamUser = 0;
 
 	Friends15* Proxy::SteamFriends = nullptr;
 	Apps7* Proxy::SteamApps = nullptr;
-	Utils* Proxy::SteamUtils = nullptr;
-	User* Proxy::SteamUser_ = nullptr;
+	Utils5* Proxy::SteamUtils = nullptr;
+	User12* Proxy::SteamUser_ = nullptr;
 
 	HANDLE Proxy::Process = nullptr;
 	HANDLE Proxy::CancelHandle = nullptr;
-	std::thread Proxy::WatchGuard;
+	std::jthread Proxy::WatchGuard;
 
-	uint32_t Proxy::AppId = 0;
+	std::uint32_t Proxy::AppId = 0;
 
 	std::recursive_mutex Proxy::CallMutex;
 	std::vector<Proxy::CallContainer> Proxy::Calls;
-	std::unordered_map<int32_t, void*> Proxy::Callbacks;
+	std::unordered_map<std::int32_t, Proxy::Callback> Proxy::Callbacks;
 
-	std::function<Proxy::SteamBGetCallbackFn> Proxy::SteamBGetCallback;
-	std::function<Proxy::SteamFreeLastCallbackFn> Proxy::SteamFreeLastCallback;
-	std::function<Proxy::SteamGetAPICallResultFn> Proxy::SteamGetAPICallResult;
+	Proxy::SteamBGetCallbackFn* Proxy::SteamBGetCallback = nullptr;
+	Proxy::SteamFreeLastCallbackFn* Proxy::SteamFreeLastCallback = nullptr;
+	Proxy::SteamGetAPICallResultFn* Proxy::SteamGetAPICallResult = nullptr;
 
-	std::pair<void*, uint16_t> Interface::getMethod(const std::string& method)
+	void Proxy::SetGame(std::uint32_t appId)
 	{
-		if(this->methodCache.contains(method))
+		AppId = appId;
+
+		if (Components::Dedicated::IsEnabled())
 		{
-			return this->methodCache[method];
+			return;
 		}
 
-		auto methodData = this->lookupMethod(method);
-		this->methodCache[method] = methodData;
-		return methodData;
+		SetEnvironmentVariableA("SteamAppId", std::to_string(AppId).data());
+		SetEnvironmentVariableA("SteamGameId", std::to_string(AppId & 0xFFFFFF).data());
+
+		::Utils::IO::WriteFile("steam_appid.txt", std::to_string(AppId), false);
 	}
 
-	std::pair<void*, uint16_t> Interface::lookupMethod(const std::string& method)
+	void Proxy::RegisterCall(std::int32_t callId, std::uint32_t size, std::uint64_t call)
 	{
-		if (!::Utils::Memory::IsBadReadPtr(this->interfacePtr))
-		{
-			auto* vftbl = this->interfacePtr->vftbl;
+		std::lock_guard _(CallMutex);
 
-			while (!::Utils::Memory::IsBadReadPtr(vftbl) && !::Utils::Memory::IsBadCodePtr(vftbl->func))
-			{
-				std::string name;
-				uint16_t params;
+		CallContainer container;
+		container.call = call;
+		container.dataSize = size;
+		container.callId = callId;
+		container.handled = false;
 
-				if (this->getMethodData(*vftbl, &name, &params) && name == method)
-				{
-					return { vftbl->data, params };
-				}
-
-				++vftbl;
-			}
-		}
-
-		return { nullptr, static_cast<std::uint16_t>(0) };
-	}
-
-	bool Interface::getMethodData(VInterface::VMethod method, std::string* name, uint16_t* params)
-	{
-		name->clear();
-		*params = 0;
-		if (::Utils::Memory::IsBadCodePtr(method.data)) return false;
-
-		ud_t ud;
-		ud_init(&ud);
-		ud_set_mode(&ud, 32);
-		ud_set_pc(&ud, method.value);
-		ud_set_input_buffer(&ud, method.data, INT32_MAX);
-
-		while (true)
-		{
-			ud_disassemble(&ud);
-
-			if (ud_insn_mnemonic(&ud) == UD_Iret)
-			{
-				const ud_operand* operand = ud_insn_opr(&ud, 0);
-				if (!operand)
-				{
-					*params = 0;
-					return true;
-				}
-
-				if (operand->type == UD_OP_IMM && operand->size == 16)
-				{
-					*params = operand->lval.uword;
-					return true;
-				}
-
-				break;
-			}
-
-			if (ud_insn_mnemonic(&ud) == UD_Ipush && name->empty())
-			{
-				auto operand = ud_insn_opr(&ud, 0);
-				if (operand->type == UD_OP_IMM && operand->size == 32)
-				{
-					char* operandPtr = reinterpret_cast<char*>(operand->lval.udword);
-					if (!::Utils::Memory::IsBadReadPtr(operandPtr))
-					{
-						name->clear();
-						name->append(operandPtr);
-					}
-				}
-			}
-
-			if (*reinterpret_cast<unsigned char*>(ud.pc) == 0xCC) break;
-		}
-
-		return false;
-	}
-
-	void Proxy::SetGame(uint32_t appId)
-	{
-		Proxy::AppId = appId;
-		remove("steam_appid.txt");
-	}
-
-	void Proxy::RunGame()
-	{
-		if (Steam::Enabled() && !Components::Dedicated::IsEnabled())
-		{
-			SetEnvironmentVariableA("SteamAppId", ::Utils::String::VA("%lu", Proxy::AppId));
-			SetEnvironmentVariableA("SteamGameId", ::Utils::String::VA("%llu", Proxy::AppId & 0xFFFFFF));
-
-			::Utils::IO::WriteFile("steam_appid.txt", ::Utils::String::VA("%lu", Proxy::AppId), false);
-
-			Interface clientUtils(Proxy::ClientEngine->GetIClientUtils(Proxy::SteamPipe));
-			clientUtils.invoke<void>("SetAppIDForCurrentPipe", Proxy::AppId, false);
-		}
-	}
-
-	void Proxy::SetMod(const std::string& mod)
-	{
-		if (!Proxy::ClientUser || !Proxy::SteamApps || !Steam::Enabled() || Components::Dedicated::IsEnabled()) return;
-
-		if (!Proxy::SteamApps->BIsSubscribedApp(Proxy::AppId))
-		{
-			Proxy::AppId = 480; // Spacewar - Steam's demo app
-		}
-
-		GameID_t gameID;
-		gameID.type = 1; // k_EGameIDTypeGameMod
-		gameID.appID = Proxy::AppId & 0xFFFFFF;
-
-		const char* modId = "Call of Duty: Zombie Warfare 3";
-		gameID.modID = *reinterpret_cast<const unsigned int*>(modId) | 0x80000000;
-
-		Interface clientUtils(Proxy::ClientEngine->GetIClientUtils(Proxy::SteamPipe));
-		clientUtils.invoke<void>("SetAppIDForCurrentPipe", Proxy::AppId, false);
-
-		char ourPath[MAX_PATH]{};
-		GetModuleFileNameA(GetModuleHandleA(nullptr), ourPath, sizeof(ourPath));
-
-		char ourDirectory[MAX_PATH]{};
-		GetCurrentDirectoryA(sizeof(ourDirectory), ourDirectory);
-
-		const auto* cmdline = ::Utils::String::VA("\"%s\" -proc %d", ourPath, GetCurrentProcessId());
-
-		// As of 02/19/2017, the SpawnProcess method doesn't require the app id anymore,
-		// but only for those who participate in the beta.
-		// Therefore we have to check how many bytes the method expects as arguments
-		// and adapt our call accordingly!
-		const auto expectedParams = Proxy::ClientUser.paramSize("SpawnProcess");
-		if (expectedParams == 40) // Release
-		{
-			Proxy::ClientUser.invoke<bool>("SpawnProcess", ourPath, cmdline, ourDirectory, gameID.bits, mod.data(), Proxy::AppId, 0, 0, 0);
-		}
-		else if (expectedParams == 36) // Beta
-		{
-			Proxy::ClientUser.invoke<bool>("SpawnProcess", ourPath, cmdline, ourDirectory, gameID.bits, mod.data(), Proxy::AppId, 0, 0);
-		}
-		else if (expectedParams == 48) // Legacy, expects VAC blob
-		{
-			char blob[8] = { 0 };
-			Proxy::ClientUser.invoke<bool>("SpawnProcess", blob, 0, ourPath, cmdline, 0, ourDirectory, gameID.bits, Proxy::AppId, mod.data(), 0, 0);
-		}
-		else
-		{
-#ifdef _DEBUG
-			OutputDebugStringA("Steam proxy was unable to match the arguments for SpawnProcess!\n");
-#endif
-		}
-	}
-
-	void Proxy::RunMod()
-	{
-		const char* command = "-proc ";
-		auto* parentProc = std::strstr(GetCommandLineA(), command);
-
-		if (parentProc)
-		{
-			FreeConsole();
-
-			parentProc += strlen(command);
-			const auto pid = std::strtol(parentProc, nullptr, 10);
-
-			HANDLE processHandle = OpenProcess(SYNCHRONIZE, FALSE, pid);
-
-			if (processHandle && processHandle != INVALID_HANDLE_VALUE)
-			{
-				WaitForSingleObject(processHandle, INFINITE);
-				CloseHandle(processHandle);
-			}
-
-			TerminateProcess(GetCurrentProcess(), 0);
-		}
-	}
-
-	void Proxy::RegisterCall(int32_t callId, uint32_t size, uint64_t call)
-	{
-		std::lock_guard<std::recursive_mutex> _(Proxy::CallMutex);
-
-		Proxy::CallContainer contianer;
-		contianer.call = call;
-		contianer.dataSize = size;
-		contianer.callId = callId;
-		contianer.handled = false;
-
-		Proxy::Calls.push_back(contianer);
+		Calls.push_back(container);
 	}
 
 	void Proxy::UnregisterCalls()
 	{
-		std::lock_guard<std::recursive_mutex> _(Proxy::CallMutex);
+		std::lock_guard _(CallMutex);
 
-		for (auto i = Proxy::Calls.begin(); i != Proxy::Calls.end(); ++i)
+		std::erase_if(Calls, [](const CallContainer& container)
 		{
-			if(i->handled)
-			{
-				i = Proxy::Calls.erase(i);
-			}
-			else
-			{
-				++i;
-			}
-		}
+			return container.handled;
+		});
 	}
 
-	void Proxy::RegisterCallback(int32_t callId, void* callback)
+	void Proxy::RegisterCallback(std::int32_t callId, Callback callback)
 	{
-		std::lock_guard<std::recursive_mutex> _(Proxy::CallMutex);
-		Proxy::Callbacks[callId] = callback;
+		std::lock_guard _(CallMutex);
+		Callbacks[callId] = callback;
 	}
 
-	void Proxy::UnregisterCallback(int32_t callId)
+	void Proxy::UnregisterCallback(std::int32_t callId)
 	{
-		std::lock_guard<std::recursive_mutex> _(Proxy::CallMutex);
-		Proxy::Callbacks.erase(callId);
+		std::lock_guard _(CallMutex);
+		Callbacks.erase(callId);
 	}
 
-	void Proxy::RunCallback(int32_t callId, void* data, std::size_t /*size*/)
+	void Proxy::RunCallback(std::int32_t callId, void* data)
 	{
-		std::lock_guard<std::recursive_mutex> _(Proxy::CallMutex);
+		std::lock_guard _(CallMutex);
 
-		auto callback = Proxy::Callbacks.find(callId);
-		if (callback != Proxy::Callbacks.end())
+		const auto callback = Callbacks.find(callId);
+
+		if (callback != Callbacks.end())
 		{
-			::Utils::Hook::Call<void(void*)>(callback->second)(data);
+			callback->second(data);
 		}
 	}
 
 	void Proxy::RunFrame()
 	{
-		std::lock_guard<std::recursive_mutex> _(Proxy::CallMutex);
+		std::lock_guard _(CallMutex);
 
-		if (Proxy::SteamUtils)
+		if (SteamUtils)
 		{
-			Proxy::SteamUtils->RunFrame();
+			SteamUtils->RunFrame();
 		}
 
-		Proxy::CallbackMsg message;
-		while (Proxy::SteamBGetCallback && Proxy::SteamFreeLastCallback && Proxy::SteamBGetCallback(Proxy::SteamPipe, &message))
-		{
-#ifdef DEBUG
-			printf("Callback dispatched: %d\n", message.m_iCallback);
-#endif
+		CallbackMsg message{};
 
+		while (SteamBGetCallback && SteamFreeLastCallback && SteamBGetCallback(SteamPipe, &message))
+		{
 			Steam::Callbacks::RunCallback(message.m_iCallback, message.m_pubParam);
-			Proxy::RunCallback(message.m_iCallback, message.m_pubParam, message.m_cubParam);
-			Proxy::SteamFreeLastCallback(Proxy::SteamPipe);
+			RunCallback(message.m_iCallback, message.m_pubParam);
+			SteamFreeLastCallback(SteamPipe);
 		}
 
-		if (Proxy::SteamUtils)
+		if (SteamUtils)
 		{
-			for (auto &call : Proxy::Calls)
+			for (auto& call : Calls)
 			{
-				bool failed = false;
-				if (Proxy::SteamUtils->IsAPICallCompleted(call.call, &failed))
+				bool isFailed = false;
+
+				if (!SteamUtils->IsAPICallCompleted(call.call, &isFailed))
 				{
-					::Utils::Memory::Allocator allocator;
-
-#ifdef DEBUG
-					printf("Handling call: %d\n", call.callId);
-#endif
-
-					call.handled = true;
-
-					if (failed)
-					{
-#ifdef DEBUG
-						auto error = Proxy::SteamUtils->GetAPICallFailureReason(call.call);
-						printf("API call failed: %X Handle: %llX\n", error, call.call);
-#endif
-						continue;
-					}
-
-
-					char* buffer = allocator.allocateArray<char>(call.dataSize);
-					Proxy::SteamUtils->GetAPICallResult(call.call, buffer, call.dataSize, call.callId, &failed);
-
-					if (failed)
-					{
-#ifdef DEBUG
-						auto error = Proxy::SteamUtils->GetAPICallFailureReason(call.call);
-						printf("GetAPICallResult failed: %X Handle: %llX\n", error, call.call);
-#endif
-						continue;
-					}
-
-					Proxy::RunCallback(call.callId, buffer, call.dataSize);
+					continue;
 				}
+
+				call.handled = true;
+
+				if (isFailed)
+				{
+					continue;
+				}
+
+				std::vector<char> buffer(call.dataSize);
+				SteamUtils->GetAPICallResult(call.call, buffer.data(), static_cast<int>(call.dataSize), call.callId, &isFailed);
+
+				if (isFailed)
+				{
+					continue;
+				}
+
+				RunCallback(call.callId, buffer.data());
 			}
 		}
 
-		Proxy::UnregisterCalls();
+		UnregisterCalls();
 	}
 
 	void Proxy::LaunchWatchGuard()
 	{
-		if (Proxy::WatchGuard.joinable()) return;
-
-		HKEY hRegKey;
-		DWORD pid = 0;
-		if (RegOpenKeyExA(HKEY_CURRENT_USER, STEAM_REGISTRY_PROCESS_PATH, 0, KEY_QUERY_VALUE, &hRegKey) != ERROR_SUCCESS) return;
-
-		DWORD dwLength = sizeof(pid);
-		RegQueryValueExA(hRegKey, "pid", nullptr, nullptr, reinterpret_cast<BYTE*>(&pid), &dwLength);
-		RegCloseKey(hRegKey);
-
-		Proxy::CancelHandle = CreateEventA(nullptr, TRUE, FALSE, "CancelEvent");
-		if (!Proxy::CancelHandle) return;
-
-		Proxy::Process = OpenProcess(SYNCHRONIZE, FALSE, pid);
-		if (!Proxy::Process) return;
-
-		Proxy::WatchGuard = std::thread([]()
+		if (WatchGuard.joinable())
 		{
-			HANDLE handles[] = { Proxy::Process, Proxy::CancelHandle };
+			return;
+		}
 
-			DWORD result = WaitForMultipleObjects(ARRAYSIZE(handles), handles, FALSE, INFINITE);
-			CloseHandle(Proxy::Process);
-			CloseHandle(Proxy::CancelHandle);
+		HKEY key;
+		DWORD pid = 0;
+
+		if (RegOpenKeyExA(HKEY_CURRENT_USER, STEAM_REGISTRY_PROCESS_PATH, 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
+		{
+			return;
+		}
+
+		DWORD length = sizeof(pid);
+		RegQueryValueExA(key, "pid", nullptr, nullptr, reinterpret_cast<BYTE*>(&pid), &length);
+		RegCloseKey(key);
+
+		CancelHandle = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+
+		if (!CancelHandle)
+		{
+			return;
+		}
+
+		Process = OpenProcess(SYNCHRONIZE, FALSE, pid);
+
+		if (!Process)
+		{
+			CloseHandle(CancelHandle);
+			CancelHandle = nullptr;
+			return;
+		}
+
+		WatchGuard = std::jthread([]
+		{
+			HANDLE handles[] = { Process, CancelHandle };
+
+			const DWORD result = WaitForMultipleObjects(static_cast<DWORD>(std::size(handles)), handles, FALSE, INFINITE);
+			CloseHandle(Process);
+			CloseHandle(CancelHandle);
 
 			if (result == WAIT_OBJECT_0)
 			{
-				Proxy::SteamPipe = nullptr;
-				Proxy::SteamUser = nullptr;
-				Proxy::Uninititalize();
+				SteamPipe = 0;
+				SteamUser = 0;
+				UnInitialize();
 			}
 		});
 	}
 
-	bool Proxy::Inititalize()
+	bool Proxy::Initialize()
 	{
-		const auto directoy = Proxy::GetSteamDirectory();
-		if (directoy.empty()) return false;
+		const auto directory = GetSteamDirectory();
 
-		SetDllDirectoryA(directoy.data());
+		if (directory.empty())
+		{
+			return false;
+		}
+
+		SetDllDirectoryA(directory.data());
 
 		if (!Components::Dedicated::IsEnabled())
 		{
-			Proxy::LaunchWatchGuard();
+			LaunchWatchGuard();
 
-			Proxy::Overlay = ::Utils::Library(GAMEOVERLAY_LIB, false);
-			if (!Proxy::Overlay.isValid()) return false;
+			Overlay = ::Utils::Library(GAMEOVERLAY_LIB, false);
+
+			if (!Overlay)
+			{
+				return false;
+			}
 		}
 
-		Proxy::Client = ::Utils::Library(STEAMCLIENT_LIB, false);
-		if (!Proxy::Client.isValid()) return false;
+		Client = ::Utils::Library(STEAMCLIENT_LIB, false);
 
-		Proxy::SteamClient = Proxy::Client.get<ISteamClient008*(const char*, int*)>("CreateInterface")("SteamClient008", nullptr);
-		if(!Proxy::SteamClient) return false;
+		if (!Client)
+		{
+			return false;
+		}
 
-		Proxy::SteamBGetCallback = Proxy::Client.get<Proxy::SteamBGetCallbackFn>("Steam_BGetCallback");
-		if (!Proxy::SteamBGetCallback) return false;
+		SteamBGetCallback = Client.GetProc<SteamBGetCallbackFn*>("Steam_BGetCallback");
+		SteamFreeLastCallback = Client.GetProc<SteamFreeLastCallbackFn*>("Steam_FreeLastCallback");
+		SteamGetAPICallResult = Client.GetProc<SteamGetAPICallResultFn*>("Steam_GetAPICallResult");
+		const auto createInterface = Client.GetProc<void*(*)(const char*, int*)>("CreateInterface");
 
-		Proxy::SteamFreeLastCallback = Proxy::Client.get<Proxy::SteamFreeLastCallbackFn>("Steam_FreeLastCallback");
-		if (!Proxy::SteamFreeLastCallback) return false;
+		if (!SteamBGetCallback || !SteamFreeLastCallback || !SteamGetAPICallResult || !createInterface)
+		{
+			return false;
+		}
 
-		Proxy::SteamGetAPICallResult = Proxy::Client.get<Proxy::SteamGetAPICallResultFn>("Steam_GetAPICallResult");
-		if (!Proxy::SteamGetAPICallResult) return false;
+		SteamClient = static_cast<ISteamClient008*>(createInterface("SteamClient008", nullptr));
 
-		Proxy::SteamClient = Proxy::Client.get<ISteamClient008*(const char*, int*)>("CreateInterface")("SteamClient008", nullptr);
-		if (!Proxy::SteamClient) return false;
+		if (!SteamClient)
+		{
+			return false;
+		}
 
-		Proxy::SteamPipe = Proxy::SteamClient->CreateSteamPipe();
-		if (!Proxy::SteamPipe) return false;
+		SteamPipe = SteamClient->CreateSteamPipe();
 
-		Proxy::SteamUser = Proxy::SteamClient->ConnectToGlobalUser(Proxy::SteamPipe);
-		if (!Proxy::SteamUser) return false;
+		if (!SteamPipe)
+		{
+			return false;
+		}
 
-		Proxy::ClientEngine = Proxy::Client.get<IClientEngine*(const char*, int*)>("CreateInterface")("CLIENTENGINE_INTERFACE_VERSION005", nullptr);
-		if (!Proxy::ClientEngine) return false;
+		SteamUser = SteamClient->ConnectToGlobalUser(SteamPipe);
 
-		Proxy::ClientUser = Proxy::ClientEngine->GetIClientUser(Proxy::SteamUser, Proxy::SteamPipe);
-		if (!Proxy::ClientUser) return false;
+		if (!SteamUser)
+		{
+			return false;
+		}
 
-		//temporary fix required since Steam runtime update v0.20201203.1 (an additional function was added by steam)
-		Proxy::Placeholder = Proxy::ClientEngine->Placeholder(0);
+		SteamApps = static_cast<Apps7*>(SteamClient->GetISteamApps(SteamUser, SteamPipe, "STEAMAPPS_INTERFACE_VERSION007"));
+		SteamFriends = static_cast<Friends15*>(SteamClient->GetISteamFriends(SteamUser, SteamPipe, "SteamFriends015"));
+		SteamUtils = static_cast<Utils5*>(SteamClient->GetISteamUtils(SteamPipe, "SteamUtils005"));
+		SteamUser_ = static_cast<User12*>(SteamClient->GetISteamUser(SteamUser, SteamPipe, "SteamUser012"));
 
-		Proxy::ClientFriends = Proxy::ClientEngine->GetIClientFriends(Proxy::SteamUser, Proxy::SteamPipe);
-		if (!Proxy::ClientFriends) return false;
-
-		Proxy::SteamApps = reinterpret_cast<Apps7*>(Proxy::SteamClient->GetISteamApps(Proxy::SteamUser, Proxy::SteamPipe, "STEAMAPPS_INTERFACE_VERSION007"));
-		if (!Proxy::SteamApps) return false;
-
-		Proxy::SteamFriends = reinterpret_cast<Friends15*>(Proxy::SteamClient->GetISteamFriends(Proxy::SteamUser, Proxy::SteamPipe, "SteamFriends015"));
-		if (!Proxy::SteamFriends) return false;
-
-		Proxy::SteamUtils = reinterpret_cast<Utils*>(Proxy::SteamClient->GetISteamUtils(Proxy::SteamPipe, "SteamUtils005"));
-		if (!Proxy::SteamUtils) return false;
-
-		Proxy::SteamUser_ = reinterpret_cast<User*>(Proxy::SteamClient->GetISteamUser(Proxy::SteamUser, Proxy::SteamPipe, "SteamUser012"));
-		if (!Proxy::SteamUser_) return false;
-
-		return true;
+		return SteamApps && SteamFriends && SteamUtils && SteamUser_;
 	}
 
-	void Proxy::Uninititalize()
+	void Proxy::UnInitialize()
 	{
-		if(Proxy::WatchGuard.get_id() != std::this_thread::get_id() && Proxy::WatchGuard.joinable())
+		if (WatchGuard.get_id() != std::this_thread::get_id() && WatchGuard.joinable())
 		{
-			if (Proxy::CancelHandle)
+			if (CancelHandle)
 			{
-				SetEvent(Proxy::CancelHandle);
-				Proxy::WatchGuard.join();
+				SetEvent(CancelHandle);
+				WatchGuard.join();
 			}
 			else
 			{
-				Proxy::WatchGuard.detach();
+				WatchGuard.detach();
 			}
 		}
 
-		Proxy::Process = nullptr;
-		Proxy::CancelHandle = nullptr;
+		Process = nullptr;
+		CancelHandle = nullptr;
 
-		Proxy::ClientEngine = nullptr;
-		Proxy::ClientUser = nullptr;
-		Proxy::ClientFriends = nullptr;
-		Proxy::SteamApps = nullptr;
-		Proxy::SteamFriends = nullptr;
-		Proxy::SteamUtils = nullptr;
-		Proxy::SteamUser_ = nullptr;
+		std::lock_guard _(CallMutex);
 
-		if (Proxy::SteamClient && Proxy::SteamPipe)
+		SteamApps = nullptr;
+		SteamFriends = nullptr;
+		SteamUtils = nullptr;
+		SteamUser_ = nullptr;
+
+		if (SteamClient && SteamPipe)
 		{
-			if (Proxy::SteamUser)
+			if (SteamUser)
 			{
-				Proxy::SteamClient->ReleaseUser(Proxy::SteamPipe, Proxy::SteamUser);
+				SteamClient->ReleaseUser(SteamPipe, SteamUser);
 			}
 
-			Proxy::SteamClient->ReleaseSteamPipe(Proxy::SteamPipe);
+			SteamClient->BReleaseSteamPipe(SteamPipe);
 		}
 
-		Proxy::SteamPipe = nullptr;
-		Proxy::SteamUser = nullptr;
-		Proxy::SteamClient = nullptr;
-		Proxy::Client = ::Utils::Library();
-		Proxy::Overlay = ::Utils::Library();
+		SteamPipe = 0;
+		SteamUser = 0;
+		SteamClient = nullptr;
+
+		SteamBGetCallback = nullptr;
+		SteamFreeLastCallback = nullptr;
+		SteamGetAPICallResult = nullptr;
+
+		Client = ::Utils::Library();
+		Overlay = ::Utils::Library();
 	}
 
 	std::string Proxy::GetSteamDirectory()
 	{
-		HKEY hRegKey;
-		char SteamPath[MAX_PATH]{};
-		if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, STEAM_REGISTRY_PATH, 0, KEY_QUERY_VALUE, &hRegKey) == ERROR_SUCCESS)
-		{
-			DWORD dwLength = sizeof(SteamPath);
-			RegQueryValueExA(hRegKey, "InstallPath", nullptr, nullptr, reinterpret_cast<BYTE*>(SteamPath), &dwLength);
-			RegCloseKey(hRegKey);
+		HKEY key;
+		char steamPath[MAX_PATH]{};
 
-			return SteamPath;
+		if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, STEAM_REGISTRY_PATH, 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
+		{
+			return {};
 		}
 
-		return {};
+		DWORD length = sizeof(steamPath);
+		RegQueryValueExA(key, "InstallPath", nullptr, nullptr, reinterpret_cast<BYTE*>(steamPath), &length);
+		RegCloseKey(key);
+
+		return steamPath;
 	}
 
-	uint32_t Proxy::GetActiveUser()
+	void Proxy::SetOverlayNotificationPosition(std::uint32_t eNotificationPosition)
 	{
-		HKEY hRegKey;
-		uint32_t activeUser = 0;
-
-		if (RegOpenKeyExA(HKEY_CURRENT_USER, STEAM_REGISTRY_PROCESS_PATH, 0, KEY_QUERY_VALUE, &hRegKey) == ERROR_SUCCESS)
+		if (!Overlay)
 		{
-			DWORD dwLength = sizeof(activeUser);
-			RegQueryValueExA(hRegKey, "ActiveUser", nullptr, nullptr, reinterpret_cast<BYTE*>(&activeUser), &dwLength);
-			RegCloseKey(hRegKey);
+			return;
 		}
 
-		return activeUser;
-	}
+		const auto setNotificationPosition = Overlay.GetProc<void(*)(std::uint32_t)>("SetNotificationPosition");
 
-	void Proxy::ResetActiveUser()
-	{
-		HKEY hRegKey;
-		uint32_t activeUser = 0;
-
-		if (RegOpenKeyExA(HKEY_CURRENT_USER, STEAM_REGISTRY_PROCESS_PATH, 0, KEY_ALL_ACCESS, &hRegKey) == ERROR_SUCCESS)
+		if (setNotificationPosition)
 		{
-			RegSetValueExA(hRegKey, "ActiveUser", 0, REG_DWORD, reinterpret_cast<BYTE*>(&activeUser), sizeof(activeUser));
-			RegCloseKey(hRegKey);
+			setNotificationPosition(eNotificationPosition);
 		}
-	}
-
-	void Proxy::SetOverlayNotificationPosition(uint32_t eNotificationPosition)
-	{
-		if (Proxy::Overlay.isValid())
-		{
-			Proxy::Overlay.get<void(uint32_t)>("SetNotificationPosition")(eNotificationPosition);
-		}
-	}
-
-	bool Proxy::IsOverlayEnabled()
-	{
-		if (Proxy::Overlay.isValid())
-		{
-			return Proxy::Overlay.get<bool()>("IsOverlayEnabled")();
-		}
-
-		return false;
-	}
-
-	bool Proxy::BOverlayNeedsPresent()
-	{
-		if (Proxy::Overlay.isValid())
-		{
-			return Proxy::Overlay.get<bool()>("BOverlayNeedsPresent")();
-		}
-
-		return false;
 	}
 }

@@ -27,14 +27,14 @@ namespace Components
 		StructuredData();
 
 	private:
-		static bool UpdateVersionOffsets(Game::StructuredDataDefSet *set, Game::StructuredDataBuffer *buffer, Game::StructuredDataDef *oldDef);
+		static Utils::Hook updateVersionHook;
+		static Utils::Memory::Allocator memAllocator;
+		static const char* enumTranslation[COUNT];
 
-		static void PatchPlayerDataEnum(Game::StructuredDataDef* data, PlayerDataType type, std::vector<std::string>& entries);
-		static void PatchAdditionalData(Game::StructuredDataDef* data, std::unordered_map<std::string, std::string>& patches);
+		static bool UpdateVersionOffsets(Game::StructuredDataDefSet* set, Game::StructuredDataBuffer* buffer, Game::StructuredDataDef* oldDef);
 
+		static void PatchPlayerDataEnum(Game::StructuredDataDef* data, PlayerDataType type, const std::vector<std::string>& entries);
+		static void PatchAdditionalData(Game::StructuredDataDef* data, const std::unordered_map<std::string, std::string>& patches);
 		static void PatchCustomClassLimit(Game::StructuredDataDef* data, int count);
-		static Utils::Memory::Allocator MemAllocator;
-
-		static const char* EnumTranslation[COUNT];
 	};
 }

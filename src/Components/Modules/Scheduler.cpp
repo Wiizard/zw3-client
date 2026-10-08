@@ -1,192 +1,194 @@
+#include "STDInclude.hpp"
 
-constexpr bool COND_CONTINUE = false;
-constexpr bool COND_END = true;
+#include "Scheduler.hpp"
 
 namespace Components
 {
-	std::thread Scheduler::Thread;
-	volatile bool Scheduler::Kill = false;
-	Scheduler::TaskPipeline Scheduler::Pipelines[static_cast<std::underlying_type_t<Pipeline>>(Pipeline::COUNT)];
+	constexpr bool conditionContinue = false;
+	constexpr bool conditionEnd = true;
 
-	void Scheduler::TaskPipeline::add(Task&& task)
+	volatile bool Scheduler::kill = false;
+	std::jthread Scheduler::thread;
+	Scheduler::TaskPipeline Scheduler::pipelines[static_cast<int>(Pipeline::COUNT)];
+
+	Utils::Hook Scheduler::mainFrameHook;
+	Utils::Hook Scheduler::clientFrameHook;
+	Utils::Hook Scheduler::serverFrameHook;
+	Utils::Hook Scheduler::rendererFrameHook;
+	Utils::Hook Scheduler::quitHook;
+
+	constexpr std::uintptr_t MainFrameCall = 0x1401F41B4;
+	constexpr std::uintptr_t CL_FrameCall = 0x1401F478C;
+	constexpr std::uintptr_t G_Glass_UpdateCall = 0x14019EFD4;
+	constexpr std::uintptr_t ScrPlace_EndFrameCall = 0x140101D31;
+	constexpr std::uintptr_t Sys_SetBlockSystemHotkeysCall = 0x1402A58C1;
+
+	void Scheduler::TaskPipeline::Add(Task&& task)
 	{
-		newCallbacks_.access([&task](taskList& tasks)
+		this->newCallbacks.Access([&task](TaskList& tasks)
 		{
 			tasks.emplace_back(std::move(task));
 		});
 	}
 
-	void Scheduler::TaskPipeline::execute()
+	void Scheduler::TaskPipeline::MergeCallbacks()
 	{
-		callbacks_.access([&](taskList& tasks)
+		this->callbacks.Access([&](TaskList& tasks)
 		{
-			this->mergeCallbacks();
-
-			for (auto i = tasks.begin(); i != tasks.end();)
+			this->newCallbacks.Access([&](TaskList& pending)
 			{
-				const auto now = std::chrono::high_resolution_clock::now();
-				const auto diff = now - i->lastCall;
+				tasks.insert(tasks.end(),
+					std::move_iterator<TaskList::iterator>(pending.begin()),
+					std::move_iterator<TaskList::iterator>(pending.end()));
 
-				if (diff < i->interval)
-				{
-					++i;
-					continue;
-				}
-
-				i->lastCall = now;
-
-				const auto res = i->handler();
-				if (res == COND_END)
-				{
-					i = tasks.erase(i);
-				}
-				else
-				{
-					++i;
-				}
-			}
+				pending = {};
+			});
 		});
 	}
 
-	void Scheduler::TaskPipeline::mergeCallbacks()
+	void Scheduler::TaskPipeline::Execute()
 	{
-		callbacks_.access([&](taskList& tasks)
+		this->callbacks.Access([&](TaskList& tasks)
 		{
-			newCallbacks_.access([&](taskList& new_tasks)
+			this->MergeCallbacks();
+
+			for (auto task = tasks.begin(); task != tasks.end();)
 			{
-				tasks.insert(tasks.end(), std::move_iterator<taskList::iterator>(new_tasks.begin()), std::move_iterator<taskList::iterator>(new_tasks.end()));
-				new_tasks = {};
-			});
+				const auto now = std::chrono::high_resolution_clock::now();
+
+				if ((now - task->lastCall) < task->interval)
+				{
+					++task;
+					continue;
+				}
+
+				task->lastCall = now;
+
+				if (task->handler() == conditionEnd)
+				{
+					task = tasks.erase(task);
+					continue;
+				}
+
+				++task;
+			}
 		});
 	}
 
 	void Scheduler::Execute(Pipeline type)
 	{
-		assert(type < Pipeline::COUNT);
-		const auto index = static_cast<std::underlying_type_t<Pipeline>>(type);
-		Pipelines[index].execute();
+		pipelines[static_cast<int>(type)].Execute();
 	}
 
-	void Scheduler::ScrPlace_EndFrame_Hk()
+	void Scheduler::Schedule(const std::function<bool()>& callback, Pipeline type,
+		std::chrono::milliseconds delay)
 	{
-		Utils::Hook::Call<void()>(0x4AA720)();
-		Execute(Pipeline::RENDERER);
-	}
-
-	void Scheduler::ServerFrame_Hk()
-	{
-		Utils::Hook::Call<void()>(0x471C50)();
-		Execute(Pipeline::SERVER);
-	}
-
-	void Scheduler::ClientFrame_Hk(const int localClientNum)
-	{
-		Utils::Hook::Call<void(int)>(0x5A8E80)(localClientNum);
-		Execute(Pipeline::CLIENT);
-	}
-
-	void Scheduler::MainFrame_Hk()
-	{
-		Utils::Hook::Call<void()>(0x47DCA0)();
-		Execute(Pipeline::MAIN);
-	}
-
-	void Scheduler::SysSetBlockSystemHotkeys_Hk(int block)
-	{
-		Execute(Pipeline::QUIT);
-		Utils::Hook::Call<void(int)>(0x46B370)(block);
-	}
-
-	void Scheduler::Schedule(const std::function<bool()>& callback, const Pipeline type,
-		const std::chrono::milliseconds delay)
-	{
-		assert(type < Pipeline::COUNT);
-
 		Task task;
 		task.handler = callback;
 		task.interval = delay;
 		task.lastCall = std::chrono::high_resolution_clock::now();
 
-		const auto index = static_cast<std::underlying_type_t<Pipeline>>(type);
-		Pipelines[index].add(std::move(task));
+		pipelines[static_cast<int>(type)].Add(std::move(task));
 	}
 
-	void Scheduler::Loop(const std::function<void()>& callback, const Pipeline type,
-		const std::chrono::milliseconds delay)
+	void Scheduler::Loop(const std::function<void()>& callback, Pipeline type,
+		std::chrono::milliseconds delay)
 	{
 		Schedule([callback]
 		{
 			callback();
-			return COND_CONTINUE;
+			return conditionContinue;
 		}, type, delay);
 	}
 
-	void Scheduler::Once(const std::function<void()>& callback, const Pipeline type,
-		const std::chrono::milliseconds delay)
+	void Scheduler::Once(const std::function<void()>& callback, Pipeline type,
+		std::chrono::milliseconds delay)
 	{
 		Schedule([callback]
 		{
 			callback();
-			return COND_END;
+			return conditionEnd;
 		}, type, delay);
 	}
 
-	void Scheduler::OnGameInitialized(const std::function<void()>& callback, const Pipeline type,
-		const std::chrono::milliseconds delay)
+	void Scheduler::OnGameInitialized(const std::function<void()>& callback, Pipeline type,
+		std::chrono::milliseconds delay)
 	{
 		Schedule([=]
 		{
 			if (Game::Sys_IsDatabaseReady2())
 			{
 				Once(callback, type, delay);
-				return COND_END;
+				return conditionEnd;
 			}
 
-			return COND_CONTINUE;
-		}, Pipeline::MAIN); // Once Com_Frame_Try_Block_Function is called we know the game is 'ready'
+			return conditionContinue;
+		}, Pipeline::MAIN);
 	}
 
-	void Scheduler::OnGameShutdown(const std::function<void()>& callback)
+	void Scheduler::OnShutdown(const std::function<void()>& callback)
 	{
-		Schedule([callback]
+		Once(callback, Pipeline::QUIT);
+	}
+
+	void Scheduler::MainFrame_Hook()
+	{
+		reinterpret_cast<void(*)()>(mainFrameHook.GetOriginal())();
+
+		Execute(Pipeline::MAIN);
+	}
+
+	void Scheduler::CL_Frame_Hook(int localClientNum)
+	{
+		reinterpret_cast<void(*)(int)>(clientFrameHook.GetOriginal())(localClientNum);
+
+		Execute(Pipeline::CLIENT);
+	}
+
+	void Scheduler::G_Glass_Update_Hook(int a1, int a2, const float* a3, const float* a4)
+	{
+		reinterpret_cast<void(*)(int, int, const float*, const float*)>(
+			serverFrameHook.GetOriginal())(a1, a2, a3, a4);
+
+		Execute(Pipeline::SERVER);
+	}
+
+	void Scheduler::ScrPlace_EndFrame_Hook()
+	{
+		reinterpret_cast<void(*)()>(rendererFrameHook.GetOriginal())();
+
+		Execute(Pipeline::RENDERER);
+	}
+
+	void Scheduler::Sys_SetBlockSystemHotkeys_Hook(int block)
+	{
+		Execute(Pipeline::QUIT);
+
+		kill = true;
+
+		if (thread.joinable())
 		{
-			callback();
-			return COND_END;
-		}, Pipeline::QUIT, 0ms);
+			thread.join();
+		}
+
+		reinterpret_cast<void(*)(int)>(quitHook.GetOriginal())(block);
 	}
 
 	Scheduler::Scheduler()
 	{
-		Thread = Utils::Thread::CreateNamedThread("Async Scheduler", []
+		mainFrameHook.Initialize(MainFrameCall, MainFrame_Hook, HOOK_CALL)->Install()->Quick();
+		clientFrameHook.Initialize(CL_FrameCall, CL_Frame_Hook, HOOK_CALL)->Install()->Quick();
+		serverFrameHook.Initialize(G_Glass_UpdateCall, G_Glass_Update_Hook, HOOK_CALL)->Install()->Quick();
+		rendererFrameHook.Initialize(ScrPlace_EndFrameCall, ScrPlace_EndFrame_Hook, HOOK_CALL)->Install()->Quick();
+		quitHook.Initialize(Sys_SetBlockSystemHotkeysCall, Sys_SetBlockSystemHotkeys_Hook, HOOK_CALL)->Install()->Quick();
+
+		thread = Utils::Thread::CreateNamedThread("Async Scheduler", []
 		{
-			while (!Kill)
+			while (!kill)
 			{
 				Execute(Pipeline::ASYNC);
-				std::this_thread::sleep_for(10ms);
+				std::this_thread::sleep_for(std::chrono::milliseconds(10));
 			}
 		});
-
-		Utils::Hook(0x5ACB9E, ScrPlace_EndFrame_Hk, HOOK_CALL).install()->quick();
-
-		// Hook G_Glass_Update so we may fix TLS issues
-		Utils::Hook(0x416049, ServerFrame_Hk, HOOK_CALL).install()->quick();
-
-		// CL_CheckTimeout
-		Utils::Hook(0x4B0F81, ClientFrame_Hk, HOOK_CALL).install()->quick();
-
-		// Com_Frame_Try_Block_Function
-		Utils::Hook(0x4B724F, MainFrame_Hk, HOOK_CALL).install()->quick();
-
-		// Sys_Quit
-		Utils::Hook(0x4D697A, SysSetBlockSystemHotkeys_Hk, HOOK_CALL).install()->quick();
-	}
-
-	void Scheduler::preDestroy()
-	{
-		Kill = true;
-		if (Thread.joinable())
-		{
-			Thread.join();
-		}
 	}
 }

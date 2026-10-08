@@ -8,15 +8,16 @@ namespace Components::GSC
 		Script();
 
 		using scriptNames = std::vector<std::string>;
-		static void AddFunction(const std::string& name, Game::BuiltinFunction func, bool type = false, bool isBuitIn= false);
-		static void AddMethod(const std::string& name, Game::BuiltinMethod func, bool type = false, bool isBuitIn= false);
+		static void AddFunction(const std::string& name, Game::BuiltinFunction func, bool type = false, bool isBuiltIn = false);
+		static void AddMethod(const std::string& name, Game::BuiltinMethod func, bool type = false, bool isBuiltIn = false);
 
-		static void AddFuncMultiple(Game::BuiltinFunction func, bool type, scriptNames);
-		static void AddMethMultiple(Game::BuiltinMethod func, bool type, scriptNames);
+		static void AddFuncMultiple(Game::BuiltinFunction func, bool type, scriptNames aliases);
+		static void AddMethMultiple(Game::BuiltinMethod func, bool type, scriptNames aliases);
 
+		static void Scr_Error(const char* error);
+		static void Scr_ParamError(unsigned int paramIndex, const char* error);
+		static void Scr_ObjectError(const char* error);
 
-		static Game::client_s* GetClient(const Game::gentity_s* gentity);
-		// Probably a macro 'originally' but this is fine
 		static Game::gentity_s* Scr_GetPlayerEntity(Game::scr_entref_t entref);
 
 	private:
@@ -34,14 +35,14 @@ namespace Components::GSC
 			scriptNames aliases;
 		};
 
-		static std::vector<ScriptFunction> CommonOverridenFunctions;
-		static std::vector<ScriptMethod> CommonOverridenMethods;
+		static std::vector<ScriptFunction> commonOverridenFunctions;
+		static std::vector<ScriptMethod> commonOverridenMethods;
 
-		static std::vector<ScriptFunction> CustomScrFunctions;
-		static std::vector<ScriptMethod> CustomScrMethods;
+		static std::vector<ScriptFunction> customScrFunctions;
+		static std::vector<ScriptMethod> customScrMethods;
 
-		static std::unordered_map<std::string, int> ScriptMainHandles;
-		static std::unordered_map<std::string, int> ScriptInitHandles;
+		static std::unordered_map<std::string, int> scriptMainHandles;
+		static std::unordered_map<std::string, int> scriptInitHandles;
 
 		static void LoadCustomScriptsFromFolder(const char* dir);
 		static void LoadCustomScripts();
@@ -54,8 +55,10 @@ namespace Components::GSC
 		static Game::BuiltinMethod Common_GetMethodStub(const char** pName);
 
 		static Game::BuiltinFunction BuiltIn_GetFunctionStub(const char** pName, int* type);
-		static Game::BuiltinMethod BuiltIn_GetMethodStub(const char** pName, int* type);
+		static Game::BuiltinMethod BuiltIn_GetMethodStub(const char** pName);
 
 		static unsigned int SetExpFogStub();
+
+		static void PrintError(const char* error);
 	};
 }

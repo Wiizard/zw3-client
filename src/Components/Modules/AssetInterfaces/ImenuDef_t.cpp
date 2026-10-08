@@ -1,86 +1,154 @@
+#include "STDInclude.hpp"
+
 #include "ImenuDef_t.hpp"
+#include "../Logger.hpp"
+#include "../Menus.hpp"
 
 namespace Assets
 {
+	constexpr int ITEM_TYPE_LISTBOX = 6;
+	constexpr int ITEM_TYPE_MULTI = 12;
+	constexpr int ITEM_TYPE_DVARENUM = 13;
+	constexpr int ITEM_TYPE_NEWS_TICKER = 20;
+	constexpr int ITEM_TYPE_TEXT_SCROLL = 21;
+	constexpr int editFieldItemTypes[] = { 0, 4, 9, 10, 11, 14, 16, 17, 18, 22, 23 };
 
-	std::unordered_map<std::string, Game::menuDef_t*> ImenuDef_t::LoadedMenus;
-
-	void ImenuDef_t::load(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* /*builder*/)
+	static void SaveXString(Utils::Stream* buffer, const char* string, std::uint32_t* dest)
 	{
-		auto menus = Components::Menus::LoadMenuByName_Recursive(std::format("ui_mp/{}.menu", name));
+		if (!string)
+		{
+			return;
+		}
+
+		buffer->SaveString(string);
+		Utils::Stream::ClearPointer(dest);
+	}
+
+	template <typename T>
+	static void SavePointerArray(Utils::Stream* buffer, T* const* pointers, int count)
+	{
+		for (int i = 0; i < count; ++i)
+		{
+			std::uint32_t slot = 0;
+
+			if (pointers[i])
+			{
+				Utils::Stream::ClearPointer(&slot);
+			}
+
+			buffer->Save(&slot);
+		}
+	}
+
+	static Game::X86::expressionEntry ConvertEntry(const Game::expressionEntry& entry)
+	{
+		Game::X86::expressionEntry record{};
+		record.type = entry.type;
+
+		if (!entry.type)
+		{
+			record.data.op = entry.data.op;
+			return record;
+		}
+
+		const auto& operand = entry.data.operand;
+		record.data.operand.dataType = static_cast<std::int32_t>(operand.dataType);
+
+		if (operand.dataType != Game::VAL_STRING && operand.dataType != Game::VAL_FUNCTION)
+		{
+			record.data.operand.internals.intVal = operand.internals.intVal;
+		}
+
+		return record;
+	}
+
+	void ImenuDef_t::Load(Game::XAssetHeader* header, const std::string& name, [[maybe_unused]] Components::ZoneBuilder::Zone* builder)
+	{
+		const auto menus = Components::Menus::LoadMenuByName_Recursive(std::format("ui_mp/{}.menu", name));
 
 		if (menus.empty())
 		{
 			header->menu = nullptr;
 			return;
 		}
-		if (menus.size() > 1) {
+
+		if (menus.size() > 1)
+		{
 			Components::Logger::Print("Menu '{}' on disk has more than one menudef in it. Only saving the first one\n", name);
 		}
 
 		header->menu = menus[0];
 	}
 
-
-	void ImenuDef_t::mark(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
+	void ImenuDef_t::Mark(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
 	{
-		auto* asset = header.menu;
+		const auto* const asset = header.menu;
 
 		if (asset->window.background)
 		{
-			builder->loadAsset(Game::XAssetType::ASSET_TYPE_MATERIAL, asset->window.background);
+			builder->LoadAsset(Game::ASSET_TYPE_MATERIAL, asset->window.background);
 		}
 
-		// mark items
 		for (int i = 0; i < asset->itemCount; ++i)
 		{
-			if (asset->items[i]->window.background)
+			const auto* const item = asset->items[i];
+
+			if (!item)
 			{
-				builder->loadAsset(Game::XAssetType::ASSET_TYPE_MATERIAL, asset->items[i]->window.background);
+				continue;
 			}
 
-			if (asset->items[i]->focusSound)
+			if (item->window.background)
 			{
-				builder->loadAsset(Game::XAssetType::ASSET_TYPE_SOUND, asset->items[i]->focusSound);
+				builder->LoadAsset(Game::ASSET_TYPE_MATERIAL, item->window.background);
 			}
 
-			if (asset->items[i]->type == 6 && asset->items[i]->typeData.listBox &&
-				asset->items[i]->typeData.listBox->selectIcon)
+			if (item->focusSound)
 			{
-				builder->loadAsset(Game::XAssetType::ASSET_TYPE_MATERIAL, asset->items[i]->typeData.listBox->selectIcon);
+				builder->LoadAsset(Game::ASSET_TYPE_SOUND, item->focusSound);
+			}
+
+			if (item->type == ITEM_TYPE_LISTBOX && item->typeData.listBox && item->typeData.listBox->selectIcon)
+			{
+				builder->LoadAsset(Game::ASSET_TYPE_MATERIAL, item->typeData.listBox->selectIcon);
 			}
 		}
 	}
 
-	void ImenuDef_t::save_ExpressionSupportingData(Game::ExpressionSupportingData* asset, Components::ZoneBuilder::Zone* builder)
+	void ImenuDef_t::Save_windowDef_t(const Game::windowDef_t* asset, Game::X86::windowDef_t* dest, Components::ZoneBuilder::Zone* builder)
 	{
-		AssertSize(Game::ExpressionSupportingData, 24);
-		Utils::Stream* buffer = builder->getBuffer();
+		auto* const buffer = builder->GetBuffer();
 
-#ifdef WRITE_LOGS
-		buffer->enterStruct("ExpressionSupportingData");
-#endif
+		SaveXString(buffer, asset->name, &dest->name);
+		SaveXString(buffer, asset->group, &dest->group);
 
-		buffer->align(Utils::Stream::ALIGN_4);
+		if (asset->background)
+		{
+			dest->background = builder->SaveSubAsset(Game::ASSET_TYPE_MATERIAL, asset->background);
+		}
+	}
 
-		auto* dest = buffer->dest<Game::ExpressionSupportingData>();
-		buffer->save(asset);
+	void ImenuDef_t::Save_ExpressionSupportingData(const Game::ExpressionSupportingData* asset, Components::ZoneBuilder::Zone* builder)
+	{
+		auto* const buffer = builder->GetBuffer();
+
+		buffer->Align(Utils::Stream::ALIGN_4);
+
+		auto* const dest = buffer->Dest<Game::X86::ExpressionSupportingData>();
+		const auto record = Game::X86::Convert(*asset);
+		buffer->Save(&record);
 
 		if (asset->uifunctions.functions)
 		{
-			buffer->align(Utils::Stream::ALIGN_4);
-
-			auto** destStatement = buffer->dest<Game::Statement_s*>();
-			buffer->saveArray(asset->uifunctions.functions, asset->uifunctions.totalFunctions);
+			buffer->Align(Utils::Stream::ALIGN_4);
+			SavePointerArray(buffer, asset->uifunctions.functions, asset->uifunctions.totalFunctions);
 
 			for (int i = 0; i < asset->uifunctions.totalFunctions; ++i)
 			{
 				if (asset->uifunctions.functions[i])
 				{
-					Utils::Stream::ClearPointer(&destStatement[i]);
-
-					buffer->align(Utils::Stream::ALIGN_4);
-					this->save_Statement_s(asset->uifunctions.functions[i], builder);
+					buffer->Align(Utils::Stream::ALIGN_4);
+					this->Save_Statement_s(asset->uifunctions.functions[i], builder);
 				}
 			}
 
@@ -89,27 +157,25 @@ namespace Assets
 
 		if (asset->staticDvarList.staticDvars)
 		{
-			buffer->align(Utils::Stream::ALIGN_4);
+			buffer->Align(Utils::Stream::ALIGN_4);
+			SavePointerArray(buffer, asset->staticDvarList.staticDvars, asset->staticDvarList.numStaticDvars);
 
-			auto** destStaticDvars = buffer->dest<Game::StaticDvar*>();
-			buffer->saveArray(asset->staticDvarList.staticDvars, asset->staticDvarList.numStaticDvars);
-
-			for (auto i = 0; i < asset->staticDvarList.numStaticDvars; ++i)
+			for (int i = 0; i < asset->staticDvarList.numStaticDvars; ++i)
 			{
-				if (asset->staticDvarList.staticDvars[i])
+				const auto* const staticDvar = asset->staticDvarList.staticDvars[i];
+
+				if (!staticDvar)
 				{
-					Utils::Stream::ClearPointer(&destStaticDvars[i]);
-
-					buffer->align(Utils::Stream::ALIGN_4);
-					auto* destStaticDvar = buffer->dest<Game::StaticDvar>();
-					buffer->save(asset->staticDvarList.staticDvars[i]);
-
-					if (asset->staticDvarList.staticDvars[i]->dvarName)
-					{
-						buffer->saveString(asset->staticDvarList.staticDvars[i]->dvarName);
-						Utils::Stream::ClearPointer(&destStaticDvar->dvarName);
-					}
+					continue;
 				}
+
+				buffer->Align(Utils::Stream::ALIGN_4);
+
+				auto* const destStaticDvar = buffer->Dest<Game::X86::StaticDvar>();
+				const auto staticDvarRecord = Game::X86::Convert(*staticDvar);
+				buffer->Save(&staticDvarRecord);
+
+				SaveXString(buffer, staticDvar->dvarName, &destStaticDvar->dvarName);
 			}
 
 			Utils::Stream::ClearPointer(&dest->staticDvarList.staticDvars);
@@ -117,588 +183,434 @@ namespace Assets
 
 		if (asset->uiStrings.strings)
 		{
-			buffer->align(Utils::Stream::ALIGN_4);
-
-			const auto** destUIStrings = buffer->dest<const char*>();
-			buffer->saveArray(asset->uiStrings.strings, asset->uiStrings.totalStrings);
+			buffer->Align(Utils::Stream::ALIGN_4);
+			SavePointerArray(buffer, asset->uiStrings.strings, asset->uiStrings.totalStrings);
 
 			for (int i = 0; i < asset->uiStrings.totalStrings; ++i)
 			{
 				if (asset->uiStrings.strings[i])
 				{
-					buffer->saveString(asset->uiStrings.strings[i]);
-					Utils::Stream::ClearPointer(&destUIStrings[i]);
+					buffer->SaveString(asset->uiStrings.strings[i]);
 				}
 			}
+
+			Utils::Stream::ClearPointer(&dest->uiStrings.strings);
 		}
-#ifdef WRITE_LOGS
-		buffer->leaveStruct();
-#endif
 	}
 
-	void ImenuDef_t::save_Statement_s(Game::Statement_s* asset, Components::ZoneBuilder::Zone* builder)
+	void ImenuDef_t::Save_Statement_s(const Game::Statement_s* asset, Components::ZoneBuilder::Zone* builder)
 	{
-		AssertSize(Game::Statement_s, 24);
-		AssertSize(Game::expressionEntry, 12);
-		Utils::Stream* buffer = builder->getBuffer();
+		auto* const buffer = builder->GetBuffer();
+		auto* const dest = buffer->Dest<Game::X86::Statement_s>();
 
-#ifdef WRITE_LOGS
-		buffer->enterStruct("Statement_s");
-#endif
+		auto record = Game::X86::Convert(*asset);
 
-		// Write header data
-		auto* dest = buffer->dest<Game::Statement_s>();
-		buffer->save(asset);
+		if (asset->lastResult.dataType == Game::VAL_STRING || asset->lastResult.dataType == Game::VAL_FUNCTION)
+		{
+			record.lastResult.internals.intVal = 0;
+		}
 
-		// Write statement entries
+		buffer->Save(&record);
+
 		if (asset->entries)
 		{
-#ifdef WRITE_LOGS
-			buffer->enterStruct("statement entries");
-#endif
-			buffer->align(Utils::Stream::ALIGN_4);
+			buffer->Align(Utils::Stream::ALIGN_4);
 
-			// Write entries
-			auto* destEntries = buffer->dest<Game::expressionEntry>();
-			buffer->save(asset->entries, sizeof(Game::expressionEntry), asset->numEntries);
+			auto* const destEntries = buffer->Dest<Game::X86::expressionEntry>();
 
-			// Loop through entries
 			for (int i = 0; i < asset->numEntries; ++i)
 			{
-#ifdef WRITE_LOGS
-				buffer->enterStruct("entry");
-#endif
-				if (asset->entries[i].type)
-				{
-					switch (asset->entries[i].data.operand.dataType)
-					{
-						// Those types do not require additional data
-					case 0:
-					case 1:
-						break;
-
-						// Expression string
-					case 2:
-						if (asset->entries[i].data.operand.internals.stringVal.string)
-						{
-							buffer->saveString(asset->entries[i].data.operand.internals.stringVal.string);
-							Utils::Stream::ClearPointer(&destEntries[i].data.operand.internals.stringVal.string);
-						}
-						break;
-
-						// Function
-					case 3:
-						if (asset->entries[i].data.operand.internals.function)
-						{
-							buffer->align(Utils::Stream::ALIGN_4);
-							this->save_Statement_s(asset->entries[i].data.operand.internals.function, builder);
-							Utils::Stream::ClearPointer(&destEntries[i].data.operand.internals.function);
-						}
-						break;
-					}
-				}
-#ifdef WRITE_LOGS
-				buffer->leaveStruct();
-#endif
+				const auto entryRecord = ConvertEntry(asset->entries[i]);
+				buffer->Save(&entryRecord);
 			}
-#ifdef WRITE_LOGS
-			buffer->leaveStruct();
-#endif
+
+			for (int i = 0; i < asset->numEntries; ++i)
+			{
+				const auto* const entry = &asset->entries[i];
+
+				if (!entry->type)
+				{
+					continue;
+				}
+
+				auto& destInternals = destEntries[i].data.operand.internals;
+
+				if (entry->data.operand.dataType == Game::VAL_STRING)
+				{
+					SaveXString(buffer, entry->data.operand.internals.stringVal.string, &destInternals.stringVal.string);
+				}
+				else if (entry->data.operand.dataType == Game::VAL_FUNCTION && entry->data.operand.internals.function)
+				{
+					buffer->Align(Utils::Stream::ALIGN_4);
+					this->Save_Statement_s(entry->data.operand.internals.function, builder);
+					Utils::Stream::ClearPointer(&destInternals.function);
+				}
+			}
+
+			Utils::Stream::ClearPointer(&dest->entries);
 		}
 
 		if (asset->supportingData)
 		{
-			this->save_ExpressionSupportingData(asset->supportingData, builder);
+			this->Save_ExpressionSupportingData(asset->supportingData, builder);
 			Utils::Stream::ClearPointer(&dest->supportingData);
 		}
-#ifdef WRITE_LOGS
-		buffer->leaveStruct();
-#endif
 	}
 
-	void ImenuDef_t::save_MenuEventHandlerSet(Game::MenuEventHandlerSet* asset, Components::ZoneBuilder::Zone* builder)
+	void ImenuDef_t::Save_StatementPtr(const Game::Statement_s* asset, std::uint32_t* dest, Components::ZoneBuilder::Zone* builder)
 	{
-		AssertSize(Game::MenuEventHandlerSet, 8);
-		Utils::Stream* buffer = builder->getBuffer();
-
-#ifdef WRITE_LOGS
-		buffer->enterStruct("MenuEventHandlerSet");
-#endif
-
-		// Write header data
-		auto* destset = buffer->dest<Game::MenuEventHandlerSet>();
-		buffer->save(asset);
-
-		// Event handlers
-		if (asset->eventHandlers)
+		if (!asset)
 		{
-			buffer->align(Utils::Stream::ALIGN_4);
+			return;
+		}
 
-			// Write pointers to zone
-			buffer->save(asset->eventHandlers, sizeof(Game::MenuEventHandler*), asset->eventHandlerCount);
+		builder->GetBuffer()->Align(Utils::Stream::ALIGN_4);
+		this->Save_Statement_s(asset, builder);
+		Utils::Stream::ClearPointer(dest);
+	}
 
-			// Loop through eventHandlers
-			for (auto i = 0; i < asset->eventHandlerCount; ++i)
+	void ImenuDef_t::Save_MenuEventHandlerSet(const Game::MenuEventHandlerSet* asset, Components::ZoneBuilder::Zone* builder)
+	{
+		auto* const buffer = builder->GetBuffer();
+		auto* const destSet = buffer->Dest<Game::X86::MenuEventHandlerSet>();
+		const auto record = Game::X86::Convert(*asset);
+		buffer->Save(&record);
+
+		if (!asset->eventHandlers)
+		{
+			return;
+		}
+
+		buffer->Align(Utils::Stream::ALIGN_4);
+		SavePointerArray(buffer, asset->eventHandlers, asset->eventHandlerCount);
+
+		for (int i = 0; i < asset->eventHandlerCount; ++i)
+		{
+			const auto* const handler = asset->eventHandlers[i];
+
+			if (!handler)
 			{
-				if (asset->eventHandlers[i])
-				{
-					buffer->align(Utils::Stream::ALIGN_4);
-#ifdef WRITE_LOGS
-					buffer->enterStruct("MenuEventHandler");
-#endif
-
-					// Write menu event handler
-					auto* dest = buffer->dest<Game::MenuEventHandler>();
-					buffer->save(asset->eventHandlers[i]);
-
-					// Write additional data based on type
-					switch (asset->eventHandlers[i]->eventType)
-					{
-						// unconditional scripts
-					case 0:
-						if (asset->eventHandlers[i]->eventData.unconditionalScript)
-						{
-							buffer->saveString(asset->eventHandlers[i]->eventData.unconditionalScript);
-							Utils::Stream::ClearPointer(&dest->eventData.unconditionalScript);
-						}
-						break;
-
-						// ConditionalScript
-					case 1:
-						if (asset->eventHandlers[i]->eventData.conditionalScript)
-						{
-							buffer->align(Utils::Stream::ALIGN_4);
-							auto* destConditionalScript = buffer->dest<Game::ConditionalScript>();
-							buffer->save(asset->eventHandlers[i]->eventData.conditionalScript);
-
-							// eventExpression
-							if (asset->eventHandlers[i]->eventData.conditionalScript->eventExpression)
-							{
-								buffer->align(Utils::Stream::ALIGN_4);
-								this->save_Statement_s(asset->eventHandlers[i]->eventData.conditionalScript->eventExpression, builder);
-								Utils::Stream::ClearPointer(&destConditionalScript->eventExpression);
-							}
-
-							// eventHandlerSet
-							if (asset->eventHandlers[i]->eventData.conditionalScript->eventHandlerSet)
-							{
-								buffer->align(Utils::Stream::ALIGN_4);
-								this->save_MenuEventHandlerSet(asset->eventHandlers[i]->eventData.conditionalScript->eventHandlerSet, builder);
-								Utils::Stream::ClearPointer(&destConditionalScript->eventHandlerSet);
-							}
-
-							Utils::Stream::ClearPointer(&dest->eventData.conditionalScript);
-						}
-						break;
-
-						// elseScript
-					case 2:
-						if (asset->eventHandlers[i]->eventData.elseScript)
-						{
-							buffer->align(Utils::Stream::ALIGN_4);
-							this->save_MenuEventHandlerSet(asset->eventHandlers[i]->eventData.elseScript, builder);
-							Utils::Stream::ClearPointer(&dest->eventData.elseScript);
-						}
-						break;
-
-						// localVarData expressions
-					case 3:
-					case 4:
-					case 5:
-					case 6:
-						if (asset->eventHandlers[i]->eventData.setLocalVarData)
-						{
-							buffer->align(Utils::Stream::ALIGN_4);
-
-							// header data
-							auto* destLocalVarData = buffer->dest<Game::SetLocalVarData>();
-							buffer->save(asset->eventHandlers[i]->eventData.setLocalVarData);
-
-							// localVarName
-							if (asset->eventHandlers[i]->eventData.setLocalVarData->localVarName)
-							{
-								buffer->saveString(asset->eventHandlers[i]->eventData.setLocalVarData->localVarName);
-								Utils::Stream::ClearPointer(&destLocalVarData->localVarName);
-							}
-
-							// statement
-							if (asset->eventHandlers[i]->eventData.setLocalVarData->expression)
-							{
-								buffer->align(Utils::Stream::ALIGN_4);
-								this->save_Statement_s(asset->eventHandlers[i]->eventData.setLocalVarData->expression, builder);
-								Utils::Stream::ClearPointer(&destLocalVarData->expression);
-							}
-
-							Utils::Stream::ClearPointer(&dest->eventData.setLocalVarData);
-						}
-						break;
-					}
-#ifdef WRITE_LOGS
-					buffer->leaveStruct();
-#endif
-				}
+				continue;
 			}
 
-			Utils::Stream::ClearPointer(&destset->eventHandlers);
+			buffer->Align(Utils::Stream::ALIGN_4);
+
+			auto* const dest = buffer->Dest<Game::X86::MenuEventHandler>();
+			const auto handlerRecord = Game::X86::Convert(*handler);
+			buffer->Save(&handlerRecord);
+
+			switch (handler->eventType)
+			{
+			case Game::EVENT_UNCONDITIONAL:
+				SaveXString(buffer, handler->eventData.unconditionalScript, &dest->eventData.unconditionalScript);
+				break;
+
+			case Game::EVENT_IF:
+			{
+				const auto* const conditionalScript = handler->eventData.conditionalScript;
+
+				if (!conditionalScript)
+				{
+					break;
+				}
+
+				buffer->Align(Utils::Stream::ALIGN_4);
+
+				auto* const destConditionalScript = buffer->Dest<Game::X86::ConditionalScript>();
+				const auto conditionalRecord = Game::X86::Convert(*conditionalScript);
+				buffer->Save(&conditionalRecord);
+
+				this->Save_StatementPtr(conditionalScript->eventExpression, &destConditionalScript->eventExpression, builder);
+				this->Save_MenuEventHandlerSetPtr(conditionalScript->eventHandlerSet, &destConditionalScript->eventHandlerSet, builder);
+
+				Utils::Stream::ClearPointer(&dest->eventData.conditionalScript);
+				break;
+			}
+
+			case Game::EVENT_ELSE:
+				this->Save_MenuEventHandlerSetPtr(handler->eventData.elseScript, &dest->eventData.elseScript, builder);
+				break;
+
+			case Game::EVENT_SET_LOCAL_VAR_BOOL:
+			case Game::EVENT_SET_LOCAL_VAR_INT:
+			case Game::EVENT_SET_LOCAL_VAR_FLOAT:
+			case Game::EVENT_SET_LOCAL_VAR_STRING:
+			{
+				const auto* const localVarData = handler->eventData.setLocalVarData;
+
+				if (!localVarData)
+				{
+					break;
+				}
+
+				buffer->Align(Utils::Stream::ALIGN_4);
+
+				auto* const destLocalVarData = buffer->Dest<Game::X86::SetLocalVarData>();
+				const auto localVarRecord = Game::X86::Convert(*localVarData);
+				buffer->Save(&localVarRecord);
+
+				SaveXString(buffer, localVarData->localVarName, &destLocalVarData->localVarName);
+				this->Save_StatementPtr(localVarData->expression, &destLocalVarData->expression, builder);
+
+				Utils::Stream::ClearPointer(&dest->eventData.setLocalVarData);
+				break;
+			}
+
+			default:
+				break;
+			}
 		}
-#ifdef WRITE_LOGS
-		buffer->leaveStruct();
-#endif
+
+		Utils::Stream::ClearPointer(&destSet->eventHandlers);
 	}
 
-	void ImenuDef_t::save_ItemKeyHandler(Game::ItemKeyHandler* asset, Components::ZoneBuilder::Zone* builder)
+	void ImenuDef_t::Save_MenuEventHandlerSetPtr(const Game::MenuEventHandlerSet* asset, std::uint32_t* dest, Components::ZoneBuilder::Zone* builder)
 	{
-		AssertSize(Game::ItemKeyHandler, 12);
-		Utils::Stream* buffer = builder->getBuffer();
+		if (!asset)
+		{
+			return;
+		}
 
-#ifdef WRITE_LOGS
-		buffer->enterStruct("ItemKeyHandler");
-#endif
+		builder->GetBuffer()->Align(Utils::Stream::ALIGN_4);
+		this->Save_MenuEventHandlerSet(asset, builder);
+		Utils::Stream::ClearPointer(dest);
+	}
+
+	void ImenuDef_t::Save_ItemKeyHandler(const Game::ItemKeyHandler* asset, Components::ZoneBuilder::Zone* builder)
+	{
+		auto* const buffer = builder->GetBuffer();
 
 		while (asset)
 		{
-			// Write header
-			auto* dest = buffer->dest<Game::ItemKeyHandler>();
-			buffer->save(asset);
+			auto* const dest = buffer->Dest<Game::X86::ItemKeyHandler>();
+			const auto record = Game::X86::Convert(*asset);
+			buffer->Save(&record);
 
-			// MenuEventHandlerSet
-			if (asset->action)
-			{
-				buffer->align(Utils::Stream::ALIGN_4);
-				this->save_MenuEventHandlerSet(asset->action, builder);
-				Utils::Stream::ClearPointer(&dest->action);
-			}
+			this->Save_MenuEventHandlerSetPtr(asset->action, &dest->action, builder);
 
 			if (asset->next)
 			{
-				// align every index, besides the first one?
-				buffer->align(Utils::Stream::ALIGN_4);
+				buffer->Align(Utils::Stream::ALIGN_4);
+				Utils::Stream::ClearPointer(&dest->next);
 			}
 
-			// Next key handler
 			asset = asset->next;
 		}
-#ifdef WRITE_LOGS
-		buffer->leaveStruct();
-#endif
 	}
 
-#define EVENTHANDLERSET(__index) \
-		if (asset->__index) \
-		{ \
-			buffer->align(Utils::Stream::ALIGN_4); \
-			this->save_MenuEventHandlerSet(asset->__index, builder); \
-			Utils::Stream::ClearPointer(&dest->__index); \
-		}
-
-#define STATEMENT(__index) \
-		if (asset->__index) \
-		{ \
-			buffer->align(Utils::Stream::ALIGN_4); \
-			this->save_Statement_s(asset->__index, builder); \
-			Utils::Stream::ClearPointer(&dest->__index); \
-		}
-
-	void ImenuDef_t::save_itemDefData_t(Game::itemDefData_t* asset, int type, Game::itemDef_s* dest, Components::ZoneBuilder::Zone* builder)
+	void ImenuDef_t::Save_itemDefData_t(const Game::itemDefData_t* asset, int type, Game::X86::itemDef_s* dest, Components::ZoneBuilder::Zone* builder)
 	{
-		AssertSize(Game::newsTickerDef_s, 28);
-		AssertSize(Game::listBoxDef_s, 324);
-		AssertSize(Game::editFieldDef_s, 32);
-		AssertSize(Game::multiDef_s, 392);
+		auto* const buffer = builder->GetBuffer();
 
-		Utils::Stream* buffer = builder->getBuffer();
-
-#ifdef WRITE_LOGS
-		buffer->enterStruct("itemDefData_t");
-#endif
-
-		// feeder
-		if (type == 6)
+		if (type == ITEM_TYPE_LISTBOX)
 		{
-			buffer->align(Utils::Stream::ALIGN_4);
-			auto* destlb = buffer->dest<Game::listBoxDef_s>();
-			buffer->save(asset->listBox);
+			buffer->Align(Utils::Stream::ALIGN_4);
 
-			if (asset->listBox->onDoubleClick)
-			{
-				buffer->align(Utils::Stream::ALIGN_4);
-				this->save_MenuEventHandlerSet(asset->listBox->onDoubleClick, builder);
-			}
+			auto* const destListBox = buffer->Dest<Game::X86::listBoxDef_s>();
+			const auto record = Game::X86::Convert(*asset->listBox);
+			buffer->Save(&record);
+
+			this->Save_MenuEventHandlerSetPtr(asset->listBox->onDoubleClick, &destListBox->onDoubleClick, builder);
 
 			if (asset->listBox->selectIcon)
 			{
-				destlb->selectIcon = builder->saveSubAsset(Game::XAssetType::ASSET_TYPE_MATERIAL, asset->listBox->selectIcon).material;
+				destListBox->selectIcon = builder->SaveSubAsset(Game::ASSET_TYPE_MATERIAL, asset->listBox->selectIcon);
 			}
 		}
-		// HexRays spaghetti
-		else if (type != 4 && type != 9 && type != 16 && type != 18 && type != 11 && type != 14 && type != 10 && type != 17 && type != 22 && type != 23 && type != 0)
+		else if (std::ranges::find(editFieldItemTypes, type) == std::end(editFieldItemTypes))
 		{
 			switch (type)
 			{
-				// enum dvar
-			case 13:
-				buffer->saveString(asset->enumDvarName);
+			case ITEM_TYPE_DVARENUM:
+				buffer->SaveString(asset->enumDvarName);
 				break;
-				// newsticker
-			case 20:
-				buffer->align(Utils::Stream::ALIGN_4);
-				buffer->save(asset->ticker);
+
+			case ITEM_TYPE_NEWS_TICKER:
+			{
+				buffer->Align(Utils::Stream::ALIGN_4);
+
+				const auto record = Game::X86::Convert(*asset->ticker);
+				buffer->Save(&record);
 				break;
-				// textScrollDef
-			case 21:
-				buffer->align(Utils::Stream::ALIGN_4);
-				buffer->save(asset->scroll);
+			}
+
+			case ITEM_TYPE_TEXT_SCROLL:
+			{
+				buffer->Align(Utils::Stream::ALIGN_4);
+
+				const auto record = Game::X86::Convert(*asset->scroll);
+				buffer->Save(&record);
 				break;
-			case 12:
-				buffer->align(Utils::Stream::ALIGN_4);
-				auto* destdef = buffer->dest<Game::multiDef_s>();
-				buffer->save(asset->multi);
+			}
+
+			case ITEM_TYPE_MULTI:
+			{
+				buffer->Align(Utils::Stream::ALIGN_4);
+
+				auto* const destMulti = buffer->Dest<Game::X86::multiDef_s>();
+				const auto record = Game::X86::Convert(*asset->multi);
+				buffer->Save(&record);
 
 				for (int i = 0; i < 32; ++i)
 				{
-					if (asset->multi->dvarList[i])
-					{
-						buffer->saveString(asset->multi->dvarList[i]);
-						Utils::Stream::ClearPointer(&destdef->dvarList[i]);
-					}
+					SaveXString(buffer, asset->multi->dvarList[i], &destMulti->dvarList[i]);
 				}
 
 				for (int i = 0; i < 32; ++i)
 				{
-					if (asset->multi->dvarStr[i])
-					{
-						buffer->saveString(asset->multi->dvarStr[i]);
-						Utils::Stream::ClearPointer(&destdef->dvarStr[i]);
-					}
+					SaveXString(buffer, asset->multi->dvarStr[i], &destMulti->dvarStr[i]);
 				}
 
 				break;
 			}
+
+			default:
+				break;
+			}
 		}
-		// editFieldDef
 		else
 		{
-			buffer->align(Utils::Stream::ALIGN_4);
-			buffer->save(asset->editField);
+			buffer->Align(Utils::Stream::ALIGN_4);
+
+			const auto record = Game::X86::Convert(*asset->editField);
+			buffer->Save(&record);
 		}
 
 		Utils::Stream::ClearPointer(&dest->typeData.data);
-
-#ifdef WRITE_LOGS
-		buffer->leaveStruct();
-#endif
 	}
 
-	void ImenuDef_t::save_itemDef_s(Game::itemDef_s* asset, Components::ZoneBuilder::Zone* builder)
+	void ImenuDef_t::Save_itemDef_s(const Game::itemDef_s* asset, Components::ZoneBuilder::Zone* builder)
 	{
-		AssertSize(Game::itemDef_s, 0x17C);
+		auto* const buffer = builder->GetBuffer();
+		auto* const dest = buffer->Dest<Game::X86::itemDef_s>();
 
-		Utils::Stream* buffer = builder->getBuffer();
-		auto* dest = buffer->dest<Game::itemDef_s>();
+		auto record = Game::X86::Convert(*asset);
+		record.typeData.data = 0;
+		buffer->Save(&record);
 
-#ifdef WRITE_LOGS
-		if (asset->window.name)
-			buffer->enterStruct(Utils::String::VA("itemDef_s: name = '%s'", asset->window.name));
-		else if (asset->window.background)
-			buffer->enterStruct(Utils::String::VA("itemDef_s: bg = '%s'", asset->window.background->info.name));
-		else
-			buffer->enterStruct("itemDef_s");
-#endif
+		this->Save_windowDef_t(&asset->window, &dest->window, builder);
 
-		buffer->save(asset);
+		SaveXString(buffer, asset->text, &dest->text);
 
-		// window data
-		save_windowDef_t<Game::itemDef_s>(&asset->window, dest, builder);
+		this->Save_MenuEventHandlerSetPtr(asset->mouseEnterText, &dest->mouseEnterText, builder);
+		this->Save_MenuEventHandlerSetPtr(asset->mouseExitText, &dest->mouseExitText, builder);
+		this->Save_MenuEventHandlerSetPtr(asset->mouseEnter, &dest->mouseEnter, builder);
+		this->Save_MenuEventHandlerSetPtr(asset->mouseExit, &dest->mouseExit, builder);
+		this->Save_MenuEventHandlerSetPtr(asset->action, &dest->action, builder);
+		this->Save_MenuEventHandlerSetPtr(asset->accept, &dest->accept, builder);
+		this->Save_MenuEventHandlerSetPtr(asset->onFocus, &dest->onFocus, builder);
+		this->Save_MenuEventHandlerSetPtr(asset->leaveFocus, &dest->leaveFocus, builder);
 
-		// text
-		if (asset->text)
-		{
-			buffer->saveString(asset->text);
-			Utils::Stream::ClearPointer(&dest->text);
-		}
+		SaveXString(buffer, asset->dvar, &dest->dvar);
+		SaveXString(buffer, asset->dvarTest, &dest->dvarTest);
 
-		// MenuEventHandlerSets
-		EVENTHANDLERSET(mouseEnterText);
-		EVENTHANDLERSET(mouseExitText);
-		EVENTHANDLERSET(mouseEnter);
-		EVENTHANDLERSET(mouseExit);
-		EVENTHANDLERSET(action);
-		EVENTHANDLERSET(accept);
-		EVENTHANDLERSET(onFocus);
-		EVENTHANDLERSET(leaveFocus);
-
-		// Dvar strings
-		if (asset->dvar)
-		{
-			buffer->saveString(asset->dvar);
-			Utils::Stream::ClearPointer(&dest->dvar);
-		}
-
-		if (asset->dvarTest)
-		{
-			buffer->saveString(asset->dvarTest);
-			Utils::Stream::ClearPointer(&dest->dvarTest);
-		}
-
-		// ItemKeyHandler
 		if (asset->onKey)
 		{
-			buffer->align(Utils::Stream::ALIGN_4);
-			this->save_ItemKeyHandler(asset->onKey, builder);
+			buffer->Align(Utils::Stream::ALIGN_4);
+			this->Save_ItemKeyHandler(asset->onKey, builder);
 			Utils::Stream::ClearPointer(&dest->onKey);
 		}
 
-		// Dvar strings
-		if (asset->enableDvar)
-		{
-			buffer->saveString(asset->enableDvar);
-			Utils::Stream::ClearPointer(&dest->enableDvar);
-		}
+		SaveXString(buffer, asset->enableDvar, &dest->enableDvar);
+		SaveXString(buffer, asset->localVar, &dest->localVar);
 
-		if (asset->localVar)
-		{
-			buffer->saveString(asset->localVar);
-			Utils::Stream::ClearPointer(&dest->localVar);
-		}
-
-		// Focus sound
 		if (asset->focusSound)
 		{
-			dest->focusSound = builder->saveSubAsset(Game::XAssetType::ASSET_TYPE_SOUND, asset->focusSound).sound;
+			dest->focusSound = builder->SaveSubAsset(Game::ASSET_TYPE_SOUND, asset->focusSound);
 		}
 
-		// itemDefData
 		if (asset->typeData.data)
 		{
-			this->save_itemDefData_t(&asset->typeData, asset->type, dest, builder);
+			this->Save_itemDefData_t(&asset->typeData, asset->type, dest, builder);
 		}
 
-		// floatExpressions
 		if (asset->floatExpressions)
 		{
-			buffer->align(Utils::Stream::ALIGN_4);
-#ifdef WRITE_LOGS
-			buffer->enterStruct("floatExpressions");
-#endif
+			buffer->Align(Utils::Stream::ALIGN_4);
 
-			auto* destExp = buffer->dest<Game::ItemFloatExpression>();
-			buffer->saveArray(asset->floatExpressions, asset->floatExpressionCount);
+			auto* const destExpressions = buffer->Dest<Game::X86::ItemFloatExpression>();
 
 			for (int i = 0; i < asset->floatExpressionCount; ++i)
 			{
-				buffer->align(Utils::Stream::ALIGN_4);
-				this->save_Statement_s(asset->floatExpressions[i].expression, builder);
-				Utils::Stream::ClearPointer(&destExp[i].expression);
+				const auto expressionRecord = Game::X86::Convert(asset->floatExpressions[i]);
+				buffer->Save(&expressionRecord);
+			}
+
+			for (int i = 0; i < asset->floatExpressionCount; ++i)
+			{
+				this->Save_StatementPtr(asset->floatExpressions[i].expression, &destExpressions[i].expression, builder);
 			}
 
 			Utils::Stream::ClearPointer(&dest->floatExpressions);
-
-#ifdef WRITE_LOGS
-			buffer->leaveStruct();
-#endif
 		}
 
-		// Statements
-		STATEMENT(visibleExp);
-		STATEMENT(disabledExp);
-		STATEMENT(textExp);
-		STATEMENT(materialExp);
-
-#ifdef WRITE_LOGS
-		buffer->leaveStruct();
-#endif
+		this->Save_StatementPtr(asset->visibleExp, &dest->visibleExp, builder);
+		this->Save_StatementPtr(asset->disabledExp, &dest->disabledExp, builder);
+		this->Save_StatementPtr(asset->textExp, &dest->textExp, builder);
+		this->Save_StatementPtr(asset->materialExp, &dest->materialExp, builder);
 	}
 
-	void ImenuDef_t::save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
+	void ImenuDef_t::Save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
 	{
-		AssertSize(Game::menuDef_t, 400);
-		AssertSize(Game::windowDef_t, 0xA4);
+		auto* const buffer = builder->GetBuffer();
+		const auto* const asset = header.menu;
+		auto* const dest = buffer->Dest<Game::X86::menuDef_t>();
+		const auto record = Game::X86::Convert(*asset);
+		buffer->Save(&record);
 
-#ifdef WRITE_LOGS
-		buffer->enterStruct("ImenuDef_t");
-#endif
+		buffer->PushBlock(Game::XFILE_BLOCK_VIRTUAL);
 
-		Utils::Stream* buffer = builder->getBuffer();
-		auto* asset = header.menu;
-		auto* dest = buffer->dest<Game::menuDef_t>();
-		buffer->save(asset);
-
-		buffer->pushBlock(Game::XFILE_BLOCK_VIRTUAL);
-
-		// ExpressionSupportingData
 		if (asset->expressionData)
 		{
-			// dest->expressionData = nullptr;
-			this->save_ExpressionSupportingData(asset->expressionData, builder);
+			this->Save_ExpressionSupportingData(asset->expressionData, builder);
 			Utils::Stream::ClearPointer(&dest->expressionData);
 		}
 
-		// Window data
-		save_windowDef_t<Game::menuDef_t>(&asset->window, dest, builder);
+		this->Save_windowDef_t(&asset->window, &dest->window, builder);
 
-		// Font
-		if (asset->font)
-		{
-			buffer->saveString(asset->font);
-			Utils::Stream::ClearPointer(&dest->font);
-		}
+		SaveXString(buffer, asset->font, &dest->font);
 
-		// MenuEventHandlerSets
-		EVENTHANDLERSET(onOpen);
-		EVENTHANDLERSET(onCloseRequest);
-		EVENTHANDLERSET(onClose);
-		EVENTHANDLERSET(onESC);
+		this->Save_MenuEventHandlerSetPtr(asset->onOpen, &dest->onOpen, builder);
+		this->Save_MenuEventHandlerSetPtr(asset->onClose, &dest->onClose, builder);
+		this->Save_MenuEventHandlerSetPtr(asset->onCloseRequest, &dest->onCloseRequest, builder);
+		this->Save_MenuEventHandlerSetPtr(asset->onESC, &dest->onESC, builder);
 
-		// ItemKeyHandler
 		if (asset->onKey)
 		{
-			buffer->align(Utils::Stream::ALIGN_4);
-			this->save_ItemKeyHandler(asset->onKey, builder);
+			buffer->Align(Utils::Stream::ALIGN_4);
+			this->Save_ItemKeyHandler(asset->onKey, builder);
 			Utils::Stream::ClearPointer(&dest->onKey);
 		}
 
-		// Statement
-		STATEMENT(visibleExp);
+		this->Save_StatementPtr(asset->visibleExp, &dest->visibleExp, builder);
 
-		// Strings
-		if (asset->allowedBinding)
-		{
-			buffer->saveString(asset->allowedBinding);
-			Utils::Stream::ClearPointer(&dest->allowedBinding);
-		}
-		if (asset->soundName)
-		{
-			buffer->saveString(asset->soundName);
-			Utils::Stream::ClearPointer(&dest->soundName);
-		}
+		SaveXString(buffer, asset->allowedBinding, &dest->allowedBinding);
+		SaveXString(buffer, asset->soundName, &dest->soundName);
 
-		// Statements
-		STATEMENT(rectXExp);
-		STATEMENT(rectYExp);
-		STATEMENT(rectHExp);
-		STATEMENT(rectWExp);
-		STATEMENT(openSoundExp);
-		STATEMENT(closeSoundExp);
+		this->Save_StatementPtr(asset->rectXExp, &dest->rectXExp, builder);
+		this->Save_StatementPtr(asset->rectYExp, &dest->rectYExp, builder);
+		this->Save_StatementPtr(asset->rectWExp, &dest->rectWExp, builder);
+		this->Save_StatementPtr(asset->rectHExp, &dest->rectHExp, builder);
+		this->Save_StatementPtr(asset->openSoundExp, &dest->openSoundExp, builder);
+		this->Save_StatementPtr(asset->closeSoundExp, &dest->closeSoundExp, builder);
 
-		// Items
 		if (asset->items)
 		{
-			buffer->align(Utils::Stream::ALIGN_4);
-			buffer->saveArray(asset->items, asset->itemCount);
+			buffer->Align(Utils::Stream::ALIGN_4);
+			SavePointerArray(buffer, asset->items, asset->itemCount);
 
 			for (int i = 0; i < asset->itemCount; ++i)
 			{
 				if (asset->items[i])
 				{
-					buffer->align(Utils::Stream::ALIGN_4);
-					this->save_itemDef_s(asset->items[i], builder);
+					buffer->Align(Utils::Stream::ALIGN_4);
+					this->Save_itemDef_s(asset->items[i], builder);
 				}
 			}
-		}
-#ifdef WRITE_LOGS
-		buffer->leaveStruct();
-#endif
 
-		buffer->popBlock();
+			Utils::Stream::ClearPointer(&dest->items);
+		}
+
+		buffer->PopBlock();
 	}
 }

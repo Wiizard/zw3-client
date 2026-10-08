@@ -1,12 +1,15 @@
+#include "STDInclude.hpp"
+
 #include "StructuredData.hpp"
+#include "AssetHandler.hpp"
+#include "Logger.hpp"
 
 namespace Components
 {
-	constexpr auto BASE_PLAYERSTATS_VERSION = 155;
+	Utils::Hook StructuredData::updateVersionHook;
+	Utils::Memory::Allocator StructuredData::memAllocator;
 
-	Utils::Memory::Allocator StructuredData::MemAllocator;
-
-	const char* StructuredData::EnumTranslation[COUNT] =
+	const char* StructuredData::enumTranslation[COUNT] =
 	{
 		"features",
 		"weapons",
@@ -23,22 +26,225 @@ namespace Components
 		"gametypes"
 	};
 
-	void StructuredData::PatchPlayerDataEnum(Game::StructuredDataDef* data, StructuredData::PlayerDataType type, std::vector<std::string>& entries)
-	{
-		if (!data || type >= StructuredData::PlayerDataType::COUNT) return;
+	constexpr int basePlayerStatsVersion = 155;
 
-		// Reallocate them before patching
-		Game::StructuredDataEnum* newEnums = MemAllocator.allocateArray<Game::StructuredDataEnum>(data->enumCount);
+	constexpr unsigned int assetTypeStructuredDataDef = 0x27;
+
+	constexpr std::uintptr_t LiveStorage_FinalizeStatsRead_UpdateVersionCall = 0x1401F7944;
+
+	static const std::uint8_t updateVersionCall[] = { 0xE8, 0x97, 0xB8, 0x08, 0x00 };
+
+	constexpr std::uintptr_t LiveStorage_StatsInit_ClassCount = 0x1401FA6D8;
+
+	static const std::uint8_t classCountTest[] = { 0x83, 0xFE, 0x0A, 0x0F, 0x8C };
+
+	constexpr unsigned int customClassesEnd = 3643;
+	constexpr unsigned int customClassesEndAtFifteen = 3963;
+
+	struct PlayerDataPatch
+	{
+		std::unordered_map<std::string, std::vector<std::string>> enums;
+		std::unordered_map<std::string, std::string> other;
+		unsigned int formatChecksum = 0;
+	};
+
+	static const std::map<int, PlayerDataPatch> playerDataPatches =
+	{
+		{
+			156,
+			{
+				{
+					{
+						"weapons",
+						{
+							"m40a3", "ak47classic",
+						},
+					},
+					{
+						"cardicons",
+						{
+							"cardicon_rtrolling",
+						},
+					},
+					{
+						"cardtitles",
+						{
+							"cardtitle_evilchicken", "cardtitle_nolaststand",
+						},
+					},
+				},
+				{},
+			},
+		},
+		{
+			157,
+			{
+				{
+					{
+						"weapons",
+						{
+							"ak74u", "peacekeeper",
+						},
+					},
+				},
+				{},
+			},
+		},
+		{
+			158,
+			{
+				{
+					{
+						"weapons",
+						{
+							"dragunov", "onemanarmy",
+						},
+					},
+				},
+				{},
+			},
+		},
+		{
+			159,
+			{
+				{},
+				{
+					{ "classes", "15" },
+				},
+			},
+		},
+		{
+			160,
+			{
+				{
+					{
+						"weapons",
+						{
+							"iw3_skorpion", "iw3_g36c", "iw3_mp44", "iw3_mp5", "iw3_m21", "iw3_m40a3", "iw3_ak47",
+							"iw3_ak74u", "iw3_winchester1200", "iw3_remington700", "iw3_m14", "iw3_dragunov",
+							"iw3_barrett", "iw3_saw", "iw3_m4", "iw3_m60e4", "iw3_m16", "iw3_g3", "iw3_colt45",
+						},
+					},
+					{
+						"cardicons",
+						{
+							"cardicon_burn", "cardicon_burningrunner", "cardicon_capsule", "cardicon_coffee",
+							"cardicon_commando", "cardicon_cooking", "cardicon_devil", "cardicon_flashbang",
+							"cardicon_ghostoon", "cardicon_grinch", "cardicon_gunstar", "cardicon_horseshoe",
+							"cardicon_hound", "cardicon_icecream", "cardicon_kitty", "cardicon_mushroom",
+							"cardicon_nunchucks", "cardicon_rampage", "cardicon_rank_supcomm", "cardicon_reaped",
+							"cardicon_smilebomb", "cardicon_spade", "cardicon_toxic", "cardicon_unicorn",
+							"cardicon_xrayhand", "cardicon_sniper", "cardicon_chicken_buff_icon", "cardicon_dive",
+							"cardicon_eaglegraffiti", "cardicon_ghost2018", "cardicon_ghostdog",
+							"cardicon_ghostdoge", "cardicon_graffitibear", "cardicon_graffitygorilla",
+							"cardicon_headicon_micro_boss", "cardicon_helicopter", "cardicon_hud_star69icon",
+							"cardicon_iw5_bearninja", "cardicon_doomguyface", "cardicon_iw5_cards",
+							"cardicon_iw5_cat", "cardicon_iw5_cooking", "cardicon_iw5_death_bell",
+							"cardicon_iw5_elite_01", "cardicon_iw5_elite_03", "cardicon_iw5_elite_13",
+							"cardicon_iw5_elite_14", "cardicon_iw5_elite_15", "cardicon_iw5_flashbang",
+							"cardicon_iw5_frank", "cardicon_iw5_gunstar", "cardicon_iw5_helmet",
+							"cardicon_iw5_horseshoe", "cardicon_iw5_medkit", "cardicon_iw5_skullguns",
+						},
+					},
+					{
+						"cardtitles",
+						{
+							"cardtitle_abstract3_a", "cardtitle_abstract3_b", "cardtitle_glass_hispeed_a",
+							"cardtitle_glass_hispeed_b", "cardtitle_glass_hispeed_c", "cardtitle_joint_a",
+							"cardtitle_joint_b", "cardtitle_flames_1_a", "cardtitle_flames_1_b",
+							"cardtitle_jason_nvg_a", "cardtitle_jason_nvg_b", "cardtitle_horsemen_death",
+							"cardtitle_horsemen_famine", "cardtitle_horsemen_war", "cardtitle_pinkscar_a",
+							"cardtitle_pinkscar_b", "cardtitle_pinkscar_c", "cardtitle_pinkscar_d",
+							"cardtitle_wolf_a", "cardtitle_wolf_b", "cardtitle_sunbather_a",
+							"cardtitle_sunbather_b", "cardtitle_sunbather_c", "cardtitle_sword_2",
+							"cardtitle_sword_3", "cardtitle_graff_a", "cardtitle_graff_b",
+							"cardtitle_graffiti_01_a", "cardtitle_graffiti_01_b", "cardtitle_graffiti_01_c",
+							"cardtitle_bills_a", "cardtitle_bills_b", "cardtitle_bills_c", "cardtitle_eyes_a",
+							"cardtitle_eyes_b", "cardtitle_eyes_c", "cardtitle_machinegunner_a",
+							"cardtitle_machinegunner_b", "cardtitle_machinegunner_c", "cardtitle_gungirl_a",
+							"cardtitle_gungirl_b", "cardtitle_burgertown_a", "cardtitle_burgertown_b",
+							"cardtitle_burgertown_c", "cardtitle_burgertown_d", "cardtitle_naval_a",
+							"cardtitle_naval_b", "cardtitle_blackhawk_a", "cardtitle_blackhawk_b",
+							"cardtitle_blackhawk_c", "cardtitle_feathers_a", "cardtitle_feathers_b",
+							"cardtitle_migs_a", "cardtitle_migs_b", "cardtitle_minigun_a", "cardtitle_minigun_b",
+							"cardtitle_minigun_c", "cardtitle_minigun_d", "cardtitle_rainbows_a",
+							"cardtitle_rainbows_bb", "cardtitle_redrocket_a", "cardtitle_redrocket_b",
+							"cardtitle_redrocket_c", "cardtitle_tbaga", "cardtitle_tbag_b", "cardtitle_uav_a",
+							"cardtitle_uav_b", "cardtitle_bandaidnew_a", "cardtitle_bandaidnew_b",
+							"cardtitle_bandaidnew_c", "cardtitle_bloodcells_a", "cardtitle_bloodcells_b",
+							"cardtitle_diver_a", "cardtitle_diver_b", "cardtitle_girl_a", "cardtitle_girl_b",
+							"cardtitle_huntknife_a", "cardtitle_huntknife_b", "cardtitle_huntknife_c",
+							"cardtitle_pistols_a", "cardtitle_pistols_b", "cardtitle_smoke_grenade_a",
+							"cardtitle_smoke_grenade_b", "cardtitle_smoke_grenade_c", "cardtitle_specops_a",
+							"cardtitle_specops_b", "cardtitle_specops_c", "cardtitle_boombox_a",
+							"cardtitle_boombox_b", "cardtitle_boombox_c", "cardtitle_bloodlake_a",
+							"cardtitle_bloodlake_b", "cardtitle_bloodlake_c", "cardtitle_skullking_a",
+							"cardtitle_skullking_b", "cardtitle_skullking_c", "cardtitle_comic_a",
+							"cardtitle_comic_b", "cardtitle_comic_c", "cardtitle_assault_silence_a",
+							"cardtitle_assault_silence_b", "cardtitle_assault_silence_c", "cardtitle_delta_a",
+							"cardtitle_delta_b", "cardtitle_lasers_a", "cardtitle_lasers_b", "cardtitle_makarov",
+							"cardtitle_mw_bros", "cardtitle_toonprice_a", "cardtitle_toonprice_b",
+							"cardtitle_flag_pride_a", "cardtitle_flag_transgender_a", "cardtitle_flag_asexual_a",
+							"cardtitle_flag_nonbinary_a", "cardtitle_flag_bisexual_a", "cardtitle_flag_pride_b",
+							"cardtitle_flag_transgender_b", "cardtitle_flag_asexual_b",
+							"cardtitle_flag_nonbinary_b", "cardtitle_flag_bisexual_b",
+						},
+					},
+				},
+				{},
+			},
+		},
+		{
+			161,
+			{
+				{
+					{
+						"cardicons",
+						{
+							"cardicon_red_devil",
+						},
+					},
+				},
+				{},
+				0x9085448B,
+			},
+		},
+	};
+
+	bool StructuredData::UpdateVersionOffsets(Game::StructuredDataDefSet* set, Game::StructuredDataBuffer* buffer, Game::StructuredDataDef* oldDef)
+	{
+		const int bufferVersion = *reinterpret_cast<int*>(buffer->data);
+
+		for (unsigned int i = 1; i < set->defCount; ++i)
+		{
+			const Game::StructuredDataDef* const newer = &set->defs[i - 1];
+			const Game::StructuredDataDef* const older = &set->defs[i];
+
+			if (older->version == bufferVersion && newer->version == 159 && older->version <= 158)
+			{
+				std::memmove(&buffer->data[customClassesEndAtFifteen], &buffer->data[customClassesEnd], older->size - customClassesEnd);
+				break;
+			}
+		}
+
+		return reinterpret_cast<bool(*)(Game::StructuredDataDefSet*, Game::StructuredDataBuffer*, Game::StructuredDataDef*)>(
+			updateVersionHook.GetOriginal())(set, buffer, oldDef);
+	}
+
+	void StructuredData::PatchPlayerDataEnum(Game::StructuredDataDef* data, PlayerDataType type, const std::vector<std::string>& entries)
+	{
+		auto* const newEnums = memAllocator.AllocateArray<Game::StructuredDataEnum>(data->enumCount);
 		std::memcpy(newEnums, data->enums, sizeof(Game::StructuredDataEnum) * data->enumCount);
 		data->enums = newEnums;
 
-		Game::StructuredDataEnum* dataEnum = &data->enums[type];
+		Game::StructuredDataEnum* const dataEnum = &data->enums[type];
 
-		// Build index-sorted data vector
 		std::vector<const char*> dataVector;
+
 		for (int i = 0; i < dataEnum->entryCount; ++i)
 		{
 			int index = 0;
+
 			for (; index < dataEnum->entryCount; ++index)
 			{
 				if (dataEnum->entries[index].index == i)
@@ -50,319 +256,225 @@ namespace Components
 			dataVector.push_back(dataEnum->entries[index].string);
 		}
 
-		// Rebase or add new entries
-		for (auto entry : entries)
+		for (const std::string& entry : entries)
 		{
 			const char* value = nullptr;
+
 			for (auto i = dataVector.begin(); i != dataVector.end(); ++i)
 			{
 				if (*i == entry)
 				{
 					value = *i;
 					dataVector.erase(i);
-					Logger::Print("Playerdatadef entry '{}' will be rebased!\n", value);
 					break;
 				}
 			}
 
-			if (!value) value = StructuredData::MemAllocator.duplicateString(entry);
+			if (!value)
+			{
+				value = memAllocator.DuplicateString(entry);
+			}
+
 			dataVector.push_back(value);
 		}
 
-		// Map data back to the game structure
-		Game::StructuredDataEnumEntry* indices = StructuredData::MemAllocator.allocateArray<Game::StructuredDataEnumEntry>(dataVector.size());
+		auto* const indices = memAllocator.AllocateArray<Game::StructuredDataEnumEntry>(dataVector.size());
+
 		for (unsigned short i = 0; i < dataVector.size(); ++i)
 		{
 			indices[i].index = i;
 			indices[i].string = dataVector[i];
 		}
 
-		// Sort alphabetically
-		qsort(indices, dataVector.size(), sizeof(Game::StructuredDataEnumEntry), [](void const* first, void const* second)
-			{
-				const Game::StructuredDataEnumEntry* entry1 = reinterpret_cast<const Game::StructuredDataEnumEntry*>(first);
-				const Game::StructuredDataEnumEntry* entry2 = reinterpret_cast<const Game::StructuredDataEnumEntry*>(second);
+		std::sort(indices, indices + dataVector.size(), [](const Game::StructuredDataEnumEntry& first, const Game::StructuredDataEnumEntry& second)
+		{
+			return std::strcmp(first.string, second.string) < 0;
+		});
 
-				return std::string(entry1->string).compare(entry2->string);
-			});
-
-		// Apply our patches
-		dataEnum->entryCount = dataVector.size();
+		dataEnum->entryCount = static_cast<int>(dataVector.size());
 		dataEnum->entries = indices;
 	}
 
 	void StructuredData::PatchCustomClassLimit(Game::StructuredDataDef* data, int count)
 	{
-		constexpr auto CLASS_ARRAY = 5;
-		const auto originalClassCount = data->indexedArrays[CLASS_ARRAY].arraySize;
+		constexpr int classArray = 5;
+		constexpr int customClassSize = 64;
 
-		if (count != originalClassCount)
+		const int originalClassCount = data->indexedArrays[classArray].arraySize;
+
+		if (count == originalClassCount)
 		{
-			const int customClassSize = 64;
+			return;
+		}
 
-			// We need to recreate the struct list cause it's used in order definitions
-			auto newStructs = StructuredData::MemAllocator.allocateArray<Game::StructuredDataStruct>(data->structCount);
-			std::memcpy(newStructs, data->structs, data->structCount * sizeof(Game::StructuredDataStruct));
-			data->structs = newStructs;
+		const int growth = (count - originalClassCount) * customClassSize;
 
-			constexpr auto structIndex = 0;
+		auto* const newStructs = memAllocator.AllocateArray<Game::StructuredDataStruct>(data->structCount);
+		std::memcpy(newStructs, data->structs, data->structCount * sizeof(Game::StructuredDataStruct));
+		data->structs = newStructs;
+
+		Game::StructuredDataStruct* const root = &data->structs[0];
+
+		auto* const newProperties = memAllocator.AllocateArray<Game::StructuredDataStructProperty>(root->propertyCount);
+		std::memcpy(newProperties, root->properties, root->propertyCount * sizeof(Game::StructuredDataStructProperty));
+		root->properties = newProperties;
+
+		for (int i = 0; i < root->propertyCount; ++i)
+		{
+			if (root->properties[i].offset >= customClassesEnd)
 			{
-				auto strct = &data->structs[structIndex];
-
-				auto newProperties = StructuredData::MemAllocator.allocateArray<Game::StructuredDataStructProperty>(strct->propertyCount);
-				std::memcpy(newProperties, strct->properties, strct->propertyCount * sizeof(Game::StructuredDataStructProperty));
-				strct->properties = newProperties;
-
-				for (int propertyIndex = 0; propertyIndex < strct->propertyCount; ++propertyIndex)
-				{
-					// 3643 is the offset of the customClasses structure
-					if (strct->properties[propertyIndex].offset >= 3643)
-					{
-						// -10 because 10 is the default amount of custom classes.
-						strct->properties[propertyIndex].offset += ((count - originalClassCount) * customClassSize);
-					}
-				}
-			}
-
-			// update structure size
-			data->size += ((count - originalClassCount) * customClassSize);
-
-			// Update amount of custom classes
-			if (data->indexedArrays[CLASS_ARRAY].arraySize != count)
-			{
-				// We need to recreate the whole array - this reference could be reused accross definitions
-				auto newIndexedArray = StructuredData::MemAllocator.allocateArray<Game::StructuredDataIndexedArray>(data->indexedArrayCount);
-				std::memcpy(newIndexedArray, data->indexedArrays, data->indexedArrayCount * sizeof(Game::StructuredDataIndexedArray));
-				data->indexedArrays = newIndexedArray;
-
-				// Add classes
-				data->indexedArrays[CLASS_ARRAY].arraySize = count;
+				root->properties[i].offset += growth;
 			}
 		}
+
+		data->size += growth;
+
+		auto* const newIndexedArrays = memAllocator.AllocateArray<Game::StructuredDataIndexedArray>(data->indexedArrayCount);
+		std::memcpy(newIndexedArrays, data->indexedArrays, data->indexedArrayCount * sizeof(Game::StructuredDataIndexedArray));
+		data->indexedArrays = newIndexedArrays;
+
+		data->indexedArrays[classArray].arraySize = count;
 	}
 
-	void StructuredData::PatchAdditionalData(Game::StructuredDataDef* data, std::unordered_map<std::string, std::string>& patches)
+	void StructuredData::PatchAdditionalData(Game::StructuredDataDef* data, const std::unordered_map<std::string, std::string>& patches)
 	{
-		for (auto& item : patches)
+		for (const auto& [key, value] : patches)
 		{
-			if (item.first == "classes")
+			if (key == "classes")
 			{
-				StructuredData::PatchCustomClassLimit(data, atoi(item.second.data()));
+				PatchCustomClassLimit(data, std::atoi(value.data()));
 			}
 		}
-	}
-
-	bool StructuredData::UpdateVersionOffsets(Game::StructuredDataDefSet* set, Game::StructuredDataBuffer* buffer, Game::StructuredDataDef* whatever)
-	{
-		if (set->defCount > 1)
-		{
-			int bufferVersion = *reinterpret_cast<int*>(buffer->data);
-
-			for (size_t i = 0; i < set->defCount; i++)
-			{
-				if (set->defs[i].version == bufferVersion)
-				{
-					if (i == 0)
-					{
-						// No update to conduct
-					}
-					else
-					{
-						Game::StructuredDataDef* newDef = &set->defs[i - 1];
-						Game::StructuredDataDef* oldDef = &set->defs[i];
-
-						if (newDef->version == 159 && oldDef->version <= 158)
-						{
-							// this should move the data 320 bytes infront
-							std::memmove(&buffer->data[3963], &buffer->data[3643], oldDef->size - 3643);
-						}
-						else if (newDef->version > 159 && false)
-						{
-							// 159 cannot be translated upwards and it's hard to say why
-							// Reading it fails in various ways
-							// might be the funky class bump...?
-
-							Command::Execute("setPlayerData prestige 10");
-							Command::Execute("setPlayerData experience 2516000");
-						}
-
-						return Utils::Hook::Call<bool(void*, void*, void*)>(0x456830)(set, buffer, whatever);
-					}
-				}
-			}
-
-			return Utils::Hook::Call<bool(void*, void*, void*)>(0x456830)(set, buffer, whatever);
-		}
-
-		// StructuredData_UpdateVersion
-		return Utils::Hook::Call<bool(void*, void*, void*)>(0x456830)(set, buffer, whatever);
 	}
 
 	StructuredData::StructuredData()
 	{
-		if (Dedicated::IsEnabled()) return;
-
-		// Do not execute this when building zones
-		if (!ZoneBuilder::IsEnabled())
+		if (!AssetHandler::IsInstalled())
 		{
-			// Correctly upgrade stats
-			Utils::Hook(0x42F088, StructuredData::UpdateVersionOffsets, HOOK_CALL).install()->quick();
-
-			// 15 or more custom classes
-			Utils::Hook::Set<BYTE>(0x60A2FE, NUM_CUSTOM_CLASSES);
-
+			Logger::Error("structureddata: asset loads are not watched, mp/playerdata.def keeps its 10 classes\n");
 			return;
 		}
 
+		if (!Utils::Hook::MatchesBytes(LiveStorage_FinalizeStatsRead_UpdateVersionCall, updateVersionCall, sizeof(updateVersionCall))
+			|| !Utils::Hook::MatchesBytes(LiveStorage_StatsInit_ClassCount, classCountTest, sizeof(classCountTest)))
+		{
+			Logger::Error("structureddata: the stats code does not read as expected, mp/playerdata.def keeps its 10 classes\n");
+			return;
+		}
 
-		// TODO: Since all of the following is zonebuilder-only code, move it to IW4OF or IStructuredDataDefSet.cpp
-		AssetHandler::OnLoad(Game::ASSET_TYPE_STRUCTURED_DATA_DEF, [](Game::XAssetType type, Game::XAssetHeader asset, const std::string_view filename, bool* /*restrict*/)
+		if (!updateVersionHook.Initialize(LiveStorage_FinalizeStatsRead_UpdateVersionCall, reinterpret_cast<void*>(UpdateVersionOffsets), HOOK_CALL)
+			->Install()->IsInstalled())
+		{
+			Logger::Error("structureddata: could not hook the stats version upgrade, mp/playerdata.def keeps its 10 classes\n");
+			return;
+		}
+
+		updateVersionHook.Quick();
+
+		AssetHandler::OnLoad([](unsigned int type, void* asset, const std::string& filename, [[maybe_unused]] bool* restrict)
+		{
+			if (type != assetTypeStructuredDataDef || filename != "mp/playerdata.def")
 			{
-				if (ZoneBuilder::IsDumpingZone()) {
-					return;
+				return;
+			}
+
+			auto* const data = static_cast<Game::StructuredDataDefSet*>(asset);
+
+			if (data->defCount != 1)
+			{
+				Logger::Error("PlayerDataDefSet contains more than 1 definition!\n");
+				return;
+			}
+
+			if (data->defs[0].version != basePlayerStatsVersion)
+			{
+				Logger::Error("Initial PlayerDataDef is not version 155, patching not possible!\n");
+				return;
+			}
+
+			std::unordered_map<int, std::vector<std::vector<std::string>>> patchDefinitions;
+			std::unordered_map<int, std::unordered_map<std::string, std::string>> otherPatchDefinitions;
+			std::unordered_map<int, unsigned int> formatChecksums;
+
+			for (int i = 156;; ++i)
+			{
+				const auto patch = playerDataPatches.find(i);
+
+				if (patch == playerDataPatches.end())
+				{
+					break;
 				}
 
-				// Only intercept playerdatadef loading
-				if (type != Game::ASSET_TYPE_STRUCTURED_DATA_DEF || filename != "mp/playerdata.def") return;
+				std::vector<std::vector<std::string>> enumContainer;
 
-				// Store asset
-				Game::StructuredDataDefSet* data = asset.structuredDataDefSet;
-				if (!data) return;
-
-				if (data->defCount != 1)
+				for (int pType = 0; pType < COUNT; ++pType)
 				{
-					Logger::Error(Game::ERR_FATAL, "PlayerDataDefSet contains more than 1 definition!");
-					return;
+					const auto entries = patch->second.enums.find(enumTranslation[pType]);
+
+					if (entries == patch->second.enums.end())
+					{
+						enumContainer.emplace_back();
+					}
+					else
+					{
+						enumContainer.push_back(entries->second);
+					}
 				}
 
-				if (data->defs[0].version != BASE_PLAYERSTATS_VERSION)
+				patchDefinitions[i] = enumContainer;
+				otherPatchDefinitions[i] = patch->second.other;
+				formatChecksums[i] = patch->second.formatChecksum;
+			}
+
+			if (patchDefinitions.empty())
+			{
+				return;
+			}
+
+			auto* const newData = memAllocator.AllocateArray<Game::StructuredDataDef>(data->defCount + patchDefinitions.size());
+			std::memcpy(&newData[patchDefinitions.size()], data->defs, sizeof(Game::StructuredDataDef) * data->defCount);
+
+			for (unsigned int i = 0; i < patchDefinitions.size(); ++i)
+			{
+				newData[i].version = static_cast<int>(patchDefinitions.size() - i) + basePlayerStatsVersion;
+			}
+
+			data->defs = newData;
+			data->defCount += static_cast<unsigned int>(patchDefinitions.size());
+
+			for (int i = static_cast<int>(data->defCount) - 1; i >= 0; --i)
+			{
+				if (newData[i].version == basePlayerStatsVersion)
 				{
-					Logger::Error(Game::ERR_FATAL, "Initial PlayerDataDef is not version 155, patching not possible!");
-					return;
+					continue;
 				}
 
-				std::unordered_map<int, std::vector<std::vector<std::string>>> patchDefinitions;
-				std::unordered_map<int, std::unordered_map<std::string, std::string>> otherPatchDefinitions;
+				const int version = newData[i].version;
+				data->defs[i] = data->defs[i + 1];
+				newData[i].version = version;
 
-				// First check if all versions are present
-				for (int i = 156;; ++i)
+				if (patchDefinitions.contains(version))
 				{
-					// We're on DB thread (OnLoad) so use DB thread for FS
-					FileSystem::File definition(std::format("{}/{}.json", filename, i), Game::FsThread::FS_THREAD_DATABASE);
-					if (!definition.exists()) break;
+					const auto& patchData = patchDefinitions[version];
 
-					std::vector<std::vector<std::string>> enumContainer;
-					std::unordered_map<std::string, std::string> otherPatches;
-
-					nlohmann::json defData;
-					try
+					for (int pType = 0; pType < COUNT; ++pType)
 					{
-						defData = nlohmann::json::parse(definition.getBuffer());
-					}
-					catch (const nlohmann::json::parse_error& ex)
-					{
-						Logger::PrintError(Game::CON_CHANNEL_ERROR, "JSON Parse Error: {}\n", ex.what());
-						return;
-					}
-
-					if (!defData.is_object())
-					{
-						Logger::Error(Game::ERR_FATAL, "PlayerDataDef patch for version {} is invalid!", i);
-						return;
-					}
-
-					for (auto pType = 0; pType < StructuredData::PlayerDataType::COUNT; ++pType)
-					{
-						auto enumData = defData[StructuredData::EnumTranslation[pType]];
-
-						std::vector<std::string> entryData;
-
-						if (enumData.is_array())
+						if (!patchData[pType].empty())
 						{
-							for (const auto& rawEntry : enumData)
-							{
-								if (rawEntry.is_string())
-								{
-									entryData.push_back(rawEntry.get<std::string>());
-								}
-							}
-						}
-
-						enumContainer.push_back(entryData);
-					}
-
-					auto other = defData["other"];
-
-					if (other.is_object())
-					{
-						for (auto& item : other.items())
-						{
-							if (item.value().is_string())
-							{
-								otherPatches[item.key()] = item.value().get<std::string>();
-							}
+							PatchPlayerDataEnum(&newData[i], static_cast<PlayerDataType>(pType), patchData[pType]);
 						}
 					}
 
-					patchDefinitions[i] = enumContainer;
-					otherPatchDefinitions[i] = otherPatches;
-				}
+					PatchAdditionalData(&newData[i], otherPatchDefinitions[version]);
 
-				// Nothing to patch
-				if (patchDefinitions.empty()) return;
-
-				// Reallocate the definition
-				auto* newData = StructuredData::MemAllocator.allocateArray<Game::StructuredDataDef>(data->defCount + patchDefinitions.size());
-				std::memcpy(&newData[patchDefinitions.size()], data->defs, sizeof(Game::StructuredDataDef) * data->defCount);
-
-				// Set the versions
-				for (unsigned int i = 0; i < patchDefinitions.size(); ++i)
-				{
-					newData[i].version = (patchDefinitions.size() - i) + BASE_PLAYERSTATS_VERSION;
-				}
-
-				// Apply new data
-				data->defs = newData;
-				data->defCount += patchDefinitions.size();
-
-				// Patch the definition
-				for (int i = data->defCount - 1; i >= 0; --i)
-				{
-					// No need to patch version 155
-					if (newData[i].version == BASE_PLAYERSTATS_VERSION)
+					if (formatChecksums[version])
 					{
-						continue;
-					}
-
-					// We start from the previous one
-					const auto version = newData[i].version;
-					data->defs[i] = data->defs[i + 1];
-					newData[i].version = version;
-
-					if (patchDefinitions.contains(newData[i].version))
-					{
-						auto patchData = patchDefinitions[newData[i].version];
-						auto otherData = otherPatchDefinitions[newData[i].version];
-
-						// Invalid patch data
-						if (patchData.size() != StructuredData::PlayerDataType::COUNT)
-						{
-							Logger::Error(Game::ERR_FATAL, "PlayerDataDef patch for version {} wasn't parsed correctly!", newData[i].version);
-							continue;
-						}
-
-						// Apply the patch data
-						for (auto pType = 0; pType < StructuredData::PlayerDataType::COUNT; ++pType)
-						{
-							if (!patchData[pType].empty())
-							{
-								StructuredData::PatchPlayerDataEnum(&newData[i], static_cast<StructuredData::PlayerDataType>(pType), patchData[pType]);
-							}
-						}
-
-						StructuredData::PatchAdditionalData(&newData[i], otherData);
+						newData[i].formatChecksum = formatChecksums[version];
 					}
 				}
-			});
+			}
+
+			Utils::Hook::Set<std::uint8_t>(LiveStorage_StatsInit_ClassCount + 2, NUM_CUSTOM_CLASSES);
+		});
 	}
 }

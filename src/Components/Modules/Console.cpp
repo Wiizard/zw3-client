@@ -1,10 +1,14 @@
+#include "STDInclude.hpp"
+
 #include "Console.hpp"
+#include "Command.hpp"
+#include "Dedicated.hpp"
+#include "Dvar.hpp"
+#include "Events.hpp"
+#include "Flags.hpp"
+#include "Logger.hpp"
+#include "Scheduler.hpp"
 #include "TextRenderer.hpp"
-#include "Window.hpp"
-
-#include "Terminus_4.49.1.ttf.hpp"
-
-#include <version.hpp>
 
 #ifdef MOUSE_MOVED
 	#undef MOUSE_MOVED
@@ -12,261 +16,351 @@
 
 #include <curses.h>
 
-#define REMOVE_HEADERBAR 1
-
 namespace Components
 {
-	static WINDOW* OutputWindow;
-	static WINDOW* InputWindow;
-	static WINDOW* InfoWindow;
+	bool Console::isOpen = false;
+	std::vector<Console::KeyObserver> Console::keyObservers;
+	bool Console::isBig = false;
+	bool Console::isInstalled = false;
 
-	int Console::OutputTop = 0;
-	int Console::OutBuffer = 0;
-	int Console::LastRefresh = 0;
+	Utils::Hook Console::keyEventHook;
+	Utils::Hook Console::charEventHook;
+	Utils::Hook Console::consolePrintHooks[3];
 
-	int Console::Height = 25;
-	int Console::Width = 80;
+	std::atomic_bool Console::isShutdownRequested = false;
+	std::atomic_bool Console::isWatchdogStarted = false;
 
-	char Console::LineBuffer[1024] = {0};
-	char Console::LineBuffer2[1024] = {0};
-	int Console::LineBufferIndex = 0;
+	constexpr int maxLines = 2048;
+	constexpr int lineLength = 256;
+	constexpr int inputCapacity = 256;
+	constexpr int historyMax = 32;
+	constexpr int maxMatches = 24;
 
-	bool Console::HasConsole = false;
-	bool Console::SkipShutdown = false;
-	std::atomic_bool Console::ShutdownRequested = false;
-	std::atomic_bool Console::ShutdownWatchdogStarted = false;
+	static char lineBuffer[maxLines][lineLength];
+	static int writeHead = 0;
+	static int lineBufferCount = 0;
+	static int scrollOffset = 0;
+	static int visibleLineCount = 0;
+	static SRWLOCK lineBufferLock = SRWLOCK_INIT;
 
-	COLORREF Console::TextColor =
-#ifdef _DEBUG
-		RGB(255, 200, 117);
-#else
-		RGB(120, 237, 122);
-#endif
+	static char inputBuffer[inputCapacity];
+	static int inputLength = 0;
+	static int inputCursor = 0;
+	static int inputScroll = 0;
+	static int inputDrawWidth = 0;
+	static bool isOverstrike = false;
 
-	COLORREF Console::BackgroundColor =
-#ifdef _DEBUG
-		RGB(35, 21, 0);
-#else
-		RGB(25, 32, 25);
-#endif
-	HBRUSH Console::ForegroundBrush = CreateSolidBrush(TextColor);
-	HBRUSH Console::BackgroundBrush = CreateSolidBrush(BackgroundColor);
+	static char historyBuffer[historyMax][inputCapacity];
+	static int historyCount = 0;
+	static int historyBrowse = -1;
 
-	HANDLE Console::CustomConsoleFont;
+	static char matchBuffer[maxMatches][64];
+	static int matchCount = 0;
+	static int matchTotal = 0;
 
-	std::thread Console::ConsoleThread;
+	static float minX = 0.0f;
+	static float minY = 0.0f;
+	static float maxX = 0.0f;
+	static float maxY = 0.0f;
+	static float fontHeight = 16.0f;
 
-	Game::SafeArea Console::OriginalSafeArea;
+	constexpr float textScale = 1.0f;
+	constexpr float pad = 6.0f;
+	constexpr float inputBandHeight = 32.0f;
+	constexpr float valueColumnOffset = 348.0f;
+	constexpr float scrollBarWidth = 10.0f;
+	constexpr int nameClamp = 28;
+	constexpr int valueClamp = 40;
 
-	bool Console::isCommand;
+	constexpr const char* promptText = "Call of Duty: Zombie Warfare 3> ";
+	constexpr const char* versionText = "Call of Duty: Zombie Warfare 3";
 
-	const char** Console::GetAutoCompleteFileList(const char* path, const char* extension, Game::FsListBehavior_e behavior, int* numfiles, [[maybe_unused]] int allocTrackType)
+	constexpr Console::Color inputBoxColor{ 0.25f, 0.25f, 0.20f, 1.00f };
+	constexpr Console::Color inputHintBoxColor{ 0.40f, 0.40f, 0.35f, 1.00f };
+	constexpr Console::Color outputWindowColor{ 0.35f, 0.35f, 0.30f, 0.75f };
+	constexpr Console::Color outputBarColor{ 1.00f, 1.00f, 0.95f, 0.60f };
+	constexpr Console::Color outputSliderColor{ 0.15f, 0.15f, 0.10f, 0.60f };
+	constexpr Console::Color outputTextColor{ 1.00f, 1.00f, 1.00f, 1.00f };
+	constexpr Console::Color versionColor{ 1.00f, 1.00f, 0.00f, 1.00f };
+	constexpr Console::Color dvarNameColor{ 1.00f, 1.00f, 0.80f, 1.00f };
+	constexpr Console::Color dvarValueColor{ 1.00f, 1.00f, 1.00f, 1.00f };
+	constexpr Console::Color commandNameColor{ 0.80f, 0.80f, 1.00f, 1.00f };
+	constexpr Console::Color descriptionColor{ 0.80f, 0.80f, 1.00f, 1.00f };
+
+	constexpr std::uintptr_t cls_whiteMaterial = 0x140C5CF08;
+	constexpr std::uintptr_t cls_consoleFont = 0x140C5CF18;
+	constexpr std::uintptr_t keyCatchers = 0x1406CECF0;
+	constexpr std::uintptr_t cmd_functions = 0x141BBC798;
+	constexpr std::uintptr_t dvarHashTable = 0x1466E3A60;
+
+	constexpr int dvarName = 0x0;
+	constexpr int dvarType = 0xC;
+	constexpr int dvarCurrent = 0x10;
+	constexpr int dvarReset = 0x30;
+	constexpr int dvarHashNext = 0x58;
+	constexpr int dvarHashBuckets = 1024;
+
+	constexpr unsigned char dvarTypeBool = 0;
+	constexpr unsigned char dvarTypeFloat = 1;
+	constexpr unsigned char dvarTypeInt = 5;
+	constexpr unsigned char dvarTypeEnum = 6;
+	constexpr unsigned char dvarTypeString = 7;
+
+	constexpr int cmdNext = 0x0;
+	constexpr int cmdName = 0x8;
+
+	constexpr int keyTab = 0x9;
+	constexpr int keyEnter = 0xD;
+	constexpr int keyEscape = 0x1B;
+	constexpr int keyConsole = 0x7E;
+	constexpr int keyBackspace = 0x7F;
+	constexpr int keyUpArrow = 0x9A;
+	constexpr int keyDownArrow = 0x9B;
+	constexpr int keyLeftArrow = 0x9C;
+	constexpr int keyRightArrow = 0x9D;
+	constexpr int keyInsert = 0xA1;
+	constexpr int keyPageDown = 0xA3;
+	constexpr int keyPageUp = 0xA4;
+	constexpr int keyHome = 0xA5;
+	constexpr int keyEnd = 0xA6;
+	constexpr int keyMouseWheelDown = 0xCD;
+	constexpr int keyMouseWheelUp = 0xCE;
+
+	constexpr std::uintptr_t CL_KeyEventCall = 0x1401F402D;
+	constexpr std::uintptr_t CL_CharEventCall = 0x1401F4018;
+	constexpr std::uintptr_t CL_ConsolePrint_AddLineCalls[] = { 0x1400EB814, 0x1400EB88B, 0x1400EBFCC };
+
+	constexpr std::uintptr_t Sys_Error = 0x1402A4F90;
+	static const std::uint8_t sysErrorEntry[] = { 0x48, 0x89, 0x4C, 0x24, 0x08 };
+
+	static Utils::Hook sysErrorHook;
+
+	static void StdOutError(const char* fmt, ...)
 	{
-		if (path == reinterpret_cast<char*>(0xBAADF00D) || path == reinterpret_cast<char*>(0xCDCDCDCD) || ::Utils::Memory::IsBadReadPtr(path)) return nullptr;
-		return Game::FS_ListFiles(path, extension, behavior, numfiles);
+		char buffer[4096]{};
+
+		va_list ap;
+		va_start(ap, fmt);
+		vsnprintf_s(buffer, _TRUNCATE, fmt, ap);
+		va_end(ap);
+
+		perror(buffer);
+		std::fflush(stderr);
+
+		ExitProcess(1);
 	}
 
-	void Console::RefreshStatus()
-	{
-		const std::string mapname = (*Game::sv_mapname)->current.string;
-		const auto hostname = TextRenderer::StripColors((*Game::sv_hostname)->current.string);
+	constexpr int outputHeight = 250;
 
-		if (HasConsole)
-		{
-			SetConsoleTitleA(hostname.data());
+	static WINDOW* outputWindow = nullptr;
+	static WINDOW* inputWindow = nullptr;
+	static WINDOW* infoWindow = nullptr;
 
-			auto clientCount = 0;
-			auto maxClientCount = *Game::svs_clientCount;
+	static int outputTop = 0;
+	static int outBuffer = 0;
+	static int lastRefresh = 0;
+	static int consoleWidth = 80;
+	static int consoleHeight = 25;
 
-			if (maxClientCount)
-			{
-				for (auto i = 0; i < maxClientCount; ++i)
-				{
-					if (Game::svs_clients[i].header.state >= Game::CS_CONNECTED)
-					{
-						++clientCount;
-					}
-				}
-			}
-			else
-			{
-				maxClientCount = *Game::party_maxplayers ? (*Game::party_maxplayers)->current.integer : 18;
-				clientCount = Game::PartyHost_CountMembers(Game::g_lobbyData);
-			}
+	static char promptLine[1024]{};
+	static char lastPromptLine[1024]{};
+	static int promptLength = 0;
+	static bool hasPrompt = false;
 
-			wclear(InfoWindow);
-			wprintw(InfoWindow, "%s : %d/%d players : map %s", hostname.data(), clientCount, maxClientCount, (!mapname.empty()) ? mapname.data() : "none");
-			wnoutrefresh(InfoWindow);
-		}
-		else if (IsWindow(GetWindow()) != FALSE)
-		{
-#ifdef EXPERIMENTAL_BUILD
-			SetWindowTextA(GetWindow(), Utils::String::Format("Call of Duty: Zombie Warfare 3 - {}", hostname));
-#else
-			SetWindowTextA(GetWindow(), Utils::String::Format("Call of Duty: Zombie Warfare 3 - {}", hostname));
-#endif
-		}
-	}
+	static std::recursive_mutex cursesMutex;
+
+	constexpr std::uintptr_t Sys_GetEvent_Sys_ConsoleInputCall = 0x1402A5218;
+	constexpr std::uintptr_t Sys_ConsoleInput = 0x1402A9310;
+
+	static Utils::Hook consoleInputHook;
 
 	void Console::ShowPrompt()
 	{
-		wattron(InputWindow, COLOR_PAIR(10) | A_BOLD);
-#ifdef EXPERIMENTAL_BUILD
-		wprintw(InputWindow, "%s> ", REVISION_STR);
-#else
-		wprintw(InputWindow, "%s> ", REVISION_STR);
-#endif
+		wattron(inputWindow, COLOR_PAIR(10) | A_BOLD);
+		wprintw(inputWindow, "%s", promptText);
 	}
 
 	void Console::RefreshOutput()
 	{
-		prefresh(OutputWindow, ((OutputTop > 0) ? (OutputTop - 1) : 0), 0, 1, 0, Height - 2, Width - 1);
+		int top = 0;
+
+		if (outputTop > 0)
+		{
+			top = outputTop - 1;
+		}
+
+		prefresh(outputWindow, top, 0, 1, 0, consoleHeight - 2, consoleWidth - 1);
 	}
 
 	void Console::ScrollOutput(int amount)
 	{
-		OutputTop += amount;
+		const int maxTop = outputHeight - (consoleHeight - 2);
 
-		if (OutputTop > OUTPUT_MAX_TOP)
+		outputTop += amount;
+
+		if (outputTop > maxTop)
 		{
-			OutputTop = OUTPUT_MAX_TOP;
+			outputTop = maxTop;
 		}
-		else if (OutputTop < 0)
+		else if (outputTop < 0)
 		{
-			OutputTop = 0;
+			outputTop = 0;
 		}
 
-		// make it only scroll the top if there's more than HEIGHT lines
-		if (OutBuffer >= 0)
+		if (outBuffer >= 0)
 		{
-			OutBuffer += amount;
+			outBuffer += amount;
 
-			if (OutBuffer >= Height)
+			if (outBuffer >= consoleHeight)
 			{
-				OutBuffer = -1;
+				outBuffer = -1;
 			}
 
-			if (OutputTop < Height)
+			if (outputTop < consoleHeight)
 			{
-				OutputTop = 0;
+				outputTop = 0;
 			}
 		}
 	}
 
-	float Console::GetDpiScale(const HWND hWnd)
+	void Console::RefreshStatus()
 	{
-		const auto user32 = Utils::Library("user32.dll");
-		const auto getDpiForWindow = user32.getProc<UINT(WINAPI*)(HWND)>("GetDpiForWindow");
-		const auto getDpiForMonitor = user32.getProc<HRESULT(WINAPI*)(HMONITOR, int, UINT*, UINT*)>("GetDpiForMonitor");
+		std::lock_guard lock(cursesMutex);
 
-		int dpi;
-
-		if (getDpiForWindow)
+		if (!infoWindow || !hasPrompt)
 		{
-			dpi = static_cast<int>(getDpiForWindow(hWnd));
+			return;
 		}
-		else if (getDpiForMonitor)
-		{
-			HMONITOR hMonitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
-			UINT xdpi, ydpi;
-			getDpiForMonitor(hMonitor, 0, &xdpi, &ydpi);
 
-			dpi = 96;
+		const std::string hostname = TextRenderer::StripColors(Dvar::Var("sv_hostname").Get<std::string>());
+		const std::string mapname = Dvar::Var("mapname").Get<std::string>();
+
+		SetConsoleTitleA(hostname.data());
+
+		int clientCount = 0;
+		int maxClientCount = *Game::svs_clientCount;
+
+		if (maxClientCount)
+		{
+			for (int i = 0; i < maxClientCount; ++i)
+			{
+				if (Game::svs_clients[i].header.state >= Game::CS_CONNECTED)
+				{
+					++clientCount;
+				}
+			}
 		}
 		else
 		{
-			HDC hDC = GetDC(hWnd);
-			INT ydpi = GetDeviceCaps(hDC, LOGPIXELSY);
-			ReleaseDC(nullptr, hDC);
+			const Dvar::Var partyMaxPlayers("party_maxplayers");
+			maxClientCount = 18;
 
-			dpi = ydpi;
+			if (partyMaxPlayers.IsValid())
+			{
+				maxClientCount = partyMaxPlayers.Get<int>();
+			}
+
+			clientCount = Game::PartyClient_CountMembersEvenIfInactive(Game::g_lobbyData);
 		}
 
-		constexpr auto unawareDpi = 96.0f;
-		return static_cast<float>(dpi) / unawareDpi;
-	}
+		const char* shownMap = "none";
 
+		if (!mapname.empty())
+		{
+			shownMap = mapname.data();
+		}
+
+		wclear(infoWindow);
+		wprintw(infoWindow, "%s : %d/%d players : map %s", hostname.data(), clientCount, maxClientCount, shownMap);
+		wnoutrefresh(infoWindow);
+	}
 
 	const char* Console::Input()
 	{
-		if (!HasConsole)
-		{
-			ShowPrompt();
-			wrefresh(InputWindow);
-			HasConsole = true;
-		}
+		std::lock_guard lock(cursesMutex);
 
-		auto currentTime = static_cast<int>(GetTickCount64()); // Make our compiler happy
-		if ((currentTime - LastRefresh) > 250)
-		{
-			RefreshOutput();
-			LastRefresh = currentTime;
-		}
-
-		auto c = wgetch(InputWindow);
-
-		if (c == ERR)
+		if (!inputWindow)
 		{
 			return nullptr;
 		}
 
-		switch (c)
+		if (!hasPrompt)
+		{
+			ShowPrompt();
+			wrefresh(inputWindow);
+			hasPrompt = true;
+		}
+
+		const auto currentTime = static_cast<int>(GetTickCount64());
+
+		if (currentTime - lastRefresh > 250)
+		{
+			RefreshOutput();
+			lastRefresh = currentTime;
+		}
+
+		const int key = wgetch(inputWindow);
+
+		if (key == ERR)
+		{
+			return nullptr;
+		}
+
+		switch (key)
 		{
 		case '\r':
-		case 459: // keypad enter
+		case 459:
 		{
-			wattron(OutputWindow, COLOR_PAIR(10) | A_BOLD);
-			wprintw(OutputWindow, "%s", "]");
+			wattron(outputWindow, COLOR_PAIR(10) | A_BOLD);
+			wprintw(outputWindow, "%s", "]");
 
-			if (LineBufferIndex)
+			if (promptLength)
 			{
-				wprintw(OutputWindow, "%s", LineBuffer);
+				wprintw(outputWindow, "%s", promptLine);
 			}
 
-			wprintw(OutputWindow, "%s", "\n");
-			wattroff(OutputWindow, A_BOLD);
-			wclear(InputWindow);
+			wprintw(outputWindow, "%s", "\n");
+			wattroff(outputWindow, A_BOLD);
+			wclear(inputWindow);
 
 			ShowPrompt();
-
-			wrefresh(InputWindow);
+			wrefresh(inputWindow);
 
 			ScrollOutput(1);
 			RefreshOutput();
 
-			if (LineBufferIndex)
+			if (promptLength)
 			{
-				strcpy_s(LineBuffer2, LineBuffer);
-				strcat_s(LineBuffer, "\n");
-				LineBufferIndex = 0;
-				return LineBuffer;
+				strcpy_s(lastPromptLine, promptLine);
+				strcat_s(promptLine, "\n");
+				promptLength = 0;
+				return promptLine;
 			}
 
 			break;
 		}
-		case 'c' - 'a' + 1: // ctrl-c
+		case 'c' - 'a' + 1:
 		case 27:
 		{
-			LineBuffer[0] = '\0';
-			LineBufferIndex = 0;
+			promptLine[0] = '\0';
+			promptLength = 0;
 
-			wclear(InputWindow);
-
+			wclear(inputWindow);
 			ShowPrompt();
-
-			wrefresh(InputWindow);
+			wrefresh(inputWindow);
 			break;
 		}
-		case 8: // backspace
+		case 8:
 		{
-			if (LineBufferIndex > 0)
+			if (promptLength > 0)
 			{
-				LineBufferIndex--;
-				LineBuffer[LineBufferIndex] = '\0';
+				--promptLength;
+				promptLine[promptLength] = '\0';
 
-				wprintw(InputWindow, "%c %c", static_cast<char>(c), static_cast<char>(c));
-				wrefresh(InputWindow);
+				wprintw(inputWindow, "%c %c", static_cast<char>(key), static_cast<char>(key));
+				wrefresh(inputWindow);
 			}
+
 			break;
 		}
 		case KEY_PPAGE:
@@ -283,82 +377,84 @@ namespace Components
 		}
 		case KEY_UP:
 		{
-			wclear(InputWindow);
+			wclear(inputWindow);
 			ShowPrompt();
-			wprintw(InputWindow, "%s", LineBuffer2);
-			wrefresh(InputWindow);
+			wprintw(inputWindow, "%s", lastPromptLine);
+			wrefresh(inputWindow);
 
-			strcpy_s(LineBuffer, LineBuffer2);
-			LineBufferIndex = static_cast<int>(std::strlen(LineBuffer));
+			strcpy_s(promptLine, lastPromptLine);
+			promptLength = static_cast<int>(std::strlen(promptLine));
 			break;
 		}
 		default:
-			if (c <= 127 && LineBufferIndex < 1022)
+		{
+			if (key <= 127 && promptLength < 1022)
 			{
-				// temporary workaround, find out what overwrites our index later on
-				//consoleLineBufferIndex = strlen(consoleLineBuffer);
+				promptLine[promptLength++] = static_cast<char>(key);
+				promptLine[promptLength] = '\0';
 
-				LineBuffer[LineBufferIndex++] = static_cast<char>(c);
-				LineBuffer[LineBufferIndex] = '\0';
-				wprintw(InputWindow, "%c", static_cast<char>(c));
-				wrefresh(InputWindow);
+				wprintw(inputWindow, "%c", static_cast<char>(key));
+				wrefresh(inputWindow);
 			}
+
 			break;
+		}
 		}
 
 		return nullptr;
 	}
 
-	void Console::Destroy()
-	{
-		__try
-		{
-			delwin(OutputWindow);
-			delwin(InputWindow);
-			delwin(InfoWindow);
-			endwin();
-			delscreen(SP);
-		}
-		__finally {}
-
-		OutputWindow = nullptr;
-		InputWindow = nullptr;
-		InfoWindow = nullptr;
-	}
-
 	void Console::Create()
 	{
-		OutputTop = 0;
-		OutBuffer = 0;
-		LastRefresh = 0;
-		LineBufferIndex = 0;
-		HasConsole = false;
+		std::lock_guard lock(cursesMutex);
+
+		if (!GetConsoleWindow() && !AllocConsole())
+		{
+			Logger::Error("console: could not open a console window: {}\n", GetLastError());
+			return;
+		}
+
+		if (GetFileType(GetStdHandle(STD_INPUT_HANDLE)) != FILE_TYPE_CHAR)
+		{
+			MessageBoxA(nullptr, "Console not supported, please use '-stdout'!", "Zombie Warfare 3", MB_ICONERROR);
+			TerminateProcess(GetCurrentProcess(), EXIT_FAILURE);
+		}
+
+		outputTop = 0;
+		outBuffer = 0;
+		lastRefresh = 0;
+		promptLength = 0;
+		hasPrompt = false;
 
 		CONSOLE_SCREEN_BUFFER_INFO info;
+
 		if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info))
 		{
-			Width = info.dwSize.X;
-			Height = info.srWindow.Bottom - info.srWindow.Top + 1;
+			consoleWidth = info.dwSize.X;
+			consoleHeight = info.srWindow.Bottom - info.srWindow.Top + 1;
 		}
-		else
+
+		DWORD inputMode = 0;
+		const HANDLE consoleInput = GetStdHandle(STD_INPUT_HANDLE);
+
+		if (GetConsoleMode(consoleInput, &inputMode))
 		{
-			Height = 25;
-			Width = 80;
+			SetConsoleMode(consoleInput, (inputMode & ~ENABLE_QUICK_EDIT_MODE) | ENABLE_EXTENDED_FLAGS);
 		}
 
 		initscr();
 		raw();
 		noecho();
 
-		OutputWindow = newpad(Height - 1, Width);
-		InputWindow = newwin(1, Width, Height - 1, 0);
-		InfoWindow = newwin(1, Width, 0, 0);
+		outputWindow = newpad(outputHeight, consoleWidth);
+		inputWindow = newwin(1, consoleWidth, consoleHeight - 1, 0);
+		infoWindow = newwin(1, consoleWidth, 0, 0);
 
-		scrollok(OutputWindow, true);
-		idlok(OutputWindow, true);
-		scrollok(InputWindow, true);
-		nodelay(InputWindow, true);
-		keypad(InputWindow, true);
+		scrollok(outputWindow, true);
+		idlok(outputWindow, true);
+		scrollok(inputWindow, true);
+		nodelay(inputWindow, true);
+		keypad(inputWindow, true);
 
 		if (has_colors())
 		{
@@ -375,324 +471,1172 @@ namespace Components
 			init_pair(10, COLOR_WHITE, COLOR_BLACK);
 		}
 
-		wbkgd(InfoWindow, COLOR_PAIR(1));
+		wbkgd(infoWindow, COLOR_PAIR(1));
 
-		wrefresh(InfoWindow);
-		wrefresh(InputWindow);
+		wrefresh(infoWindow);
+		wrefresh(inputWindow);
+
+		AcquireSRWLockShared(&lineBufferLock);
+
+		for (int i = lineBufferCount; i > 0; --i)
+		{
+			PrintCurses(lineBuffer[(writeHead - i + maxLines) % maxLines]);
+			PrintCurses("\n");
+		}
+
+		ReleaseSRWLockShared(&lineBufferLock);
 
 		RefreshOutput();
 	}
 
 	void Console::Error(const char* fmt, ...)
 	{
-		char buf[4096] = {0};
+		char buffer[4096]{};
 
-		va_list va;
-		va_start(va, fmt);
-		vsnprintf_s(buf, _TRUNCATE, fmt, va);
-		va_end(va);
+		va_list ap;
+		va_start(ap, fmt);
+		vsnprintf_s(buffer, _TRUNCATE, fmt, ap);
+		va_end(ap);
 
-		Logger::PrintError(Game::CON_CHANNEL_ERROR, "{}\n", buf);
+		Logger::Error("{}\n", buffer);
 
-		RefreshOutput();
-
-#ifdef _DEBUG
-		if (IsDebuggerPresent())
 		{
-			while (true)
+			std::lock_guard lock(cursesMutex);
+
+			if (outputWindow)
 			{
-				std::this_thread::sleep_for(5s);
+				RefreshOutput();
 			}
 		}
-#endif
 
 		TerminateProcess(GetCurrentProcess(), EXIT_FAILURE);
 	}
 
-	void Console::Print(const char* message)
+	void Console::PrintCurses(const char* text)
 	{
-		if (!OutputWindow) return;
+		std::lock_guard lock(cursesMutex);
 
-		const char* p = message;
-		while (*p != '\0')
-		{
-			if (*p == '^')
-			{
-				++p;
-
-				const char color = (*p - '0');
-				if (color < 9 && color > 0)
-				{
-					wattron(OutputWindow, COLOR_PAIR(color + 2));
-					++p;
-					continue;
-				}
-			}
-
-			waddch(OutputWindow, *p);
-
-			++p;
-		}
-
-		wattron(OutputWindow, COLOR_PAIR(9));
-
-		RefreshOutput();
-	}
-
-	HFONT CALLBACK Console::ReplaceFont([[maybe_unused]] int cHeight, int cWidth, int cEscapement, int cOrientation, [[maybe_unused]] int cWeight, DWORD bItalic, DWORD bUnderline,
-	                                    DWORD bStrikeOut, DWORD iCharSet, [[maybe_unused]] DWORD iOutPrecision, DWORD iClipPrecision, [[maybe_unused]] DWORD iQuality,
-	                                    [[maybe_unused]] DWORD iPitchAndFamily, [[maybe_unused]] LPCSTR pszFaceName)
-	{
-		HFONT font = CreateFontA(12, cWidth, cEscapement, cOrientation, 700, bItalic,
-		                         bUnderline, bStrikeOut, iCharSet, OUT_RASTER_PRECIS,
-		                         iClipPrecision, NONANTIALIASED_QUALITY, 0x31,
-		                         "Terminus (TTF)"
-		);
-
-		return font;
-	}
-
-	void Console::GetWindowPos(HWND hWnd, int* x, int* y)
-	{
-		HWND hWndParent = GetParent(hWnd);
-		POINT p{};
-
-		MapWindowPoints(hWnd, hWndParent, &p, 1);
-
-		(*x) = p.x;
-		(*y) = p.y;
-	}
-
-	BOOL CALLBACK Console::ResizeChildWindow(HWND hwndChild, LPARAM lParam)
-	{
-		auto id = GetWindowLong(hwndChild, GWL_ID);
-		auto isInputBox = id == INPUT_BOX;
-		auto isOutputBox = id == OUTPUT_BOX;
-
-		if (isInputBox || isOutputBox)
-		{
-			RECT newParentRect = *reinterpret_cast<LPRECT>(lParam);
-
-			RECT childRect;
-
-			if (GetWindowRect(hwndChild, &childRect))
-			{
-
-				int childX, childY;
-
-				GetWindowPos(hwndChild, &childX, &childY);
-
-				HWND parent = Utils::Hook::Get<HWND>(0x64A3288);
-
-				auto scale = GetDpiScale(parent);
-
-				if (isInputBox)
-				{
-
-					auto newX = childX; // No change!
-					auto newY = static_cast<int>((newParentRect.bottom - newParentRect.top) - 65 * scale);
-					auto newWidth = static_cast<int>((newParentRect.right - newParentRect.left) - 29 * scale);
-					auto newHeight = static_cast<int>((childRect.bottom - childRect.top) * scale); // No change!
-
-					MoveWindow(hwndChild, newX, newY, newWidth, newHeight, TRUE);
-				}
-
-				if (isOutputBox)
-				{
-					auto newX = childX; // No change!
-					auto newY = childY; // No change!
-					auto newWidth = static_cast<int>((newParentRect.right - newParentRect.left) - 29);
-
-#ifdef REMOVE_HEADERBAR
-					constexpr auto margin = 10;
-#else
-					constexpr auto margin = 70;
-#endif
-					auto newHeight = static_cast<int>((newParentRect.bottom - newParentRect.top) - 74 * scale - margin);
-
-					MoveWindow(hwndChild, newX, newY, newWidth, newHeight, TRUE);
-				}
-			}
-		}
-
-		return TRUE;
-	}
-
-	// Instead of clearing fully the console text whenever the 0x400's character is written, we
-	//	clear it progressively when we run out of room by truncating the top line by line.
-	// A bit of trickery with SETREDRAW is required to avoid having the outputbox jump
-	//	around whenever clearing occurs.
-	void Console::MakeRoomForText([[maybe_unused]] int addedCharacters)
-	{
-		constexpr auto maxChars = 0x4000;
-		constexpr auto maxAffectedChars = 0x100;
-		HWND outputBox = Utils::Hook::Get<HWND>(0x64A328C);
-
-		auto totalClearLength = 0;
-
-		char str[maxAffectedChars];
-		const auto fetchedCharacters = GetWindowTextA(outputBox, str, maxAffectedChars);
-
-		auto totalChars = GetWindowTextLengthA(outputBox);
-		while (totalChars - totalClearLength > maxChars)
-		{
-			auto clearLength = maxAffectedChars; // Default to full clear
-
-			for (auto i = 0; i < fetchedCharacters; i++)
-			{
-				if (str[i] == '\n')
-				{
-					// Shorter clear if I meet a linebreak
-					clearLength = i + 1;
-					break;
-				}
-			}
-
-			totalClearLength += clearLength;
-		}
-
-		if (totalClearLength > 0)
-		{
-			SendMessageA(outputBox, WM_SETREDRAW, FALSE, 0);
-			SendMessageA(outputBox, EM_SETSEL, 0, totalClearLength);
-			SendMessageA(outputBox, EM_REPLACESEL, FALSE, 0);
-			SendMessageA(outputBox, WM_SETREDRAW, TRUE, 0);
-		}
-
-		Utils::Hook::Set(0x64A38B8, totalChars - totalClearLength);
-	}
-
-	void __declspec(naked) Console::Sys_PrintStub()
-	{
-		__asm
-		{
-			pushad
-			push edi
-			call MakeRoomForText
-			pop edi
-			popad
-
-			// Go back to AppendText
-			push 0x4F57F8
-			ret
-		}
-	}
-
-	LRESULT CALLBACK Console::ConWndProc(HWND hWnd, UINT Msg, WPARAM wParam, unsigned int lParam)
-	{
-		switch (Msg)
-		{
-		case WM_CREATE:
-		{
-			BOOL darkMode = TRUE;
-			constexpr auto DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
-			DwmSetWindowAttribute(hWnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &darkMode, sizeof(darkMode));
-			break;
-		}
-
-		case WM_CTLCOLORSTATIC:
-		case WM_CTLCOLOREDIT:
-		{
-			SetBkColor(reinterpret_cast<HDC>(wParam), BackgroundColor);
-			SetTextColor(reinterpret_cast<HDC>(wParam), TextColor);
-			return reinterpret_cast<LRESULT>(BackgroundBrush);
-		}
-
-		case WM_CLOSE:
-			RequestShutdown(5000);
-			return 0;
-
-		case WM_SIZE:
-			RECT rect;
-
-			if (GetWindowRect(hWnd, &rect))
-			{
-				EnumChildWindows(hWnd, ResizeChildWindow, reinterpret_cast<LPARAM>(&rect));
-			}
-
-			return 0;
-		}
-
-		return Utils::Hook::Call<LRESULT CALLBACK(HWND, UINT, WPARAM, unsigned int)>(0x64DC50)(hWnd, Msg, wParam, lParam);
-	}
-
-	ATOM CALLBACK Console::RegisterClassHook(WNDCLASSA* lpWndClass)
-	{
-		DeleteObject(lpWndClass->hbrBackground);
-		HBRUSH brush = CreateSolidBrush(BackgroundColor);
-		lpWndClass->hbrBackground = brush;
-
-		return RegisterClassA(lpWndClass);
-	}
-
-	void Console::ApplyConsoleStyle()
-	{
-		Utils::Hook::Set<std::uint8_t>(0x428A8E, 0);    // Adjust logo Y pos
-		Utils::Hook::Set<std::uint8_t>(0x428A90, 0);    // Adjust logo X pos
-		Utils::Hook::Set<std::uint8_t>(0x428AF2, 67);   // Adjust output Y pos
-		Utils::Hook::Set<std::uint32_t>(0x428AC5, 397); // Adjust input Y pos
-		Utils::Hook::Set<std::uint32_t>(0x428951, 609); // Reduce window width
-		Utils::Hook::Set<std::uint32_t>(0x42895D, 423); // Reduce window height
-		Utils::Hook::Set<std::uint32_t>(0x428AC0, 597); // Reduce input width
-		Utils::Hook::Set<std::uint32_t>(0x428AED, 596); // Reduce output width
-
-		DWORD fontsInstalled;
-		CustomConsoleFont = AddFontMemResourceEx(const_cast<void*>(reinterpret_cast<const void*>(Font::Terminus::DATA)), Font::Terminus::LENGTH, 0, &fontsInstalled);
-
-		if (fontsInstalled > 0)
-		{
-			Utils::Hook::Nop(0x428A44, 6);
-			Utils::Hook(0x428A44, ReplaceFont, HOOK_CALL).install()->quick();
-		}
-
-		Utils::Hook::Nop(0x42892D, 6);
-		Utils::Hook(0x42892D, RegisterClassHook, HOOK_CALL).install()->quick();
-
-		Utils::Hook::Set(0x4288E6 + 4, &ConWndProc);
-
-		auto style = WS_CAPTION | WS_SIZEBOX | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
-		Utils::Hook::Set(0x42893F + 1, style);
-		Utils::Hook::Set(0x4289E2 + 1, style);
-
-#ifdef REMOVE_HEADERBAR
-		// Remove that hideous header window -rox
-		Utils::Hook::Set(0x428A7C, static_cast<char>(0xEB));
-		Utils::Hook::Set(0X428AF1 + 1, static_cast<char>(10));
-#endif
-
-		// Never reset text
-		Utils::Hook::Nop(0x4F57DF, 0x4F57F6 - 0x4F57DF);
-		Utils::Hook(0x4F57DF, Sys_PrintStub, HOOK_JUMP).install()->quick();
-
-	}
-
-	void Console::RequestShutdown(const DWORD watchdogDelayMs)
-	{
-		const auto alreadyRequested = ShutdownRequested.exchange(true);
-		if (alreadyRequested)
+		if (!outputWindow)
 		{
 			return;
 		}
 
-		Command::Execute("quit\n", false);
+		const char* character = text;
+
+		while (*character != '\0')
+		{
+			if (*character == '^')
+			{
+				++character;
+
+				if (*character == '\0')
+				{
+					break;
+				}
+
+				const int color = *character - '0';
+
+				if (color < 9 && color > 0)
+				{
+					wattron(outputWindow, COLOR_PAIR(color + 2));
+					++character;
+					continue;
+				}
+			}
+
+			waddch(outputWindow, *character);
+			++character;
+		}
+
+		wattron(outputWindow, COLOR_PAIR(9));
+
+		RefreshOutput();
+	}
+
+	struct BuiltinCommand
+	{
+		const char* name;
+		const char* description;
+	};
+
+	static const BuiltinCommand builtins[] =
+	{
+		{ "clear", "clears the console scrollback" },
+		{ "echo", "echo <text>, prints text to the console" },
+		{ "quit", "exits the game" },
+	};
+
+	Game::Material* Console::WhiteMaterial()
+	{
+		auto* const slot = reinterpret_cast<Game::Material**>(Utils::Hook::Rebase(cls_whiteMaterial));
+
+		if (*slot)
+		{
+			return *slot;
+		}
+
+		return Game::Material_RegisterHandle("white", 7);
+	}
+
+	Game::Font_s* Console::ConsoleFont()
+	{
+		auto* const slot = reinterpret_cast<Game::Font_s**>(Utils::Hook::Rebase(cls_consoleFont));
+
+		if (*slot)
+		{
+			return *slot;
+		}
+
+		return Game::R_RegisterFont("fonts/consoleFont", 7);
+	}
+
+	bool Console::IsRenderReady()
+	{
+		return WhiteMaterial() != nullptr && ConsoleFont() != nullptr;
+	}
+
+	int Console::TextWidth(const char* text)
+	{
+		auto* const font = ConsoleFont();
+
+		if (!font || !text)
+		{
+			return 0;
+		}
+
+		return static_cast<int>(Game::R_TextWidth(text, 0x7FFFFFFF, font) * textScale);
+	}
+
+	int Console::TextHeight()
+	{
+		auto* const font = ConsoleFont();
+
+		if (!font)
+		{
+			return 0;
+		}
+
+		return static_cast<int>(Game::R_TextHeight(font) * textScale);
+	}
+
+	void Console::FreeNativeConsole()
+	{
+		if (!Flags::HasFlag("stdout") && (!Dedicated::IsEnabled() || Flags::HasFlag("console")))
+		{
+			FreeConsole();
+		}
+	}
+
+	bool Console::IsOpen()
+	{
+		return isOpen;
+	}
+
+	void Console::OnKey(const KeyObserver& observer)
+	{
+		keyObservers.push_back(observer);
+	}
+
+	static int LengthBeforeInlineMaterial(const char* text, int length)
+	{
+		for (int i = 0; i + 1 < length; ++i)
+		{
+			if (text[i] == '^' && (text[i + 1] == 1 || text[i + 1] == 2))
+			{
+				return i;
+			}
+		}
+
+		return length;
+	}
+
+	void Console::PushLine(const char* text, int length)
+	{
+		length = LengthBeforeInlineMaterial(text, length);
+
+		if (length >= lineLength)
+		{
+			length = lineLength - 1;
+		}
+
+		std::memcpy(lineBuffer[writeHead], text, length);
+		lineBuffer[writeHead][length] = '\0';
+
+		writeHead = (writeHead + 1) % maxLines;
+
+		if (lineBufferCount < maxLines)
+		{
+			++lineBufferCount;
+		}
+	}
+
+	void Console::Print(const char* text)
+	{
+		if (!text)
+		{
+			return;
+		}
+
+		static const bool shouldPrintToStdout = Flags::HasFlag("stdout");
+
+		if (shouldPrintToStdout)
+		{
+			std::printf("%s", text);
+			std::fflush(stdout);
+		}
+
+		PrintCurses(text);
+
+		Logger::NetworkLog(text, false);
+
+		AcquireSRWLockExclusive(&lineBufferLock);
+
+		const char* lineStart = text;
+
+		while (true)
+		{
+			const char* const lineEnd = std::strchr(lineStart, '\n');
+
+			if (!lineEnd)
+			{
+				const auto remaining = static_cast<int>(std::strlen(lineStart));
+
+				if (remaining > 0)
+				{
+					PushLine(lineStart, remaining);
+				}
+
+				break;
+			}
+
+			PushLine(lineStart, static_cast<int>(lineEnd - lineStart));
+			lineStart = lineEnd + 1;
+		}
+
+		ReleaseSRWLockExclusive(&lineBufferLock);
+	}
+
+	void Console::ClearScrollback()
+	{
+		AcquireSRWLockExclusive(&lineBufferLock);
+
+		writeHead = 0;
+		lineBufferCount = 0;
+		scrollOffset = 0;
+
+		ReleaseSRWLockExclusive(&lineBufferLock);
+	}
+
+	void Console::ScrollBy(int lines)
+	{
+		scrollOffset += lines;
+
+		const int maximum = std::max(0, lineBufferCount - visibleLineCount);
+
+		scrollOffset = std::clamp(scrollOffset, 0, maximum);
+	}
+
+	void Console::ResetInput()
+	{
+		inputBuffer[0] = '\0';
+		inputLength = 0;
+		inputCursor = 0;
+		inputScroll = 0;
+		inputDrawWidth = 0;
+	}
+
+	void Console::LoadInput(const char* text)
+	{
+		std::snprintf(inputBuffer, sizeof(inputBuffer), "%s", text);
+		inputLength = static_cast<int>(std::strlen(inputBuffer));
+		inputCursor = inputLength;
+		inputScroll = 0;
+	}
+
+	void Console::InsertInputChar(char character)
+	{
+		if (isOverstrike && inputCursor < inputLength)
+		{
+			inputBuffer[inputCursor] = character;
+			++inputCursor;
+			return;
+		}
+
+		if (inputLength + 1 >= inputCapacity)
+		{
+			return;
+		}
+
+		std::memmove(inputBuffer + inputCursor + 1, inputBuffer + inputCursor,
+			static_cast<std::size_t>(inputLength - inputCursor) + 1);
+
+		inputBuffer[inputCursor] = character;
+		++inputCursor;
+		++inputLength;
+	}
+
+	int Console::MeasureInput(int from, int count)
+	{
+		char slice[inputCapacity];
+		std::snprintf(slice, sizeof(slice), "%.*s", count, inputBuffer + from);
+		return TextWidth(slice);
+	}
+
+	void Console::AdjustInputScroll(float fieldWidth)
+	{
+		if (static_cast<float>(TextWidth(inputBuffer)) < fieldWidth)
+		{
+			inputScroll = 0;
+			inputDrawWidth = inputLength;
+			return;
+		}
+
+		while (inputScroll > 0
+			&& static_cast<float>(MeasureInput(inputScroll - 1, inputLength)) < fieldWidth)
+		{
+			--inputScroll;
+		}
+
+		while (inputScroll < inputCursor
+			&& static_cast<float>(MeasureInput(inputScroll, inputCursor - inputScroll)) > fieldWidth)
+		{
+			++inputScroll;
+		}
+
+		if (inputScroll > inputCursor)
+		{
+			inputScroll = inputCursor;
+		}
+
+		inputDrawWidth = inputCursor - inputScroll;
+
+		while (inputScroll + inputDrawWidth < inputLength
+			&& static_cast<float>(MeasureInput(inputScroll, inputDrawWidth + 1)) <= fieldWidth)
+		{
+			++inputDrawWidth;
+		}
+	}
+
+	void Console::PushHistory(const char* text)
+	{
+		if (!text || !*text)
+		{
+			return;
+		}
+
+		if (historyCount > 0 && std::strcmp(historyBuffer[0], text) == 0)
+		{
+			return;
+		}
+
+		const int keep = std::min(historyCount, historyMax - 1);
+
+		for (int i = keep; i > 0; --i)
+		{
+			std::memcpy(historyBuffer[i], historyBuffer[i - 1], inputCapacity);
+		}
+
+		std::snprintf(historyBuffer[0], inputCapacity, "%s", text);
+
+		if (historyCount < historyMax)
+		{
+			++historyCount;
+		}
+	}
+
+	void Console::HistoryUp()
+	{
+		if (historyCount == 0 || historyBrowse + 1 >= historyCount)
+		{
+			return;
+		}
+
+		++historyBrowse;
+		LoadInput(historyBuffer[historyBrowse]);
+	}
+
+	void Console::HistoryDown()
+	{
+		if (historyBrowse < 0)
+		{
+			return;
+		}
+
+		--historyBrowse;
+
+		if (historyBrowse < 0)
+		{
+			ResetInput();
+			return;
+		}
+
+		LoadInput(historyBuffer[historyBrowse]);
+	}
+
+	void* Console::FindDvar(const char* name)
+	{
+		return Game::Dvar_FindVar(name);
+	}
+
+	void* Console::FindCommand(const char* name)
+	{
+		void* command = *reinterpret_cast<void**>(Utils::Hook::Rebase(cmd_functions));
+
+		while (command)
+		{
+			const char* const entry =
+				*reinterpret_cast<const char* const*>(static_cast<char*>(command) + cmdName);
+
+			if (entry && _stricmp(entry, name) == 0)
+			{
+				return command;
+			}
+
+			command = *reinterpret_cast<void**>(static_cast<char*>(command) + cmdNext);
+		}
+
+		return nullptr;
+	}
+
+	void Console::DvarValueString(void* dvar, int valueOffset, char* out, std::size_t outSize)
+	{
+		const unsigned char type = *(static_cast<unsigned char*>(dvar) + dvarType);
+		const void* const value = static_cast<char*>(dvar) + valueOffset;
+
+		switch (type)
+		{
+		case dvarTypeBool:
+			std::snprintf(out, outSize, "%d", *static_cast<const unsigned char*>(value) ? 1 : 0);
+			return;
+
+		case dvarTypeFloat:
+			std::snprintf(out, outSize, "%g", *static_cast<const float*>(value));
+			return;
+
+		case dvarTypeInt:
+		case dvarTypeEnum:
+			std::snprintf(out, outSize, "%d", *static_cast<const int*>(value));
+			return;
+
+		case dvarTypeString:
+		{
+			const char* const text = *static_cast<const char* const*>(value);
+			std::snprintf(out, outSize, "%s", text ? text : "");
+			return;
+		}
+
+		default:
+			std::snprintf(out, outSize, "?");
+			return;
+		}
+	}
+
+	const char* Console::FindBuiltinDescription(const char* name)
+	{
+		for (const auto& builtin : builtins)
+		{
+			if (_stricmp(builtin.name, name) == 0)
+			{
+				return builtin.description;
+			}
+		}
+
+		return nullptr;
+	}
+
+	void Console::AddMatch(const char* name)
+	{
+		++matchTotal;
+
+		if (matchCount < maxMatches)
+		{
+			std::snprintf(matchBuffer[matchCount], sizeof(matchBuffer[0]), "%s", name);
+			++matchCount;
+		}
+	}
+
+	void Console::CollectMatches(const char* prefix)
+	{
+		matchCount = 0;
+		matchTotal = 0;
+
+		const auto prefixLength = std::strlen(prefix);
+
+		if (prefixLength == 0)
+		{
+			return;
+		}
+
+		for (const auto& builtin : builtins)
+		{
+			if (_strnicmp(builtin.name, prefix, prefixLength) == 0)
+			{
+				AddMatch(builtin.name);
+			}
+		}
+
+		void* command = *reinterpret_cast<void**>(Utils::Hook::Rebase(cmd_functions));
+
+		while (command)
+		{
+			const char* const name =
+				*reinterpret_cast<const char* const*>(static_cast<char*>(command) + cmdName);
+
+			if (name && _strnicmp(name, prefix, prefixLength) == 0 && !FindBuiltinDescription(name))
+			{
+				AddMatch(name);
+			}
+
+			command = *reinterpret_cast<void**>(static_cast<char*>(command) + cmdNext);
+		}
+
+		auto* const buckets = reinterpret_cast<void**>(Utils::Hook::Rebase(dvarHashTable));
+
+		for (int bucket = 0; bucket < dvarHashBuckets; ++bucket)
+		{
+			void* dvar = buckets[bucket];
+
+			while (dvar)
+			{
+				const char* const name =
+					*reinterpret_cast<const char* const*>(static_cast<char*>(dvar) + dvarName);
+
+				if (name && _strnicmp(name, prefix, prefixLength) == 0)
+				{
+					AddMatch(name);
+				}
+
+				dvar = *reinterpret_cast<void**>(static_cast<char*>(dvar) + dvarHashNext);
+			}
+		}
+	}
+
+	const char* Console::NamePrefix()
+	{
+		const char* text = inputBuffer;
+
+		while (*text == '/' || *text == '\\')
+		{
+			++text;
+		}
+
+		return text;
+	}
+
+	bool Console::IsTypingName()
+	{
+		const char* const text = NamePrefix();
+
+		return *text != '\0' && std::strchr(text, ' ') == nullptr;
+	}
+
+	void Console::ExecuteInput()
+	{
+		if (inputLength == 0)
+		{
+			return;
+		}
+
+		char command[inputCapacity];
+		std::snprintf(command, sizeof(command), "%s", NamePrefix());
+
+		char echo[inputCapacity + 16];
+		std::snprintf(echo, sizeof(echo), "%s%s", promptText, command);
+		Print(echo);
+
+		PushHistory(inputBuffer);
+		ResetInput();
+		historyBrowse = -1;
+		scrollOffset = 0;
+
+		char firstToken[64];
+		std::snprintf(firstToken, sizeof(firstToken), "%.*s",
+			static_cast<int>(std::strcspn(command, " 	")), command);
+
+		if (*firstToken && !FindCommand(firstToken) && !FindDvar(firstToken))
+		{
+			Print(Utils::String::VA("unknown command or dvar: %s", firstToken));
+			return;
+		}
+
+		Game::Cmd_ExecuteSingleCommand(0, 0, command);
+	}
+
+	void Console::SetOpen(bool open)
+	{
+		isOpen = open;
+
+		auto* const catchers = reinterpret_cast<volatile unsigned int*>(Utils::Hook::Rebase(keyCatchers));
+
+		if (isOpen)
+		{
+			*catchers |= 1u;
+		}
+		else
+		{
+			*catchers &= ~1u;
+		}
+
+		ResetInput();
+		scrollOffset = 0;
+		historyBrowse = -1;
+	}
+
+	void Console::FollowEngineClose()
+	{
+		if (!isOpen)
+		{
+			return;
+		}
+
+		const auto* const catchers = reinterpret_cast<const volatile unsigned int*>(Utils::Hook::Rebase(keyCatchers));
+
+		if (*catchers & Game::KEYCATCH_CONSOLE)
+		{
+			return;
+		}
+
+		SetOpen(false);
+	}
+
+	void Console::ToggleMode(bool big)
+	{
+		if (!isOpen)
+		{
+			isBig = big;
+			SetOpen(true);
+			return;
+		}
+
+		SetOpen(false);
+	}
+
+	void Console::DrawRect(float x, float y, float w, float h, const Color& color)
+	{
+		auto* const material = WhiteMaterial();
+
+		if (!material)
+		{
+			return;
+		}
+
+		const float rgba[4] = { color.r, color.g, color.b, color.a };
+		Game::CL_DrawStretchPicPhysical(x, y, w, h, 0.0f, 0.0f, 0.0f, 0.0f, rgba, material);
+	}
+
+	void Console::DrawText(const char* text, float x, float y, const Color& color)
+	{
+		if (!text || !*text)
+		{
+			return;
+		}
+
+		auto* const font = ConsoleFont();
+
+		if (!font)
+		{
+			return;
+		}
+
+		const float rgba[4] = { color.r, color.g, color.b, color.a };
+		Game::R_AddCmdDrawText(text, 0x7FFFFFFF, font, x, y, textScale, textScale, 0.0f, rgba, 0);
+	}
+
+	void Console::DrawTextWithCursor(const char* text, int maxChars, float x, float y,
+		const Color& color, int cursorPos, char cursorChar)
+	{
+		auto* const font = ConsoleFont();
+
+		if (!font || !text)
+		{
+			return;
+		}
+
+		const float rgba[4] = { color.r, color.g, color.b, color.a };
+		Game::R_AddCmdDrawTextWithCursor(text, maxChars, font, x, y, textScale, textScale, 0.0f,
+			rgba, 0, cursorPos, cursorChar);
+	}
+
+	void Console::DrawBox(float x, float y, float w, float h, const Color& color)
+	{
+		DrawRect(x, y, w, h, color);
+
+		const Color edge{ color.r * 0.5f, color.g * 0.5f, color.b * 0.5f, color.a };
+
+		DrawRect(x, y, 2.0f, h, edge);
+		DrawRect(x + w - 2.0f, y, 2.0f, h, edge);
+		DrawRect(x, y, w, 2.0f, edge);
+		DrawRect(x, y + h - 2.0f, w, 2.0f, edge);
+	}
+
+	void Console::DrawHintBox(float x, float curY, int rows)
+	{
+		DrawBox(x - pad, curY - pad, maxX - x + pad,
+			static_cast<float>(rows) * fontHeight + 2.0f * pad, inputHintBoxColor);
+	}
+
+	void Console::DrawHintText(const char* text, float x, float curY, const Color& color)
+	{
+		DrawText(text, x, curY + fontHeight, color);
+	}
+
+	void Console::UpdateConsoleRect()
+	{
+		const float* const place = Game::ScrPlace_GetActivePlacement(0);
+
+		if (!place)
+		{
+			minX = 0.0f;
+			minY = 0.0f;
+			maxX = 640.0f;
+			maxY = 480.0f;
+			return;
+		}
+
+		minX = std::floor(place[0] * 4.0f + place[14]);
+		minY = std::floor(place[1] * 4.0f + place[15]);
+		maxX = std::floor(place[0] * -4.0f + place[16]);
+		maxY = std::floor(place[1] * -4.0f + place[17]);
+	}
+
+	void Console::DrawFrame()
+	{
+		FollowEngineClose();
+
+		if (!isOpen || !IsRenderReady())
+		{
+			return;
+		}
+
+		UpdateConsoleRect();
+
+		const int measured = TextHeight();
+		fontHeight = (measured > 0) ? static_cast<float>(measured) : 16.0f;
+
+		const float fontH = fontHeight;
+		const float consoleW = maxX - minX;
+		const float textX = minX + pad;
+		const float inputY = minY + pad;
+
+		DrawBox(minX, minY, consoleW, fontH + 2.0f * pad, inputBoxColor);
+		DrawText(promptText, textX, inputY + fontH, outputTextColor);
+
+		const float hintX = textX + static_cast<float>(TextWidth(promptText));
+		const float hintY = inputY + 2.0f * fontH;
+
+		AdjustInputScroll(maxX - pad - hintX);
+
+		const char caret = isOverstrike ? '_' : '|';
+		DrawTextWithCursor(inputBuffer + inputScroll, inputDrawWidth, hintX, inputY + fontH,
+			outputTextColor, inputCursor - inputScroll, caret);
+
+		if (isBig)
+		{
+			const float outputY = minY + inputBandHeight;
+			const float outputH = (maxY - minY) - inputBandHeight;
+			DrawBox(minX, outputY, consoleW, outputH, outputWindowColor);
+
+			const float textTop = outputY + pad;
+			const float textW = consoleW - 2.0f * pad;
+			const float textH = outputH - 2.0f * pad;
+			DrawText(versionText, textX, textTop + textH - 16.0f + fontH, versionColor);
+
+			const int visibleLines = static_cast<int>((maxY - minY - 2.0f * fontH - 24.0f) / fontH);
+			visibleLineCount = visibleLines;
+
+			if (visibleLines > 0)
+			{
+				AcquireSRWLockShared(&lineBufferLock);
+
+				const int newest = (writeHead - 1 + maxLines) % maxLines;
+				const int maxSkip = std::max(0, lineBufferCount - visibleLines);
+				const int skip = std::clamp(scrollOffset, 0, maxSkip);
+
+				const float barX = textX + textW - scrollBarWidth;
+				DrawBox(barX, textTop, scrollBarWidth, textH, outputBarColor);
+
+				float sliderY = textTop;
+				float sliderH = textH;
+
+				if (maxSkip > 0)
+				{
+					const float span = 1.0f / static_cast<float>(maxSkip);
+					const float travel = static_cast<float>(maxSkip - skip) * span;
+					sliderH = std::ceil(static_cast<float>(visibleLines) * span * textH);
+					sliderH = std::clamp(sliderH, scrollBarWidth, textH);
+					sliderY = textTop + (textH - sliderH) * travel;
+				}
+
+				DrawBox(barX, sliderY, scrollBarWidth, sliderH, outputSliderColor);
+
+				for (int row = 0; row < visibleLines; ++row)
+				{
+					const int back = (visibleLines - 1 - row) + skip;
+
+					if (back >= lineBufferCount)
+					{
+						continue;
+					}
+
+					const int index = (newest - back + maxLines) % maxLines;
+
+					if (!lineBuffer[index][0])
+					{
+						continue;
+					}
+
+					DrawText(lineBuffer[index], textX,
+						textTop + static_cast<float>(row + 1) * fontH, outputTextColor);
+				}
+
+				ReleaseSRWLockShared(&lineBufferLock);
+			}
+		}
+
+		DrawInputHints(hintX, hintY, inputY);
+
+		TextRenderer::DrawConsoleAutocomplete(std::string_view(inputBuffer, static_cast<std::size_t>(inputCursor)), ConsoleFont(), hintX, hintY);
+	}
+
+	void Console::DrawInputHints(float hintX, float hintY, float inputY)
+	{
+		const float fontH = fontHeight;
+		const char* const namePrefix = NamePrefix();
+
+		if (!*namePrefix || *namePrefix == ' ')
+		{
+			return;
+		}
+
+		char typedName[64];
+		std::snprintf(typedName, sizeof(typedName), "%.*s",
+			static_cast<int>(std::strcspn(namePrefix, " ")), namePrefix);
+
+		const bool hasSpaceAfter = std::strchr(namePrefix, ' ') != nullptr;
+
+		void* detailDvar = nullptr;
+
+		if (hasSpaceAfter)
+		{
+			matchCount = 0;
+			matchTotal = 0;
+			detailDvar = FindDvar(typedName);
+		}
+		else
+		{
+			CollectMatches(typedName);
+
+			if (matchTotal == 1)
+			{
+				detailDvar = FindDvar(matchBuffer[0]);
+			}
+		}
+
+		if (!hasSpaceAfter && matchTotal == 1)
+		{
+			const auto typedLength = static_cast<int>(std::strlen(typedName));
+
+			if (_strnicmp(matchBuffer[0], typedName, static_cast<std::size_t>(typedLength)) == 0
+				&& matchBuffer[0][typedLength])
+			{
+				char ghost[80];
+				std::snprintf(ghost, sizeof(ghost), "^2%s", matchBuffer[0] + typedLength);
+
+				const float ghostX = hintX
+					+ static_cast<float>(MeasureInput(inputScroll, inputLength - inputScroll));
+
+				DrawText(ghost, ghostX, inputY + fontH, outputTextColor);
+			}
+		}
+
+		if (detailDvar)
+		{
+			const char* const detailName = hasSpaceAfter ? typedName : matchBuffer[0];
+
+			char value[128];
+			DvarValueString(detailDvar, dvarCurrent, value, sizeof(value));
+			char resetValue[128];
+			DvarValueString(detailDvar, dvarReset, resetValue, sizeof(resetValue));
+
+			const float valueX = hintX + valueColumnOffset;
+
+			char clampedName[nameClamp + 1];
+			std::snprintf(clampedName, sizeof(clampedName), "%s", detailName);
+			char clampedValue[valueClamp + 1];
+
+			DrawHintBox(hintX, hintY, 2);
+			DrawHintText(clampedName, hintX, hintY, dvarNameColor);
+			std::snprintf(clampedValue, sizeof(clampedValue), "%s", value);
+			DrawHintText(clampedValue, valueX, hintY, dvarValueColor);
+
+			std::snprintf(clampedValue, sizeof(clampedValue), "%s", resetValue);
+			DrawHintText("  default", hintX, hintY + fontH, descriptionColor);
+			DrawHintText(clampedValue, valueX, hintY + fontH, descriptionColor);
+			return;
+		}
+
+		if (!hasSpaceAfter && matchTotal == 1 && FindBuiltinDescription(matchBuffer[0]))
+		{
+			DrawHintBox(hintX, hintY, 2);
+			DrawHintText(matchBuffer[0], hintX, hintY, commandNameColor);
+			DrawHintText(FindBuiltinDescription(matchBuffer[0]), hintX, hintY + fontH, descriptionColor);
+			return;
+		}
+
+		if (matchTotal > maxMatches)
+		{
+			DrawHintBox(hintX, hintY, 1);
+
+			char note[128];
+			std::snprintf(note, sizeof(note), "%d matches, keep typing", matchTotal);
+			DrawHintText(note, hintX, hintY, dvarNameColor);
+			return;
+		}
+
+		if (matchCount > 0)
+		{
+			DrawHintBox(hintX, hintY, matchCount);
+
+			for (int i = 0; i < matchCount; ++i)
+			{
+				const float rowY = hintY + static_cast<float>(i) * fontH;
+				void* const dvar = FindDvar(matchBuffer[i]);
+
+				char name[nameClamp + 1];
+				std::snprintf(name, sizeof(name), "%s", matchBuffer[i]);
+				DrawHintText(name, hintX, rowY, dvar ? dvarNameColor : commandNameColor);
+
+				if (dvar)
+				{
+					char value[128];
+					DvarValueString(dvar, dvarCurrent, value, sizeof(value));
+					char clamped[valueClamp + 1];
+					std::snprintf(clamped, sizeof(clamped), "%s", value);
+					DrawHintText(clamped, hintX + valueColumnOffset, rowY, dvarValueColor);
+				}
+			}
+		}
+	}
+
+	bool Console::HandleKey(int key, int down)
+	{
+		FollowEngineClose();
+
+		for (const auto& observer : keyObservers)
+		{
+			if (observer(key, down))
+			{
+				return true;
+			}
+		}
+
+		const bool isShiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+		const bool isControlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+
+		if (!isOpen)
+		{
+			if (key == keyConsole && down)
+			{
+				ToggleMode(isShiftDown);
+				return true;
+			}
+
+			return false;
+		}
+
+		if (!down)
+		{
+			return true;
+		}
+
+		if (TextRenderer::HandleFontIconAutocompleteKey(TextRenderer::FONT_ICON_ACI_CONSOLE, key, inputBuffer, inputCursor))
+		{
+			inputLength = static_cast<int>(std::strlen(inputBuffer));
+			return true;
+		}
+
+		switch (key)
+		{
+		case keyConsole:
+			ToggleMode(isShiftDown);
+			return true;
+
+		case keyEscape:
+			SetOpen(false);
+			return true;
+
+		case keyEnter:
+			ExecuteInput();
+			return true;
+
+		case keyTab:
+			if (IsTypingName())
+			{
+				const char* const prefix = NamePrefix();
+				CollectMatches(prefix);
+
+				if (matchCount > 0)
+				{
+					const auto slashes = static_cast<int>(prefix - inputBuffer);
+					char completed[inputCapacity];
+					std::snprintf(completed, sizeof(completed), "%.*s%s ", slashes, inputBuffer, matchBuffer[0]);
+					LoadInput(completed);
+				}
+			}
+			return true;
+
+		case keyBackspace:
+			if (inputCursor > 0)
+			{
+				std::memmove(inputBuffer + inputCursor - 1, inputBuffer + inputCursor,
+					static_cast<std::size_t>(inputLength - inputCursor) + 1);
+				--inputCursor;
+				--inputLength;
+			}
+			return true;
+
+		case keyLeftArrow:
+			if (inputCursor > 0)
+			{
+				--inputCursor;
+			}
+			return true;
+
+		case keyRightArrow:
+			if (inputCursor < inputLength)
+			{
+				++inputCursor;
+			}
+			return true;
+
+		case keyInsert:
+			isOverstrike = !isOverstrike;
+			return true;
+
+		case keyUpArrow:
+			HistoryUp();
+			return true;
+
+		case keyDownArrow:
+			HistoryDown();
+			return true;
+
+		case keyHome:
+			if (isControlDown)
+			{
+				ScrollBy(lineBufferCount);
+			}
+			else
+			{
+				inputCursor = 0;
+			}
+			return true;
+
+		case keyEnd:
+			if (isControlDown)
+			{
+				ScrollBy(-scrollOffset);
+			}
+			else
+			{
+				inputCursor = inputLength;
+			}
+			return true;
+
+		case keyPageUp:
+			ScrollBy(8);
+			return true;
+
+		case keyPageDown:
+			ScrollBy(-8);
+			return true;
+
+		case keyMouseWheelUp:
+			ScrollBy(3);
+			return true;
+
+		case keyMouseWheelDown:
+			ScrollBy(-3);
+			return true;
+
+		default:
+			return true;
+		}
+	}
+
+	void Console::HandleChar(int character)
+	{
+		if (character < ' ' || character > '~')
+		{
+			return;
+		}
+
+		if (character == '`' || character == '~')
+		{
+			return;
+		}
+
+		InsertInputChar(static_cast<char>(character));
+	}
+
+	void Console::CL_KeyEvent_Hook(int localClientNum, int key, int down, unsigned int time)
+	{
+		if (HandleKey(key, down))
+		{
+			return;
+		}
+
+		reinterpret_cast<Game::CL_KeyEvent_t>(keyEventHook.GetOriginal())(localClientNum, key, down, time);
+	}
+
+	void Console::CL_CharEvent_Hook(int localClientNum, int character)
+	{
+		FollowEngineClose();
+
+		if (isOpen)
+		{
+			HandleChar(character);
+			return;
+		}
+
+		reinterpret_cast<Game::CL_CharEvent_t>(charEventHook.GetOriginal())(localClientNum, character);
+	}
+
+	void* Console::CL_ConsolePrint_AddLine_Hook(int localClientNum, int channel, const char* text,
+		int duration, int pixelWidth, unsigned char color, int flags)
+	{
+		Print(text);
+
+		return reinterpret_cast<Game::CL_ConsolePrint_AddLine_t>(consolePrintHooks[0].GetOriginal())(
+			localClientNum, channel, text, duration, pixelWidth, color, flags);
+	}
+
+	void Console::RequestShutdown(DWORD watchdogDelayMs)
+	{
+		if (isShutdownRequested.exchange(true))
+		{
+			return;
+		}
+
+		Command::Execute("quit", false);
 		StartShutdownWatchdog(watchdogDelayMs);
 	}
 
-	void Console::StartShutdownWatchdog(const DWORD watchdogDelayMs)
+	void Console::StartShutdownWatchdog(DWORD watchdogDelayMs)
 	{
-		if (ShutdownWatchdogStarted.exchange(true))
+		if (isWatchdogStarted.exchange(true))
 		{
 			return;
 		}
 
 		std::thread([watchdogDelayMs]
-			{
-				std::this_thread::sleep_for(std::chrono::milliseconds(watchdogDelayMs));
-				TerminateProcess(GetCurrentProcess(), EXIT_SUCCESS);
-			}).detach();
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(watchdogDelayMs));
+			TerminateProcess(GetCurrentProcess(), EXIT_SUCCESS);
+		}).detach();
 	}
 
-	BOOL WINAPI Console::ConsoleCtrlHandler(const DWORD ctrlType)
+	BOOL WINAPI Console::ConsoleCtrlHandler(DWORD ctrlType)
 	{
 		switch (ctrlType)
 		{
@@ -708,334 +1652,109 @@ namespace Components
 		}
 	}
 
-
-	void Console::ConsoleRunner()
-	{
-		SkipShutdown = false;
-		Game::Sys_ShowConsole();
-
-		MSG message;
-		while (IsWindow(GetWindow()) != FALSE && GetMessageA(&message, nullptr, 0, 0))
-		{
-			TranslateMessage(&message);
-			DispatchMessageA(&message);
-		}
-
-		if (SkipShutdown) return;
-
-		if (Game::Sys_Milliseconds() -LastRefresh > 100 &&
-			MessageBoxA(nullptr, "The application is not responding anymore, do you want to force its termination?", "Application is not responding", MB_ICONEXCLAMATION | MB_YESNO) == IDYES)
-		{
-			// Force process termination
-			// if the main thread is not responding
-#ifdef _DEBUG
-			OutputDebugStringA("Process termination was forced as the main thread is not responding!");
-#endif
-
-			// We can not force the termination in this thread
-			// The destructor would be called in this thread
-			// and would try to join this thread, which is impossible
-			TerminateProcess(GetCurrentProcess(), EXIT_FAILURE);
-		}
-		else
-		{
-			// Send quit command to safely terminate the application, then force exit
-			// if shutdown hangs and would otherwise leave zw3.exe in the background.
-			Command::Execute("wait 200;quit\n", false);
-		}
-	}
-
-	void Console::StdOutPrint(const char* message)
-	{
-		printf("%s", message);
-		fflush(stdout);
-	}
-
-	void Console::StdOutError(const char* fmt, ...)
-	{
-		char buffer[4096] = {0};
-
-		va_list ap;
-		va_start(ap, fmt);
-		vsnprintf_s(buffer, _TRUNCATE, fmt, ap);
-		va_end(ap);
-
-		perror(buffer);
-		fflush(stderr);
-
-		ExitProcess(1);
-	}
-
-	__declspec(naked) void Console::DrawSolidConsoleStub()
-	{
-		__asm
-		{
-			pushad
-			call Console::StoreSafeArea
-			popad
-
-			// We need esi preserved here, so we have to backup 'all' registers when storing the safearea
-			call Game::Con_DrawSolidConsole
-
-			pushad
-			call Console::RestoreSafeArea
-			popad
-			retn
-		}
-	}
-
-	void Console::StoreSafeArea()
-	{
-		// Backup the original safe area
-		OriginalSafeArea = *Game::safeArea;
-
-		// Apply new safe area and border
-		float border = 6.0f;
-		Game::safeArea->top = border;
-		Game::safeArea->left = border;
-		Game::safeArea->bottom = static_cast<float>(Renderer::Height()) - border;
-		Game::safeArea->right = static_cast<float>(Renderer::Width()) - border;
-
-		Game::safeArea->textHeight = static_cast<int>((Game::safeArea->bottom - Game::safeArea->top - (2 * Game::safeArea->fontHeight) - 24.0) / Game::safeArea->fontHeight);
-		Game::safeArea->textWidth = static_cast<int>(Game::safeArea->right - Game::safeArea->left - 10.0f - 18.0);
-	}
-
-	void Console::RestoreSafeArea()
-	{
-		// Restore the initial safe area
-		*Game::safeArea = OriginalSafeArea;
-	}
-
-	void Console::SetSkipShutdown()
-	{
-		SkipShutdown = true;
-	}
-
-	void Console::FreeNativeConsole()
-	{
-		if (!Flags::HasFlag("stdout") && (!Dedicated::IsEnabled() || Flags::HasFlag("console")))
-		{
-			FreeConsole();
-		}
-	}
-
-	HWND Console::GetWindow()
-	{
-		return *reinterpret_cast<HWND*>(0x64A3288);
-	}
-
-	void Console::ShowAsyncConsole()
-	{
-		ConsoleThread = std::thread(ConsoleRunner);
-	}
-
-	Game::dvar_t* Console::RegisterConColor(const char* dvarName, float r, float g, float b, float a, float min, float max, unsigned __int16 flags, const char* description)
-	{
-		static struct
-		{
-			const char* name;
-			float color[4];
-		} patchedColors[] =
-		{
-			{ "con_inputBoxColor",     { 0.20f, 0.20f, 0.20f, 1.00f } },
-			{ "con_inputHintBoxColor", { 0.30f, 0.30f, 0.30f, 1.00f } },
-			{ "con_outputBarColor",    { 0.50f, 0.50f, 0.50f, 0.60f } },
-			{ "con_outputSliderColor", { 0.70f, 1.00f, 0.00f, 1.00f } },
-			{ "con_outputWindowColor", { 0.25f, 0.25f, 0.25f, 0.85f } },
-		};
-
-		for (std::size_t i = 0; i < ARRAYSIZE(patchedColors); ++i)
-		{
-			if (std::strcmp(dvarName, patchedColors[i].name) == 0)
-			{
-				r = patchedColors[i].color[0];
-				g = patchedColors[i].color[1];
-				b = patchedColors[i].color[2];
-				a = patchedColors[i].color[3];
-				break;
-			}
-		}
-
-		return reinterpret_cast<Game::Dvar_RegisterVec4_t>(0x471500)(dvarName, r, g, b, a, min, max, flags, description);
-	}
-
-	bool Console::Con_IsDvarCommand_Stub(const char* cmd)
-	{
-		isCommand = Game::Con_IsDvarCommand(cmd);
-		return isCommand;
-	}
-
-	void Console::Cmd_ForEach_Stub(void(*callback)(const char* str))
-	{
-		if (!isCommand)
-		{
-			Game::Cmd_ForEach(callback);
-		}
-	}
-
-	void Console::Con_ToggleConsole()
-	{
-		Game::Field_Clear(Game::g_consoleField);
-		if (Game::conDrawInputGlob->matchIndex >= 0 && Game::conDrawInputGlob->autoCompleteChoice[0] != '\0')
-		{
-			Game::conDrawInputGlob->matchIndex = -1;
-			Game::conDrawInputGlob->autoCompleteChoice[0] = '\0';
-		}
-
-		Game::g_consoleField->fixedSize = 1;
-		Game::con->outputVisible = false;
-		Game::g_consoleField->widthInPixels = *Game::g_console_field_width;
-		Game::g_consoleField->charHeight = *Game::g_console_char_height;
-
-		for (std::size_t localClientNum = 0; localClientNum < Game::MAX_LOCAL_CLIENTS; ++localClientNum)
-		{
-			assert((Game::clientUIActives[0].keyCatchers & Game::KEYCATCH_CONSOLE) == (Game::clientUIActives[localClientNum].keyCatchers & Game::KEYCATCH_CONSOLE));
-			Game::clientUIActives[localClientNum].keyCatchers ^= 1;
-		}
-	}
-
-	void Console::AddConsoleCommand()
-	{
-		Command::Add("con_echo", []
-		{
-			Con_ToggleConsole();
-			Game::I_strncpyz(Game::g_consoleField->buffer, "\\echo ", sizeof(Game::field_t::buffer));
-			Game::g_consoleField->cursor = static_cast<int>(std::strlen(Game::g_consoleField->buffer));
-			Game::Field_AdjustScroll(Game::ScrPlace_GetFullPlacement(), Game::g_consoleField);
-		});
-	}
-
 	Console::Console()
 	{
-		AssertOffset(Game::clientUIActive_t, connectionState, 0x9B8);
-		AssertOffset(Game::clientUIActive_t, keyCatchers, 0x9B0);
+		if (isInstalled)
+		{
+			return;
+		}
 
 		SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
-		Scheduler::OnGameShutdown([]
-			{
-				StartShutdownWatchdog(5000);
-			});
-
-		// Console '%s: %s> ' string
-#ifdef EXPERIMENTAL_BUILD
-		Utils::Hook::Set<const char*>(0x5A44B4, "Call of Duty: Zombie Warfare 3> ");
-#else
-		Utils::Hook::Set<const char*>(0x5A44B4, "Call of Duty: Zombie Warfare 3> ");
-#endif
-
-		// Patch console color
-		static float consoleColor[] = { 0.70f, 1.00f, 0.00f, 1.00f };
-		Utils::Hook::Set<float*>(0x5A451A, consoleColor);
-		Utils::Hook::Set<float*>(0x5A4400, consoleColor);
-
-		// Remove the need to type '\' or '/' to send a console command
-		Utils::Hook::Set<std::uint8_t>(0x431565, 0xEB);
-
-		// Internal console
-		Utils::Hook(0x4F690C, Con_ToggleConsole, HOOK_CALL).install()->quick();
-		Utils::Hook(0x4F65A5, Con_ToggleConsole, HOOK_JUMP).install()->quick();
-
-		// Allow the client console to always be opened (sv_allowClientConsole)
-		Utils::Hook::Nop(0x4F68EC, 2);
-
-		// Patch safearea for ingame-console
-		Utils::Hook(0x5A50EF, DrawSolidConsoleStub, HOOK_CALL).install()->quick();
-
-		// Check for bad food ;)
-		Utils::Hook(0x4CB9F4, GetAutoCompleteFileList, HOOK_CALL).install()->quick();
-
-		// Patch console dvars
-		Utils::Hook(0x4829AB, RegisterConColor, HOOK_CALL).install()->quick();
-		Utils::Hook(0x4829EE, RegisterConColor, HOOK_CALL).install()->quick();
-		Utils::Hook(0x482A31, RegisterConColor, HOOK_CALL).install()->quick();
-		Utils::Hook(0x482A7A, RegisterConColor, HOOK_CALL).install()->quick();
-		Utils::Hook(0x482AC3, RegisterConColor, HOOK_CALL).install()->quick();
-
-		// Modify console style
-		ApplyConsoleStyle();
-
-		// Don't resize the console
-		Utils::Hook(0x64DC6B, 0x64DCC2, HOOK_JUMP).install()->quick();
-
-		// Con_DrawInput
-		Utils::Hook(0x5A45BD, Con_IsDvarCommand_Stub, HOOK_CALL).install()->quick();
-		Utils::Hook(0x5A466C, Cmd_ForEach_Stub, HOOK_CALL).install()->quick();
-
-#ifdef _DEBUG
-		AddConsoleCommand();
-#endif
-
-		if (Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled())
+		Scheduler::OnShutdown([]
 		{
-			Scheduler::Loop(RefreshStatus, Scheduler::Pipeline::MAIN);
-		}
+			StartShutdownWatchdog(5000);
+		});
 
-		// External console
+		ResetInput();
+
+		Scheduler::Loop(DrawFrame, Scheduler::Pipeline::RENDERER);
+
 		if (Flags::HasFlag("stdout"))
 		{
-			Utils::Hook(0x4B2080, StdOutPrint, HOOK_JUMP).install()->quick();
-			Utils::Hook(0x43D570, StdOutError, HOOK_JUMP).install()->quick();
+			if (!Utils::Hook::MatchesBytes(Sys_Error, sysErrorEntry, sizeof(sysErrorEntry))
+				|| !sysErrorHook.Initialize(Sys_Error, reinterpret_cast<void*>(StdOutError), HOOK_JUMP)->Install()->IsInstalled())
+			{
+				Logger::Error("console: could not hook Sys_Error, -stdout prints but errors still go to the error box\n");
+			}
+			else
+			{
+				sysErrorHook.Quick();
+			}
 		}
-		else if (Flags::HasFlag("console") || ZoneBuilder::IsEnabled()) // ZoneBuilder uses the game's console, until the native one is adapted.
+		else if (Dedicated::IsEnabled() && !Flags::HasFlag("console"))
 		{
-			Utils::Hook::Nop(0x60BB58, 11);
+			const bool isExpected = Utils::Hook::BranchesTo(Sys_GetEvent_Sys_ConsoleInputCall, Sys_ConsoleInput, HOOK_CALL)
+				&& Utils::Hook::MatchesBytes(Sys_Error, sysErrorEntry, sizeof(sysErrorEntry));
 
-			// Redirect input (]command)
-			Utils::Hook(0x47025A, 0x4F5770, HOOK_CALL).install()->quick();
+			bool isSeated = false;
 
-			Utils::Hook(0x60BB68, []
+			if (isExpected)
 			{
-				ShowAsyncConsole();
-			}, HOOK_CALL).install()->quick();
-
-			Utils::Hook(0x4D69A2, []
-			{
-				SetSkipShutdown();
-
-				// Sys_DestroyConsole
-				Utils::Hook::Call<void()>(0x4528A0)();
-
-				if (ConsoleThread.joinable())
-				{
-					ConsoleThread.join();
-				}
-			}, HOOK_CALL).install()->quick();
-
-			Scheduler::Loop([]
-			{
-				LastRefresh = Game::Sys_Milliseconds();
-			}, Scheduler::Pipeline::MAIN);
-		}
-		else if (Dedicated::IsEnabled())
-		{
-			DWORD type = GetFileType(GetStdHandle(STD_INPUT_HANDLE));
-			if (type != FILE_TYPE_CHAR)
-			{
-				MessageBoxA(nullptr, "Console not supported, please use '-stdout' or '-console' flag!", "ERRROR", MB_ICONERROR);
-				TerminateProcess(GetCurrentProcess(), EXIT_FAILURE);
+				isSeated = consoleInputHook.Initialize(Sys_GetEvent_Sys_ConsoleInputCall, reinterpret_cast<void*>(Input), HOOK_CALL)->Install()->IsInstalled();
+				isSeated = sysErrorHook.Initialize(Sys_Error, reinterpret_cast<void*>(Error), HOOK_JUMP)->Install()->IsInstalled() && isSeated;
 			}
 
-			Utils::Hook::Nop(0x60BB58, 11);
+			if (!isSeated)
+			{
+				consoleInputHook.Uninstall();
+				sysErrorHook.Uninstall();
+				Logger::Error("console: Sys_GetEvent or Sys_Error does not read as expected, the dedicated server has no console\n");
+			}
+			else
+			{
+				consoleInputHook.Quick();
+				sysErrorHook.Quick();
 
-			Utils::Hook(0x4305E0, Create, HOOK_JUMP).install()->quick();
-			Utils::Hook(0x4528A0, Destroy, HOOK_JUMP).install()->quick();
-			Utils::Hook(0x4B2080, Print, HOOK_JUMP).install()->quick();
-			Utils::Hook(0x43D570, Error, HOOK_JUMP).install()->quick();
-			Utils::Hook(0x4859A5, Input, HOOK_CALL).install()->quick();
+				Events::OnDvarInit(Create);
+				Scheduler::Loop(RefreshStatus, Scheduler::Pipeline::MAIN);
+			}
 		}
-		else
-		{
-			FreeConsole();
-		}
-	}
 
-	Console::~Console()
-	{
-		SetConsoleCtrlHandler(ConsoleCtrlHandler, FALSE);
-		SetSkipShutdown();
-		if (ConsoleThread.joinable())
+		int failed = 0;
+
+		failed += !keyEventHook.Initialize(CL_KeyEventCall, CL_KeyEvent_Hook, HOOK_CALL)->Install()->IsInstalled();
+		failed += !charEventHook.Initialize(CL_CharEventCall, CL_CharEvent_Hook, HOOK_CALL)->Install()->IsInstalled();
+
+		for (std::size_t i = 0; i < ARRAYSIZE(CL_ConsolePrint_AddLineCalls); ++i)
 		{
-			ConsoleThread.join();
+			failed += !consolePrintHooks[i]
+				.Initialize(CL_ConsolePrint_AddLineCalls[i], CL_ConsolePrint_AddLine_Hook, HOOK_CALL)
+				->Install()->IsInstalled();
 		}
+
+		if (failed)
+		{
+			return;
+		}
+
+		keyEventHook.Quick();
+		charEventHook.Quick();
+
+		for (auto& hook : consolePrintHooks)
+		{
+			hook.Quick();
+		}
+
+		Command::Add("clear", []
+		{
+			ClearScrollback();
+		});
+
+		Command::Add("echo", [](const Command::Params* params)
+		{
+			Print(params->Join(1).data());
+		});
+
+		Command::Add("quit", []
+		{
+			reinterpret_cast<void(*)()>(Utils::Hook::Rebase(0x1401F5BB0))();
+		});
+
+		isInstalled = true;
+
+		char banner[128];
+		std::snprintf(banner, sizeof(banner), "%s console, press ~ to open and shift+~ for the log", versionText);
+		Print(banner);
+		Print("tab completes, up and down recall, pgup and pgdn scroll, quit exits");
 	}
 }

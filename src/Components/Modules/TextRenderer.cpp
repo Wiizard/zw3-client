@@ -1,1131 +1,2390 @@
-#include "TextRenderer.hpp"
-#include "Events.hpp"
-#include "Materials.hpp"
-#include "Renderer.hpp"
+#include "STDInclude.hpp"
 
-#pragma warning(push)
-#pragma warning(disable: 4005)
 #include <dwrite.h>
-#pragma warning(pop)
+#include <wrl/client.h>
 
 #pragma comment(lib, "dwrite.lib")
 
-namespace Game
-{
-	float* con_screenMin = reinterpret_cast<float*>(0xA15F48);
-}
+#include "TextRenderer.hpp"
+#include "Dvar.hpp"
+#include "Events.hpp"
+#include "Logger.hpp"
+#include "Materials.hpp"
+#include "Renderer.hpp"
+#include "Scheduler.hpp"
 
 namespace Components
 {
-	namespace
+	unsigned int TextRenderer::colorTableDefault[TEXT_COLOR_COUNT]
 	{
-		constexpr char UNICODE_GLYPH_ESCAPE = '\x03';
-		constexpr std::size_t UNICODE_GLYPH_HEX_LENGTH = 6;
-		constexpr char UNICODE_RUN_ESCAPE = '\x04';
-		constexpr std::size_t UNICODE_RUN_ID_HEX_LENGTH = 8;
-		constexpr float UNICODE_RUN_RASTER_HEIGHT = 64.0f;
-		constexpr unsigned int UNICODE_RUN_BITMAP_PADDING = 64;
-		constexpr unsigned int UNICODE_RUN_TEXTURE_PADDING = 2;
-		constexpr unsigned int MAX_UNICODE_RUN_BITMAP_DIMENSION = 4096;
-		constexpr float UNICODE_GLYPH_BASELINE_OFFSET = -2.0f;
-		constexpr std::size_t MAX_RUNTIME_UNICODE_GLYPHS = 512;
-		constexpr std::size_t MAX_RUNTIME_UNICODE_RUNS = 512;
-		constexpr std::size_t MAX_UNICODE_GLYPHS_PER_FRAME = 8;
-		constexpr std::size_t MAX_UNICODE_RUNS_PER_FRAME = 4;
+		ColorRgb(0, 0, 0),
+		ColorRgb(255, 92, 92),
+		ColorRgb(0, 255, 0),
+		ColorRgb(255, 255, 0),
+		ColorRgb(0, 0, 255),
+		ColorRgb(0, 255, 255),
+		ColorRgb(255, 92, 255),
+		ColorRgb(255, 255, 255),
+		ColorRgb(255, 255, 255),
+		ColorRgb(255, 255, 255),
+		ColorRgb(255, 255, 255),
+		ColorRgb(255, 255, 255),
 
-		struct RuntimeUnicodeRun
+		ColorRgb(200, 75, 200),
+		ColorRgb(255, 240, 20),
+		ColorRgb(128, 0, 128),
+		ColorRgb(20, 180, 180),
+		ColorRgb(255, 255, 255),
+		ColorRgb(60, 75, 35),
+		ColorRgb(93, 23, 255),
+		ColorRgb(255, 0, 0),
+		ColorRgb(0, 255, 0),
+		ColorRgb(0, 0, 255),
+		ColorRgb(128, 0, 0),
+		ColorRgb(255, 105, 180),
+		ColorRgb(170, 240, 209),
+		ColorRgb(255, 213, 165),
+		ColorRgb(187, 231, 151),
+		ColorRgb(255, 120, 120),
+	};
+
+	unsigned int TextRenderer::colorTableNew[TEXT_COLOR_COUNT]
+	{
+		ColorRgb(0, 0, 0),
+		ColorRgb(255, 49, 49),
+		ColorRgb(134, 192, 0),
+		ColorRgb(255, 173, 34),
+		ColorRgb(0, 135, 193),
+		ColorRgb(32, 197, 255),
+		ColorRgb(151, 80, 221),
+		ColorRgb(255, 255, 255),
+		ColorRgb(255, 255, 255),
+		ColorRgb(255, 255, 255),
+		ColorRgb(255, 255, 255),
+		ColorRgb(255, 255, 255),
+
+		ColorRgb(200, 75, 200),
+		ColorRgb(255, 240, 20),
+		ColorRgb(128, 0, 128),
+		ColorRgb(20, 180, 180),
+		ColorRgb(255, 255, 255),
+		ColorRgb(60, 75, 35),
+		ColorRgb(93, 23, 255),
+		ColorRgb(255, 0, 0),
+		ColorRgb(0, 255, 0),
+		ColorRgb(0, 0, 255),
+		ColorRgb(128, 0, 0),
+		ColorRgb(255, 105, 180),
+		ColorRgb(170, 240, 209),
+		ColorRgb(255, 213, 165),
+		ColorRgb(187, 231, 151),
+		ColorRgb(255, 120, 120),
+	};
+
+	unsigned int(*TextRenderer::currentColorTable)[TEXT_COLOR_COUNT] = &TextRenderer::colorTableNew;
+
+	Game::dvar_t* TextRenderer::cg_newColors = nullptr;
+	Game::dvar_t* TextRenderer::sv_customTextColor = nullptr;
+	Game::dvar_t* TextRenderer::r_colorBlind = nullptr;
+	Game::dvar_t* TextRenderer::g_ColorBlind_EnemyTeam = nullptr;
+	Game::dvar_t* TextRenderer::g_ColorBlind_MyTeam = nullptr;
+
+	constexpr std::uintptr_t ColorIndex_Entry = 0x14028BCC0;
+
+	static const std::uint8_t colorIndexEntry[] = { 0x80, 0xE9, 0x30, 0xB8, 0x07, 0x00, 0x00, 0x00 };
+
+	constexpr std::uintptr_t DrawText2D_ColorLookup = 0x14004E4BF;
+	constexpr std::uintptr_t DrawText2D_ColorIndexCall = 0x14004E4C2;
+	constexpr std::uintptr_t DrawText2D_AfterColorIndex = 0x14004E4C7;
+	constexpr std::uint16_t jumpToColorApplied = 0x37EB;
+
+	static const std::uint8_t colorLookup[] =
+	{
+		0x0F, 0xB6, 0xCB,
+		0xE8, 0xF9, 0xD7, 0x23, 0x00,
+		0x0F, 0xB6, 0xC0,
+		0x83, 0xF8, 0x08,
+		0x73, 0x10,
+	};
+
+	constexpr std::uintptr_t teamColorAxis = 0x148CCA440;
+	constexpr std::uintptr_t teamColorAllies = 0x148CCA444;
+
+	struct ColorLimitSite
+	{
+		std::uintptr_t instruction;
+		std::uint8_t bytes[3];
+		std::size_t length;
+	};
+
+	static const ColorLimitSite colorLimitSites[] =
+	{
+		{ 0x14004E3FC, { 0x80, 0xFA, 0x09 }, 3 },
+		{ 0x14024F16F, { 0x3C, 0x09 }, 2 },
+		{ 0x14026B006, { 0x3C, 0x09 }, 2 },
+		{ 0x14026B07F, { 0x3C, 0x09 }, 2 },
+		{ 0x14001AA9E, { 0x3C, 0x09 }, 2 },
+		{ 0x14001AC0C, { 0x3C, 0x09 }, 2 },
+		{ 0x14001AD8D, { 0x3C, 0x09 }, 2 },
+		{ 0x1400E5D12, { 0x80, 0xF9, 0x09 }, 3 },
+		{ 0x1400EE550, { 0x80, 0xF9, 0x09 }, 3 },
+		{ 0x1400EBB70, { 0x80, 0xF9, 0x09 }, 3 },
+	};
+
+	constexpr std::uintptr_t Dvar_GetUnpackedColorByNameCalls[] =
+	{
+		0x1400A7DA1,
+		0x1400A7E18,
+		0x1400A8D91,
+		0x1400A8DC6,
+		0x1400F5A5C,
+		0x1400F5A79,
+	};
+
+	static const std::uint8_t unpackedColorCallBytes[][5] =
+	{
+		{ 0xE8, 0x4A, 0xD5, 0x1D, 0x00 },
+		{ 0xE8, 0xD3, 0xD4, 0x1D, 0x00 },
+		{ 0xE8, 0x5A, 0xC5, 0x1D, 0x00 },
+		{ 0xE8, 0x25, 0xC5, 0x1D, 0x00 },
+		{ 0xE8, 0x8F, 0xF8, 0x18, 0x00 },
+		{ 0xE8, 0x72, 0xF8, 0x18, 0x00 },
+	};
+
+	constexpr std::uintptr_t Dvar_RegisterColor = 0x140285D50;
+
+	constexpr std::uintptr_t Sys_Milliseconds = 0x1402A8620;
+
+	static Utils::Hook colorIndexHook;
+	static Utils::Hook colorLookupHook;
+	static Utils::Hook unpackedColorHooks[std::size(Dvar_GetUnpackedColorByNameCalls)];
+
+	std::map<std::string, TextRenderer::FontIcon> TextRenderer::fontIcons;
+	std::mutex TextRenderer::fontIconsMutex;
+	std::atomic<bool> TextRenderer::areFontIconsReady = false;
+
+	TextRenderer::FontIconAutocompleteContext TextRenderer::autocompleteContextArray[FONT_ICON_ACI_COUNT];
+
+	TextRenderer::BufferedLocalizedString TextRenderer::stringHintAutoComplete("FONT_ICON_HINT_AUTO_COMPLETE");
+	TextRenderer::BufferedLocalizedString TextRenderer::stringHintModifier("FONT_ICON_HINT_MODIFIER");
+	TextRenderer::BufferedLocalizedString TextRenderer::stringListHeader("FONT_ICON_MODIFIER_LIST_HEADER");
+	TextRenderer::BufferedLocalizedString TextRenderer::stringListFlipHorizontal("FONT_ICON_MODIFIER_LIST_FLIP_HORIZONTAL");
+	TextRenderer::BufferedLocalizedString TextRenderer::stringListFlipVertical("FONT_ICON_MODIFIER_LIST_FLIP_VERTICAL");
+	TextRenderer::BufferedLocalizedString TextRenderer::stringListBig("FONT_ICON_MODIFIER_LIST_BIG");
+
+	Game::dvar_t* TextRenderer::cg_fontIconAutocomplete = nullptr;
+	Game::dvar_t* TextRenderer::cg_fontIconAutocompleteHint = nullptr;
+
+	constexpr char fontIconSeparator = ':';
+	constexpr char fontIconModifierSeparator = '+';
+	constexpr char fontIconFlipHorizontally = 'h';
+	constexpr char fontIconFlipVertically = 'v';
+	constexpr char fontIconBig = 'b';
+	constexpr float fontIconBigScale = 1.5f;
+
+	constexpr char inlineIconEscape = '^';
+	constexpr char inlineIcon = 1;
+	constexpr char inlineIconFlipped = 2;
+	constexpr int inlineIconUnit = 32;
+	constexpr int inlineIconBias = 16;
+	constexpr int inlineIconLargest = 127;
+
+	constexpr std::size_t hudIconNameLength = 4;
+
+	constexpr unsigned int assetTypeMaterial = 5;
+
+	constexpr std::uintptr_t DB_FindXAssetEntry = 0x14012D600;
+	constexpr std::size_t assetEntryHeader = 8;
+
+	constexpr std::size_t materialAtlasRows = 0x0A;
+	constexpr std::size_t materialAtlasColumns = 0x0B;
+	constexpr std::size_t materialTextureCount = 80;
+	constexpr std::size_t materialTechniqueSet = 88;
+	constexpr std::size_t materialTextureTable = 96;
+	constexpr std::size_t textureDefSize = 16;
+	constexpr std::size_t textureDefImage = 8;
+	constexpr unsigned int colorMapHash = 0xA0AB1041;
+
+	constexpr std::size_t imageWidth = 0x18;
+	constexpr std::size_t imageHeight = 0x1A;
+
+	constexpr std::size_t fontPixelHeight = 0x08;
+	constexpr std::size_t fontGlyphCount = 0x0C;
+	constexpr std::size_t fontGlyphs = 0x20;
+	constexpr std::size_t glyphSize = 24;
+	constexpr std::size_t glyphDx = 4;
+
+	constexpr int glyphDirectCount = 0x60;
+	constexpr int glyphFallback = 14;
+
+	constexpr std::uintptr_t SEH_ReadCharFromString = 0x14024F1A0;
+
+	constexpr std::uintptr_t R_TextWidth_Entry = 0x14001AA20;
+
+	static const std::uint8_t textWidthEntry[] = { 0x48, 0x89, 0x4C, 0x24, 0x08, 0x55, 0x56, 0x41, 0x54 };
+
+	constexpr std::uintptr_t DrawText2DCall = 0x14004F8C2;
+	constexpr int textRenderFlagCursor = 0x2;
+	constexpr int textRenderFlagDropShadow = 0x4;
+	constexpr int textRenderFlagDropShadowExtra = 0x8;
+	constexpr int textRenderFlagGlow = 0x10;
+	constexpr int textRenderFlagGlowForceColor = 0x20;
+	constexpr int textRenderFlagFxDecode = 0x40;
+	constexpr int textRenderFlagPadding = 0x80;
+	constexpr int textRenderFlagSubtitle = 0x100;
+	constexpr int textRenderFlagOutline = 0x400;
+	constexpr int textRenderFlagOutlineExtra = 0x800;
+	constexpr int textRenderFlagForceMonospace = 0x1;
+
+	constexpr std::uintptr_t glyphQuadDraw = 0x1400481C0;
+	constexpr std::size_t inlineIconBytes = 12;
+	constexpr float styleOffsets[4][2] = { { -1.0f, -1.0f }, { -1.0f, 1.0f }, { 1.0f, -1.0f }, { 1.0f, 1.0f } };
+
+	static const std::uint8_t drawText2DCall[] = { 0xE8, 0x99, 0xE7, 0xFF, 0xFF };
+
+	static Utils::Hook drawText2DHook;
+	static Utils::Hook textWidthHook;
+
+	constexpr std::uintptr_t DB_UnloadXZone = 0x14012FDA0;
+	constexpr std::uintptr_t DB_UnloadXZoneCalls[] = { 0x14012EDC1, 0x14012F83B };
+
+	static Utils::Hook unloadHooks[std::size(DB_UnloadXZoneCalls)];
+
+	struct TextRenderer::field_t
+	{
+		int cursor;
+		int scroll;
+		int drawWidth;
+		int widthInPixels;
+		float charHeight;
+		int fixedSize;
+		char buffer[256];
+	};
+
+	AssertSize(TextRenderer::field_t, 0x118);
+	AssertOffset(TextRenderer::field_t, charHeight, 0x10);
+	AssertOffset(TextRenderer::field_t, buffer, 0x18);
+
+	constexpr std::uintptr_t playerKeys = 0x1406C70A0;
+	constexpr std::size_t playerKeysStride = 3368;
+
+	struct ConversionArguments
+	{
+		int argCount;
+		const char* args[9];
+	};
+
+	AssertOffset(ConversionArguments, args, 0x08);
+
+	constexpr std::uintptr_t UI_SafeTranslateString = 0x140272770;
+	constexpr std::uintptr_t UI_ReplaceConversions = 0x140271C90;
+
+	constexpr std::uintptr_t R_AddCmdDrawStretchPic = 0x14001BE90;
+
+	constexpr std::uintptr_t UI_GetFontHandle = 0x14026EE10;
+
+	constexpr std::uintptr_t R_NormalizedTextScale = 0x14001AA00;
+
+	constexpr std::uintptr_t ScrPlace_ApplyRect = 0x1400F23B0;
+
+	constexpr std::uintptr_t ScrPlace_GetViewPlacement = 0x1400F2BD0;
+
+	constexpr std::uintptr_t Field_AdjustScroll = 0x1400EEB40;
+
+	constexpr std::uintptr_t con_inputBoxColor = 0x1406C7030;
+
+	constexpr std::uintptr_t cls_whiteMaterial = 0x140C5CF08;
+
+	constexpr std::uintptr_t sharedUiInfo_scrollBarArrowUp = 0x1465D0A40;
+	constexpr std::uintptr_t sharedUiInfo_scrollBarArrowDown = 0x1465D0A48;
+
+	constexpr std::uintptr_t Con_DrawSay_Field_DrawCall = 0x1400ED087;
+
+	static const std::uint8_t fieldDrawCall[] = { 0xE8, 0x34, 0x1E, 0x00, 0x00 };
+
+	constexpr std::uintptr_t CL_KeyEvent_Message_KeyCalls[] =
+	{
+		0x1400EE973,
+		0x1400EEADB,
+	};
+
+	static const std::uint8_t messageKeyCallBytes[][5] =
+	{
+		{ 0xE8, 0x18, 0x15, 0x00, 0x00 },
+		{ 0xE8, 0xB0, 0x13, 0x00, 0x00 },
+	};
+
+	constexpr std::uintptr_t Field_AdjustScroll_SEH_PrintStrlenCall = 0x1400EEBD6;
+	constexpr std::uintptr_t Field_AdjustScroll_BufferArgument = 0x1400EEBCB;
+
+	static const std::uint8_t printStrlenCall[] =
+	{
+		0x48, 0x8D, 0x4B, 0x18,
+		0xC7, 0x43, 0x04, 0x00, 0x00, 0x00, 0x00,
+		0xE8, 0x65, 0x04, 0x16, 0x00,
+	};
+
+	constexpr int keyTab = 9;
+	constexpr int keyEnter = 13;
+	constexpr int keyEscape = 27;
+	constexpr int keyUpArrow = 154;
+	constexpr int keyDownArrow = 155;
+	constexpr int keyPadUpArrow = 183;
+	constexpr int keyPadDownArrow = 189;
+	constexpr int keyPadEnter = 191;
+
+	constexpr float autocompleteBoxPadding = 6.0f;
+	constexpr float autocompleteBoxBorder = 2.0f;
+	constexpr float autocompleteColumnSpacing = 12.0f;
+	constexpr float autocompleteArrowSize = 12.0f;
+	constexpr float autocompleteWhite[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+	constexpr float autocompleteTextColor[4] = { 1.0f, 1.0f, 0.8f, 1.0f };
+	constexpr float autocompleteHintColor[4] = { 0.6f, 0.6f, 0.6f, 1.0f };
+
+	constexpr char colorFirstChar = '0';
+	constexpr char colorLastChar = static_cast<char>('0' + TEXT_COLOR_COUNT - 1);
+
+	static Utils::Hook fieldDrawSayHook;
+	static Utils::Hook messageKeyHooks[std::size(CL_KeyEvent_Message_KeyCalls)];
+	static Utils::Hook printLenHook;
+
+	constexpr std::size_t encodedCharacterLimit = 1024 / 8;
+
+	static bool IsDroppedCodepoint(const std::uint32_t codepoint)
+	{
+		return codepoint < 0x20
+			|| (codepoint >= 0x7F && codepoint <= 0x9F)
+			|| (codepoint >= 0x202A && codepoint <= 0x202E)
+			|| (codepoint >= 0x2066 && codepoint <= 0x2069);
+	}
+
+	static bool IsUnicodeWhitespace(const std::uint32_t codepoint)
+	{
+		return codepoint == 0x20 || codepoint == 0xA0 || codepoint == 0x1680
+			|| (codepoint >= 0x2000 && codepoint <= 0x200A) || codepoint == 0x2028
+			|| codepoint == 0x2029 || codepoint == 0x202F || codepoint == 0x205F
+			|| codepoint == 0x3000;
+	}
+
+	static void AppendUtf16(std::wstring& output, const std::uint32_t codepoint)
+	{
+		if (codepoint <= 0xFFFF)
 		{
-			Game::Material* material{};
-			float bearingX{};
-			float bearingY{};
-			float width{};
-			float height{};
-			float advance{};
-		};
-
-		struct UnicodeRunDefinition
-		{
-			std::wstring text;
-			std::size_t characterCount{};
-		};
-
-		bool RasterizeUnicodeRun(const std::string& materialName, const std::wstring& text,
-			RuntimeUnicodeRun& run);
-
-		std::mutex UnicodeRunMutex;
-		std::unordered_map<std::wstring, std::uint32_t> UnicodeRunIds;
-		std::unordered_map<std::uint32_t, UnicodeRunDefinition> UnicodeRunDefinitions;
-		std::unordered_map<std::uint32_t, RuntimeUnicodeRun> UnicodeGlyphCache;
-		std::unordered_set<std::uint32_t> PendingUnicodeGlyphs;
-		std::unordered_map<std::uint32_t, RuntimeUnicodeRun> UnicodeRunCache;
-		std::unordered_set<std::uint32_t> PendingUnicodeRuns;
-		std::uint32_t NextUnicodeRunId = 1;
-
-		int HexDigitValue(const char character)
-		{
-			if (character >= '0' && character <= '9') return character - '0';
-			if (character >= 'A' && character <= 'F') return character - 'A' + 10;
-			if (character >= 'a' && character <= 'f') return character - 'a' + 10;
-			return -1;
+			output.push_back(static_cast<wchar_t>(codepoint));
+			return;
 		}
 
-		bool ParseUnicodeGlyphEscape(const char*& text, std::uint32_t& codepoint)
+		const auto value = codepoint - 0x10000;
+		output.push_back(static_cast<wchar_t>(0xD800 + (value >> 10)));
+		output.push_back(static_cast<wchar_t>(0xDC00 + (value & 0x3FF)));
+	}
+
+	static bool IsGraphemeExtend(const std::uint32_t codepoint)
+	{
+		if (codepoint == 0x200C || codepoint == 0x200D
+			|| (codepoint >= 0xFE00 && codepoint <= 0xFE0F)
+			|| (codepoint >= 0x1F3FB && codepoint <= 0x1F3FF)
+			|| (codepoint >= 0xE0020 && codepoint <= 0xE007F)
+			|| (codepoint >= 0xE0100 && codepoint <= 0xE01EF))
 		{
-			if (!text || *text != UNICODE_GLYPH_ESCAPE) return false;
-
-			std::uint32_t value{};
-			for (std::size_t index = 0; index < UNICODE_GLYPH_HEX_LENGTH; ++index)
-			{
-				const auto character = text[index + 1];
-				if (character == '\0') return false;
-				const auto digit = HexDigitValue(character);
-				if (digit < 0) return false;
-				value = (value << 4) | static_cast<std::uint32_t>(digit);
-			}
-
-			if (value > 0x10FFFF || (value >= 0xD800 && value <= 0xDFFF)) return false;
-			text += UNICODE_GLYPH_HEX_LENGTH + 1;
-			codepoint = value;
 			return true;
 		}
 
-		bool ParseUnicodeRunEscape(const char*& text, std::uint32_t& runId)
+		std::wstring utf16;
+		AppendUtf16(utf16, codepoint);
+
+		WORD types[2]{};
+
+		if (!GetStringTypeW(CT_CTYPE3, utf16.data(), static_cast<int>(utf16.size()), types))
 		{
-			if (!text || *text != UNICODE_RUN_ESCAPE) return false;
-
-			std::uint32_t value{};
-			for (std::size_t index = 0; index < UNICODE_RUN_ID_HEX_LENGTH; ++index)
-			{
-				const auto character = text[index + 1];
-				if (character == '\0') return false;
-				const auto digit = HexDigitValue(character);
-				if (digit < 0) return false;
-				value = (value << 4) | static_cast<std::uint32_t>(digit);
-			}
-
-			if (value == 0) return false;
-			text += UNICODE_RUN_ID_HEX_LENGTH + 1;
-			runId = value;
-			return true;
+			return false;
 		}
 
-		std::uint32_t RegisterUnicodeRun(const std::wstring& text, const std::size_t characterCount)
+		for (std::size_t i = 0; i < utf16.size(); ++i)
 		{
-			std::lock_guard lock(UnicodeRunMutex);
-			if (const auto entry = UnicodeRunIds.find(text); entry != UnicodeRunIds.end())
+			if (types[i] & (C3_NONSPACING | C3_DIACRITIC | C3_VOWELMARK))
 			{
-				return entry->second;
-			}
-
-			auto runId = NextUnicodeRunId++;
-			while (runId == 0 || UnicodeRunDefinitions.contains(runId))
-			{
-				runId = NextUnicodeRunId++;
-			}
-
-			UnicodeRunIds.emplace(text, runId);
-			UnicodeRunDefinitions.emplace(runId, UnicodeRunDefinition{text, characterCount});
-			return runId;
-		}
-
-		std::size_t GetUnicodeRunCharacterCount(const std::uint32_t runId)
-		{
-			std::lock_guard lock(UnicodeRunMutex);
-			if (const auto entry = UnicodeRunDefinitions.find(runId); entry != UnicodeRunDefinitions.end())
-			{
-				return entry->second.characterCount;
-			}
-			return 1;
-		}
-
-		std::optional<RuntimeUnicodeRun> GetUnicodeGlyph(const std::uint32_t codepoint)
-		{
-			std::lock_guard lock(UnicodeRunMutex);
-			if (const auto entry = UnicodeGlyphCache.find(codepoint); entry != UnicodeGlyphCache.end())
-			{
-				if (entry->second.material) return entry->second;
-				return std::nullopt;
-			}
-
-			if (UnicodeGlyphCache.size() + PendingUnicodeGlyphs.size() < MAX_RUNTIME_UNICODE_GLYPHS)
-			{
-				PendingUnicodeGlyphs.insert(codepoint);
-			}
-			return std::nullopt;
-		}
-
-		std::optional<RuntimeUnicodeRun> GetUnicodeRun(const std::uint32_t runId)
-		{
-			std::lock_guard lock(UnicodeRunMutex);
-			if (const auto entry = UnicodeRunCache.find(runId); entry != UnicodeRunCache.end())
-			{
-				if (entry->second.material) return entry->second;
-				return std::nullopt;
-			}
-
-			if (UnicodeRunDefinitions.contains(runId)
-				&& UnicodeRunCache.size() + PendingUnicodeRuns.size() < MAX_RUNTIME_UNICODE_RUNS)
-			{
-				PendingUnicodeRuns.insert(runId);
-			}
-			return std::nullopt;
-		}
-
-		bool RasterizeUnicodeGlyph(const std::uint32_t codepoint, RuntimeUnicodeRun& glyph)
-		{
-			if (codepoint > 0xFFFF) return false;
-
-			const auto deviceContext = CreateCompatibleDC(nullptr);
-			if (!deviceContext) return false;
-			const auto deleteDeviceContext = gsl::finally([deviceContext] { DeleteDC(deviceContext); });
-
-			static constexpr std::array fontNames
-			{
-				L"Segoe UI Symbol",
-				L"Segoe UI",
-				L"Arial",
-				L"Tahoma",
-			};
-
-			GLYPHMETRICS metrics{};
-			std::vector<unsigned char> bitmap;
-			bool found = false;
-			for (const auto* fontName : fontNames)
-			{
-				const auto font = CreateFontW(-static_cast<int>(UNICODE_RUN_RASTER_HEIGHT), 0, 0, 0, FW_NORMAL,
-					FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-					ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, fontName);
-				if (!font) continue;
-
-				const auto previousFont = SelectObject(deviceContext, font);
-				const auto restoreFont = gsl::finally([deviceContext, previousFont, font]
-				{
-					SelectObject(deviceContext, previousFont);
-					DeleteObject(font);
-				});
-
-				const auto character = static_cast<wchar_t>(codepoint);
-				WORD glyphIndex{};
-				if (GetGlyphIndicesW(deviceContext, &character, 1, &glyphIndex,
-					GGI_MARK_NONEXISTING_GLYPHS) == GDI_ERROR || glyphIndex == 0xFFFF)
-				{
-					continue;
-				}
-
-				MAT2 transform{};
-				transform.eM11.value = 1;
-				transform.eM22.value = 1;
-				const auto bitmapSize = GetGlyphOutlineW(deviceContext, glyphIndex,
-					GGO_GRAY8_BITMAP | GGO_GLYPH_INDEX, &metrics, 0, nullptr, &transform);
-				if (bitmapSize == GDI_ERROR || metrics.gmBlackBoxX == 0 || metrics.gmBlackBoxY == 0) continue;
-
-				bitmap.resize(bitmapSize);
-				if (GetGlyphOutlineW(deviceContext, glyphIndex, GGO_GRAY8_BITMAP | GGO_GLYPH_INDEX,
-					&metrics, bitmapSize, bitmap.data(), &transform) == GDI_ERROR)
-				{
-					bitmap.clear();
-					continue;
-				}
-
-				found = true;
-				break;
-			}
-
-			if (!found)
-			{
-				return RasterizeUnicodeRun(std::format("runtime_unicode_glyph_fallback_{:06X}", codepoint),
-					std::wstring(1, static_cast<wchar_t>(codepoint)), glyph);
-			}
-
-			const auto width = static_cast<unsigned int>(metrics.gmBlackBoxX);
-			const auto height = static_cast<unsigned int>(metrics.gmBlackBoxY);
-			if (width > 256 || height > 256) return false;
-			const auto name = std::format("runtime_unicode_glyph_{:06X}", codepoint);
-			auto* image = Materials::CreateImage(name, width, height, 1, 0x1000003, D3DFMT_A8R8G8B8);
-			if (!image || !image->texture.map) return false;
-
-			D3DLOCKED_RECT lockedRect{};
-			if (FAILED(image->texture.map->LockRect(0, &lockedRect, nullptr, 0))) return false;
-			const auto unlockTexture = gsl::finally([image] { image->texture.map->UnlockRect(0); });
-			const auto sourcePitch = (width + 3u) & ~3u;
-			for (auto y = 0u; y < height; ++y)
-			{
-				const auto* source = bitmap.data() + static_cast<std::size_t>(y) * sourcePitch;
-				auto* destination = static_cast<unsigned char*>(lockedRect.pBits)
-					+ static_cast<std::size_t>(y) * lockedRect.Pitch;
-				for (auto x = 0u; x < width; ++x)
-				{
-					const auto alpha = static_cast<unsigned char>(std::min(255u,
-						static_cast<unsigned int>(source[x]) * 255u / 64u));
-					destination[x * 4 + 0] = 255;
-					destination[x * 4 + 1] = 255;
-					destination[x * 4 + 2] = 255;
-					destination[x * 4 + 3] = alpha;
-				}
-			}
-
-			glyph.material = Materials::Create(name, image);
-			glyph.bearingX = static_cast<float>(metrics.gmptGlyphOrigin.x) / UNICODE_RUN_RASTER_HEIGHT;
-			glyph.bearingY = -static_cast<float>(metrics.gmptGlyphOrigin.y) / UNICODE_RUN_RASTER_HEIGHT;
-			glyph.width = static_cast<float>(width) / UNICODE_RUN_RASTER_HEIGHT;
-			glyph.height = static_cast<float>(height) / UNICODE_RUN_RASTER_HEIGHT;
-			glyph.advance = static_cast<float>(std::max<LONG>(1, metrics.gmCellIncX)) / UNICODE_RUN_RASTER_HEIGHT;
-			return glyph.material != nullptr;
-		}
-
-		class UnicodeRunTextRenderer final : public IDWriteTextRenderer
-		{
-		public:
-			UnicodeRunTextRenderer(IDWriteBitmapRenderTarget* target, IDWriteRenderingParams* renderingParams)
-				: target_(target), renderingParams_(renderingParams)
-			{
-			}
-
-			HRESULT STDMETHODCALLTYPE QueryInterface(const IID& iid, void** object) override
-			{
-				if (!object) return E_POINTER;
-				if (iid == __uuidof(IUnknown) || iid == __uuidof(IDWritePixelSnapping)
-					|| iid == __uuidof(IDWriteTextRenderer))
-				{
-					*object = this;
-					AddRef();
-					return S_OK;
-				}
-				*object = nullptr;
-				return E_NOINTERFACE;
-			}
-
-			ULONG STDMETHODCALLTYPE AddRef() override
-			{
-				return 1;
-			}
-
-			ULONG STDMETHODCALLTYPE Release() override
-			{
-				return 1;
-			}
-
-			HRESULT STDMETHODCALLTYPE IsPixelSnappingDisabled(void*, BOOL* disabled) override
-			{
-				if (!disabled) return E_POINTER;
-				*disabled = FALSE;
-				return S_OK;
-			}
-
-			HRESULT STDMETHODCALLTYPE GetCurrentTransform(void*, DWRITE_MATRIX* transform) override
-			{
-				if (!transform) return E_POINTER;
-				*transform = DWRITE_MATRIX{1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
-				return S_OK;
-			}
-
-			HRESULT STDMETHODCALLTYPE GetPixelsPerDip(void*, FLOAT* pixelsPerDip) override
-			{
-				if (!pixelsPerDip) return E_POINTER;
-				*pixelsPerDip = 1.0f;
-				return S_OK;
-			}
-
-			HRESULT STDMETHODCALLTYPE DrawGlyphRun(void*, const FLOAT baselineOriginX,
-				const FLOAT baselineOriginY, const DWRITE_MEASURING_MODE measuringMode,
-				const DWRITE_GLYPH_RUN* glyphRun, const DWRITE_GLYPH_RUN_DESCRIPTION*, IUnknown*) override
-			{
-				return target_->DrawGlyphRun(baselineOriginX, baselineOriginY, measuringMode,
-					glyphRun, renderingParams_, RGB(255, 255, 255));
-			}
-
-			HRESULT STDMETHODCALLTYPE DrawUnderline(void*, FLOAT, FLOAT, const DWRITE_UNDERLINE*, IUnknown*) override
-			{
-				return S_OK;
-			}
-
-			HRESULT STDMETHODCALLTYPE DrawStrikethrough(void*, FLOAT, FLOAT,
-				const DWRITE_STRIKETHROUGH*, IUnknown*) override
-			{
-				return S_OK;
-			}
-
-			HRESULT STDMETHODCALLTYPE DrawInlineObject(void*, FLOAT, FLOAT, IDWriteInlineObject*,
-				BOOL, BOOL, IUnknown*) override
-			{
-				return S_OK;
-			}
-
-		private:
-			IDWriteBitmapRenderTarget* target_;
-			IDWriteRenderingParams* renderingParams_;
-		};
-
-		template <typename T>
-		void ReleaseComObject(T*& object)
-		{
-			if (object)
-			{
-				object->Release();
-				object = nullptr;
+				return true;
 			}
 		}
 
-		bool RasterizeUnicodeRun(const std::string& materialName, const std::wstring& text,
-			RuntimeUnicodeRun& run)
+		return false;
+	}
+
+	static bool TryConvertToWindows1252(const std::uint32_t codepoint, char& converted)
+	{
+		std::wstring utf16;
+		AppendUtf16(utf16, codepoint);
+
+		BOOL usedDefaultCharacter = FALSE;
+
+		return WideCharToMultiByte(1252, WC_NO_BEST_FIT_CHARS, utf16.data(), static_cast<int>(utf16.size()), &converted, 1, nullptr, &usedDefaultCharacter) == 1
+			&& !usedDefaultCharacter;
+	}
+
+	static std::size_t ClusterEnd(const std::vector<std::uint32_t>& codepoints, const std::size_t start)
+	{
+		auto end = start + 1;
+
+		while (end < codepoints.size() && (IsGraphemeExtend(codepoints[end]) || codepoints[end - 1] == 0x200D))
 		{
-			if (text.empty() || text.size() > static_cast<std::size_t>(std::numeric_limits<UINT32>::max()))
+			++end;
+		}
+
+		return end;
+	}
+
+	static bool TryConvertCluster(const std::vector<std::uint32_t>& codepoints, const std::size_t start, const std::size_t end, std::string& converted)
+	{
+		converted.clear();
+
+		for (auto i = start; i < end; ++i)
+		{
+			char character{};
+
+			if (!TryConvertToWindows1252(codepoints[i], character))
 			{
 				return false;
 			}
 
-			IDWriteFactory* factory{};
-			IDWriteTextFormat* textFormat{};
-			IDWriteTextLayout* textLayout{};
-			IDWriteGdiInterop* gdiInterop{};
-			IDWriteBitmapRenderTarget* bitmapTarget{};
-			IDWriteRenderingParams* renderingParams{};
-			const auto releaseObjects = gsl::finally([&]
-			{
-				ReleaseComObject(renderingParams);
-				ReleaseComObject(bitmapTarget);
-				ReleaseComObject(gdiInterop);
-				ReleaseComObject(textLayout);
-				ReleaseComObject(textFormat);
-				ReleaseComObject(factory);
-			});
-
-			if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
-				reinterpret_cast<IUnknown**>(&factory))) || !factory)
-			{
-				return false;
-			}
-
-			if (FAILED(factory->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
-				DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, UNICODE_RUN_RASTER_HEIGHT,
-				L"", &textFormat)) || !textFormat)
-			{
-				return false;
-			}
-			textFormat->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
-			textFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-			textFormat->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
-
-			if (FAILED(factory->CreateTextLayout(text.data(), static_cast<UINT32>(text.size()), textFormat,
-				static_cast<FLOAT>(MAX_UNICODE_RUN_BITMAP_DIMENSION - 2 * UNICODE_RUN_BITMAP_PADDING),
-				static_cast<FLOAT>(MAX_UNICODE_RUN_BITMAP_DIMENSION - 2 * UNICODE_RUN_BITMAP_PADDING),
-				&textLayout)) || !textLayout)
-			{
-				return false;
-			}
-
-			DWRITE_TEXT_METRICS textMetrics{};
-			if (FAILED(textLayout->GetMetrics(&textMetrics))) return false;
-			UINT32 lineCount{};
-			textLayout->GetLineMetrics(nullptr, 0, &lineCount);
-			if (lineCount == 0) return false;
-			std::vector<DWRITE_LINE_METRICS> lineMetrics(lineCount);
-			if (FAILED(textLayout->GetLineMetrics(lineMetrics.data(), lineCount, &lineCount))) return false;
-
-			const auto bitmapWidth = static_cast<unsigned int>(std::ceil(textMetrics.widthIncludingTrailingWhitespace))
-				+ 2 * UNICODE_RUN_BITMAP_PADDING;
-			const auto bitmapHeight = static_cast<unsigned int>(std::ceil(textMetrics.height))
-				+ 2 * UNICODE_RUN_BITMAP_PADDING;
-			if (bitmapWidth == 0 || bitmapHeight == 0 || bitmapWidth > MAX_UNICODE_RUN_BITMAP_DIMENSION
-				|| bitmapHeight > MAX_UNICODE_RUN_BITMAP_DIMENSION)
-			{
-				return false;
-			}
-
-			if (FAILED(factory->GetGdiInterop(&gdiInterop)) || !gdiInterop
-				|| FAILED(gdiInterop->CreateBitmapRenderTarget(nullptr, bitmapWidth, bitmapHeight, &bitmapTarget))
-				|| !bitmapTarget || FAILED(factory->CreateRenderingParams(&renderingParams)) || !renderingParams)
-			{
-				return false;
-			}
-
-			const auto memoryDc = bitmapTarget->GetMemoryDC();
-			if (!memoryDc || !PatBlt(memoryDc, 0, 0, bitmapWidth, bitmapHeight, BLACKNESS)) return false;
-
-			UnicodeRunTextRenderer renderer(bitmapTarget, renderingParams);
-			if (FAILED(textLayout->Draw(nullptr, &renderer, static_cast<FLOAT>(UNICODE_RUN_BITMAP_PADDING),
-				static_cast<FLOAT>(UNICODE_RUN_BITMAP_PADDING))))
-			{
-				return false;
-			}
-
-			const auto bitmap = static_cast<HBITMAP>(GetCurrentObject(memoryDc, OBJ_BITMAP));
-			DIBSECTION bitmapInfo{};
-			if (!bitmap || GetObjectW(bitmap, sizeof(bitmapInfo), &bitmapInfo) != sizeof(bitmapInfo)
-				|| !bitmapInfo.dsBm.bmBits || bitmapInfo.dsBm.bmBitsPixel != 32)
-			{
-				return false;
-			}
-
-			const auto* pixels = static_cast<const unsigned char*>(bitmapInfo.dsBm.bmBits);
-			auto minX = bitmapWidth;
-			auto minY = bitmapHeight;
-			auto maxX = 0u;
-			auto maxY = 0u;
-			for (auto y = 0u; y < bitmapHeight; ++y)
-			{
-				const auto* row = pixels + static_cast<std::size_t>(y) * bitmapInfo.dsBm.bmWidthBytes;
-				for (auto x = 0u; x < bitmapWidth; ++x)
-				{
-					const auto* pixel = row + static_cast<std::size_t>(x) * 4;
-					if (std::max({pixel[0], pixel[1], pixel[2]}) == 0) continue;
-					minX = std::min(minX, x);
-					minY = std::min(minY, y);
-					maxX = std::max(maxX, x);
-					maxY = std::max(maxY, y);
-				}
-			}
-
-			if (minX > maxX || minY > maxY) return false;
-			const auto inkWidth = maxX - minX + 1;
-			const auto inkHeight = maxY - minY + 1;
-			const auto width = inkWidth + 2 * UNICODE_RUN_TEXTURE_PADDING;
-			const auto height = inkHeight + 2 * UNICODE_RUN_TEXTURE_PADDING;
-
-			auto* image = Materials::CreateImage(materialName, width, height, 1, 0x1000003, D3DFMT_A8R8G8B8);
-			if (!image || !image->texture.map) return false;
-
-			D3DLOCKED_RECT lockedRect{};
-			if (FAILED(image->texture.map->LockRect(0, &lockedRect, nullptr, 0))) return false;
-			const auto unlockTexture = gsl::finally([image] { image->texture.map->UnlockRect(0); });
-			for (auto y = 0u; y < height; ++y)
-			{
-				auto* destination = static_cast<unsigned char*>(lockedRect.pBits)
-					+ static_cast<std::size_t>(y) * lockedRect.Pitch;
-				std::memset(destination, 0, static_cast<std::size_t>(width) * 4);
-			}
-			for (auto y = 0u; y < inkHeight; ++y)
-			{
-				const auto* source = pixels + static_cast<std::size_t>(y + minY) * bitmapInfo.dsBm.bmWidthBytes
-					+ static_cast<std::size_t>(minX) * 4;
-				auto* destination = static_cast<unsigned char*>(lockedRect.pBits)
-					+ static_cast<std::size_t>(y + UNICODE_RUN_TEXTURE_PADDING) * lockedRect.Pitch
-					+ static_cast<std::size_t>(UNICODE_RUN_TEXTURE_PADDING) * 4;
-				for (auto x = 0u; x < inkWidth; ++x)
-				{
-					const auto* sourcePixel = source + static_cast<std::size_t>(x) * 4;
-					const auto alpha = std::max({sourcePixel[0], sourcePixel[1], sourcePixel[2]});
-					destination[x * 4 + 0] = 255;
-					destination[x * 4 + 1] = 255;
-					destination[x * 4 + 2] = 255;
-					destination[x * 4 + 3] = alpha;
-				}
-			}
-
-			run.material = Materials::Create(materialName, image);
-			run.bearingX = (static_cast<float>(minX) - static_cast<float>(UNICODE_RUN_BITMAP_PADDING))
-				/ UNICODE_RUN_RASTER_HEIGHT
-				- static_cast<float>(UNICODE_RUN_TEXTURE_PADDING) / UNICODE_RUN_RASTER_HEIGHT;
-			run.bearingY = (static_cast<float>(minY) - static_cast<float>(UNICODE_RUN_BITMAP_PADDING)
-				- lineMetrics[0].baseline - static_cast<float>(UNICODE_RUN_TEXTURE_PADDING))
-				/ UNICODE_RUN_RASTER_HEIGHT;
-			run.width = static_cast<float>(width) / UNICODE_RUN_RASTER_HEIGHT;
-			run.height = static_cast<float>(height) / UNICODE_RUN_RASTER_HEIGHT;
-			run.advance = std::max(1.0f, textMetrics.widthIncludingTrailingWhitespace)
-				/ UNICODE_RUN_RASTER_HEIGHT;
-			return run.material != nullptr;
+			converted.push_back(character);
 		}
 
-		void BuildPendingUnicodeGlyphs([[maybe_unused]] IDirect3DDevice9* device)
+		return true;
+	}
+
+	static int FontPixelHeight(const void* font)
+	{
+		return *reinterpret_cast<const int*>(static_cast<const std::uint8_t*>(font) + fontPixelHeight);
+	}
+
+	static void* FindMaterial(const char* name)
+	{
+		auto* const entry = reinterpret_cast<std::uint8_t*(*)(unsigned int, const char*)>(
+			Utils::Hook::Rebase(DB_FindXAssetEntry))(assetTypeMaterial, name);
+
+		if (!entry)
 		{
-			std::vector<std::uint32_t> pending;
+			return nullptr;
+		}
+
+		return *reinterpret_cast<void**>(entry + assetEntryHeader);
+	}
+
+	static float ColorMapAspect(const void* material)
+	{
+		const auto* const bytes = static_cast<const std::uint8_t*>(material);
+
+		if (bytes[materialAtlasRows] > 1 || bytes[materialAtlasColumns] > 1)
+		{
+			return 0.0f;
+		}
+
+		const auto* const table = *reinterpret_cast<const std::uint8_t* const*>(bytes + materialTextureTable);
+
+		for (unsigned int i = 0; i < bytes[materialTextureCount]; ++i)
+		{
+			const auto* const textureDef = table + i * textureDefSize;
+
+			if (*reinterpret_cast<const unsigned int*>(textureDef) != colorMapHash)
 			{
-				std::lock_guard lock(UnicodeRunMutex);
-				while (!PendingUnicodeGlyphs.empty() && pending.size() < MAX_UNICODE_GLYPHS_PER_FRAME)
-				{
-					const auto entry = PendingUnicodeGlyphs.begin();
-					pending.push_back(*entry);
-					PendingUnicodeGlyphs.erase(entry);
-				}
-				for (const auto codepoint : pending) UnicodeGlyphCache.try_emplace(codepoint);
+				continue;
 			}
 
-			for (const auto codepoint : pending)
+			const auto* const image = *reinterpret_cast<const std::uint8_t* const*>(textureDef + textureDefImage);
+
+			if (!image)
 			{
-				RuntimeUnicodeRun glyph{};
-				RasterizeUnicodeGlyph(codepoint, glyph);
-				std::lock_guard lock(UnicodeRunMutex);
-				UnicodeGlyphCache[codepoint] = glyph;
+				return 0.0f;
+			}
+
+			const auto width = *reinterpret_cast<const std::uint16_t*>(image + imageWidth);
+			const auto height = *reinterpret_cast<const std::uint16_t*>(image + imageHeight);
+
+			if (!width || !height)
+			{
+				return 0.0f;
+			}
+
+			return static_cast<float>(width) / static_cast<float>(height);
+		}
+
+		return 0.0f;
+	}
+
+	static int InlineIconSize(int pixelHeight, char size)
+	{
+		return (pixelHeight * (size - inlineIconBias) + inlineIconBias) / inlineIconUnit;
+	}
+
+	static void AppendInlineIcon(std::string& out, void* material, float aspect, bool isFlippedHorizontally, bool isBig)
+	{
+		const float scale = isBig ? fontIconBigScale : 1.0f;
+		const int height = inlineIconBias + static_cast<int>(std::lround(inlineIconUnit * scale));
+		const int width = std::clamp(inlineIconBias + static_cast<int>(std::lround(inlineIconUnit * aspect * scale)), inlineIconBias + 1, inlineIconLargest);
+
+		out.push_back(inlineIconEscape);
+
+		if (isFlippedHorizontally)
+		{
+			out.push_back(inlineIconFlipped);
+		}
+		else
+		{
+			out.push_back(inlineIcon);
+		}
+
+		out.push_back(static_cast<char>(width));
+		out.push_back(static_cast<char>(height));
+		out.append(reinterpret_cast<const char*>(&material), sizeof(material));
+	}
+
+	static bool IsHudIcon(const char* text)
+	{
+		return text[0] == inlineIconEscape && (text[1] == inlineIcon || text[1] == inlineIconFlipped);
+	}
+
+	static bool HasHudIcon(const char* text)
+	{
+		for (const char* position = text; *position; ++position)
+		{
+			if (IsHudIcon(position))
+			{
+				return true;
 			}
 		}
 
-		void BuildPendingUnicodeRuns([[maybe_unused]] IDirect3DDevice9* device)
+		return false;
+	}
+
+	static const char* SkipHudIcon(const char* text)
+	{
+		const char* position = text + 2;
+
+		if (*position)
 		{
-			std::vector<std::pair<std::uint32_t, std::wstring>> pending;
+			++position;
+		}
+
+		if (*position)
+		{
+			++position;
+		}
+
+		if (*position)
+		{
+			const auto nameLength = static_cast<unsigned char>(*position);
+			++position;
+
+			for (unsigned int i = 0; i < nameLength && *position; ++i)
 			{
-				std::lock_guard lock(UnicodeRunMutex);
-				while (!PendingUnicodeRuns.empty() && pending.size() < MAX_UNICODE_RUNS_PER_FRAME)
-				{
-					const auto entry = PendingUnicodeRuns.begin();
-					const auto definition = UnicodeRunDefinitions.find(*entry);
-					if (definition != UnicodeRunDefinitions.end())
-					{
-						pending.emplace_back(*entry, definition->second.text);
-						UnicodeRunCache.try_emplace(*entry);
-					}
-					PendingUnicodeRuns.erase(entry);
-				}
+				++position;
+			}
+		}
+
+		return position;
+	}
+
+	static void AppendHudIcon(std::string& out, const char* text)
+	{
+		const char type = text[1];
+		const char width = text[2];
+		const char height = text[3];
+
+		if (!width || !height || !text[hudIconNameLength])
+		{
+			return;
+		}
+
+		const auto nameLength = static_cast<unsigned char>(text[hudIconNameLength]);
+		const char* const name = text + hudIconNameLength + 1;
+
+		if (strnlen(name, nameLength) < nameLength)
+		{
+			return;
+		}
+
+		void* material = FindMaterial(std::string(name, nameLength).c_str());
+
+		if (material)
+		{
+			const auto* const techniqueSet = *reinterpret_cast<const char* const* const*>(static_cast<const std::uint8_t*>(material) + materialTechniqueSet);
+
+			if (!techniqueSet || !*techniqueSet || std::strcmp(*techniqueSet, "2d") != 0)
+			{
+				material = nullptr;
+			}
+		}
+
+		if (!material)
+		{
+			material = FindMaterial("default");
+		}
+
+		if (!material)
+		{
+			return;
+		}
+
+		out.push_back(inlineIconEscape);
+		out.push_back(type);
+		out.push_back(width);
+		out.push_back(height);
+		out.append(reinterpret_cast<const char*>(&material), sizeof(material));
+	}
+
+	constexpr char unicodeGlyphEscape = 3;
+	constexpr std::size_t unicodeGlyphDigits = 6;
+	constexpr char unicodeRunEscape = 4;
+	constexpr std::size_t unicodeRunDigits = 8;
+	constexpr std::uint64_t unicodeRunKey = 1ull << 32;
+
+	constexpr int unicodeEmPixels = 64;
+	constexpr int unicodeUnitPixels = unicodeEmPixels / inlineIconUnit;
+	constexpr int unicodeBoxUnits = 56;
+	constexpr int unicodeBoxPixels = unicodeBoxUnits * unicodeUnitPixels;
+	constexpr int unicodeBaselinePixels = (unicodeBoxPixels + unicodeEmPixels) / 2;
+	constexpr int unicodePieceUnits = inlineIconLargest - inlineIconBias;
+
+	constexpr int unicodeMaxRunPixels = 4096;
+	constexpr std::size_t unicodeGlyphsPerFrame = 8;
+	constexpr std::size_t unicodeRunsPerFrame = 4;
+
+	constexpr std::size_t unicodeTextureBytes = 32 * 1024 * 1024;
+
+	constexpr unsigned int unicodeImageFlags = 0x1000003;
+
+	struct UnicodeText
+	{
+		std::vector<Game::Material*> pieces;
+		std::vector<std::uint8_t> pieceUnits;
+		std::size_t bytes = 0;
+		std::uint64_t lastDrawnFrame = 0;
+		bool isPending = false;
+		bool isFailed = false;
+	};
+
+	struct UnicodeBuild
+	{
+		std::uint64_t key;
+		std::wstring text;
+		std::vector<Game::Material*> pieces;
+		std::vector<std::uint8_t> pieceUnits;
+		std::size_t bytes;
+	};
+
+	static std::mutex unicodeMutex;
+	static std::unordered_map<std::uint32_t, std::wstring> unicodeRunTexts;
+	static std::unordered_map<std::uint64_t, UnicodeText> unicodeTexts;
+	static std::vector<std::uint64_t> unicodePending;
+	static std::size_t unicodeResidentBytes = 0;
+	static std::uint64_t unicodeFrame = 1;
+
+	constexpr std::size_t unicodeRunLimit = 4096;
+
+	static std::unordered_map<std::wstring, std::uint32_t> unicodeRunIds;
+	static std::uint32_t nextUnicodeRunId = 1;
+
+	static std::atomic<bool> areUnicodeEscapesDrawn = false;
+
+	static int HexDigitValue(const char character)
+	{
+		if (character >= '0' && character <= '9')
+		{
+			return character - '0';
+		}
+
+		if (character >= 'A' && character <= 'F')
+		{
+			return character - 'A' + 10;
+		}
+
+		if (character >= 'a' && character <= 'f')
+		{
+			return character - 'a' + 10;
+		}
+
+		return -1;
+	}
+
+	static bool TryReadUnicodeEscape(const char* text, std::uint64_t& key, const char*& end)
+	{
+		std::size_t digitCount = 0;
+
+		if (*text == unicodeGlyphEscape)
+		{
+			digitCount = unicodeGlyphDigits;
+		}
+		else if (*text == unicodeRunEscape)
+		{
+			digitCount = unicodeRunDigits;
+		}
+		else
+		{
+			return false;
+		}
+
+		std::uint32_t value = 0;
+
+		for (std::size_t i = 1; i <= digitCount; ++i)
+		{
+			const int digit = HexDigitValue(text[i]);
+
+			if (digit < 0)
+			{
+				return false;
 			}
 
-			for (const auto& [runId, text] : pending)
+			value = (value << 4) | static_cast<std::uint32_t>(digit);
+		}
+
+		if (*text == unicodeGlyphEscape)
+		{
+			if (value > 0x10FFFF || (value >= 0xD800 && value <= 0xDFFF))
 			{
-				RuntimeUnicodeRun run{};
-				RasterizeUnicodeRun(std::format("runtime_unicode_run_{:08X}", runId), text, run);
-				std::lock_guard lock(UnicodeRunMutex);
-				UnicodeRunCache[runId] = run;
+				return false;
 			}
+
+			key = value;
+		}
+		else
+		{
+			if (value == 0)
+			{
+				return false;
+			}
+
+			key = unicodeRunKey | value;
+		}
+
+		end = text + digitCount + 1;
+		return true;
+	}
+
+	static std::uint32_t RegisterUnicodeRun(const std::wstring& text)
+	{
+		std::lock_guard _(unicodeMutex);
+		const auto found = unicodeRunIds.find(text);
+
+		if (found != unicodeRunIds.end())
+		{
+			return found->second;
+		}
+
+		if (unicodeRunTexts.size() >= unicodeRunLimit)
+		{
+			return 0;
+		}
+
+		const auto id = nextUnicodeRunId;
+		++nextUnicodeRunId;
+
+		unicodeRunIds.emplace(text, id);
+		unicodeRunTexts.emplace(id, text);
+
+		return id;
+	}
+
+	static bool HasUnicodeEscape(const char* text)
+	{
+		const char* position = text;
+
+		while (*position)
+		{
+			if (IsHudIcon(position))
+			{
+				position = SkipHudIcon(position);
+				continue;
+			}
+
+			if (*position == inlineIconEscape && (position[1] == unicodeGlyphEscape || position[1] == unicodeRunEscape))
+			{
+				return true;
+			}
+
+			++position;
+		}
+
+		return false;
+	}
+
+	static UnicodeText* FindUnicodeText(const std::uint64_t key)
+	{
+		const auto value = static_cast<std::uint32_t>(key);
+
+		if (key & unicodeRunKey)
+		{
+			if (!unicodeRunTexts.contains(value))
+			{
+				return nullptr;
+			}
+		}
+		else if (value > 0xFFFF || IsDroppedCodepoint(value))
+		{
+			return nullptr;
+		}
+
+		auto& entry = unicodeTexts[key];
+
+		if (entry.pieces.empty() && !entry.isPending && !entry.isFailed)
+		{
+			entry.isPending = true;
+			unicodePending.push_back(key);
+		}
+
+		return &entry;
+	}
+
+	static void AppendUnicodeText(std::string& out, const std::uint64_t key)
+	{
+		std::lock_guard _(unicodeMutex);
+		auto* const entry = FindUnicodeText(key);
+
+		if (!entry || entry->pieces.empty())
+		{
+			out.push_back('?');
+			return;
+		}
+
+		entry->lastDrawnFrame = unicodeFrame;
+
+		for (std::size_t i = 0; i < entry->pieces.size(); ++i)
+		{
+			const auto* const material = entry->pieces[i];
+
+			out.push_back(inlineIconEscape);
+			out.push_back(inlineIcon);
+			out.push_back(static_cast<char>(inlineIconBias + entry->pieceUnits[i]));
+			out.push_back(static_cast<char>(inlineIconBias + unicodeBoxUnits));
+			out.append(reinterpret_cast<const char*>(&material), sizeof(material));
 		}
 	}
 
-	unsigned TextRenderer::colorTableDefault[TEXT_COLOR_COUNT]
+	class UnicodeGlyphRunRenderer final : public IDWriteTextRenderer
 	{
-		ColorRgb(0, 0, 0),          // TEXT_COLOR_BLACK
-		ColorRgb(255, 92, 92),      // TEXT_COLOR_RED
-		ColorRgb(0, 255, 0),        // TEXT_COLOR_GREEN
-		ColorRgb(255, 255, 0),      // TEXT_COLOR_YELLOW
-		ColorRgb(0, 0, 255),        // TEXT_COLOR_BLUE
-		ColorRgb(0, 255, 255),      // TEXT_COLOR_LIGHT_BLUE
-		ColorRgb(255, 92, 255),     // TEXT_COLOR_PINK
-		ColorRgb(255, 255, 255),    // TEXT_COLOR_DEFAULT
-		ColorRgb(255, 255, 255),    // TEXT_COLOR_AXIS
-		ColorRgb(255, 255, 255),    // TEXT_COLOR_ALLIES
-		ColorRgb(255, 255, 255),    // TEXT_COLOR_RAINBOW
-		ColorRgb(255, 255, 255),    // TEXT_COLOR_SERVER
+	public:
+		UnicodeGlyphRunRenderer(IDWriteBitmapRenderTarget* bitmapTarget, IDWriteRenderingParams* params)
+			: target(bitmapTarget), renderingParams(params)
+		{
+		}
 
-		ColorRgb(200, 75, 200),     // TEXT_COLOR_REAL_PINK
-		ColorRgb(255, 240, 20),     // TEXT_COLOR_REAL_YELLOW
-		ColorRgb(128, 0, 128),      // TEXT_COLOR_DARK_PURPLE
-		ColorRgb(20, 180, 180),     // TEXT_COLOR_TEAL
-		ColorRgb(255, 255, 255),    // TEXT_COLOR_INVALIDCHAR 16 = @, can't be typed ingame
-		ColorRgb(60, 75, 35),       // TEXT_COLOR_OLIVE
-		ColorRgb(93, 23, 255),      // TEXT_COLOR_BLURPLE
-		ColorRgb(255, 0, 0),        // TEXT_COLOR_PURE_RED
-		ColorRgb(0, 255, 0),        // TEXT_COLOR_PURE_GREEN
-		ColorRgb(0, 0, 255),        // TEXT_COLOR_PURE_BLUE
-		ColorRgb(128, 0, 0),        // TEXT_COLOR_MAROON
-		ColorRgb(255, 105, 180),    // TEXT_COLOR_HOT_PINK
-		ColorRgb(170, 240, 209),    // TEXT_COLOR_MINT
-		ColorRgb(255, 213, 165),    // TEXT_COLOR_PEACH
-		ColorRgb(187, 231, 151),    // TEXT_COLOR_PASTEL_GREEN
-		ColorRgb(255, 120, 120),    // TEXT_COLOR_LIGHT_RED
+		HRESULT STDMETHODCALLTYPE QueryInterface(const IID& iid, void** object) override
+		{
+			if (!object)
+			{
+				return E_POINTER;
+			}
+
+			if (iid == __uuidof(IUnknown) || iid == __uuidof(IDWritePixelSnapping) || iid == __uuidof(IDWriteTextRenderer))
+			{
+				*object = this;
+				return S_OK;
+			}
+
+			*object = nullptr;
+			return E_NOINTERFACE;
+		}
+
+		ULONG STDMETHODCALLTYPE AddRef() override
+		{
+			return 1;
+		}
+
+		ULONG STDMETHODCALLTYPE Release() override
+		{
+			return 1;
+		}
+
+		HRESULT STDMETHODCALLTYPE IsPixelSnappingDisabled(void*, BOOL* isDisabled) override
+		{
+			if (!isDisabled)
+			{
+				return E_POINTER;
+			}
+
+			*isDisabled = FALSE;
+			return S_OK;
+		}
+
+		HRESULT STDMETHODCALLTYPE GetCurrentTransform(void*, DWRITE_MATRIX* transform) override
+		{
+			if (!transform)
+			{
+				return E_POINTER;
+			}
+
+			*transform = DWRITE_MATRIX{ 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f };
+			return S_OK;
+		}
+
+		HRESULT STDMETHODCALLTYPE GetPixelsPerDip(void*, FLOAT* pixelsPerDip) override
+		{
+			if (!pixelsPerDip)
+			{
+				return E_POINTER;
+			}
+
+			*pixelsPerDip = 1.0f;
+			return S_OK;
+		}
+
+		HRESULT STDMETHODCALLTYPE DrawGlyphRun(void*, FLOAT baselineOriginX, FLOAT baselineOriginY, DWRITE_MEASURING_MODE measuringMode,
+			const DWRITE_GLYPH_RUN* glyphRun, const DWRITE_GLYPH_RUN_DESCRIPTION*, IUnknown*) override
+		{
+			return target->DrawGlyphRun(baselineOriginX, baselineOriginY, measuringMode, glyphRun, renderingParams, RGB(255, 255, 255));
+		}
+
+		HRESULT STDMETHODCALLTYPE DrawUnderline(void*, FLOAT, FLOAT, const DWRITE_UNDERLINE*, IUnknown*) override
+		{
+			return S_OK;
+		}
+
+		HRESULT STDMETHODCALLTYPE DrawStrikethrough(void*, FLOAT, FLOAT, const DWRITE_STRIKETHROUGH*, IUnknown*) override
+		{
+			return S_OK;
+		}
+
+		HRESULT STDMETHODCALLTYPE DrawInlineObject(void*, FLOAT, FLOAT, IDWriteInlineObject*, BOOL, BOOL, IUnknown*) override
+		{
+			return S_OK;
+		}
+
+	private:
+		IDWriteBitmapRenderTarget* target;
+		IDWriteRenderingParams* renderingParams;
 	};
 
-	unsigned TextRenderer::colorTableNew[TEXT_COLOR_COUNT]
+	static std::uint8_t InkAt(const DIBSECTION& section, const int x, const int y)
 	{
-		ColorRgb(0, 0, 0),          // TEXT_COLOR_BLACK
-		ColorRgb(255, 49, 49),      // TEXT_COLOR_RED
-		ColorRgb(134, 192, 0),      // TEXT_COLOR_GREEN
-		ColorRgb(255, 173, 34),     // TEXT_COLOR_YELLOW
-		ColorRgb(0, 135, 193),      // TEXT_COLOR_BLUE
-		ColorRgb(32, 197, 255),     // TEXT_COLOR_LIGHT_BLUE
-		ColorRgb(151, 80, 221),     // TEXT_COLOR_PINK
-		ColorRgb(255, 255, 255),    // TEXT_COLOR_DEFAULT
-		ColorRgb(255, 255, 255),    // TEXT_COLOR_AXIS
-		ColorRgb(255, 255, 255),    // TEXT_COLOR_ALLIES
-		ColorRgb(255, 255, 255),    // TEXT_COLOR_RAINBOW
-		ColorRgb(255, 255, 255),    // TEXT_COLOR_SERVER
+		const auto* const pixel = static_cast<const std::uint8_t*>(section.dsBm.bmBits)
+			+ static_cast<std::size_t>(y) * section.dsBm.bmWidthBytes + static_cast<std::size_t>(x) * 4;
 
-		ColorRgb(200, 75, 200),     // TEXT_COLOR_REAL_PINK
-		ColorRgb(255, 240, 20),     // TEXT_COLOR_REAL_YELLOW
-		ColorRgb(128, 0, 128),      // TEXT_COLOR_DARK_PURPLE
-		ColorRgb(20, 180, 180),     // TEXT_COLOR_TEAL
-		ColorRgb(255, 255, 255),    // TEXT_COLOR_INVALIDCHAR 16 = @, can't be typed ingame
-		ColorRgb(60, 75, 35),       // TEXT_COLOR_OLIVE
-		ColorRgb(93, 23, 255),      // TEXT_COLOR_BLURPLE
-		ColorRgb(255, 0, 0),        // TEXT_COLOR_PURE_RED
-		ColorRgb(0, 255, 0),        // TEXT_COLOR_PURE_GREEN
-		ColorRgb(0, 0, 255),        // TEXT_COLOR_PURE_BLUE
-		ColorRgb(128, 0, 0),        // TEXT_COLOR_MAROON
-		ColorRgb(255, 105, 180),    // TEXT_COLOR_HOT_PINK
-		ColorRgb(170, 240, 209),    // TEXT_COLOR_MINT
-		ColorRgb(255, 213, 165),    // TEXT_COLOR_PEACH
-		ColorRgb(187, 231, 151),    // TEXT_COLOR_PASTEL_GREEN
-		ColorRgb(255, 120, 120),    // TEXT_COLOR_LIGHT_RED
+		return std::max({ pixel[0], pixel[1], pixel[2] });
+	}
+
+	static bool IsColumnEmpty(const DIBSECTION& section, const int x)
+	{
+		for (int y = 0; y < unicodeBoxPixels; ++y)
+		{
+			if (InkAt(section, x, y))
+			{
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	static void DeleteUnicodeMaterials(const std::vector<Game::Material*>& materials)
+	{
+		for (auto* const material : materials)
+		{
+			Materials::Delete(material, true);
+		}
+	}
+
+	static bool TryCreateUnicodePiece(UnicodeBuild& build, const DIBSECTION& section, const int startUnits, const int units)
+	{
+		const auto value = static_cast<std::uint32_t>(build.key);
+		std::string name;
+
+		if (build.key & unicodeRunKey)
+		{
+			name = std::format("runtime_unicode_run_{:08X}_{}", value, build.pieces.size());
+		}
+		else
+		{
+			name = std::format("runtime_unicode_glyph_{:06X}_{}", value, build.pieces.size());
+		}
+
+		const int width = units * unicodeUnitPixels;
+		const int startX = startUnits * unicodeUnitPixels;
+		auto* const image = Materials::CreateImage(name, width, unicodeBoxPixels, 1, unicodeImageFlags, D3DFMT_A8R8G8B8);
+
+		if (!image->texture.map)
+		{
+			Materials::DeleteImage(image);
+			return false;
+		}
+
+		D3DLOCKED_RECT lockedRect{};
+
+		if (FAILED(image->texture.map->LockRect(0, &lockedRect, nullptr, 0)))
+		{
+			Materials::DeleteImage(image);
+			return false;
+		}
+
+		for (int y = 0; y < unicodeBoxPixels; ++y)
+		{
+			auto* const row = static_cast<std::uint8_t*>(lockedRect.pBits) + static_cast<std::size_t>(y) * lockedRect.Pitch;
+
+			for (int x = 0; x < width; ++x)
+			{
+				row[x * 4 + 0] = 255;
+				row[x * 4 + 1] = 255;
+				row[x * 4 + 2] = 255;
+				row[x * 4 + 3] = InkAt(section, startX + x, y);
+			}
+		}
+
+		image->texture.map->UnlockRect(0);
+
+		auto* const material = Materials::Create(name, image);
+
+		if (!material)
+		{
+			Materials::DeleteImage(image);
+			return false;
+		}
+
+		build.pieces.push_back(material);
+		build.pieceUnits.push_back(static_cast<std::uint8_t>(units));
+		build.bytes += static_cast<std::size_t>(width) * unicodeBoxPixels * 4;
+
+		return true;
+	}
+
+	static bool TryBuildUnicodeText(UnicodeBuild& build)
+	{
+		using Microsoft::WRL::ComPtr;
+
+		if (build.text.empty())
+		{
+			return false;
+		}
+
+		ComPtr<IDWriteFactory> factory;
+
+		if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), reinterpret_cast<IUnknown**>(factory.GetAddressOf()))))
+		{
+			return false;
+		}
+
+		ComPtr<IDWriteTextFormat> format;
+
+		if (FAILED(factory->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+			static_cast<FLOAT>(unicodeEmPixels), L"", &format)))
+		{
+			return false;
+		}
+
+		format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+		format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+		format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+
+		ComPtr<IDWriteTextLayout> layout;
+
+		if (FAILED(factory->CreateTextLayout(build.text.data(), static_cast<UINT32>(build.text.size()), format.Get(),
+			static_cast<FLOAT>(unicodeMaxRunPixels), static_cast<FLOAT>(unicodeBoxPixels), &layout)))
+		{
+			return false;
+		}
+
+		DWRITE_TEXT_METRICS textMetrics{};
+		DWRITE_LINE_METRICS lineMetrics{};
+		UINT32 lineCount = 0;
+
+		if (FAILED(layout->GetMetrics(&textMetrics)) || FAILED(layout->GetLineMetrics(&lineMetrics, 1, &lineCount)) || lineCount != 1)
+		{
+			return false;
+		}
+
+		const int totalUnits = std::max(1, static_cast<int>(std::ceil(textMetrics.widthIncludingTrailingWhitespace / unicodeUnitPixels)));
+		const int width = totalUnits * unicodeUnitPixels;
+
+		if (width > unicodeMaxRunPixels)
+		{
+			return false;
+		}
+
+		ComPtr<IDWriteGdiInterop> interop;
+		ComPtr<IDWriteBitmapRenderTarget> target;
+		ComPtr<IDWriteRenderingParams> renderingParams;
+
+		if (FAILED(factory->GetGdiInterop(&interop)) || FAILED(interop->CreateBitmapRenderTarget(nullptr, width, unicodeBoxPixels, &target))
+			|| FAILED(factory->CreateRenderingParams(&renderingParams)))
+		{
+			return false;
+		}
+
+		const HDC memoryDc = target->GetMemoryDC();
+
+		if (!memoryDc || !PatBlt(memoryDc, 0, 0, width, unicodeBoxPixels, BLACKNESS))
+		{
+			return false;
+		}
+
+		UnicodeGlyphRunRenderer renderer(target.Get(), renderingParams.Get());
+
+		if (FAILED(layout->Draw(nullptr, &renderer, 0.0f, static_cast<FLOAT>(unicodeBaselinePixels) - lineMetrics.baseline)))
+		{
+			return false;
+		}
+
+		const auto bitmap = static_cast<HBITMAP>(GetCurrentObject(memoryDc, OBJ_BITMAP));
+		DIBSECTION section{};
+
+		if (!bitmap || GetObjectW(bitmap, sizeof(section), &section) != sizeof(section) || !section.dsBm.bmBits || section.dsBm.bmBitsPixel != 32)
+		{
+			return false;
+		}
+
+		int startUnits = 0;
+
+		while (startUnits < totalUnits)
+		{
+			int units = std::min(unicodePieceUnits, totalUnits - startUnits);
+
+			if (startUnits + units < totalUnits)
+			{
+				for (int candidate = units; candidate > unicodePieceUnits / 2; --candidate)
+				{
+					const int cutX = (startUnits + candidate) * unicodeUnitPixels;
+
+					if (IsColumnEmpty(section, cutX - 1) && IsColumnEmpty(section, cutX))
+					{
+						units = candidate;
+						break;
+					}
+				}
+			}
+
+			if (!TryCreateUnicodePiece(build, section, startUnits, units))
+			{
+				DeleteUnicodeMaterials(build.pieces);
+				build.pieces.clear();
+				build.pieceUnits.clear();
+				build.bytes = 0;
+				return false;
+			}
+
+			startUnits += units;
+		}
+
+		return true;
+	}
+
+	static void RetireUnicodeTexts(const std::uint64_t frame, std::vector<Game::Material*>& retired)
+	{
+		if (unicodeResidentBytes <= unicodeTextureBytes)
+		{
+			return;
+		}
+
+		std::vector<std::pair<std::uint64_t, std::uint64_t>> candidates;
+
+		for (const auto& [key, entry] : unicodeTexts)
+		{
+			if (!entry.pieces.empty() && entry.lastDrawnFrame < frame)
+			{
+				candidates.emplace_back(entry.lastDrawnFrame, key);
+			}
+		}
+
+		std::ranges::sort(candidates);
+
+		for (const auto& candidate : candidates)
+		{
+			if (unicodeResidentBytes <= unicodeTextureBytes)
+			{
+				break;
+			}
+
+			auto& entry = unicodeTexts[candidate.second];
+
+			retired.insert(retired.end(), entry.pieces.begin(), entry.pieces.end());
+			entry.pieces.clear();
+			unicodeResidentBytes -= entry.bytes;
+			entry.bytes = 0;
+		}
+	}
+
+	static void BuildUnicodeTexts(IDirect3DDevice9*)
+	{
+		std::vector<Game::Material*> retired;
+		bool hasPending = false;
+
+		{
+			std::lock_guard _(unicodeMutex);
+			const auto frame = unicodeFrame;
+			++unicodeFrame;
+
+			RetireUnicodeTexts(frame, retired);
+			hasPending = !unicodePending.empty() && unicodeResidentBytes < unicodeTextureBytes;
+		}
+
+		DeleteUnicodeMaterials(retired);
+
+		if (!hasPending || !FindMaterial("white"))
+		{
+			return;
+		}
+
+		std::vector<UnicodeBuild> builds;
+
+		{
+			std::lock_guard _(unicodeMutex);
+			std::size_t glyphCount = 0;
+			std::size_t runCount = 0;
+
+			for (auto it = unicodePending.begin(); it != unicodePending.end();)
+			{
+				const auto key = *it;
+				const bool isRun = (key & unicodeRunKey) != 0;
+
+				if ((isRun && runCount >= unicodeRunsPerFrame) || (!isRun && glyphCount >= unicodeGlyphsPerFrame))
+				{
+					++it;
+					continue;
+				}
+
+				UnicodeBuild build{ key, {}, {}, {}, 0 };
+
+				if (isRun)
+				{
+					const auto runText = unicodeRunTexts.find(static_cast<std::uint32_t>(key));
+
+					if (runText != unicodeRunTexts.end())
+					{
+						build.text = runText->second;
+					}
+
+					++runCount;
+				}
+				else
+				{
+					AppendUtf16(build.text, static_cast<std::uint32_t>(key));
+					++glyphCount;
+				}
+
+				builds.push_back(std::move(build));
+				it = unicodePending.erase(it);
+			}
+		}
+
+		for (auto& build : builds)
+		{
+			TryBuildUnicodeText(build);
+		}
+
+		std::lock_guard _(unicodeMutex);
+
+		for (auto& build : builds)
+		{
+			auto& entry = unicodeTexts[build.key];
+
+			entry.isPending = false;
+			entry.lastDrawnFrame = unicodeFrame;
+
+			if (build.pieces.empty())
+			{
+				entry.isFailed = true;
+				continue;
+			}
+
+			entry.pieces = std::move(build.pieces);
+			entry.pieceUnits = std::move(build.pieceUnits);
+			entry.bytes = build.bytes;
+			unicodeResidentBytes += build.bytes;
+		}
+	}
+
+	static void DropUnicodeTextures()
+	{
+		std::vector<Game::Material*> retired;
+
+		{
+			std::lock_guard _(unicodeMutex);
+
+			for (auto& item : unicodeTexts)
+			{
+				auto& entry = item.second;
+
+				retired.insert(retired.end(), entry.pieces.begin(), entry.pieces.end());
+				entry.pieces.clear();
+				entry.bytes = 0;
+			}
+
+			unicodeResidentBytes = 0;
+		}
+
+		DeleteUnicodeMaterials(retired);
+	}
+
+	void TextRenderer::InitFontIcons()
+	{
+		InitFontIconStrings();
+
+		void* buffer = nullptr;
+		const int length = Game::FS_ReadFile("mp/fonticons.csv", &buffer);
+
+		if (length <= 0 || !buffer)
+		{
+			if (buffer)
+			{
+				Game::FS_FreeFile(buffer);
+			}
+
+			Logger::Error("textrenderer: mp/fonticons.csv is missing, so there are no font icons\n");
+			return;
+		}
+
+		const std::string contents(static_cast<const char*>(buffer), static_cast<std::size_t>(length));
+		Game::FS_FreeFile(buffer);
+
+		std::map<std::string, FontIcon> table;
+		std::istringstream lines(contents);
+		std::string line;
+
+		while (std::getline(lines, line))
+		{
+			if (!line.empty() && line.back() == '\r')
+			{
+				line.pop_back();
+			}
+
+			if (line.empty() || line[0] == '#')
+			{
+				continue;
+			}
+
+			const auto comma = line.find(',');
+
+			if (comma == std::string::npos)
+			{
+				continue;
+			}
+
+			const std::string iconName = line.substr(0, comma);
+			std::string materialName = line.substr(comma + 1);
+			const auto nextComma = materialName.find(',');
+
+			if (nextComma != std::string::npos)
+			{
+				materialName.resize(nextComma);
+			}
+
+			if (iconName.empty() || materialName.empty())
+			{
+				continue;
+			}
+
+			table.emplace(iconName, FontIcon{ materialName, nullptr, 0.0f, false });
+		}
+
+		{
+			std::lock_guard _(fontIconsMutex);
+			fontIcons = std::move(table);
+		}
+
+		areFontIconsReady.store(true, std::memory_order_release);
+	}
+
+	bool TextRenderer::TryResolveFontIcon(FontIcon& icon)
+	{
+		void* material = FindMaterial(icon.materialName.data());
+
+		if (!material)
+		{
+			return false;
+		}
+
+		const auto* const techniqueSet = *reinterpret_cast<const char* const* const*>(static_cast<const std::uint8_t*>(material) + materialTechniqueSet);
+
+		if (!techniqueSet || !*techniqueSet)
+		{
+			return false;
+		}
+
+		if (std::strcmp(*techniqueSet, "2d") != 0)
+		{
+			material = FindMaterial("default");
+
+			if (!material)
+			{
+				return false;
+			}
+		}
+
+		const float aspect = ColorMapAspect(material);
+		icon.isResolved = true;
+		icon.material = nullptr;
+		icon.aspect = aspect;
+
+		if (aspect > 0.0f)
+		{
+			icon.material = material;
+		}
+
+		return icon.material != nullptr;
+	}
+
+	void TextRenderer::DB_UnloadXZone_Hk(unsigned int zoneIndex, bool shouldCreateDefault)
+	{
+		{
+			std::lock_guard _(fontIconsMutex);
+
+			for (auto& entry : fontIcons)
+			{
+				entry.second.isResolved = false;
+				entry.second.material = nullptr;
+			}
+		}
+
+		reinterpret_cast<void(*)(unsigned int, bool)>(Utils::Hook::Rebase(DB_UnloadXZone))(zoneIndex, shouldCreateDefault);
+	}
+
+	bool TextRenderer::TryReadFontIcon(const char*& text, FontIcon& icon, bool& isFlippedHorizontally, bool& isBig)
+	{
+		const char* position = text;
+
+		while (*position != ' ' && *position != fontIconSeparator && *position != 0 && *position != fontIconModifierSeparator)
+		{
+			++position;
+		}
+
+		const char* const nameEnd = position;
+
+		if (*position == fontIconModifierSeparator)
+		{
+			bool isDone = false;
+
+			while (!isDone)
+			{
+				++position;
+
+				switch (*position)
+				{
+				case fontIconFlipHorizontally:
+					isFlippedHorizontally = true;
+					break;
+				case fontIconFlipVertically:
+					break;
+				case fontIconBig:
+					isBig = true;
+					break;
+				case fontIconSeparator:
+					isDone = true;
+					break;
+				default:
+					return false;
+				}
+			}
+		}
+
+		if (*position != fontIconSeparator)
+		{
+			return false;
+		}
+
+		{
+			std::lock_guard _(fontIconsMutex);
+			const auto found = fontIcons.find(std::string(text, nameEnd));
+
+			if (found == fontIcons.end())
+			{
+				return false;
+			}
+
+			if (!found->second.isResolved && !TryResolveFontIcon(found->second))
+			{
+				return false;
+			}
+
+			if (!found->second.material)
+			{
+				return false;
+			}
+
+			icon.material = found->second.material;
+			icon.aspect = found->second.aspect;
+		}
+
+		text = position + 1;
+		return true;
+	}
+
+	bool TextRenderer::TryGetFontIconWidth(const char* text, const char*& end, float& width)
+	{
+		if (*text != fontIconSeparator || !areFontIconsReady.load(std::memory_order_acquire))
+		{
+			return false;
+		}
+
+		const char* position = text + 1;
+		FontIcon icon{};
+		bool isFlippedHorizontally = false;
+		bool isBig = false;
+
+		if (!TryReadFontIcon(position, icon, isFlippedHorizontally, isBig))
+		{
+			return false;
+		}
+
+		float sizeMultiplier = 1.0f;
+
+		if (isBig)
+		{
+			sizeMultiplier = 1.5f;
+		}
+
+		end = position;
+		width = icon.aspect * sizeMultiplier;
+		return true;
+	}
+
+	bool TextRenderer::TranslateText(const char* text, bool isEditing, std::string& translated, std::vector<std::size_t>& unicodeIcons)
+	{
+		unicodeIcons.clear();
+
+		if (!text)
+		{
+			return false;
+		}
+
+		const bool hasFontIcons = !isEditing && areFontIconsReady.load(std::memory_order_acquire) && std::strchr(text, fontIconSeparator) != nullptr;
+		const bool hasUnicodeEscapes = !isEditing && HasUnicodeEscape(text);
+
+		if (!hasFontIcons && !hasUnicodeEscapes && !HasHudIcon(text))
+		{
+			return false;
+		}
+
+		translated.clear();
+
+		bool isTranslated = false;
+		const char* position = text;
+
+		while (*position)
+		{
+			if (IsHudIcon(position))
+			{
+				AppendHudIcon(translated, position);
+				position = SkipHudIcon(position);
+				isTranslated = true;
+				continue;
+			}
+
+			if (hasUnicodeEscapes && *position == inlineIconEscape)
+			{
+				const char* escapeEnd = nullptr;
+				std::uint64_t key = 0;
+
+				if (TryReadUnicodeEscape(position + 1, key, escapeEnd))
+				{
+					const auto start = translated.size();
+					AppendUnicodeText(translated, key);
+
+					for (auto at = start; at + inlineIconBytes <= translated.size(); at += inlineIconBytes)
+					{
+						unicodeIcons.push_back(at);
+					}
+
+					position = escapeEnd;
+					isTranslated = true;
+					continue;
+				}
+			}
+
+			if (hasFontIcons && *position == fontIconSeparator)
+			{
+				const char* iconEnd = position + 1;
+				FontIcon icon{};
+				bool isFlippedHorizontally = false;
+				bool isBig = false;
+
+				if (TryReadFontIcon(iconEnd, icon, isFlippedHorizontally, isBig))
+				{
+					AppendInlineIcon(translated, icon.material, icon.aspect, isFlippedHorizontally, isBig);
+					position = iconEnd;
+					isTranslated = true;
+					continue;
+				}
+			}
+
+			translated.push_back(*position);
+			++position;
+		}
+
+		return isTranslated;
+	}
+
+	struct StyledText
+	{
+		float x;
+		float y;
+		void* font;
+		float xScale;
+		float yScale;
+		float sinAngle;
+		float cosAngle;
+		unsigned int color;
+		int maxLength;
+		int renderFlags;
+		float padding;
+		unsigned int glowForcedColor;
 	};
 
-	unsigned(*TextRenderer::currentColorTable)[TEXT_COLOR_COUNT];
-	TextRenderer::FontIconAutocompleteContext TextRenderer::autocompleteContextArray[FONT_ICON_ACI_COUNT];
-	std::map<std::string, TextRenderer::FontIconTableEntry> TextRenderer::fontIconLookup;
-	std::vector<TextRenderer::FontIconTableEntry> TextRenderer::fontIconList;
-
-	TextRenderer::BufferedLocalizedString TextRenderer::stringHintAutoComplete(REFERENCE_HINT_AUTO_COMPLETE, STRING_BUFFER_SIZE_SMALL);
-	TextRenderer::BufferedLocalizedString TextRenderer::stringHintModifier(REFERENCE_HINT_MODIFIER, STRING_BUFFER_SIZE_SMALL);
-	TextRenderer::BufferedLocalizedString TextRenderer::stringListHeader(REFERENCE_MODIFIER_LIST_HEADER, STRING_BUFFER_SIZE_SMALL);
-	TextRenderer::BufferedLocalizedString TextRenderer::stringListFlipHorizontal(REFERENCE_MODIFIER_LIST_FLIP_HORIZONTAL, STRING_BUFFER_SIZE_SMALL);
-	TextRenderer::BufferedLocalizedString TextRenderer::stringListFlipVertical(REFERENCE_MODIFIER_LIST_FLIP_VERTICAL, STRING_BUFFER_SIZE_SMALL);
-	TextRenderer::BufferedLocalizedString TextRenderer::stringListBig(REFERENCE_MODIFIER_LIST_BIG, STRING_BUFFER_SIZE_SMALL);
-
-	Dvar::Var TextRenderer::cg_newColors;
-	Dvar::Var TextRenderer::cg_fontIconAutocomplete;
-	Dvar::Var TextRenderer::cg_fontIconAutocompleteHint;
-	Game::dvar_t* TextRenderer::sv_customTextColor;
-	Dvar::Var TextRenderer::r_colorBlind;
-	Game::dvar_t* TextRenderer::g_ColorBlind_MyTeam;
-	Game::dvar_t* TextRenderer::g_ColorBlind_EnemyTeam;
-	Game::dvar_t** TextRenderer::con_inputBoxColor = reinterpret_cast<Game::dvar_t**>(0x9FD4BC);
-
-	TextRenderer::BufferedLocalizedString::BufferedLocalizedString(const char* reference, const std::size_t bufferSize)
-		: stringReference(reference),
-		stringBuffer(std::make_unique<char[]>(bufferSize)),
-		stringBufferSize(bufferSize),
-		stringWidth{-1}
+	static unsigned int GlowColor(const StyledText& draw)
 	{
+		const unsigned int alpha = draw.color & 0xFF000000;
 
+		if (draw.renderFlags & textRenderFlagGlowForceColor)
+		{
+			return (draw.glowForcedColor & 0x00FFFFFF) | alpha;
+		}
+
+		unsigned int glow = alpha;
+
+		for (int shift = 0; shift < 24; shift += 8)
+		{
+			const auto channel = static_cast<unsigned int>(std::floor(static_cast<float>((draw.color >> shift) & 0xFF) * 0.06f));
+			glow |= channel << shift;
+		}
+
+		return glow;
+	}
+
+	static void DrawUnicodeStyles(const std::string& text, const std::vector<std::size_t>& unicodeIcons, const StyledText& draw)
+	{
+		const bool hasShadow = (draw.renderFlags & textRenderFlagDropShadow) != 0;
+		const bool hasOutline = (draw.renderFlags & textRenderFlagOutline) != 0;
+		const bool hasGlow = (draw.renderFlags & textRenderFlagGlow) != 0 && (draw.renderFlags & textRenderFlagSubtitle) == 0;
+
+		if (unicodeIcons.empty() || (!hasShadow && !hasOutline && !hasGlow))
+		{
+			return;
+		}
+
+		const auto* const fontBytes = static_cast<const std::uint8_t*>(draw.font);
+		const int pixelHeight = *reinterpret_cast<const int*>(fontBytes + fontPixelHeight);
+		const int glyphCount = *reinterpret_cast<const int*>(fontBytes + fontGlyphCount);
+		const auto* const glyphs = *reinterpret_cast<const std::uint8_t* const*>(fontBytes + fontGlyphs);
+		const auto readChar = reinterpret_cast<unsigned int(*)(const char**, int*)>(Utils::Hook::Rebase(SEH_ReadCharFromString));
+		const auto quad = reinterpret_cast<void(*)(void*, float, float, float, float, float, float, float, float, float, float, unsigned int)>(
+			Utils::Hook::Rebase(glyphQuadDraw));
+
+		const unsigned int shadowColor = draw.color & 0xFF000000;
+		const unsigned int glowColor = GlowColor(draw);
+		const float shadowOffset = (draw.renderFlags & textRenderFlagDropShadowExtra) ? 2.0f : 1.0f;
+		const float outlineSize = (draw.renderFlags & textRenderFlagOutlineExtra) ? 1.3f : 1.0f;
+		const bool hasPadding = (draw.renderFlags & textRenderFlagPadding) != 0;
+
+		float pen = draw.x;
+		int remaining = draw.maxLength;
+		std::size_t nextIcon = 0;
+		const char* position = text.data();
+
+		while (*position && remaining != 0)
+		{
+			const auto letterAt = static_cast<std::size_t>(position - text.data());
+			unsigned int letter = readChar(&position, nullptr);
+
+			if (letter == '\r' || letter == '\n')
+			{
+				return;
+			}
+
+			if (letter == static_cast<unsigned int>(inlineIconEscape))
+			{
+				const unsigned int index = static_cast<unsigned char>(*position) - '0';
+
+				if (index < TEXT_COLOR_COUNT)
+				{
+					++position;
+					continue;
+				}
+
+				if (*position == inlineIcon || *position == inlineIconFlipped)
+				{
+					const float w = static_cast<float>(InlineIconSize(pixelHeight, position[1])) * draw.xScale;
+					const float h = static_cast<float>(InlineIconSize(pixelHeight, position[2])) * draw.yScale;
+
+					while (nextIcon < unicodeIcons.size() && unicodeIcons[nextIcon] < letterAt)
+					{
+						++nextIcon;
+					}
+
+					if (nextIcon < unicodeIcons.size() && unicodeIcons[nextIcon] == letterAt)
+					{
+						void* material = nullptr;
+						std::memcpy(&material, position + 3, sizeof(material));
+
+						const auto drawAt = [&](float offsetX, float offsetY, unsigned int tint)
+						{
+							const float along = pen - draw.x + offsetX;
+							const float drawX = draw.x + along * draw.cosAngle - offsetY * draw.sinAngle;
+							const float drawY = draw.y + offsetY * draw.cosAngle + along * draw.sinAngle
+								- 0.5f * (static_cast<float>(pixelHeight) * draw.yScale + h);
+							quad(material, drawX, drawY, w, h, 0.0f, 0.0f, 1.0f, 1.0f, draw.sinAngle, draw.cosAngle, tint);
+						};
+
+						if (hasGlow)
+						{
+							for (const auto& offset : styleOffsets)
+							{
+								drawAt(2.0f * offset[0] * draw.xScale, 2.0f * offset[1] * draw.yScale, glowColor);
+							}
+						}
+
+						if (hasOutline)
+						{
+							for (const auto& offset : styleOffsets)
+							{
+								drawAt(outlineSize * offset[0], outlineSize * offset[1], shadowColor);
+							}
+						}
+
+						if (hasShadow)
+						{
+							drawAt(shadowOffset, shadowOffset, shadowColor);
+						}
+					}
+
+					pen += w;
+
+					if (hasPadding)
+					{
+						pen += draw.xScale * draw.padding;
+					}
+
+					position += inlineIconBytes - 1;
+					--remaining;
+					continue;
+				}
+			}
+
+			const std::uint8_t* glyph = nullptr;
+
+			if (letter - 0x20 <= 0x5F)
+			{
+				glyph = glyphs + (letter - 0x20) * glyphSize;
+			}
+			else
+			{
+				int low = glyphDirectCount;
+				int high = glyphCount - 1;
+
+				while (low <= high)
+				{
+					const int middle = (low + high) / 2;
+					const auto* const candidate = glyphs + middle * glyphSize;
+					const unsigned int candidateLetter = *reinterpret_cast<const std::uint16_t*>(candidate);
+
+					if (candidateLetter == letter)
+					{
+						glyph = candidate;
+						break;
+					}
+
+					if (candidateLetter < letter)
+					{
+						low = middle + 1;
+					}
+					else
+					{
+						high = middle - 1;
+					}
+				}
+
+				if (!glyph)
+				{
+					glyph = glyphs + glyphFallback * glyphSize;
+				}
+			}
+
+			pen += static_cast<float>(glyph[glyphDx]) * draw.xScale;
+
+			if (hasPadding)
+			{
+				pen += draw.xScale * draw.padding;
+			}
+
+			--remaining;
+		}
+	}
+
+	void TextRenderer::DrawText2D_Hook(const char* text, float x, float y, void* font, float xScale, float yScale,
+		float sinAngle, float cosAngle, unsigned int color, int maxLength, int renderFlags, int cursorPos, char cursorLetter,
+		float padding, unsigned int glowForcedColor, int fxBirthTime, int fxLetterTime, int fxDecayStartTime,
+		int fxDecayDuration, void* fxMaterial, void* fxMaterialGlow)
+	{
+		thread_local std::string translated;
+		thread_local std::vector<std::size_t> unicodeIcons;
+
+		const bool isEditing = (renderFlags & textRenderFlagCursor) != 0;
+
+		if (TranslateText(text, isEditing, translated, unicodeIcons))
+		{
+			text = translated.data();
+
+			const int unstyled = textRenderFlagFxDecode | textRenderFlagForceMonospace;
+
+			if (!(renderFlags & unstyled))
+			{
+				DrawUnicodeStyles(translated, unicodeIcons, { x, y, font, xScale, yScale, sinAngle, cosAngle, color, maxLength, renderFlags, padding, glowForcedColor });
+			}
+		}
+
+		reinterpret_cast<void(*)(const char*, float, float, void*, float, float, float, float, unsigned int, int, int, int, char,
+			float, unsigned int, int, int, int, int, void*, void*)>(drawText2DHook.GetOriginal())(text, x, y, font, xScale, yScale,
+			sinAngle, cosAngle, color, maxLength, renderFlags, cursorPos, cursorLetter, padding, glowForcedColor, fxBirthTime,
+			fxLetterTime, fxDecayStartTime, fxDecayDuration, fxMaterial, fxMaterialGlow);
+	}
+
+	int TextRenderer::R_TextWidth(const char* text, int maxChars, void* font)
+	{
+		const auto* const fontBytes = static_cast<const std::uint8_t*>(font);
+		const int pixelHeight = *reinterpret_cast<const int*>(fontBytes + fontPixelHeight);
+		const int glyphCount = *reinterpret_cast<const int*>(fontBytes + fontGlyphCount);
+		const auto* const glyphs = *reinterpret_cast<const std::uint8_t* const*>(fontBytes + fontGlyphs);
+		const auto readChar = reinterpret_cast<unsigned int(*)(const char**, int*)>(Utils::Hook::Rebase(SEH_ReadCharFromString));
+
+		int limit = std::numeric_limits<int>::max();
+
+		if (maxChars > 0)
+		{
+			limit = maxChars;
+		}
+
+		int lineWidth = 0;
+		int maxWidth = 0;
+		int count = 0;
+
+		while (*text && count < limit)
+		{
+			unsigned int letter = readChar(&text, nullptr);
+
+			if (letter == '\r' || letter == '\n')
+			{
+				lineWidth = 0;
+				continue;
+			}
+
+			if (letter == static_cast<unsigned int>(inlineIconEscape))
+			{
+				const unsigned int index = static_cast<unsigned char>(*text) - '0';
+
+				if (index < TEXT_COLOR_COUNT)
+				{
+					++text;
+					continue;
+				}
+
+				if ((*text == inlineIcon || *text == inlineIconFlipped) && text[1] && text[2] && text[3])
+				{
+					lineWidth += InlineIconSize(pixelHeight, text[1]);
+					text = SkipHudIcon(text - 1);
+					++count;
+					maxWidth = std::max(maxWidth, lineWidth);
+					continue;
+				}
+
+				const char* escapeEnd = nullptr;
+				std::uint64_t key = 0;
+
+				if (TryReadUnicodeEscape(text, key, escapeEnd))
+				{
+					text = escapeEnd;
+
+					std::lock_guard _(unicodeMutex);
+					const auto* const entry = FindUnicodeText(key);
+
+					if (entry && !entry->pieceUnits.empty())
+					{
+						for (const auto units : entry->pieceUnits)
+						{
+							if (count >= limit)
+							{
+								break;
+							}
+
+							lineWidth += InlineIconSize(pixelHeight, static_cast<char>(inlineIconBias + units));
+							++count;
+						}
+
+						maxWidth = std::max(maxWidth, lineWidth);
+						continue;
+					}
+
+					letter = '?';
+				}
+			}
+
+			if (letter == static_cast<unsigned int>(fontIconSeparator) && areFontIconsReady.load(std::memory_order_acquire))
+			{
+				const char* iconEnd = text;
+				FontIcon icon{};
+				bool isFlippedHorizontally = false;
+				bool isBig = false;
+
+				if (TryReadFontIcon(iconEnd, icon, isFlippedHorizontally, isBig))
+				{
+					std::string escape;
+					AppendInlineIcon(escape, icon.material, icon.aspect, isFlippedHorizontally, isBig);
+
+					lineWidth += InlineIconSize(pixelHeight, escape[2]);
+					text = iconEnd;
+					++count;
+					maxWidth = std::max(maxWidth, lineWidth);
+					continue;
+				}
+			}
+
+			const std::uint8_t* glyph = nullptr;
+
+			if (letter - 0x20 <= 0x5F)
+			{
+				glyph = glyphs + (letter - 0x20) * glyphSize;
+			}
+			else
+			{
+				int low = glyphDirectCount;
+				int high = glyphCount - 1;
+
+				while (low <= high)
+				{
+					const int middle = (low + high) / 2;
+					const auto* const candidate = glyphs + middle * glyphSize;
+					const unsigned int candidateLetter = *reinterpret_cast<const std::uint16_t*>(candidate);
+
+					if (candidateLetter == letter)
+					{
+						glyph = candidate;
+						break;
+					}
+
+					if (candidateLetter < letter)
+					{
+						low = middle + 1;
+					}
+					else
+					{
+						high = middle - 1;
+					}
+				}
+
+				if (!glyph)
+				{
+					glyph = glyphs + glyphFallback * glyphSize;
+				}
+			}
+
+			lineWidth += glyph[glyphDx];
+			++count;
+			maxWidth = std::max(maxWidth, lineWidth);
+		}
+
+		return maxWidth;
+	}
+
+	TextRenderer::BufferedLocalizedString::BufferedLocalizedString(const char* localizeReference)
+		: reference(localizeReference)
+	{
+		std::ranges::fill(this->width, -1);
 	}
 
 	void TextRenderer::BufferedLocalizedString::Cache()
 	{
-		const auto* formattingString = Game::UI_SafeTranslateString(stringReference);
+		const char* const translated = reinterpret_cast<const char*(*)(const char*)>(Utils::Hook::Rebase(UI_SafeTranslateString))(this->reference);
 
-		if (formattingString != nullptr)
+		if (!translated)
 		{
-			strncpy_s(stringBuffer.get(), stringBufferSize, formattingString, _TRUNCATE);
-			for (auto& width : stringWidth)
-			{
-				width = -1;
-			}
+			return;
 		}
+
+		this->text = translated;
+		std::ranges::fill(this->width, -1);
 	}
 
 	const char* TextRenderer::BufferedLocalizedString::Format(const char* value)
 	{
-		const auto* formattingString = Game::UI_SafeTranslateString(stringReference);
-		if (formattingString == nullptr)
+		const char* const formatting = reinterpret_cast<const char*(*)(const char*)>(Utils::Hook::Rebase(UI_SafeTranslateString))(this->reference);
+
+		if (!formatting)
 		{
-			stringBuffer[0] = '\0';
-			return stringBuffer.get();
+			this->text.clear();
+			return this->text.data();
 		}
 
-		Game::ConversionArguments conversionArguments{};
-		conversionArguments.args[conversionArguments.argCount++] = value;
-		Game::UI_ReplaceConversions(formattingString, &conversionArguments, stringBuffer.get(), stringBufferSize);
+		ConversionArguments arguments{};
+		arguments.args[arguments.argCount++] = value;
 
-		for (auto& width : stringWidth)
-		{
-			width = -1;
-		}
+		char formatted[1024]{};
+		reinterpret_cast<void(*)(const char*, ConversionArguments*, char*, int)>(Utils::Hook::Rebase(UI_ReplaceConversions))(
+			formatting, &arguments, formatted, sizeof(formatted));
 
-		return stringBuffer.get();
+		this->text = formatted;
+		std::ranges::fill(this->width, -1);
+
+		return this->text.data();
 	}
 
 	const char* TextRenderer::BufferedLocalizedString::GetString() const
 	{
-		return stringBuffer.get();
+		return this->text.data();
 	}
 
-	int TextRenderer::BufferedLocalizedString::GetWidth(const FontIconAutocompleteInstance autocompleteInstance, Game::Font_s* font)
+	int TextRenderer::BufferedLocalizedString::GetWidth(FontIconAutocompleteInstance instance, Game::Font_s* font)
 	{
-		assert(autocompleteInstance < FONT_ICON_ACI_COUNT);
-		if (stringWidth[autocompleteInstance] < 0)
+		if (this->width[instance] < 0)
 		{
-			stringWidth[autocompleteInstance] = Game::R_TextWidth(GetString(), std::numeric_limits<int>::max(), font);
+			this->width[instance] = Game::R_TextWidth(this->GetString(), std::numeric_limits<int>::max(), font);
 		}
 
-		return stringWidth[autocompleteInstance];
+		return this->width[instance];
 	}
 
-	TextRenderer::FontIconAutocompleteContext::FontIconAutocompleteContext()
-		: autocompleteActive(false),
-		inModifiers(false),
-		userClosed(false),
-		lastHash(0),
-		results{},
-		resultCount(0),
-		hasMoreResults(false),
-		resultOffset(0),
-		lastResultOffset(0),
-		selectedOffset(0),
-		maxFontIconWidth(0.0f),
-		maxMaterialNameWidth(0.0f),
-		stringSearchStartWith(REFERENCE_SEARCH_START_WITH, STRING_BUFFER_SIZE_BIG)
+	bool TextRenderer::IsAutocompleteEnabled()
 	{
-
+		return cg_fontIconAutocomplete && cg_fontIconAutocomplete->current.enabled && areFontIconsReady.load(std::memory_order_acquire);
 	}
 
-	unsigned TextRenderer::HsvToRgb(HsvColor hsv)
+	void TextRenderer::DrawAutocompleteBox(const FontIconAutocompleteContext& context, const AutocompleteLayout& layout, float width, unsigned int lineCount)
 	{
-		unsigned rgb;
-		unsigned char region, p, q, t;
-		unsigned int h, s, v, remainder;
+		const auto* const boxColorDvar = Utils::Hook::Get<const Game::dvar_t*>(con_inputBoxColor);
+		void* const whiteMaterial = Utils::Hook::Get<void*>(cls_whiteMaterial);
 
-		if (hsv.s == 0)
+		if (!boxColorDvar || !whiteMaterial)
 		{
-			rgb = ColorRgb(hsv.v, hsv.v, hsv.v);
-			return rgb;
+			return;
 		}
 
-		// converting to 16 bit to prevent overflow
-		h = hsv.h;
-		s = hsv.s;
-		v = hsv.v;
+		const auto drawStretchPic = reinterpret_cast<void(*)(float, float, float, float, float, float, float, float, const float*, void*)>(
+			Utils::Hook::Rebase(R_AddCmdDrawStretchPic));
 
-		region = static_cast<uint8_t>(h / 43);
-		remainder = (h - (region * 43)) * 6;
+		const float lineHeight = static_cast<float>(FontPixelHeight(layout.font)) * layout.yScale;
+		const float x = layout.x - autocompleteBoxPadding;
+		const float y = layout.y - autocompleteBoxPadding;
+		const float w = width + autocompleteBoxPadding * 2.0f;
+		const float h = static_cast<float>(lineCount) * lineHeight + autocompleteBoxPadding * 2.0f;
 
-		p = static_cast<uint8_t>((v * (255 - s)) >> 8);
-		q = static_cast<uint8_t>((v * (255 - ((s * remainder) >> 8))) >> 8);
-		t = static_cast<uint8_t>((v * (255 - ((s * (255 - remainder)) >> 8))) >> 8);
+		const float* const color = boxColorDvar->current.vector;
+		const float borderColor[4] = { color[0] * 0.5f, color[1] * 0.5f, color[2] * 0.5f, color[3] };
 
-		switch (region)
+		drawStretchPic(x, y, w, h, 0.0f, 0.0f, 0.0f, 0.0f, color, whiteMaterial);
+		drawStretchPic(x, y, autocompleteBoxBorder, h, 0.0f, 0.0f, 0.0f, 0.0f, borderColor, whiteMaterial);
+		drawStretchPic(x + w - autocompleteBoxBorder, y, autocompleteBoxBorder, h, 0.0f, 0.0f, 0.0f, 0.0f, borderColor, whiteMaterial);
+		drawStretchPic(x, y, w, autocompleteBoxBorder, 0.0f, 0.0f, 0.0f, 0.0f, borderColor, whiteMaterial);
+		drawStretchPic(x, y + h - autocompleteBoxBorder, w, autocompleteBoxBorder, 0.0f, 0.0f, 0.0f, 0.0f, borderColor, whiteMaterial);
+
+		void* const arrowDown = Utils::Hook::Get<void*>(sharedUiInfo_scrollBarArrowDown);
+		void* const arrowUp = Utils::Hook::Get<void*>(sharedUiInfo_scrollBarArrowUp);
+
+		if (context.resultOffset > 0 && arrowDown)
 		{
-		case 0:
-			rgb = ColorRgb(static_cast<uint8_t>(v), t, p);
-			break;
-		case 1:
-			rgb = ColorRgb(q, static_cast<uint8_t>(v), p);
-			break;
-		case 2:
-			rgb = ColorRgb(p, static_cast<uint8_t>(v), t);
-			break;
-		case 3:
-			rgb = ColorRgb(p, q, static_cast<uint8_t>(v));
-			break;
-		case 4:
-			rgb = ColorRgb(t, p, static_cast<uint8_t>(v));
-			break;
-		default:
-			rgb = ColorRgb(static_cast<uint8_t>(v), p, q);
-			break;
+			drawStretchPic(x + w - autocompleteBoxBorder - autocompleteArrowSize, y + autocompleteBoxBorder,
+				autocompleteArrowSize, autocompleteArrowSize, 1.0f, 1.0f, 0.0f, 0.0f, autocompleteWhite, arrowDown);
 		}
 
-		return rgb;
-	}
-
-	void TextRenderer::DrawAutocompleteBox(const FontIconAutocompleteContext& context, const float x, const float y, const float w, const float h, const float* color)
-	{
-		const float borderColor[4]
+		if (context.hasMoreResults && arrowUp)
 		{
-			color[0] * 0.5f,
-			color[1] * 0.5f,
-			color[2] * 0.5f,
-			color[3]
-		};
-
-		Game::R_AddCmdDrawStretchPic(x, y, w, h, 0.0, 0.0, 0.0, 0.0, color, Game::cls->whiteMaterial);
-		Game::R_AddCmdDrawStretchPic(x, y, FONT_ICON_AUTOCOMPLETE_BOX_BORDER, h, 0.0, 0.0, 0.0, 0.0, borderColor, Game::cls->whiteMaterial);
-		Game::R_AddCmdDrawStretchPic(x + w - FONT_ICON_AUTOCOMPLETE_BOX_BORDER, y, FONT_ICON_AUTOCOMPLETE_BOX_BORDER, h, 0.0, 0.0, 0.0, 0.0, borderColor, Game::cls->whiteMaterial);
-		Game::R_AddCmdDrawStretchPic(x, y, w, FONT_ICON_AUTOCOMPLETE_BOX_BORDER, 0.0, 0.0, 0.0, 0.0, borderColor, Game::cls->whiteMaterial);
-		Game::R_AddCmdDrawStretchPic(x, y + h - FONT_ICON_AUTOCOMPLETE_BOX_BORDER, w, FONT_ICON_AUTOCOMPLETE_BOX_BORDER, 0.0, 0.0, 0.0, 0.0, borderColor, Game::cls->whiteMaterial);
-
-		if (context.resultOffset > 0)
-		{
-			Game::R_AddCmdDrawStretchPic(x + w - FONT_ICON_AUTOCOMPLETE_BOX_BORDER - FONT_ICON_AUTOCOMPLETE_ARROW_SIZE,
-				y + FONT_ICON_AUTOCOMPLETE_BOX_BORDER,
-				FONT_ICON_AUTOCOMPLETE_ARROW_SIZE,
-				FONT_ICON_AUTOCOMPLETE_ARROW_SIZE,
-				1.0f, 1.0f, 0.0f, 0.0f, WHITE_COLOR, Game::sharedUiInfo->assets.scrollBarArrowDown);
-		}
-
-		if (context.hasMoreResults)
-		{
-			Game::R_AddCmdDrawStretchPic(x + w - FONT_ICON_AUTOCOMPLETE_BOX_BORDER - FONT_ICON_AUTOCOMPLETE_ARROW_SIZE,
-				y + h - FONT_ICON_AUTOCOMPLETE_BOX_BORDER - FONT_ICON_AUTOCOMPLETE_ARROW_SIZE,
-				FONT_ICON_AUTOCOMPLETE_ARROW_SIZE,
-				FONT_ICON_AUTOCOMPLETE_ARROW_SIZE,
-				1.0f, 1.0f, 0.0f, 0.0f, WHITE_COLOR, Game::sharedUiInfo->assets.scrollBarArrowUp);
+			drawStretchPic(x + w - autocompleteBoxBorder - autocompleteArrowSize, y + h - autocompleteBoxBorder - autocompleteArrowSize,
+				autocompleteArrowSize, autocompleteArrowSize, 1.0f, 1.0f, 0.0f, 0.0f, autocompleteWhite, arrowUp);
 		}
 	}
 
-	void TextRenderer::UpdateAutocompleteContextResults(FontIconAutocompleteContext& context, Game::Font_s* font, const float textXScale)
+	void TextRenderer::UpdateAutocompleteContextResults(FontIconAutocompleteContext& context, Game::Font_s* font, float textXScale)
 	{
 		context.resultCount = 0;
 		context.hasMoreResults = false;
 		context.lastResultOffset = context.resultOffset;
 
-		auto skipCount = context.resultOffset;
+		std::size_t skipCount = context.resultOffset;
+		std::unique_lock lock(fontIconsMutex);
 
-		const auto queryLen = context.lastQuery.size();
-		for (const auto& fontIconEntry : fontIconList)
+		for (auto entry = fontIcons.lower_bound(context.lastQuery); entry != fontIcons.end(); ++entry)
 		{
-			const auto compareValue = fontIconEntry.iconName.compare(0, queryLen, context.lastQuery);
-
-			if (compareValue == 0)
-			{
-				if (skipCount > 0)
-				{
-					skipCount--;
-				}
-				else if (context.resultCount < FontIconAutocompleteContext::MAX_RESULTS)
-				{
-					context.results[context.resultCount++] =
-					{
-						Utils::String::VA(":%s:", fontIconEntry.iconName.data()),
-						fontIconEntry.iconName
-					};
-				}
-				else
-				{
-					context.hasMoreResults = true;
-				}
-			}
-			else if (compareValue > 0)
+			if (entry->first.compare(0, context.lastQuery.size(), context.lastQuery) != 0)
 			{
 				break;
 			}
+
+			if (skipCount > 0)
+			{
+				--skipCount;
+				continue;
+			}
+
+			if (context.resultCount >= FontIconAutocompleteContext::maxResults)
+			{
+				context.hasMoreResults = true;
+				break;
+			}
+
+			auto& result = context.results[context.resultCount];
+			result.fontIconName = Utils::String::VA("%c%s%c", fontIconSeparator, entry->first.data(), fontIconSeparator);
+			result.iconName = entry->first;
+			++context.resultCount;
 		}
 
-		context.maxFontIconWidth = 0;
-		context.maxMaterialNameWidth = 0;
-		for (auto resultIndex = 0u; resultIndex < context.resultCount; resultIndex++)
-		{
-			const auto& result = context.results[resultIndex];
-			const auto fontIconWidth = static_cast<float>(Game::R_TextWidth(result.fontIconName.c_str(), std::numeric_limits<int>::max(), font)) * textXScale;
-			const auto materialNameWidth = static_cast<float>(Game::R_TextWidth(result.materialName.c_str(), std::numeric_limits<int>::max(), font)) * textXScale;
+		lock.unlock();
 
-			if (fontIconWidth > context.maxFontIconWidth)
-				context.maxFontIconWidth = fontIconWidth;
-			if (materialNameWidth > context.maxMaterialNameWidth)
-				context.maxMaterialNameWidth = materialNameWidth;
+		context.maxFontIconWidth = 0.0f;
+		context.maxIconNameWidth = 0.0f;
+
+		for (std::size_t i = 0; i < context.resultCount; ++i)
+		{
+			const auto& result = context.results[i];
+			const float fontIconWidth = static_cast<float>(Game::R_TextWidth(result.fontIconName.data(), std::numeric_limits<int>::max(), font)) * textXScale;
+			const float iconNameWidth = static_cast<float>(Game::R_TextWidth(result.iconName.data(), std::numeric_limits<int>::max(), font)) * textXScale;
+
+			context.maxFontIconWidth = std::max(context.maxFontIconWidth, fontIconWidth);
+			context.maxIconNameWidth = std::max(context.maxIconNameWidth, iconNameWidth);
 		}
 	}
 
-	void TextRenderer::UpdateAutocompleteContext(FontIconAutocompleteContext& context, const Game::field_t* edit, Game::Font_s* font, const float textXScale)
+	void TextRenderer::UpdateAutocompleteContext(FontIconAutocompleteContext& context, std::string_view typed, Game::Font_s* font, float textXScale)
 	{
 		int fontIconStart = -1;
-		auto inModifiers = false;
+		bool isInModifiers = false;
 
-		for (auto i = 0; i < edit->cursor; i++)
+		for (std::size_t i = 0; i < typed.size(); ++i)
 		{
-			const auto c = static_cast<unsigned char>(edit->buffer[i]);
-			if (c == FONT_ICON_SEPARATOR_CHARACTER)
+			const auto character = static_cast<unsigned char>(typed[i]);
+
+			if (character == fontIconSeparator)
 			{
 				if (fontIconStart < 0)
 				{
-					fontIconStart = i + 1;
-					inModifiers = false;
+					fontIconStart = static_cast<int>(i) + 1;
 				}
 				else
 				{
 					fontIconStart = -1;
-					inModifiers = false;
 				}
+
+				isInModifiers = false;
 			}
-			else if (std::isspace(c))
+			else if (std::isspace(character))
 			{
 				fontIconStart = -1;
-				inModifiers = false;
+				isInModifiers = false;
 			}
-			else if (c == FONT_ICON_MODIFIER_SEPARATOR_CHARACTER)
+			else if (character == fontIconModifierSeparator)
 			{
-				if (fontIconStart >= 0 && !inModifiers)
+				if (fontIconStart >= 0 && !isInModifiers)
 				{
-					inModifiers = true;
+					isInModifiers = true;
 				}
 				else
 				{
 					fontIconStart = -1;
-					inModifiers = false;
+					isInModifiers = false;
 				}
 			}
 		}
 
-		if (fontIconStart < 0 // Not in fonticon sequence
-			|| fontIconStart == edit->cursor // Did not type the first letter yet
-			|| !std::isalpha(static_cast<unsigned char>(edit->buffer[fontIconStart])) // First letter of the icon is not alphabetic
-			|| (fontIconStart > 1 && std::isalnum(static_cast<unsigned char>(edit->buffer[fontIconStart - 2]))) // Letter before sequence is alnum
-			)
+		const auto start = static_cast<std::size_t>(fontIconStart);
+
+		if (fontIconStart < 0
+			|| start == typed.size()
+			|| !std::isalpha(static_cast<unsigned char>(typed[start]))
+			|| (start > 1 && std::isalnum(static_cast<unsigned char>(typed[start - 2]))))
 		{
-			context.autocompleteActive = false;
-			context.userClosed = false;
-			context.lastHash = 0;
+			context.isActive = false;
+			context.didUserClose = false;
+			context.lastQuery.clear();
 			context.resultCount = 0;
 			return;
 		}
 
-		context.inModifiers = inModifiers;
+		context.isInModifiers = isInModifiers;
 
-		// Update scroll
 		if (context.selectedOffset < context.resultOffset)
 		{
 			context.resultOffset = context.selectedOffset;
 		}
-		else if(context.selectedOffset >= context.resultOffset + FontIconAutocompleteContext::MAX_RESULTS)
+		else if (context.selectedOffset >= context.resultOffset + FontIconAutocompleteContext::maxResults)
 		{
-			context.resultOffset = context.selectedOffset - (FontIconAutocompleteContext::MAX_RESULTS - 1);
+			context.resultOffset = context.selectedOffset - (FontIconAutocompleteContext::maxResults - 1);
 		}
 
-		// If the user closed the context do not draw or update
-		if (context.userClosed)
-		{
-			return;
-		}
-
-		context.autocompleteActive = true;
-
-		// No need to update results when in modifiers
-		if (context.inModifiers)
+		if (context.didUserClose)
 		{
 			return;
 		}
 
-		// Check if results need updates
-		const auto currentFontIconHash = Game::R_HashString(&edit->buffer[fontIconStart], edit->cursor - fontIconStart);
-		if (currentFontIconHash == context.lastHash && context.lastResultOffset == context.resultOffset)
+		context.isActive = true;
+
+		if (context.isInModifiers)
 		{
 			return;
 		}
 
-		// If query was updated then reset scroll parameters
-		if (currentFontIconHash != context.lastHash)
+		const std::string_view query = typed.substr(start);
+		const bool isNewQuery = query != context.lastQuery;
+
+		if (!isNewQuery && context.lastResultOffset == context.resultOffset)
+		{
+			return;
+		}
+
+		if (isNewQuery)
 		{
 			context.resultOffset = 0;
 			context.selectedOffset = 0;
-			context.lastHash = currentFontIconHash;
 		}
 
-		// Update results for query and scroll and update search string
-		context.lastQuery = std::string(&edit->buffer[fontIconStart], edit->cursor - fontIconStart);
-		context.stringSearchStartWith.Format(context.lastQuery.c_str());
+		context.lastQuery = query;
+		context.stringSearchStartWith.Format(context.lastQuery.data());
 		UpdateAutocompleteContextResults(context, font, textXScale);
 	}
 
-	void TextRenderer::DrawAutocompleteModifiers(const FontIconAutocompleteInstance instance, const float x, const float y, Game::Font_s* font, const float textXScale, const float textYScale)
+	void TextRenderer::DrawAutocompleteModifiers(FontIconAutocompleteInstance instance, const AutocompleteLayout& layout)
 	{
-		assert(instance < FONT_ICON_ACI_COUNT);
 		const auto& context = autocompleteContextArray[instance];
 
-		// Check which is the longest string to be able to calculate how big the box needs to be
-		const auto longestStringLength = std::max(std::max(std::max(stringListHeader.GetWidth(instance, font), stringListFlipHorizontal.GetWidth(instance, font)),
-			stringListFlipVertical.GetWidth(instance, font)),
-			stringListBig.GetWidth(instance, font));
+		const int longestWidth = std::max({
+			stringListHeader.GetWidth(instance, layout.font),
+			stringListFlipHorizontal.GetWidth(instance, layout.font),
+			stringListFlipVertical.GetWidth(instance, layout.font),
+			stringListBig.GetWidth(instance, layout.font),
+		});
 
-		// Draw background box
-		const auto boxWidth = static_cast<float>(longestStringLength) * textXScale;
-		constexpr auto totalLines = 4u;
-		const auto lineHeight = static_cast<float>(font->pixelHeight) * textYScale;
-		DrawAutocompleteBox(context,
-			x - FONT_ICON_AUTOCOMPLETE_BOX_PADDING,
-			y - FONT_ICON_AUTOCOMPLETE_BOX_PADDING,
-			boxWidth + FONT_ICON_AUTOCOMPLETE_BOX_PADDING * 2,
-			static_cast<float>(totalLines) * lineHeight + FONT_ICON_AUTOCOMPLETE_BOX_PADDING * 2,
-			(*con_inputBoxColor)->current.vector);
+		DrawAutocompleteBox(context, layout, static_cast<float>(longestWidth) * layout.xScale, 4);
 
-		auto currentY = y + lineHeight;
+		const float lineHeight = static_cast<float>(FontPixelHeight(layout.font)) * layout.yScale;
+		float currentY = layout.y + lineHeight;
 
-		// Draw header line: "Following modifiers are available:"
-		Game::R_AddCmdDrawText(stringListHeader.GetString(), std::numeric_limits<int>::max(), font, x, currentY, textXScale, textYScale, 0.0, TEXT_COLOR, 0);
+		Game::R_AddCmdDrawText(stringListHeader.GetString(), std::numeric_limits<int>::max(), layout.font, layout.x, currentY, layout.xScale, layout.yScale, 0.0f, autocompleteTextColor, 0);
 		currentY += lineHeight;
 
-		// Draw modifier hints
-		Game::R_AddCmdDrawText(stringListFlipHorizontal.GetString(), std::numeric_limits<int>::max(), font, x, currentY, textXScale, textYScale, 0.0, TEXT_COLOR, 0);
+		Game::R_AddCmdDrawText(stringListFlipHorizontal.GetString(), std::numeric_limits<int>::max(), layout.font, layout.x, currentY, layout.xScale, layout.yScale, 0.0f, autocompleteTextColor, 0);
 		currentY += lineHeight;
-		Game::R_AddCmdDrawText(stringListFlipVertical.GetString(), std::numeric_limits<int>::max(), font, x, currentY, textXScale, textYScale, 0.0, TEXT_COLOR, 0);
+		Game::R_AddCmdDrawText(stringListFlipVertical.GetString(), std::numeric_limits<int>::max(), layout.font, layout.x, currentY, layout.xScale, layout.yScale, 0.0f, autocompleteTextColor, 0);
 		currentY += lineHeight;
-		Game::R_AddCmdDrawText(stringListBig.GetString(), std::numeric_limits<int>::max(), font, x, currentY, textXScale, textYScale, 0.0, TEXT_COLOR, 0);
+		Game::R_AddCmdDrawText(stringListBig.GetString(), std::numeric_limits<int>::max(), layout.font, layout.x, currentY, layout.xScale, layout.yScale, 0.0f, autocompleteTextColor, 0);
 	}
 
-	void TextRenderer::DrawAutocompleteResults(const FontIconAutocompleteInstance instance, const float x, const float y, Game::Font_s* font, const float textXScale, const float textYScale)
+	void TextRenderer::DrawAutocompleteResults(FontIconAutocompleteInstance instance, const AutocompleteLayout& layout)
 	{
-		assert(instance < FONT_ICON_ACI_COUNT);
 		auto& context = autocompleteContextArray[instance];
 
-		const auto hintEnabled = cg_fontIconAutocompleteHint.get<bool>();
+		const bool isHintEnabled = cg_fontIconAutocompleteHint && cg_fontIconAutocompleteHint->current.enabled;
 
-		// Check which is the longest string to be able to calculate how big the box needs to be
-		auto longestStringLength = context.stringSearchStartWith.GetWidth(instance, font);
-		if(hintEnabled)
-			longestStringLength = std::max(std::max(longestStringLength, stringHintAutoComplete.GetWidth(instance, font)), stringHintModifier.GetWidth(instance, font));
+		int longestWidth = context.stringSearchStartWith.GetWidth(instance, layout.font);
 
-		const auto colSpacing = FONT_ICON_AUTOCOMPLETE_COL_SPACING * textXScale;
-		const auto boxWidth = std::max(context.maxFontIconWidth + context.maxMaterialNameWidth + colSpacing, static_cast<float>(longestStringLength) * textXScale);
-		const auto lineHeight = static_cast<float>(font->pixelHeight) * textYScale;
+		if (isHintEnabled)
+		{
+			longestWidth = std::max({ longestWidth, stringHintAutoComplete.GetWidth(instance, layout.font), stringHintModifier.GetWidth(instance, layout.font) });
+		}
 
-		// Draw background box
-		const auto totalLines = 1u + context.resultCount + (hintEnabled ? 2u : 0u);
-		const auto arrowPadding = context.resultOffset > 0 || context.hasMoreResults ? FONT_ICON_AUTOCOMPLETE_ARROW_SIZE : 0.0f;
-		DrawAutocompleteBox(context,
-			x - FONT_ICON_AUTOCOMPLETE_BOX_PADDING,
-			y - FONT_ICON_AUTOCOMPLETE_BOX_PADDING,
-			boxWidth + FONT_ICON_AUTOCOMPLETE_BOX_PADDING * 2 + arrowPadding,
-			static_cast<float>(totalLines) * lineHeight + FONT_ICON_AUTOCOMPLETE_BOX_PADDING * 2,
-			(*con_inputBoxColor)->current.vector);
+		const float columnSpacing = autocompleteColumnSpacing * layout.xScale;
+		const float boxWidth = std::max(context.maxFontIconWidth + context.maxIconNameWidth + columnSpacing, static_cast<float>(longestWidth) * layout.xScale);
+		const float lineHeight = static_cast<float>(FontPixelHeight(layout.font)) * layout.yScale;
 
-		// Draw header line "Search results for: xyz"
-		auto currentY = y + lineHeight;
-		Game::R_AddCmdDrawText(context.stringSearchStartWith.GetString(), std::numeric_limits<int>::max(), font, x, currentY, textXScale, textYScale, 0.0, TEXT_COLOR, 0);
+		unsigned int totalLines = 1 + static_cast<unsigned int>(context.resultCount);
+
+		if (isHintEnabled)
+		{
+			totalLines += 2;
+		}
+
+		float arrowPadding = 0.0f;
+
+		if (context.resultOffset > 0 || context.hasMoreResults)
+		{
+			arrowPadding = autocompleteArrowSize;
+		}
+
+		DrawAutocompleteBox(context, layout, boxWidth + arrowPadding, totalLines);
+
+		float currentY = layout.y + lineHeight;
+		Game::R_AddCmdDrawText(context.stringSearchStartWith.GetString(), std::numeric_limits<int>::max(), layout.font, layout.x, currentY, layout.xScale, layout.yScale, 0.0f, autocompleteTextColor, 0);
 		currentY += lineHeight;
 
-		// Draw search results
-		const auto selectedIndex = context.selectedOffset - context.resultOffset;
-		for (auto resultIndex = 0u; resultIndex < context.resultCount; resultIndex++)
-		{
-			const auto& result = context.results[resultIndex];
-			Game::R_AddCmdDrawText(result.fontIconName.c_str(), std::numeric_limits<int>::max(), font, x, currentY, textXScale, textYScale, 0.0, TEXT_COLOR, 0);
+		const std::size_t selectedIndex = context.selectedOffset - context.resultOffset;
+		const float iconNameX = layout.x + context.maxFontIconWidth + columnSpacing;
 
-			if (selectedIndex == resultIndex)
-				Game::R_AddCmdDrawText(Utils::String::VA("^2%s", result.materialName.c_str()), std::numeric_limits<int>::max(), font, x + context.maxFontIconWidth + colSpacing, currentY, textXScale, textYScale, 0.0, TEXT_COLOR, 0);
+		for (std::size_t i = 0; i < context.resultCount; ++i)
+		{
+			const auto& result = context.results[i];
+			Game::R_AddCmdDrawText(result.fontIconName.data(), std::numeric_limits<int>::max(), layout.font, layout.x, currentY, layout.xScale, layout.yScale, 0.0f, autocompleteTextColor, 0);
+
+			if (i == selectedIndex)
+			{
+				Game::R_AddCmdDrawText(Utils::String::VA("^2%s", result.iconName.data()), std::numeric_limits<int>::max(), layout.font, iconNameX, currentY, layout.xScale, layout.yScale, 0.0f, autocompleteTextColor, 0);
+			}
 			else
-				Game::R_AddCmdDrawText(result.materialName.c_str(), std::numeric_limits<int>::max(), font, x + context.maxFontIconWidth + colSpacing, currentY, textXScale, textYScale, 0.0, TEXT_COLOR, 0);
+			{
+				Game::R_AddCmdDrawText(result.iconName.data(), std::numeric_limits<int>::max(), layout.font, iconNameX, currentY, layout.xScale, layout.yScale, 0.0f, autocompleteTextColor, 0);
+			}
+
 			currentY += lineHeight;
 		}
 
-		// Draw extra hint if enabled
-		if (hintEnabled)
+		if (isHintEnabled)
 		{
-			Game::R_AddCmdDrawText(stringHintAutoComplete.GetString(), std::numeric_limits<int>::max(), font, x, currentY, textXScale, textYScale, 0.0, HINT_COLOR, 0);
+			Game::R_AddCmdDrawText(stringHintAutoComplete.GetString(), std::numeric_limits<int>::max(), layout.font, layout.x, currentY, layout.xScale, layout.yScale, 0.0f, autocompleteHintColor, 0);
 			currentY += lineHeight;
-			Game::R_AddCmdDrawText(stringHintModifier.GetString(), std::numeric_limits<int>::max(), font, x, currentY, textXScale, textYScale, 0.0, HINT_COLOR, 0);
+			Game::R_AddCmdDrawText(stringHintModifier.GetString(), std::numeric_limits<int>::max(), layout.font, layout.x, currentY, layout.xScale, layout.yScale, 0.0f, autocompleteHintColor, 0);
 		}
 	}
 
-	void TextRenderer::DrawAutocomplete(const FontIconAutocompleteInstance instance, const float x, const float y, Game::Font_s* font, const float textXScale, const float textYScale)
+	void TextRenderer::DrawAutocomplete(FontIconAutocompleteInstance instance, const AutocompleteLayout& layout)
 	{
-		assert(instance < FONT_ICON_ACI_COUNT);
-		const auto& context = autocompleteContextArray[instance];
-
-		if (context.inModifiers)
-			DrawAutocompleteModifiers(instance, x, y, font, textXScale, textYScale);
+		if (autocompleteContextArray[instance].isInModifiers)
+		{
+			DrawAutocompleteModifiers(instance, layout);
+		}
 		else
-			DrawAutocompleteResults(instance, x, y, font, textXScale, textYScale);
-	}
-
-	void TextRenderer::Con_DrawInput_Hk(const int localClientNum)
-	{
-		// Call original function
-		Utils::Hook::Call<void(int)>(0x5A4480)(localClientNum);
-
-		auto& autocompleteContext = autocompleteContextArray[FONT_ICON_ACI_CONSOLE];
-		if (cg_fontIconAutocomplete.get<bool>() == false)
 		{
-			autocompleteContext.autocompleteActive = false;
-			return;
-		}
-
-		UpdateAutocompleteContext(autocompleteContext, Game::g_consoleField, Game::cls->consoleFont, 1.0f);
-		if (autocompleteContext.autocompleteActive)
-		{
-			const auto x = Game::conDrawInputGlob->leftX;
-			const auto y = Game::con_screenMin[1] + 6.0f + static_cast<float>(2 * Game::R_TextHeight(Game::cls->consoleFont));
-			DrawAutocomplete(FONT_ICON_ACI_CONSOLE, x, y, Game::cls->consoleFont, 1.0f, 1.0f);
+			DrawAutocompleteResults(instance, layout);
 		}
 	}
 
-	void TextRenderer::Field_Draw_Say(const int localClientNum, Game::field_t* edit, const int x, const int y, const int horzAlign, const int vertAlign)
+	void TextRenderer::DrawConsoleAutocomplete(std::string_view typed, Game::Font_s* font, float x, float y)
 	{
-		Game::Field_Draw(localClientNum, edit, x, y, horzAlign, vertAlign);
+		auto& context = autocompleteContextArray[FONT_ICON_ACI_CONSOLE];
 
-		auto& autocompleteContext = autocompleteContextArray[FONT_ICON_ACI_CHAT];
-		if (cg_fontIconAutocomplete.get<bool>() == false)
+		if (!IsAutocompleteEnabled() || !font)
 		{
-			autocompleteContext.autocompleteActive = false;
+			context.isActive = false;
 			return;
 		}
 
-		auto* screenPlacement = Game::ScrPlace_GetActivePlacement(localClientNum);
-		const auto scale = edit->charHeight / 48.0f;
-		auto* font = Game::UI_GetFontHandle(screenPlacement, 0, scale);
-		const auto normalizedScale = Game::R_NormalizedTextScale(font, scale);
-		auto xx = static_cast<float>(x);
-		auto yy = static_cast<float>(y);
-		yy += static_cast<float>(Game::R_TextHeight(font)) * normalizedScale * 1.5f;
-		auto ww = normalizedScale;
-		auto hh = normalizedScale;
-		Game::ScrPlace_ApplyRect(screenPlacement, &xx, &yy, &ww, &hh, horzAlign, vertAlign);
+		UpdateAutocompleteContext(context, typed, font, 1.0f);
 
-		UpdateAutocompleteContext(autocompleteContext, edit, font, ww);
-		if (autocompleteContext.autocompleteActive)
+		if (context.isActive)
 		{
-			DrawAutocomplete(FONT_ICON_ACI_CHAT, std::floor(xx), std::floor(yy), font, ww, hh);
+			DrawAutocomplete(FONT_ICON_ACI_CONSOLE, { x, y, font, 1.0f, 1.0f });
+		}
+	}
+
+	void TextRenderer::Field_Draw_Say(int localClientNum, field_t* edit, int x, int y, int horzAlign, int vertAlign)
+	{
+		reinterpret_cast<void(*)(int, field_t*, int, int, int, int)>(fieldDrawSayHook.GetOriginal())(localClientNum, edit, x, y, horzAlign, vertAlign);
+
+		auto& context = autocompleteContextArray[FONT_ICON_ACI_CHAT];
+
+		if (!IsAutocompleteEnabled())
+		{
+			context.isActive = false;
+			return;
+		}
+
+		const float* const placement = Game::ScrPlace_GetActivePlacement(localClientNum);
+		const float scale = edit->charHeight / 48.0f;
+
+		auto* const font = reinterpret_cast<Game::Font_s*(*)(const float*, int, float)>(Utils::Hook::Rebase(UI_GetFontHandle))(placement, 0, scale);
+		const float normalizedScale = reinterpret_cast<float(*)(Game::Font_s*, float)>(Utils::Hook::Rebase(R_NormalizedTextScale))(font, scale);
+
+		float drawX = static_cast<float>(x);
+		float drawY = static_cast<float>(y) + static_cast<float>(Game::R_TextHeight(font)) * normalizedScale * 1.5f;
+		float xScale = normalizedScale;
+		float yScale = normalizedScale;
+
+		reinterpret_cast<void(*)(const float*, float*, float*, float*, float*, int, int)>(Utils::Hook::Rebase(ScrPlace_ApplyRect))(
+			placement, &drawX, &drawY, &xScale, &yScale, horzAlign, vertAlign);
+
+		const int cursor = std::clamp(edit->cursor, 0, static_cast<int>(sizeof(edit->buffer)) - 1);
+		UpdateAutocompleteContext(context, std::string_view(edit->buffer, static_cast<std::size_t>(cursor)), font, xScale);
+
+		if (context.isActive)
+		{
+			DrawAutocomplete(FONT_ICON_ACI_CHAT, { std::floor(drawX), std::floor(drawY), font, xScale, yScale });
 		}
 	}
 
@@ -1133,13 +2392,13 @@ namespace Components
 	{
 		if (context.selectedOffset > 0)
 		{
-			context.selectedOffset--;
+			--context.selectedOffset;
 		}
 	}
 
 	void TextRenderer::AutocompleteDown(FontIconAutocompleteContext& context)
 	{
-		if (context.resultCount < FontIconAutocompleteContext::MAX_RESULTS)
+		if (context.resultCount < FontIconAutocompleteContext::maxResults)
 		{
 			if (context.resultCount > 0 && context.selectedOffset < context.resultOffset + context.resultCount - 1)
 			{
@@ -1155,73 +2414,91 @@ namespace Components
 		}
 		else
 		{
-			context.selectedOffset++;
+			++context.selectedOffset;
 		}
 	}
 
-	void TextRenderer::AutocompleteFill(const FontIconAutocompleteContext& context, Game::ScreenPlacement* scrPlace, Game::field_t* edit, const bool closeFontIcon)
+	void TextRenderer::AutocompleteFill(const FontIconAutocompleteContext& context, std::span<char> buffer, int& cursor, bool shouldCloseFontIcon)
 	{
 		if (context.selectedOffset >= context.resultOffset + context.resultCount)
+		{
 			return;
-
-		const auto selectedResultIndex = context.selectedOffset - context.resultOffset;
-		std::string remainingFillData = context.results[selectedResultIndex].materialName.substr(context.lastQuery.size());
-
-		if (closeFontIcon)
-		{
-			remainingFillData += ":";
 		}
 
-		const std::string moveData(&edit->buffer[edit->cursor]);
-
-		const auto remainingBufferCharacters = std::extent_v<decltype(Game::field_t::buffer)> - edit->cursor - moveData.size() - 1;
-		if (remainingFillData.size() > remainingBufferCharacters)
+		if (cursor < 0 || static_cast<std::size_t>(cursor) >= buffer.size())
 		{
-			remainingFillData = remainingFillData.erase(remainingBufferCharacters);
+			return;
 		}
 
-		if (!remainingFillData.empty())
+		const std::size_t start = static_cast<std::size_t>(cursor);
+		const std::size_t afterLength = strnlen(buffer.data() + start, buffer.size() - start);
+
+		if (start + afterLength + 1 > buffer.size())
 		{
-			strncpy(&edit->buffer[edit->cursor], remainingFillData.c_str(), remainingFillData.size());
-			strncpy(&edit->buffer[edit->cursor + remainingFillData.size()], moveData.c_str(), moveData.size());
-			edit->buffer[std::extent_v<decltype(Game::field_t::buffer)> - 1] = '\0';
-			edit->cursor += static_cast<int>(remainingFillData.size());
-			Game::Field_AdjustScroll(scrPlace, edit);
+			return;
 		}
+
+		const auto& result = context.results[context.selectedOffset - context.resultOffset];
+		std::string fill = result.iconName.substr(context.lastQuery.size());
+
+		if (shouldCloseFontIcon)
+		{
+			fill.push_back(fontIconSeparator);
+		}
+
+		const std::size_t room = buffer.size() - start - afterLength - 1;
+
+		if (fill.size() > room)
+		{
+			fill.resize(room);
+		}
+
+		if (fill.empty())
+		{
+			return;
+		}
+
+		const std::string after(buffer.data() + start, afterLength);
+
+		std::memcpy(buffer.data() + start, fill.data(), fill.size());
+		std::memcpy(buffer.data() + start + fill.size(), after.data(), after.size());
+		buffer[start + fill.size() + after.size()] = '\0';
+
+		cursor += static_cast<int>(fill.size());
 	}
 
-	bool TextRenderer::AutocompleteHandleKeyDown(FontIconAutocompleteContext& context, const int key, Game::ScreenPlacement* scrPlace, Game::field_t* edit)
+	bool TextRenderer::AutocompleteHandleKeyDown(FontIconAutocompleteContext& context, int key, std::span<char> buffer, int& cursor)
 	{
 		switch (key)
 		{
-		case Game::K_UPARROW:
-		case Game::K_KP_UPARROW:
+		case keyUpArrow:
+		case keyPadUpArrow:
 			AutocompleteUp(context);
 			return true;
 
-		case Game::K_DOWNARROW:
-		case Game::K_KP_DOWNARROW:
+		case keyDownArrow:
+		case keyPadDownArrow:
 			AutocompleteDown(context);
 			return true;
 
-		case Game::K_ENTER:
-		case Game::K_KP_ENTER:
-			if(context.resultCount > 0)
+		case keyEnter:
+		case keyPadEnter:
+			if (context.resultCount > 0)
 			{
-				AutocompleteFill(context, scrPlace, edit, true);
+				AutocompleteFill(context, buffer, cursor, true);
 				return true;
 			}
 			return false;
 
-		case Game::K_TAB:
-			AutocompleteFill(context, scrPlace, edit, false);
+		case keyTab:
+			AutocompleteFill(context, buffer, cursor, false);
 			return true;
 
-		case Game::K_ESCAPE:
-			if (!context.userClosed)
+		case keyEscape:
+			if (!context.didUserClose)
 			{
-				context.autocompleteActive = false;
-				context.userClosed = true;
+				context.isActive = false;
+				context.didUserClose = true;
 				return true;
 			}
 			return false;
@@ -1231,832 +2508,173 @@ namespace Components
 		}
 	}
 
-	bool TextRenderer::HandleFontIconAutocompleteKey(const int localClientNum, const FontIconAutocompleteInstance autocompleteInstance, const int key)
+	bool TextRenderer::HandleFontIconAutocompleteKey(FontIconAutocompleteInstance instance, int key, std::span<char> buffer, int& cursor)
 	{
-		assert(autocompleteInstance < FONT_ICON_ACI_COUNT);
-		if (autocompleteInstance >= FONT_ICON_ACI_COUNT)
+		if (instance >= FONT_ICON_ACI_COUNT)
+		{
 			return false;
+		}
 
-		auto& autocompleteContext = autocompleteContextArray[autocompleteInstance];
-		if (!autocompleteContext.autocompleteActive)
+		auto& context = autocompleteContextArray[instance];
+
+		if (!context.isActive)
+		{
 			return false;
+		}
 
-		if (autocompleteInstance == FONT_ICON_ACI_CONSOLE)
-			return AutocompleteHandleKeyDown(autocompleteContext, key, Game::scrPlaceFull, Game::g_consoleField);
-
-		if (autocompleteInstance == FONT_ICON_ACI_CHAT)
-			return AutocompleteHandleKeyDown(autocompleteContext, key, &Game::scrPlaceView[localClientNum], &Game::playerKeys[localClientNum].chatField);
-
-		return false;
+		return AutocompleteHandleKeyDown(context, key, buffer, cursor);
 	}
 
-	void TextRenderer::Console_Key_Hk(const int localClientNum, const int key)
+	void TextRenderer::Message_Key_Hook(int localClientNum, int key)
 	{
-		if (HandleFontIconAutocompleteKey(localClientNum, FONT_ICON_ACI_CONSOLE, key))
+		auto* const chatField = reinterpret_cast<field_t*>(Utils::Hook::Rebase(playerKeys) + playerKeysStride * static_cast<std::size_t>(localClientNum));
+		const int cursorBefore = chatField->cursor;
+
+		if (HandleFontIconAutocompleteKey(FONT_ICON_ACI_CHAT, key, chatField->buffer, chatField->cursor))
+		{
+			if (chatField->cursor != cursorBefore)
+			{
+				auto* const placement = reinterpret_cast<const float*(*)(int)>(Utils::Hook::Rebase(ScrPlace_GetViewPlacement))(localClientNum);
+				reinterpret_cast<void(*)(const float*, field_t*)>(Utils::Hook::Rebase(Field_AdjustScroll))(placement, chatField);
+			}
+
 			return;
+		}
 
-		Utils::Hook::Call<void(int, int)>(0x4311E0)(localClientNum, key);
+		reinterpret_cast<void(*)(int, int)>(messageKeyHooks[0].GetOriginal())(localClientNum, key);
 	}
 
-	bool TextRenderer::ChatHandleKeyDown(const int localClientNum, const int key)
+	int TextRenderer::SEH_PrintStrlenWithCursor(const char* string, const field_t* field)
 	{
-		return HandleFontIconAutocompleteKey(localClientNum, FONT_ICON_ACI_CHAT, key);
-	}
-
-	constexpr auto Message_Key = 0x5A7E50;
-	__declspec(naked) void TextRenderer::Message_Key_Stub()
-	{
-		__asm
-		{
-			pushad
-
-			push eax
-			push edi
-			call ChatHandleKeyDown
-			add esp, 0x8
-			test al,al
-			jnz skipHandling
-
-			popad
-			call Message_Key
-			ret
-
-		skipHandling:
-			popad
-			mov al, 1
-			ret
-		}
-	}
-
-	float TextRenderer::GetMonospaceWidth(Game::Font_s* font, int rendererFlags)
-	{
-		if (rendererFlags & Game::TEXT_RENDERFLAG_FORCEMONOSPACE)
-		{
-			return Game::R_GetCharacterGlyph(font, 'o')->dx;
-		}
-
-		return 0.0f;
-	}
-
-	void TextRenderer::GlowColor(Game::GfxColor* result, const Game::GfxColor baseColor, const Game::GfxColor forcedGlowColor, int renderFlags)
-	{
-		if (renderFlags & Game::TEXT_RENDERFLAG_GLOW_FORCE_COLOR)
-		{
-			result->array[0] = forcedGlowColor.array[0];
-			result->array[1] = forcedGlowColor.array[1];
-			result->array[2] = forcedGlowColor.array[2];
-		}
-		else
-		{
-			result->array[0] = static_cast<char>(std::floor(static_cast<float>(static_cast<uint8_t>(baseColor.array[0])) * 0.06f));
-			result->array[1] = static_cast<char>(std::floor(static_cast<float>(static_cast<uint8_t>(baseColor.array[1])) * 0.06f));
-			result->array[2] = static_cast<char>(std::floor(static_cast<float>(static_cast<uint8_t>(baseColor.array[2])) * 0.06f));
-		}
-	}
-
-	unsigned TextRenderer::R_FontGetRandomLetter(const int seed)
-	{
-		static constexpr char RANDOM_CHARACTERS[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz1234567890";
-		return RANDOM_CHARACTERS[seed % (std::extent_v<decltype(RANDOM_CHARACTERS)> - 1)];
-	}
-
-	void TextRenderer::DrawTextFxExtraCharacter(Game::Material* material, const int charIndex, const float x, const float y, const float w, const float h, const float sinAngle, const float cosAngle, const unsigned color)
-	{
-		Game::RB_DrawStretchPicRotate(material, x, y, w, h, static_cast<float>(charIndex % 16) * 0.0625f, 0.0f, static_cast<float>(charIndex % 16) * 0.0625f + 0.0625f, 1.0f, sinAngle, cosAngle, color);
-	}
-
-	Game::GfxImage* TextRenderer::GetFontIconColorMap(const Game::Material* fontIconMaterial)
-	{
-		for (auto i = 0u; i < fontIconMaterial->textureCount; i++)
-		{
-			if (fontIconMaterial->textureTable[i].nameHash == COLOR_MAP_HASH)
-			{
-				return fontIconMaterial->textureTable[i].u.image;
-			}
-		}
-
-		return nullptr;
-	}
-
-	bool TextRenderer::IsFontIcon(const char*& text, FontIconInfo& fontIcon)
-	{
-		const auto* curPos = text;
-
-		while (*curPos != ' ' && *curPos != FONT_ICON_SEPARATOR_CHARACTER && *curPos != 0 && *curPos != FONT_ICON_MODIFIER_SEPARATOR_CHARACTER)
-			curPos++;
-
-		const auto* nameEnd = curPos;
-
-		if (*curPos == FONT_ICON_MODIFIER_SEPARATOR_CHARACTER)
-		{
-			auto breakArgs = false;
-			while (!breakArgs)
-			{
-				curPos++;
-				switch(*curPos)
-				{
-				case FONT_ICON_MODIFIER_FLIP_HORIZONTALLY:
-					fontIcon.flipHorizontal = true;
-					break;
-
-				case FONT_ICON_MODIFIER_FLIP_VERTICALLY:
-					fontIcon.flipVertical = true;
-					break;
-
-				case FONT_ICON_MODIFIER_BIG:
-					fontIcon.big = true;
-					break;
-
-				case FONT_ICON_SEPARATOR_CHARACTER:
-					breakArgs = true;
-					break;
-
-				default:
-					return false;
-				}
-			}
-		}
-
-		if (*curPos != FONT_ICON_SEPARATOR_CHARACTER)
-		{
-			return false;
-		}
-
-		const std::string fontIconName(text, nameEnd - text);
-
-		const auto foundFontIcon = fontIconLookup.find(fontIconName);
-		if (foundFontIcon == fontIconLookup.end())
-		{
-			return false;
-		}
-
-		auto& entry = foundFontIcon->second;
-		if (entry.material == nullptr)
-		{
-			auto* materialEntry = Game::DB_FindXAssetEntry(Game::XAssetType::ASSET_TYPE_MATERIAL, entry.materialName.data());
-			if (materialEntry == nullptr)
-				return false;
-			auto* material = materialEntry->asset.header.material;
-			if (material == nullptr || material->techniqueSet == nullptr || material->techniqueSet->name == nullptr)
-				return false;
-
-			if (std::strcmp(material->techniqueSet->name, "2d") != 0)
-			{
-				Logger::PrintError(Game::CON_CHANNEL_ERROR, "Fonticon material '{}' does not have 2d techset!\n", material->info.name);
-				material = Game::DB_FindXAssetHeader(Game::ASSET_TYPE_MATERIAL, "default").material;
-			}
-
-			entry.material = material;
-		}
-
-		text = curPos + 1;
-		fontIcon.material = entry.material;
-		return true;
-	}
-
-	float TextRenderer::GetNormalizedFontIconWidth(const FontIconInfo& fontIcon)
-	{
-		const auto* colorMap = GetFontIconColorMap(fontIcon.material);
-		if (colorMap == nullptr)
-		{
-			return 0.0f;
-		}
-
-		const auto sizeMultiplier = fontIcon.big ? 1.5f : 1.0f;
-		auto colWidth = static_cast<float>(colorMap->width);
-		auto colHeight = static_cast<float>(colorMap->height);
-		if (fontIcon.material->info.textureAtlasColumnCount > 1)
-			colWidth /= static_cast<float>(fontIcon.material->info.textureAtlasColumnCount);
-		if (fontIcon.material->info.textureAtlasRowCount > 1)
-			colHeight /= static_cast<float>(fontIcon.material->info.textureAtlasRowCount);
-		return (colWidth / colHeight) * sizeMultiplier;
-	}
-
-	float TextRenderer::GetFontIconWidth(const FontIconInfo& fontIcon, const Game::Font_s* font, const float xScale)
-	{
-		const auto* colorMap = GetFontIconColorMap(fontIcon.material);
-		if (colorMap == nullptr)
-		{
-			return 0.0f;
-		}
-
-		const auto sizeMultiplier = fontIcon.big ? 1.5f : 1.0f;
-		auto colWidth = static_cast<float>(colorMap->width);
-		auto colHeight = static_cast<float>(colorMap->height);
-		if (fontIcon.material->info.textureAtlasColumnCount > 1)
-			colWidth /= static_cast<float>(fontIcon.material->info.textureAtlasColumnCount);
-		if (fontIcon.material->info.textureAtlasRowCount > 1)
-			colHeight /= static_cast<float>(fontIcon.material->info.textureAtlasRowCount);
-		return static_cast<float>(font->pixelHeight) * (colWidth / colHeight) * xScale * sizeMultiplier;
-	}
-
-	float TextRenderer::DrawFontIcon(const FontIconInfo& fontIcon, const float x, const float y, const float sinAngle, const float cosAngle, const Game::Font_s* font, const float xScale, const float yScale, const unsigned color)
-	{
-		const auto* colorMap = GetFontIconColorMap(fontIcon.material);
-		if (colorMap == nullptr)
-		{
-			return 0.0f;
-		}
-
-		float s0, t0, s1, t1;
-		if (fontIcon.flipHorizontal)
-		{
-			s0 = 1.0f;
-			s1 = 0.0f;
-		}
-		else
-		{
-			s0 = 0.0f;
-			s1 = 1.0f;
-		}
-		if (fontIcon.flipVertical)
-		{
-			t0 = 1.0f;
-			t1 = 0.0f;
-		}
-		else
-		{
-			t0 = 0.0f;
-			t1 = 1.0f;
-		}
-
-		Game::Material_Process2DTextureCoordsForAtlasing(fontIcon.material, &s0, &s1, &t0, &t1);
-		const auto sizeMultiplier = fontIcon.big ? 1.5f : 1.0f;
-
-		auto colWidth = static_cast<float>(colorMap->width);
-		auto colHeight = static_cast<float>(colorMap->height);
-		if (fontIcon.material->info.textureAtlasColumnCount > 1)
-			colWidth /= static_cast<float>(fontIcon.material->info.textureAtlasColumnCount);
-		if (fontIcon.material->info.textureAtlasRowCount > 1)
-			colHeight /= static_cast<float>(fontIcon.material->info.textureAtlasRowCount);
-
-		const auto h = static_cast<float>(font->pixelHeight) * yScale * sizeMultiplier;
-		const auto w = static_cast<float>(font->pixelHeight) * (colWidth / colHeight) * xScale * sizeMultiplier;
-
-		const auto yy = y - (h + yScale * static_cast<float>(font->pixelHeight)) * 0.5f;
-		Game::RB_DrawStretchPicRotate(fontIcon.material, x, yy, w, h, s0, t0, s1, t1, sinAngle, cosAngle, color);
-
-		return w;
-	}
-
-	float TextRenderer::DrawHudIcon(const char*& text, const float x, const float y, const float sinAngle, const float cosAngle, const Game::Font_s* font, const float xScale, const float yScale, const unsigned color)
-	{
-		float s0, s1, t0, t1;
-
-		if (*text == '\x01')
-		{
-			s0 = 0.0;
-			t0 = 0.0;
-			s1 = 1.0;
-			t1 = 1.0;
-		}
-		else
-		{
-			s0 = 1.0;
-			t0 = 0.0;
-			s1 = 0.0;
-			t1 = 1.0;
-		}
-
-		++text;
-
-		if (*text == 0)
-		{
-			return 0.0f;
-		}
-
-		const auto v12 = font->pixelHeight * (*text - 16) + 16;
-		const auto w = static_cast<float>((((v12 >> 24) & 0x1F) + v12) >> 5) * xScale;
-		++text;
-
-		if (*text == 0)
-		{
-			return 0.0f;
-		}
-
-		const auto h = static_cast<float>((font->pixelHeight * (*text - 16) + 16) >> 5) * yScale;
-		++text;
-
-		if (*text == 0)
-		{
-			return 0.0f;
-		}
-
-		const auto materialNameLen = static_cast<uint8_t>(*text);
-		++text;
-
-		for (auto i = 0u; i < materialNameLen; i++)
-		{
-			if (text[i] == 0)
-			{
-				return 0.0f;
-			}
-		}
-
-		const std::string materialName(text, materialNameLen);
-		text += materialNameLen;
-
-		auto* material = Game::DB_FindXAssetHeader(Game::XAssetType::ASSET_TYPE_MATERIAL, materialName.data()).material;
-		if (material == nullptr || material->techniqueSet == nullptr || material->techniqueSet->name == nullptr || std::strcmp(material->techniqueSet->name, "2d") != 0)
-		{
-			material = Game::DB_FindXAssetHeader(Game::XAssetType::ASSET_TYPE_MATERIAL, "default").material;
-		}
-
-		const auto yy = y - (h + yScale * static_cast<float>(font->pixelHeight)) * 0.5f;
-
-		Game::RB_DrawStretchPicRotate(material, x, yy, w, h, s0, t0, s1, t1, sinAngle, cosAngle, color);
-
-		return w;
-	}
-
-	void TextRenderer::RotateXY(const float cosAngle, const float sinAngle, const float pivotX, const float pivotY, const float x, const float y, float* outX, float* outY)
-	{
-		*outX = (x - pivotX) * cosAngle + pivotX - (y - pivotY) * sinAngle;
-		*outY = (y - pivotY) * cosAngle + pivotY + (x - pivotX) * sinAngle;
-	}
-
-	void TextRenderer::DrawText2D(const char* text, float x, float y, Game::Font_s* font, float xScale, float yScale, float sinAngle, float cosAngle, Game::GfxColor color, int maxLength, int renderFlags, int cursorPos, char cursorLetter, float padding, Game::GfxColor glowForcedColor, int fxBirthTime, int fxLetterTime, int fxDecayStartTime, int fxDecayDuration, Game::Material* fxMaterial, Game::Material* fxMaterialGlow)
-	{
-		UpdateColorTable();
-
-		Game::GfxColor dropShadowColor{0};
-		dropShadowColor.array[3] = color.array[3];
-
-		int randSeed = 1;
-		bool drawRandomCharAtEnd = false;
-		const auto forceMonospace = renderFlags & Game::TEXT_RENDERFLAG_FORCEMONOSPACE;
-		const auto monospaceWidth = GetMonospaceWidth(font, renderFlags);
-		auto* material = font->material;
-		Game::Material* glowMaterial = nullptr;
-
-		bool decaying;
-		int decayTimeElapsed;
-		if(renderFlags & Game::TEXT_RENDERFLAG_FX_DECODE)
-		{
-			if (!Game::SetupPulseFXVars(text, maxLength, fxBirthTime, fxLetterTime, fxDecayStartTime, fxDecayDuration, &drawRandomCharAtEnd, &randSeed, &maxLength, &decaying, &decayTimeElapsed))
-				return;
-		}
-		else
-		{
-			drawRandomCharAtEnd = false;
-			randSeed = 1;
-			decaying = false;
-			decayTimeElapsed = 0;
-		}
-
-		Game::FontPassType passes[Game::FONTPASS_COUNT];
-		unsigned passCount = 0;
-
-		if(renderFlags & Game::TEXT_RENDERFLAG_OUTLINE)
-		{
-			if(renderFlags & Game::TEXT_RENDERFLAG_GLOW)
-			{
-				glowMaterial = font->glowMaterial;
-				passes[passCount++] = Game::FONTPASS_GLOW;
-			}
-
-			passes[passCount++] = Game::FONTPASS_OUTLINE;
-			passes[passCount++] = Game::FONTPASS_NORMAL;
-		}
-		else
-		{
-			passes[passCount++] = Game::FONTPASS_NORMAL;
-
-			if (renderFlags & Game::TEXT_RENDERFLAG_GLOW)
-			{
-				glowMaterial = font->glowMaterial;
-				passes[passCount++] = Game::FONTPASS_GLOW;
-			}
-		}
-
-		const auto startX = x - xScale * 0.5f;
-		const auto startY = y - 0.5f * yScale;
-
-		for (auto passIndex = 0u; passIndex < passCount; passIndex++)
-		{
-			float xRot, yRot;
-			const char* curText = text;
-			auto maxLengthRemaining = maxLength;
-			auto currentColor = color;
-			auto subtitleAllowGlow = false;
-			auto extraFxChar = 0;
-			auto drawExtraFxChar = false;
-			auto passRandSeed = randSeed;
-			auto count = 0;
-			auto xa = startX;
-			auto xy = startY;
-
-			while (*curText && maxLengthRemaining)
-			{
-				if (passes[passIndex] == Game::FONTPASS_NORMAL && renderFlags & Game::TEXT_RENDERFLAG_CURSOR && count == cursorPos)
-				{
-					RotateXY(cosAngle, sinAngle, startX, startY, xa, xy, &xRot, &yRot);
-					Game::RB_DrawCursor(material, cursorLetter, xRot, yRot, sinAngle, cosAngle, font, xScale, yScale, color.packed);
-				}
-
-				auto letter = Game::SEH_ReadCharFromString(&curText, nullptr);
-
-				if (letter == '^' && *curText >= COLOR_FIRST_CHAR && *curText <= COLOR_LAST_CHAR)
-				{
-					const auto colorIndex = ColorIndexForChar(*curText);
-					subtitleAllowGlow = false;
-					if (colorIndex == TEXT_COLOR_DEFAULT)
-					{
-						currentColor = color;
-					}
-					else if (renderFlags & Game::TEXT_RENDERFLAG_SUBTITLETEXT && colorIndex == TEXT_COLOR_GREEN)
-					{
-						constexpr Game::GfxColor altColor{ MY_ALTCOLOR_TWO };
-						subtitleAllowGlow = true;
-						// Swap r and b for whatever reason
-						currentColor.packed = ColorRgba(altColor.array[2], altColor.array[1], altColor.array[0], Game::ModulateByteColors(altColor.array[3], color.array[3]));
-					}
-					else
-					{
-						const Game::GfxColor colorTableColor{ (*currentColorTable)[colorIndex] };
-						// Swap r and b for whatever reason
-						currentColor.packed = ColorRgba(colorTableColor.array[2], colorTableColor.array[1], colorTableColor.array[0], color.array[3]);
-					}
-
-					if (!(renderFlags & Game::TEXT_RENDERFLAG_CURSOR && cursorPos > count && cursorPos < count + 2))
-					{
-						curText++;
-						count += 2;
-						continue;
-					}
-				}
-
-				auto finalColor = currentColor;
-
-				if (letter == '^' && (*curText == '\x01' || *curText == '\x02'))
-				{
-					RotateXY(cosAngle, sinAngle, startX, startY, xa, xy, &xRot, &yRot);
-					xa += DrawHudIcon(curText, xRot, yRot, sinAngle, cosAngle, font, xScale, yScale, ColorRgba(255, 255, 255, finalColor.array[3]));
-
-					if (renderFlags & Game::TEXT_RENDERFLAG_PADDING)
-						xa += xScale * padding;
-					++count;
-					--maxLengthRemaining;
-					continue;
-				}
-
-				if (letter == '^')
-				{
-					const char* unicodeEnd = curText;
-					std::optional<RuntimeUnicodeRun> unicodeText;
-					std::size_t tokenLength{};
-					bool isUnicodeGlyph = false;
-					std::uint32_t value{};
-					if (ParseUnicodeGlyphEscape(unicodeEnd, value))
-					{
-						unicodeText = GetUnicodeGlyph(value);
-						tokenLength = UNICODE_GLYPH_HEX_LENGTH + 2;
-						isUnicodeGlyph = true;
-					}
-					else
-					{
-						unicodeEnd = curText;
-						if (ParseUnicodeRunEscape(unicodeEnd, value))
-						{
-							unicodeText = GetUnicodeRun(value);
-							tokenLength = UNICODE_RUN_ID_HEX_LENGTH + 2;
-						}
-					}
-
-					if (tokenLength != 0)
-					{
-						curText = unicodeEnd;
-						if (!unicodeText)
-						{
-							letter = '?';
-							count += static_cast<int>(tokenLength - 1);
-						}
-						else
-						{
-							const auto fontHeight = static_cast<float>(font->pixelHeight);
-							const auto runWidth = unicodeText->width * fontHeight * xScale;
-							const auto runHeight = unicodeText->height * fontHeight * yScale;
-							const auto xAdj = unicodeText->bearingX * fontHeight * xScale;
-							const auto yAdj = unicodeText->bearingY * fontHeight * yScale
-								+ (isUnicodeGlyph ? UNICODE_GLYPH_BASELINE_OFFSET * yScale : 0.0f);
-							const auto drawRun = [&](const float xOffset, const float yOffset, const unsigned packedColor)
-							{
-								RotateXY(cosAngle, sinAngle, startX, startY, xa + xAdj + xOffset,
-									xy + yAdj + yOffset, &xRot, &yRot);
-								Game::RB_DrawStretchPicRotate(unicodeText->material, xRot, yRot, runWidth, runHeight,
-									0.0f, 0.0f, 1.0f, 1.0f, sinAngle, cosAngle, packedColor);
-							};
-
-							if (passes[passIndex] == Game::FONTPASS_NORMAL)
-							{
-								if (renderFlags & Game::TEXT_RENDERFLAG_DROPSHADOW)
-								{
-									const auto offset = (renderFlags & Game::TEXT_RENDERFLAG_DROPSHADOW_EXTRA) ? 2.0f : 1.0f;
-									drawRun(offset, offset, dropShadowColor.packed);
-								}
-								drawRun(0.0f, 0.0f, finalColor.packed);
-							}
-							else if (passes[passIndex] == Game::FONTPASS_OUTLINE)
-							{
-								const auto outlineSize = (renderFlags & Game::TEXT_RENDERFLAG_OUTLINE_EXTRA) ? 1.3f : 1.0f;
-								for (const auto offset : MY_OFFSETS)
-								{
-									drawRun(outlineSize * offset[0], outlineSize * offset[1], dropShadowColor.packed);
-								}
-							}
-							else if (passes[passIndex] == Game::FONTPASS_GLOW
-								&& ((renderFlags & Game::TEXT_RENDERFLAG_SUBTITLETEXT) == 0 || subtitleAllowGlow))
-							{
-								GlowColor(&finalColor, finalColor, glowForcedColor, renderFlags);
-								for (const auto offset : MY_OFFSETS)
-								{
-									drawRun(2.0f * offset[0] * xScale, 2.0f * offset[1] * yScale, finalColor.packed);
-								}
-							}
-
-							if (forceMonospace) xa += monospaceWidth * xScale;
-							else xa += unicodeText->advance * fontHeight * xScale;
-							if (renderFlags & Game::TEXT_RENDERFLAG_PADDING) xa += xScale * padding;
-							count += static_cast<int>(tokenLength);
-							--maxLengthRemaining;
-							continue;
-						}
-					}
-				}
-
-				if (letter == FONT_ICON_SEPARATOR_CHARACTER)
-				{
-					FontIconInfo fontIconInfo{};
-					const char* fontIconEnd = curText;
-					if (IsFontIcon(fontIconEnd, fontIconInfo) && !(renderFlags & Game::TEXT_RENDERFLAG_CURSOR && cursorPos > count && cursorPos <= count + (fontIconEnd - curText)))
-					{
-						RotateXY(cosAngle, sinAngle, startX, startY, xa, xy, &xRot, &yRot);
-
-						if(passes[passIndex] == Game::FONTPASS_NORMAL)
-							xa += DrawFontIcon(fontIconInfo, xRot, yRot, sinAngle, cosAngle, font, xScale, yScale, ColorRgba(255, 255, 255, finalColor.array[3]));
-						else
-							xa += GetFontIconWidth(fontIconInfo, font, xScale);
-
-						if (renderFlags & Game::TEXT_RENDERFLAG_PADDING)
-							xa += xScale * padding;
-						count += (fontIconEnd - curText) + 1;
-						--maxLengthRemaining;
-						curText = fontIconEnd;
-						continue;
-					}
-				}
-
-				if (drawRandomCharAtEnd && maxLengthRemaining == 1)
-				{
-					letter = R_FontGetRandomLetter(Game::RandWithSeed(&passRandSeed));
-
-					if(Game::RandWithSeed(&passRandSeed) % 2)
-					{
-						drawExtraFxChar = true;
-						letter = 'O';
-					}
-				}
-
-				if (letter == '\n')
-				{
-					xa = startX;
-					xy += static_cast<float>(font->pixelHeight) * yScale;
-					continue;
-				}
-
-				if (letter == '\r')
-				{
-					xy += static_cast<float>(font->pixelHeight) * yScale;
-					continue;
-				}
-
-				auto skipDrawing = false;
-				if (decaying)
-				{
-					char decayAlpha;
-					Game::GetDecayingLetterInfo(letter, &passRandSeed, decayTimeElapsed, fxBirthTime, fxDecayDuration, currentColor.array[3], &skipDrawing, &decayAlpha, &letter, &drawExtraFxChar);
-					finalColor.array[3] = decayAlpha;
-				}
-
-				if (drawExtraFxChar)
-				{
-					auto tempSeed = passRandSeed;
-					extraFxChar = Game::RandWithSeed(&tempSeed);
-				}
-
-				auto glyph = Game::R_GetCharacterGlyph(font, letter);
-				auto xAdj = static_cast<float>(glyph->x0) * xScale;
-				auto yAdj = static_cast<float>(glyph->y0) * yScale;
-
-				if (!skipDrawing)
-				{
-					if (passes[passIndex] == Game::FONTPASS_NORMAL)
-					{
-						if (renderFlags & Game::TEXT_RENDERFLAG_DROPSHADOW)
-						{
-							auto ofs = 1.0f;
-							if (renderFlags & Game::TEXT_RENDERFLAG_DROPSHADOW_EXTRA)
-								ofs += 1.0f;
-
-							xRot = xa + xAdj + ofs;
-							yRot = xy + yAdj + ofs;
-							RotateXY(cosAngle, sinAngle, startX, startY, xRot, yRot, &xRot, &yRot);
-							if (drawExtraFxChar)
-								DrawTextFxExtraCharacter(fxMaterial, extraFxChar, xRot, yRot, static_cast<float>(glyph->pixelWidth) * xScale, static_cast<float>(glyph->pixelHeight) * yScale, sinAngle, cosAngle, dropShadowColor.packed);
-							else
-								Game::RB_DrawChar(material, xRot, yRot, static_cast<float>(glyph->pixelWidth) * xScale, static_cast<float>(glyph->pixelHeight) * yScale, sinAngle, cosAngle, glyph, dropShadowColor.packed);
-						}
-
-						RotateXY(cosAngle, sinAngle, startX, startY, xa + xAdj, xy + yAdj, &xRot, &yRot);
-						if (drawExtraFxChar)
-							DrawTextFxExtraCharacter(fxMaterial, extraFxChar, xRot, yRot, static_cast<float>(glyph->pixelWidth) * xScale, static_cast<float>(glyph->pixelHeight) * yScale, sinAngle, cosAngle, finalColor.packed);
-						else
-							Game::RB_DrawChar(material, xRot, yRot, static_cast<float>(glyph->pixelWidth) * xScale, static_cast<float>(glyph->pixelHeight) * yScale, sinAngle, cosAngle, glyph, finalColor.packed);
-					}
-					else if (passes[passIndex] == Game::FONTPASS_OUTLINE)
-					{
-						auto outlineSize = 1.0f;
-						if (renderFlags & Game::TEXT_RENDERFLAG_OUTLINE_EXTRA)
-							outlineSize = 1.3f;
-
-						for (const auto offset : MY_OFFSETS)
-						{
-							RotateXY(cosAngle, sinAngle, startX, startY, xa + xAdj + outlineSize * offset[0], xy + yAdj + outlineSize * offset[1], &xRot, &yRot);
-							if (drawExtraFxChar)
-								DrawTextFxExtraCharacter(fxMaterial, extraFxChar, xRot, yRot, static_cast<float>(glyph->pixelWidth) * xScale, static_cast<float>(glyph->pixelHeight) * yScale, sinAngle, cosAngle, dropShadowColor.packed);
-							else
-								Game::RB_DrawChar(material, xRot, yRot, static_cast<float>(glyph->pixelWidth) * xScale, static_cast<float>(glyph->pixelHeight) * yScale, sinAngle, cosAngle, glyph, dropShadowColor.packed);
-						}
-					}
-					else if(passes[passIndex] == Game::FONTPASS_GLOW && ((renderFlags & Game::TEXT_RENDERFLAG_SUBTITLETEXT) == 0 || subtitleAllowGlow))
-					{
-						GlowColor(&finalColor, finalColor, glowForcedColor, renderFlags);
-
-						for (const auto offset : MY_OFFSETS)
-						{
-							RotateXY(cosAngle, sinAngle, startX, startY, xa + xAdj + 2.0f * offset[0] * xScale, xy + yAdj + 2.0f * offset[1] * yScale, &xRot, &yRot);
-							if (drawExtraFxChar)
-								DrawTextFxExtraCharacter(fxMaterialGlow, extraFxChar, xRot, yRot, static_cast<float>(glyph->pixelWidth) * xScale, static_cast<float>(glyph->pixelHeight) * yScale, sinAngle, cosAngle, finalColor.packed);
-							else
-								Game::RB_DrawChar(glowMaterial, xRot, yRot, static_cast<float>(glyph->pixelWidth) * xScale, static_cast<float>(glyph->pixelHeight) * yScale, sinAngle, cosAngle, glyph, finalColor.packed);
-						}
-					}
-				}
-
-				if (forceMonospace)
-					xa += monospaceWidth * xScale;
-				else
-					xa += static_cast<float>(glyph->dx) * xScale;
-
-				if (renderFlags & Game::TEXT_RENDERFLAG_PADDING)
-					xa += xScale * padding;
-
-				++count;
-				--maxLengthRemaining;
-			}
-
-			if (renderFlags & Game::TEXT_RENDERFLAG_CURSOR && count == cursorPos)
-			{
-				RotateXY(cosAngle, sinAngle, startX, startY, xa, xy, &xRot, &yRot);
-				Game::RB_DrawCursor(material, cursorLetter, xRot, yRot, sinAngle, cosAngle, font, xScale, yScale, color.packed);
-			}
-		}
-	}
-
-	int TextRenderer::R_TextWidth_Hk(const char* text, int maxChars, Game::Font_s* font)
-	{
-		auto lineWidth = 0;
-		auto maxWidth = 0;
-
-		if (maxChars <= 0)
-		{
-			maxChars = std::numeric_limits<int>::max();
-		}
-
-		if (text == nullptr)
+		if (!string)
 		{
 			return 0;
 		}
 
-		auto count = 0;
-		while (text && *text && count < maxChars)
+		const auto readChar = reinterpret_cast<unsigned int(*)(const char**, int*)>(Utils::Hook::Rebase(SEH_ReadCharFromString));
+		const int cursorPos = field->cursor;
+
+		int length = 0;
+		int lengthWithInvisibleTail = 0;
+		int count = 0;
+		const char* current = string;
+
+		while (*current)
 		{
-			const auto letter = Game::SEH_ReadCharFromString(&text, nullptr);
-			if (letter == '\r' || letter == '\n')
+			const unsigned int letter = readChar(&current, nullptr);
+			lengthWithInvisibleTail = length;
+
+			const bool isCursorInside = cursorPos > count && cursorPos < count + 2;
+
+			if (letter == '^' && *current >= colorFirstChar && *current <= colorLastChar && !isCursorInside)
 			{
-				lineWidth = 0;
-			}
-			else
-			{
-				if (letter == '^' && text)
-				{
-					if (*text >= COLOR_FIRST_CHAR && *text <= COLOR_LAST_CHAR)
-					{
-						++text;
-						continue;
-					}
-
-					if (*text >= '\x01' && *text <= '\x02' && text[1] != '\0' && text[2] != '\0' && text[3] != '\0')
-					{
-						const auto width = text[1];
-						const auto materialNameLength = text[3];
-
-						// This is how the game calculates width and height. Probably some 1 byte floating point number.
-						// Details to be investigated if necessary.
-						const auto v9 = font->pixelHeight * (width - 16) + 16;
-						const auto w = ((((v9 >> 24) & 0x1F) + v9) >> 5);
-
-						lineWidth += w;
-						if (lineWidth > maxWidth)
-						{
-							maxWidth = lineWidth;
-						}
-
-						text += 4;
-						for (auto currentLength = 0; currentLength < materialNameLength && *text; currentLength++)
-						{
-							++text;
-						}
-						continue;
-					}
-
-					const char* unicodeEnd = text;
-					std::optional<RuntimeUnicodeRun> unicodeText;
-					std::uint32_t value{};
-					if (ParseUnicodeGlyphEscape(unicodeEnd, value))
-					{
-						unicodeText = GetUnicodeGlyph(value);
-					}
-					else
-					{
-						unicodeEnd = text;
-						if (ParseUnicodeRunEscape(unicodeEnd, value)) unicodeText = GetUnicodeRun(value);
-						else unicodeEnd = nullptr;
-					}
-					if (unicodeEnd)
-					{
-						text = unicodeEnd;
-						if (unicodeText)
-						{
-							lineWidth += static_cast<int>(std::roundf(unicodeText->advance
-								* static_cast<float>(font->pixelHeight)));
-						}
-						else
-						{
-							lineWidth += R_GetCharacterGlyph(font, '?')->dx;
-						}
-						maxWidth = std::max(maxWidth, lineWidth);
-						++count;
-						continue;
-					}
-				}
-
-				if (letter == FONT_ICON_SEPARATOR_CHARACTER)
-				{
-					FontIconInfo fontIconInfo{};
-					const char* fontIconEnd = text;
-					if (IsFontIcon(fontIconEnd, fontIconInfo))
-					{
-						lineWidth += static_cast<int>(GetFontIconWidth(fontIconInfo, font, 1.0f));
-						if (lineWidth > maxWidth)
-						{
-							maxWidth = lineWidth;
-						}
-						text = fontIconEnd;
-						continue;
-					}
-				}
-
-				lineWidth += R_GetCharacterGlyph(font, letter)->dx;
-				if (lineWidth > maxWidth)
-				{
-					maxWidth = lineWidth;
-				}
-
+				++current;
 				++count;
 			}
+			else if (letter != '\r' && letter != '\n')
+			{
+				++length;
+			}
+
+			++count;
+			++lengthWithInvisibleTail;
 		}
 
-		return maxWidth;
+		return lengthWithInvisibleTail;
+	}
+
+	int TextRenderer::Field_AdjustScroll_PrintLen(const char* buffer)
+	{
+		const auto* const field = reinterpret_cast<const field_t*>(buffer - offsetof(field_t, buffer));
+
+		return SEH_PrintStrlenWithCursor(buffer, field);
+	}
+
+	unsigned int TextRenderer::HsvToRgb(HsvColor hsv)
+	{
+		if (hsv.s == 0)
+		{
+			return ColorRgb(hsv.v, hsv.v, hsv.v);
+		}
+
+		const unsigned int h = hsv.h;
+		const unsigned int s = hsv.s;
+		const unsigned int v = hsv.v;
+
+		const auto region = static_cast<std::uint8_t>(h / 43);
+		const unsigned int remainder = (h - (region * 43)) * 6;
+
+		const auto p = static_cast<std::uint8_t>((v * (255 - s)) >> 8);
+		const auto q = static_cast<std::uint8_t>((v * (255 - ((s * remainder) >> 8))) >> 8);
+		const auto t = static_cast<std::uint8_t>((v * (255 - ((s * (255 - remainder)) >> 8))) >> 8);
+
+		switch (region)
+		{
+		case 0:
+			return ColorRgb(static_cast<std::uint8_t>(v), t, p);
+		case 1:
+			return ColorRgb(q, static_cast<std::uint8_t>(v), p);
+		case 2:
+			return ColorRgb(p, static_cast<std::uint8_t>(v), t);
+		case 3:
+			return ColorRgb(p, q, static_cast<std::uint8_t>(v));
+		case 4:
+			return ColorRgb(t, p, static_cast<std::uint8_t>(v));
+		default:
+			return ColorRgb(static_cast<std::uint8_t>(v), p, q);
+		}
+	}
+
+	void TextRenderer::UpdateColorTable()
+	{
+		if (cg_newColors && !cg_newColors->current.enabled)
+		{
+			currentColorTable = &colorTableDefault;
+		}
+		else
+		{
+			currentColorTable = &colorTableNew;
+		}
+
+		const int milliseconds = reinterpret_cast<int(*)()>(Utils::Hook::Rebase(Sys_Milliseconds))();
+
+		(*currentColorTable)[TEXT_COLOR_AXIS] = Utils::Hook::Get<unsigned int>(teamColorAxis);
+		(*currentColorTable)[TEXT_COLOR_ALLIES] = Utils::Hook::Get<unsigned int>(teamColorAllies);
+		(*currentColorTable)[TEXT_COLOR_RAINBOW] = HsvToRgb({ static_cast<std::uint8_t>((milliseconds / 200) % 256), 255, 255 });
+
+		if (sv_customTextColor)
+		{
+			(*currentColorTable)[TEXT_COLOR_SERVER] = sv_customTextColor->current.unsignedInt;
+		}
 	}
 
 	unsigned int TextRenderer::ColorIndex(const char index)
 	{
-		auto result = index - '0';
-		if (static_cast<unsigned int>(result) >= TEXT_COLOR_COUNT || result < 0) result = 7;
-		return result;
+		const int result = index - '0';
+
+		if (result < 0 || result >= TEXT_COLOR_COUNT)
+		{
+			return TEXT_COLOR_DEFAULT;
+		}
+
+		return static_cast<unsigned int>(result);
 	}
 
 	void TextRenderer::StripColors(const char* in, char* out, std::size_t max)
 	{
-		if (!in || !out) return;
+		if (!in || !out)
+		{
+			return;
+		}
 
-		max--;
+		--max;
 		std::size_t current = 0;
+
 		while (*in != 0 && current < max)
 		{
-			const char index = *(in + 1);
-			if (*in == '^' && (ColorIndex(index) != 7 || index == '7'))
+			const char index = in[1];
+
+			if (*in == '^' && (ColorIndex(index) != TEXT_COLOR_DEFAULT || index == '7'))
 			{
 				++in;
 			}
@@ -2075,301 +2693,34 @@ namespace Components
 
 	std::string TextRenderer::StripColors(const std::string& in)
 	{
-		char buffer[1024]{}; // 1024 is a lucky number in the engine
+		char buffer[1024]{};
 		StripColors(in.data(), buffer, sizeof(buffer));
-		return std::string{ buffer };
-	}
 
-	std::string TextRenderer::EncodeUtf8ForGame(const std::string_view text, const std::size_t maxCharacters)
-	{
-		if (text.empty() || maxCharacters == 0
-			|| text.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-		{
-			return {};
-		}
-
-		const auto textLength = static_cast<int>(text.size());
-		const auto wideLength = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), textLength, nullptr, 0);
-		if (wideLength <= 0) return {};
-
-		std::wstring wideText(static_cast<std::size_t>(wideLength), L'\0');
-		if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), textLength,
-			wideText.data(), wideLength) != wideLength)
-		{
-			return {};
-		}
-
-		const auto effectiveMaxCharacters = std::min(maxCharacters,
-			static_cast<std::size_t>(STRING_BUFFER_SIZE_BIG / 8));
-		std::vector<std::uint32_t> codepoints;
-		codepoints.reserve(std::min(wideText.size(), effectiveMaxCharacters));
-		std::size_t characterCount{};
-		for (std::size_t index = 0; index < wideText.size() && characterCount < effectiveMaxCharacters;)
-		{
-			std::uint32_t codepoint = static_cast<std::uint16_t>(wideText[index]);
-			int codeUnitCount = 1;
-			if (codepoint >= 0xD800 && codepoint <= 0xDBFF && index + 1 < wideText.size())
-			{
-				const auto trailing = static_cast<std::uint32_t>(wideText[index + 1]);
-				if (trailing >= 0xDC00 && trailing <= 0xDFFF)
-				{
-					codepoint = 0x10000 + ((codepoint - 0xD800) << 10) + (trailing - 0xDC00);
-					codeUnitCount = 2;
-				}
-			}
-
-			index += static_cast<std::size_t>(codeUnitCount);
-			if (codepoint < 0x20 || (codepoint >= 0x7F && codepoint <= 0x9F)
-				|| (codepoint >= 0x202A && codepoint <= 0x202E)
-				|| (codepoint >= 0x2066 && codepoint <= 0x2069))
-			{
-				continue;
-			}
-
-			codepoints.push_back(codepoint);
-			++characterCount;
-		}
-
-		// User-controlled names must not be able to inject the game's color codes.
-		std::vector<std::uint32_t> sanitizedCodepoints;
-		sanitizedCodepoints.reserve(codepoints.size());
-		for (std::size_t index = 0; index < codepoints.size(); ++index)
-		{
-			if (codepoints[index] == '^' && index + 1 < codepoints.size()
-				&& codepoints[index + 1] >= static_cast<std::uint32_t>(COLOR_FIRST_CHAR)
-				&& codepoints[index + 1] <= static_cast<std::uint32_t>(COLOR_LAST_CHAR))
-			{
-				++index;
-				continue;
-			}
-			sanitizedCodepoints.push_back(codepoints[index]);
-		}
-		if (sanitizedCodepoints.empty()) return {};
-
-		const auto isWhitespace = [](const std::uint32_t codepoint)
-		{
-			return codepoint == 0x20 || codepoint == 0xA0 || codepoint == 0x1680
-				|| (codepoint >= 0x2000 && codepoint <= 0x200A) || codepoint == 0x2028
-				|| codepoint == 0x2029 || codepoint == 0x202F || codepoint == 0x205F
-				|| codepoint == 0x3000;
-		};
-
-		const auto appendUtf16 = [](std::wstring& output, const std::uint32_t codepoint)
-		{
-			if (codepoint <= 0xFFFF)
-			{
-				output.push_back(static_cast<wchar_t>(codepoint));
-			}
-			else
-			{
-				const auto value = codepoint - 0x10000;
-				output.push_back(static_cast<wchar_t>(0xD800 + (value >> 10)));
-				output.push_back(static_cast<wchar_t>(0xDC00 + (value & 0x3FF)));
-			}
-		};
-
-		const auto convertToWindows1252 = [&](const std::uint32_t codepoint, char& converted)
-		{
-			wchar_t utf16[2]{};
-			int utf16Length = 1;
-			if (codepoint <= 0xFFFF)
-			{
-				utf16[0] = static_cast<wchar_t>(codepoint);
-			}
-			else
-			{
-				const auto value = codepoint - 0x10000;
-				utf16[0] = static_cast<wchar_t>(0xD800 + (value >> 10));
-				utf16[1] = static_cast<wchar_t>(0xDC00 + (value & 0x3FF));
-				utf16Length = 2;
-			}
-
-			BOOL usedDefaultCharacter = FALSE;
-			return WideCharToMultiByte(1252, WC_NO_BEST_FIT_CHARS, utf16, utf16Length,
-				&converted, 1, nullptr, &usedDefaultCharacter) == 1 && !usedDefaultCharacter;
-		};
-
-		for (auto& codepoint : sanitizedCodepoints)
-		{
-			if (isWhitespace(codepoint)) codepoint = 0x20;
-		}
-
-		std::wstring completeText;
-		for (const auto codepoint : sanitizedCodepoints) appendUtf16(completeText, codepoint);
-
-		bool requiresRightToLeftLayout = false;
-		std::vector<WORD> characterTypes(completeText.size());
-		if (!completeText.empty() && GetStringTypeW(CT_CTYPE2, completeText.data(),
-			static_cast<int>(completeText.size()), characterTypes.data()))
-		{
-			requiresRightToLeftLayout = std::ranges::any_of(characterTypes,
-				[](const WORD type) { return type == C2_RIGHTTOLEFT; });
-		}
-
-		const auto appendRunToken = [](std::string& output, const std::uint32_t runId)
-		{
-			output.push_back('^');
-			output.push_back(UNICODE_RUN_ESCAPE);
-			output.append(std::format("{:08X}", runId));
-		};
-		const auto appendGlyphToken = [](std::string& output, const std::uint32_t codepoint)
-		{
-			output.push_back('^');
-			output.push_back(UNICODE_GLYPH_ESCAPE);
-			output.append(std::format("{:06X}", codepoint));
-		};
-
-		if (requiresRightToLeftLayout)
-		{
-			std::string result;
-			appendRunToken(result, RegisterUnicodeRun(completeText, sanitizedCodepoints.size()));
-			return result;
-		}
-
-		const auto isGraphemeExtend = [&](const std::uint32_t codepoint)
-		{
-			if (codepoint == 0x200C || codepoint == 0x200D
-				|| (codepoint >= 0xFE00 && codepoint <= 0xFE0F)
-				|| (codepoint >= 0x1F3FB && codepoint <= 0x1F3FF)
-				|| (codepoint >= 0xE0020 && codepoint <= 0xE007F)
-				|| (codepoint >= 0xE0100 && codepoint <= 0xE01EF))
-			{
-				return true;
-			}
-
-			std::wstring utf16;
-			appendUtf16(utf16, codepoint);
-			WORD types[2]{};
-			if (!GetStringTypeW(CT_CTYPE3, utf16.data(), static_cast<int>(utf16.size()), types))
-			{
-				return false;
-			}
-
-			for (std::size_t index = 0; index < utf16.size(); ++index)
-			{
-				if (types[index] & (C3_NONSPACING | C3_DIACRITIC | C3_VOWELMARK)) return true;
-			}
-			return false;
-		};
-
-		const auto getClusterEnd = [&](const std::size_t start)
-		{
-			auto end = start + 1;
-			while (end < sanitizedCodepoints.size())
-			{
-				if (isGraphemeExtend(sanitizedCodepoints[end])
-					|| sanitizedCodepoints[end - 1] == 0x200D)
-				{
-					++end;
-					continue;
-				}
-				break;
-			}
-			return end;
-		};
-
-		const auto clusterToWindows1252 = [&](const std::size_t start, const std::size_t end,
-			std::string& convertedText)
-		{
-			convertedText.clear();
-			for (auto index = start; index < end; ++index)
-			{
-				char converted{};
-				if (!convertToWindows1252(sanitizedCodepoints[index], converted)) return false;
-				convertedText.push_back(converted);
-			}
-			return true;
-		};
-
-		std::string result;
-		result.reserve(std::min(text.size(), effectiveMaxCharacters) * 2);
-		for (std::size_t start = 0; start < sanitizedCodepoints.size();)
-		{
-			const auto clusterEnd = getClusterEnd(start);
-			std::string windows1252Text;
-			if (clusterToWindows1252(start, clusterEnd, windows1252Text))
-			{
-				result.append(windows1252Text);
-				start = clusterEnd;
-				continue;
-			}
-			if (clusterEnd == start + 1 && sanitizedCodepoints[start] <= 0xFFFF)
-			{
-				appendGlyphToken(result, sanitizedCodepoints[start]);
-				start = clusterEnd;
-				continue;
-			}
-
-			std::wstring runText;
-			auto runEnd = clusterEnd;
-			for (auto index = start; index < runEnd; ++index)
-			{
-				appendUtf16(runText, sanitizedCodepoints[index]);
-			}
-
-			// Keep adjacent unsupported clusters together so DirectWrite can shape
-			// scripts and emoji sequences, without replacing native game-font text.
-			while (runEnd < sanitizedCodepoints.size())
-			{
-				const auto nextClusterEnd = getClusterEnd(runEnd);
-				if (clusterToWindows1252(runEnd, nextClusterEnd, windows1252Text)) break;
-				for (auto index = runEnd; index < nextClusterEnd; ++index)
-				{
-					appendUtf16(runText, sanitizedCodepoints[index]);
-				}
-				runEnd = nextClusterEnd;
-			}
-
-			appendRunToken(result, RegisterUnicodeRun(runText, runEnd - start));
-			start = runEnd;
-		}
-
-		return result;
+		return std::string(buffer);
 	}
 
 	void TextRenderer::StripMaterialTextIcons(const char* in, char* out, std::size_t max)
 	{
-		if (!in || !out) return;
+		if (!in || !out)
+		{
+			return;
+		}
 
 		--max;
 		std::size_t current = 0;
+
 		while (*in != 0 && current < max)
 		{
-			if (*in == '^' && (in[1] == '\x01' || in[1] == '\x02'))
+			if (IsHudIcon(in))
 			{
-				in += 2;
-
-				if (*in) // width
-				{
-					++in;
-				}
-
-				if (*in) // height
-				{
-					++in;
-				}
-
-				if (*in) // material name length + material name characters
-				{
-					const auto materialNameLength = *in;
-					++in;
-					for (auto i = 0; i < materialNameLength; i++)
-					{
-						if (*in)
-						{
-							++in;
-						}
-					}
-				}
-			}
-			else
-			{
-				*out = *in;
-				++out;
-				++current;
-				++in;
+				in = SkipHudIcon(in);
+				continue;
 			}
 
+			*out = *in;
+			++out;
+			++current;
+			++in;
 		}
 
 		*out = '\0';
@@ -2377,56 +2728,40 @@ namespace Components
 
 	std::string TextRenderer::StripMaterialTextIcons(const std::string& in)
 	{
-		char buffer[1000]{}; // Should be more than enough
+		char buffer[1000]{};
 		StripMaterialTextIcons(in.data(), buffer, sizeof(buffer));
-		return std::string{ buffer };
+
+		return std::string(buffer);
 	}
 
 	void TextRenderer::StripAllTextIcons(const char* in, char* out, std::size_t max)
 	{
-		if (!in || !out) return;
+		if (!in || !out)
+		{
+			return;
+		}
 
 		--max;
 		std::size_t current = 0;
+
 		while (*in != 0 && current < max)
 		{
-			if (*in == '^' && (in[1] == '\x01' || in[1] == '\x02'))
+			if (IsHudIcon(in))
 			{
-				in += 2;
-
-				if (*in) // width
-				{
-					++in;
-				}
-
-				if (*in) // height
-				{
-					++in;
-				}
-
-				if (*in) // material name length + material name characters
-				{
-					const auto materialNameLength = *in;
-					++in;
-					for (auto i = 0; i < materialNameLength; i++)
-					{
-						if (*in)
-						{
-							++in;
-						}
-					}
-				}
-
+				in = SkipHudIcon(in);
 				continue;
 			}
 
-			if (*in == FONT_ICON_SEPARATOR_CHARACTER)
+			if (*in == fontIconSeparator && areFontIconsReady.load(std::memory_order_acquire))
 			{
-				const auto* fontIconEndPos = &in[1];
-				FontIconInfo fontIcon{};
-				if(IsFontIcon(fontIconEndPos, fontIcon))
+				const char* iconEnd = in + 1;
+				FontIcon icon{};
+				bool isFlippedHorizontally = false;
+				bool isBig = false;
+
+				if (TryReadFontIcon(iconEnd, icon, isFlippedHorizontally, isBig))
 				{
-					in = fontIconEndPos;
+					in = iconEnd;
 					continue;
 				}
 			}
@@ -2442,282 +2777,430 @@ namespace Components
 
 	std::string TextRenderer::StripAllTextIcons(const std::string& in)
 	{
-		char buffer[1000]{}; // Should be more than enough
+		char buffer[1000]{};
 		StripAllTextIcons(in.data(), buffer, sizeof(buffer));
-		return std::string{ buffer };
+
+		return std::string(buffer);
 	}
 
-	int TextRenderer::SEH_PrintStrlenWithCursor(const char* string, const Game::field_t* field)
+	unsigned int TextRenderer::DrawText2D_ColorForChar(const char colorChar)
 	{
-		if (!string)
-		{
-			return 0;
-		}
+		UpdateColorTable();
 
-		const auto cursorPos = field->cursor;
-		auto len = 0;
-		auto lenWithInvisibleTail = 0;
-		auto count = 0;
-		const auto* curText = string;
-		while(*curText)
-		{
-			const auto c = Game::SEH_ReadCharFromString(&curText, nullptr);
-			lenWithInvisibleTail = len;
-			if (c == '^')
-			{
-				const char* unicodeEnd = curText;
-				std::uint32_t value{};
-				if (ParseUnicodeGlyphEscape(unicodeEnd, value))
-				{
-					curText = unicodeEnd;
-					++len;
-					count += static_cast<int>(UNICODE_GLYPH_HEX_LENGTH + 2);
-					lenWithInvisibleTail = len;
-					continue;
-				}
-
-				unicodeEnd = curText;
-				if (ParseUnicodeRunEscape(unicodeEnd, value))
-				{
-					curText = unicodeEnd;
-					len += static_cast<int>(GetUnicodeRunCharacterCount(value));
-					count += static_cast<int>(UNICODE_RUN_ID_HEX_LENGTH + 2);
-					lenWithInvisibleTail = len;
-					continue;
-				}
-			}
-
-			if (c == '^' && *curText >= COLOR_FIRST_CHAR && *curText <= COLOR_LAST_CHAR && !(cursorPos > count && cursorPos < count + 2))
-			{
-				++curText;
-				++count;
-			}
-			else if(c != '\r' && c != '\n')
-			{
-				++len;
-			}
-
-			++count;
-			++lenWithInvisibleTail;
-		}
-
-		return lenWithInvisibleTail;
+		return (*currentColorTable)[ColorIndex(colorChar)];
 	}
 
-	__declspec(naked) void TextRenderer::Field_AdjustScroll_PrintLen_Stub()
+	void TextRenderer::Dvar_GetUnpackedColorByName_Hook(const char* name, float* expandedColor)
 	{
-		__asm
+		if (r_colorBlind && r_colorBlind->current.enabled && g_ColorBlind_EnemyTeam && g_ColorBlind_MyTeam)
 		{
-			push eax
-			pushad
+			const Game::dvar_t* replacement = nullptr;
 
-			push esi
-			push [esp + 0x8 + 0x24]
-			call SEH_PrintStrlenWithCursor
-			add esp, 0x8
-			mov [esp + 0x20], eax
-
-			popad
-			pop eax
-			ret
-		}
-	}
-
-	void TextRenderer::PatchColorLimit(const char limit)
-	{
-		Utils::Hook::Set<char>(0x535629, limit); // DrawText2d
-		Utils::Hook::Set<char>(0x4C1BE4, limit); // SEH_PrintStrlen
-		Utils::Hook::Set<char>(0x4863DD, limit); // No idea
-		Utils::Hook::Set<char>(0x486429, limit); // No idea
-		Utils::Hook::Set<char>(0x49A5A8, limit); // No idea
-		Utils::Hook::Set<char>(0x505721, limit); // R_TextWidth
-		Utils::Hook::Set<char>(0x505801, limit); // No idea
-		Utils::Hook::Set<char>(0x50597F, limit); // No idea
-		Utils::Hook::Set<char>(0x5815DB, limit); // No idea
-		Utils::Hook::Set<char>(0x592ED0, limit); // No idea
-		Utils::Hook::Set<char>(0x5A2E2E, limit); // No idea
-
-		Utils::Hook::Set<char>(0x5A2733, static_cast<char>(ColorIndexForChar(limit))); // No idea
-	}
-
-	// Patches team overhead normally
-	bool TextRenderer::Dvar_GetUnpackedColorByName(const char* name, float* expandedColor)
-	{
-		if (r_colorBlind.get<bool>())
-		{
 			if (std::strcmp(name, "g_TeamColor_EnemyTeam") == 0)
 			{
-				// Dvar_GetUnpackedColor
-				const auto* colorblindEnemy = g_ColorBlind_EnemyTeam->current.color;
-				expandedColor[0] = static_cast<float>(colorblindEnemy[0]) / 255.0f;
-				expandedColor[1] = static_cast<float>(colorblindEnemy[1]) / 255.0f;
-				expandedColor[2] = static_cast<float>(colorblindEnemy[2]) / 255.0f;
-				expandedColor[3] = static_cast<float>(colorblindEnemy[3]) / 255.0f;
-				return false;
+				replacement = g_ColorBlind_EnemyTeam;
 			}
-
-			if (std::strcmp(name, "g_TeamColor_MyTeam") == 0)
+			else if (std::strcmp(name, "g_TeamColor_MyTeam") == 0)
 			{
-				// Dvar_GetUnpackedColor
-				const auto* colorblindAlly = g_ColorBlind_MyTeam->current.color;
-				expandedColor[0] = static_cast<float>(colorblindAlly[0]) / 255.0f;
-				expandedColor[1] = static_cast<float>(colorblindAlly[1]) / 255.0f;
-				expandedColor[2] = static_cast<float>(colorblindAlly[2]) / 255.0f;
-				expandedColor[3] = static_cast<float>(colorblindAlly[3]) / 255.0f;
-				return false;
+				replacement = g_ColorBlind_MyTeam;
+			}
+
+			if (replacement)
+			{
+				for (int i = 0; i < 4; ++i)
+				{
+					expandedColor[i] = static_cast<float>(replacement->current.color[i]) / 255.0f;
+				}
+
+				return;
 			}
 		}
 
-		return true;
+		reinterpret_cast<void(*)(const char*, float*)>(unpackedColorHooks[0].GetOriginal())(name, expandedColor);
 	}
 
-	__declspec(naked) void TextRenderer::GetUnpackedColorByNameStub()
+	void TextRenderer::RegisterDvars()
 	{
-		__asm
-		{
-			push [esp + 8h]
-			push [esp + 8h]
-			call TextRenderer::Dvar_GetUnpackedColorByName
-			add esp, 8h
+		const auto registerColor = reinterpret_cast<Game::dvar_t*(*)(const char*, float, float, float, float, unsigned int, const char*)>(
+			Utils::Hook::Rebase(Dvar_RegisterColor));
 
-			test al, al
-			jnz continue
-
-			retn
-
-		continue:
-			push edi
-			mov edi, [esp + 8h]
-			push 406535h
-			retn
-		}
+		cg_newColors = Dvar::Register("cg_newColors", true, Game::DVAR_ARCHIVE, "Use Warfare 2 color code style.").Get();
+		sv_customTextColor = registerColor("sv_customTextColor", 1.0f, 0.7f, 0.0f, 1.0f, Game::DVAR_CODINFO, "Color for the extended color code.");
+		r_colorBlind = Dvar::Register("r_colorBlind", false, Game::DVAR_ARCHIVE, "Use color-blindness-friendly colors").Get();
+		g_ColorBlind_EnemyTeam = registerColor("g_ColorBlind_EnemyTeam", 0.659f, 0.088f, 0.145f, 1.0f, Game::DVAR_ARCHIVE, "Enemy team color for colorblind mode");
+		g_ColorBlind_MyTeam = registerColor("g_ColorBlind_MyTeam", 1.0f, 0.859f, 0.125f, 1.0f, Game::DVAR_ARCHIVE, "Ally team color for colorblind mode");
 	}
 
-	void TextRenderer::UpdateColorTable()
+	void TextRenderer::RegisterAutocompleteDvars()
 	{
-		if (cg_newColors.get<bool>())
-			currentColorTable = &colorTableNew;
-		else
-			currentColorTable = &colorTableDefault;
-
-		(*currentColorTable)[TEXT_COLOR_AXIS] = *reinterpret_cast<unsigned*>(0x66E5F70);
-		(*currentColorTable)[TEXT_COLOR_ALLIES] = *reinterpret_cast<unsigned*>(0x66E5F74);
-		(*currentColorTable)[TEXT_COLOR_RAINBOW] = HsvToRgb({ static_cast<uint8_t>((Game::Sys_Milliseconds() / 200) % 256), 255,255 });
-		(*currentColorTable)[TEXT_COLOR_SERVER] = sv_customTextColor->current.unsignedInt;
+		cg_fontIconAutocomplete = Dvar::Register("cg_fontIconAutocomplete", true, Game::DVAR_ARCHIVE, "Show autocomplete for fonticons when typing.").Get();
+		cg_fontIconAutocompleteHint = Dvar::Register("cg_fontIconAutocompleteHint", true, Game::DVAR_ARCHIVE, "Show hint text in autocomplete for fonticons.").Get();
 	}
 
 	void TextRenderer::InitFontIconStrings()
 	{
+		const char modifierSeparator[] = { fontIconModifierSeparator, '\0' };
+		const char flipHorizontally[] = { fontIconFlipHorizontally, '\0' };
+		const char flipVertically[] = { fontIconFlipVertically, '\0' };
+		const char big[] = { fontIconBig, '\0' };
+
 		stringHintAutoComplete.Format("TAB");
-		stringHintModifier.Format(Utils::String::VA("%c", FONT_ICON_MODIFIER_SEPARATOR_CHARACTER));
+		stringHintModifier.Format(modifierSeparator);
 		stringListHeader.Cache();
-		stringListFlipHorizontal.Format(Utils::String::VA("%c", FONT_ICON_MODIFIER_FLIP_HORIZONTALLY));
-		stringListFlipVertical.Format(Utils::String::VA("%c", FONT_ICON_MODIFIER_FLIP_VERTICALLY));
-		stringListBig.Format(Utils::String::VA("%c", FONT_ICON_MODIFIER_BIG));
+		stringListFlipHorizontal.Format(flipHorizontally);
+		stringListFlipVertical.Format(flipVertically);
+		stringListBig.Format(big);
 	}
 
-	void TextRenderer::InitFontIcons()
+	std::string TextRenderer::EncodeUtf8ForGame(const std::string_view text, const std::size_t maxCharacters)
 	{
-		InitFontIconStrings();
-
-		fontIconList.clear();
-		fontIconLookup.clear();
-
-		const auto fontIconTable = Game::DB_FindXAssetHeader(Game::ASSET_TYPE_STRINGTABLE, "mp/fonticons.csv").stringTable;
-
-		if (fontIconTable->columnCount < 2 || fontIconTable->rowCount <= 0)
+		if (text.empty() || maxCharacters == 0 || text.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
 		{
-			Logger::Error(Game::ERR_FATAL, "\x15" "Failed to load mp/fonticons.csv");
-			return;
+			return {};
 		}
 
-		fontIconList.reserve(fontIconTable->rowCount);
-		for (auto rowIndex = 0; rowIndex < fontIconTable->rowCount; rowIndex++)
+		const auto textLength = static_cast<int>(text.size());
+		const auto wideLength = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), textLength, nullptr, 0);
+
+		if (wideLength <= 0)
 		{
-			const auto* columns = &fontIconTable->values[rowIndex * fontIconTable->columnCount];
+			return {};
+		}
 
-			if(columns[0].string == nullptr || columns[1].string == nullptr)
-				continue;
+		std::wstring wideText(static_cast<std::size_t>(wideLength), L'\0');
 
-			if (columns[0].string[0] == '\0' || columns[1].string[1] == '\0')
-				continue;
+		if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), textLength, wideText.data(), wideLength) != wideLength)
+		{
+			return {};
+		}
 
-			if (columns[0].string[0] == '#')
-				continue;
+		const auto characterLimit = std::min(maxCharacters, encodedCharacterLimit);
 
-			FontIconTableEntry entry
+		std::vector<std::uint32_t> codepoints;
+		codepoints.reserve(std::min(wideText.size(), characterLimit));
+
+		for (std::size_t i = 0; i < wideText.size() && codepoints.size() < characterLimit;)
+		{
+			std::uint32_t codepoint = static_cast<std::uint16_t>(wideText[i]);
+			std::size_t unitCount = 1;
+
+			if (codepoint >= 0xD800 && codepoint <= 0xDBFF && i + 1 < wideText.size())
 			{
-				columns[0].string,
-				columns[1].string,
-				nullptr
-			};
+				const auto trailing = static_cast<std::uint32_t>(static_cast<std::uint16_t>(wideText[i + 1]));
 
-			fontIconList.emplace_back(entry);
-			fontIconLookup.emplace(std::make_pair(entry.iconName, entry));
+				if (trailing >= 0xDC00 && trailing <= 0xDFFF)
+				{
+					codepoint = 0x10000 + ((codepoint - 0xD800) << 10) + (trailing - 0xDC00);
+					unitCount = 2;
+				}
+			}
+
+			i += unitCount;
+
+			if (!IsDroppedCodepoint(codepoint))
+			{
+				codepoints.push_back(codepoint);
+			}
 		}
 
-		std::ranges::sort(fontIconList, [](const FontIconTableEntry& a, const FontIconTableEntry& b) -> bool
+		std::vector<std::uint32_t> clean;
+		clean.reserve(codepoints.size());
+
+		for (std::size_t i = 0; i < codepoints.size(); ++i)
 		{
-			return a.iconName < b.iconName;
-		});
+			const bool isColorCode = codepoints[i] == '^' && i + 1 < codepoints.size()
+				&& codepoints[i + 1] >= static_cast<std::uint32_t>(colorFirstChar)
+				&& codepoints[i + 1] <= static_cast<std::uint32_t>(colorLastChar);
+
+			if (isColorCode)
+			{
+				++i;
+				continue;
+			}
+
+			if (IsUnicodeWhitespace(codepoints[i]))
+			{
+				clean.push_back(0x20);
+			}
+			else
+			{
+				clean.push_back(codepoints[i]);
+			}
+		}
+
+		std::string result;
+		const bool canEscape = areUnicodeEscapesDrawn.load(std::memory_order_acquire);
+
+		if (canEscape)
+		{
+			std::wstring wholeText;
+
+			for (const auto codepoint : clean)
+			{
+				AppendUtf16(wholeText, codepoint);
+			}
+
+			std::vector<WORD> types(wholeText.size());
+			bool isRightToLeft = false;
+
+			if (!wholeText.empty() && GetStringTypeW(CT_CTYPE2, wholeText.data(), static_cast<int>(wholeText.size()), types.data()))
+			{
+				isRightToLeft = std::ranges::find(types, static_cast<WORD>(C2_RIGHTTOLEFT)) != types.end();
+			}
+
+			std::uint32_t runId = 0;
+
+			if (isRightToLeft)
+			{
+				runId = RegisterUnicodeRun(wholeText);
+			}
+
+			if (runId)
+			{
+				result.push_back(inlineIconEscape);
+				result.push_back(unicodeRunEscape);
+				result.append(std::format("{:08X}", runId));
+				return result;
+			}
+		}
+
+		result.reserve(clean.size());
+
+		std::string cluster;
+
+		for (std::size_t start = 0; start < clean.size();)
+		{
+			const auto end = ClusterEnd(clean, start);
+
+			if (TryConvertCluster(clean, start, end, cluster))
+			{
+				result.append(cluster);
+				start = end;
+				continue;
+			}
+
+			if (!canEscape)
+			{
+				start = end;
+				continue;
+			}
+
+			if (end == start + 1 && clean[start] <= 0xFFFF)
+			{
+				result.push_back(inlineIconEscape);
+				result.push_back(unicodeGlyphEscape);
+				result.append(std::format("{:06X}", clean[start]));
+				start = end;
+				continue;
+			}
+
+			auto runEnd = end;
+
+			while (runEnd < clean.size())
+			{
+				const auto nextEnd = ClusterEnd(clean, runEnd);
+
+				if (TryConvertCluster(clean, runEnd, nextEnd, cluster))
+				{
+					break;
+				}
+
+				runEnd = nextEnd;
+			}
+
+			std::wstring runText;
+
+			for (auto i = start; i < runEnd; ++i)
+			{
+				AppendUtf16(runText, clean[i]);
+			}
+
+			const auto runId = RegisterUnicodeRun(runText);
+
+			if (runId)
+			{
+				result.push_back(inlineIconEscape);
+				result.push_back(unicodeRunEscape);
+				result.append(std::format("{:08X}", runId));
+			}
+			else
+			{
+				result.push_back('?');
+			}
+
+			start = runEnd;
+		}
+
+		return result;
 	}
 
 	TextRenderer::TextRenderer()
 	{
-		currentColorTable = &colorTableDefault;
+		bool areFontIconsOn = false;
 
-		cg_newColors = Dvar::Register<bool>("cg_newColors", true, Game::DVAR_ARCHIVE, "Use Warfare 2 color code style.");
-		cg_fontIconAutocomplete = Dvar::Register<bool>("cg_fontIconAutocomplete", true, Game::DVAR_ARCHIVE, "Show autocomplete for fonticons when typing.");
-		cg_fontIconAutocompleteHint = Dvar::Register<bool>("cg_fontIconAutocompleteHint", true, Game::DVAR_ARCHIVE, "Show hint text in autocomplete for fonticons.");
-		sv_customTextColor = Game::Dvar_RegisterColor("sv_customTextColor", 1, 0.7f, 0, 1, Game::DVAR_CODINFO, "Color for the extended color code.");
+		bool areUnloadCallsIntact = true;
 
-		// Initialize font icons when initializing UI
-		Components::Events::AfterUIInit(InitFontIcons);
-		Renderer::OnBackendFrame(BuildPendingUnicodeGlyphs);
-		Renderer::OnBackendFrame(BuildPendingUnicodeRuns);
-		Renderer::OnDeviceRecoveryBegin([]
+		for (const auto call : DB_UnloadXZoneCalls)
 		{
-			std::lock_guard lock(UnicodeRunMutex);
-			UnicodeGlyphCache.clear();
-			PendingUnicodeGlyphs.clear();
-			UnicodeRunCache.clear();
-			PendingUnicodeRuns.clear();
-		});
+			areUnloadCallsIntact = areUnloadCallsIntact && Utils::Hook::BranchesTo(call, DB_UnloadXZone, HOOK_CALL);
+		}
 
-		// Replace vanilla text drawing function with a reimplementation with extensions
-		Utils::Hook(0x535410, DrawText2D, HOOK_JUMP).install()->quick();
+		if (Utils::Hook::MatchesBytes(R_TextWidth_Entry, textWidthEntry, sizeof(textWidthEntry))
+			&& Utils::Hook::MatchesBytes(DrawText2DCall, drawText2DCall, sizeof(drawText2DCall))
+			&& areUnloadCallsIntact)
+		{
+			bool isSeated = textWidthHook.Initialize(R_TextWidth_Entry, reinterpret_cast<void*>(R_TextWidth), HOOK_JUMP)->Install()->IsInstalled();
+			isSeated = drawText2DHook.Initialize(DrawText2DCall, reinterpret_cast<void*>(DrawText2D_Hook), HOOK_CALL)->Install()->IsInstalled() && isSeated;
 
-		// Consider material text icons and font icons when calculating text width
-		Utils::Hook(0x5056C0, R_TextWidth_Hk, HOOK_JUMP).install()->quick();
+			for (std::size_t i = 0; i < std::size(DB_UnloadXZoneCalls); ++i)
+			{
+				isSeated = unloadHooks[i].Initialize(DB_UnloadXZoneCalls[i], reinterpret_cast<void*>(DB_UnloadXZone_Hk), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+			}
 
-		// Patch ColorIndex
-		Utils::Hook(0x417770, ColorIndex, HOOK_JUMP).install()->quick();
+			if (isSeated)
+			{
+				textWidthHook.Quick();
+				drawText2DHook.Quick();
 
-		// Add a colorblind mode for team colors
-		r_colorBlind = Dvar::Register<bool>("r_colorBlind", false, Game::DVAR_ARCHIVE, "Use color-blindness-friendly colors");
-		// A dark red
-		g_ColorBlind_EnemyTeam = Game::Dvar_RegisterColor("g_ColorBlind_EnemyTeam", 0.659f, 0.088f, 0.145f, 1, Game::DVAR_ARCHIVE, "Enemy team color for colorblind mode");
-		// A bright yellow
-		g_ColorBlind_MyTeam = Game::Dvar_RegisterColor("g_ColorBlind_MyTeam", 1, 0.859f, 0.125f, 1, Game::DVAR_ARCHIVE, "Ally team color for colorblind mode");
+				for (auto& hook : unloadHooks)
+				{
+					hook.Quick();
+				}
 
-		// Replace team colors with colorblind team colors when colorblind is enabled
-		Utils::Hook(0x406530, GetUnpackedColorByNameStub, HOOK_JUMP).install()->quick();
+				areFontIconsOn = true;
+				Events::AfterUIInit(InitFontIcons);
 
-		// Consider the cursor being inside the color escape sequence when getting the print length for a field
-		Utils::Hook(0x488CBD, Field_AdjustScroll_PrintLen_Stub, HOOK_CALL).install()->quick();
+				Renderer::OnBackendFrame(BuildUnicodeTexts);
+				Renderer::OnDeviceRecoveryBegin(DropUnicodeTextures);
+				areUnicodeEscapesDrawn.store(true, std::memory_order_release);
+			}
+			else
+			{
+				textWidthHook.Uninstall();
+				drawText2DHook.Uninstall();
 
-		// Draw fonticon autocompletion for say field
-		Utils::Hook(0x4CA1BD, Field_Draw_Say, HOOK_CALL).install()->quick();
+				for (auto& hook : unloadHooks)
+				{
+					hook.Uninstall();
+				}
 
-		// Draw fonticon autocompletion for console field
-		Utils::Hook(0x5A50A5, Con_DrawInput_Hk, HOOK_CALL).install()->quick();
-		Utils::Hook(0x5A50BB, Con_DrawInput_Hk, HOOK_CALL).install()->quick();
+				Logger::Error("textrenderer: could not seat the font icon hooks, font icons are off\n");
+			}
+		}
+		else
+		{
+			Logger::Error("textrenderer: the text drawing code does not read as expected, font icons are off\n");
+		}
 
-		// Handle key inputs for console and chat
-		Utils::Hook(0x4F685C, Console_Key_Hk, HOOK_CALL).install()->quick();
-		Utils::Hook(0x4F6694, Message_Key_Stub, HOOK_CALL).install()->quick();
-		Utils::Hook(0x4F684C, Message_Key_Stub, HOOK_CALL).install()->quick();
+		if (areFontIconsOn)
+		{
+			Scheduler::Once(RegisterAutocompleteDvars, Scheduler::Pipeline::MAIN);
 
-		PatchColorLimit(COLOR_LAST_CHAR);
+			bool isChatExpected = Utils::Hook::MatchesBytes(Con_DrawSay_Field_DrawCall, fieldDrawCall, sizeof(fieldDrawCall));
+
+			for (std::size_t i = 0; i < std::size(CL_KeyEvent_Message_KeyCalls); ++i)
+			{
+				isChatExpected = isChatExpected && Utils::Hook::MatchesBytes(CL_KeyEvent_Message_KeyCalls[i], messageKeyCallBytes[i], sizeof(messageKeyCallBytes[i]));
+			}
+
+			if (isChatExpected)
+			{
+				bool isChatSeated = fieldDrawSayHook.Initialize(Con_DrawSay_Field_DrawCall, reinterpret_cast<void*>(Field_Draw_Say), HOOK_CALL)->Install()->IsInstalled();
+
+				for (std::size_t i = 0; i < std::size(CL_KeyEvent_Message_KeyCalls); ++i)
+				{
+					isChatSeated = messageKeyHooks[i].Initialize(CL_KeyEvent_Message_KeyCalls[i], reinterpret_cast<void*>(Message_Key_Hook), HOOK_CALL)
+						->Install()->IsInstalled() && isChatSeated;
+				}
+
+				if (isChatSeated)
+				{
+					fieldDrawSayHook.Quick();
+
+					for (auto& hook : messageKeyHooks)
+					{
+						hook.Quick();
+					}
+				}
+				else
+				{
+					fieldDrawSayHook.Uninstall();
+
+					for (auto& hook : messageKeyHooks)
+					{
+						hook.Uninstall();
+					}
+
+					Logger::Error("textrenderer: could not seat the chat hooks, no font icon autocomplete in chat\n");
+				}
+			}
+			else
+			{
+				Logger::Error("textrenderer: the chat code does not read as expected, no font icon autocomplete in chat\n");
+			}
+		}
+
+		bool isExpected = Utils::Hook::MatchesBytes(ColorIndex_Entry, colorIndexEntry, sizeof(colorIndexEntry))
+			&& Utils::Hook::MatchesBytes(DrawText2D_ColorLookup, colorLookup, sizeof(colorLookup))
+			&& Utils::Hook::MatchesBytes(Field_AdjustScroll_BufferArgument, printStrlenCall, sizeof(printStrlenCall));
+
+		for (const auto& site : colorLimitSites)
+		{
+			isExpected = isExpected && Utils::Hook::MatchesBytes(site.instruction, site.bytes, site.length);
+		}
+
+		for (std::size_t i = 0; i < std::size(Dvar_GetUnpackedColorByNameCalls); ++i)
+		{
+			isExpected = isExpected && Utils::Hook::MatchesBytes(Dvar_GetUnpackedColorByNameCalls[i], unpackedColorCallBytes[i], sizeof(unpackedColorCallBytes[i]));
+		}
+
+		if (!isExpected)
+		{
+			Logger::Error("textrenderer: the text code does not read as expected, colour codes stay at ^9\n");
+			return;
+		}
+
+		bool isSeated = colorIndexHook.Initialize(ColorIndex_Entry, reinterpret_cast<void*>(ColorIndex), HOOK_JUMP)->Install()->IsInstalled();
+		isSeated = colorLookupHook.Initialize(DrawText2D_ColorIndexCall, reinterpret_cast<void*>(DrawText2D_ColorForChar), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+		isSeated = printLenHook.Initialize(Field_AdjustScroll_SEH_PrintStrlenCall, reinterpret_cast<void*>(Field_AdjustScroll_PrintLen), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+
+		for (std::size_t i = 0; i < std::size(Dvar_GetUnpackedColorByNameCalls); ++i)
+		{
+			isSeated = unpackedColorHooks[i].Initialize(Dvar_GetUnpackedColorByNameCalls[i], reinterpret_cast<void*>(Dvar_GetUnpackedColorByName_Hook), HOOK_CALL)
+				->Install()->IsInstalled() && isSeated;
+		}
+
+		if (!isSeated)
+		{
+			colorIndexHook.Uninstall();
+			colorLookupHook.Uninstall();
+			printLenHook.Uninstall();
+
+			for (auto& hook : unpackedColorHooks)
+			{
+				hook.Uninstall();
+			}
+
+			Logger::Error("textrenderer: could not seat the colour hooks, colour codes stay at ^9\n");
+			return;
+		}
+
+		colorIndexHook.Quick();
+		colorLookupHook.Quick();
+		printLenHook.Quick();
+
+		for (auto& hook : unpackedColorHooks)
+		{
+			hook.Quick();
+		}
+
+		Utils::Hook::Set<std::uint16_t>(DrawText2D_AfterColorIndex, jumpToColorApplied);
+
+		for (const auto& site : colorLimitSites)
+		{
+			Utils::Hook::Set<std::uint8_t>(site.instruction + site.length - 1, static_cast<std::uint8_t>(TEXT_COLOR_COUNT - 1));
+		}
+
+		Scheduler::Once(RegisterDvars, Scheduler::Pipeline::MAIN);
 	}
 }

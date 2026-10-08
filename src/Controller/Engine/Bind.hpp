@@ -1,60 +1,41 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Context.hpp"
-#include "Dvar.hpp"
+#include "Controller/Context.hpp"
+#include "Controller/Engine/Dvar.hpp"
 
-namespace Controller
+namespace Controller::Engine
 {
-  namespace engine
-  {
-    class bind_bridge
-    {
-    public:
-      bind_bridge (const context&, const dvars&);
+	class BindBridge
+	{
+	public:
+		BindBridge(const Context& context, const Dvars& dvars);
 
-      void
-      apply_layout (std::string_view name);
+		void ApplyLayout(std::string_view name);
+		void ApplyConfiguredLayout();
+		void ApplyStartupLayout();
+		void PollConfiguredLayout();
+		void ReapplyLayout();
 
-      void
-      apply_configured_layout ();
+		void NoteManualRebind();
 
-      void
-      apply_startup_layout ();
+		static std::size_t CommandKeys(int client, bool isControllerInUse, const char* command, int (&keys)[2]);
 
-      void
-      poll_configured_layout ();
+	private:
+		void InstallConfiguredLayout(bool shouldKeepConfigBindings);
+		void MigrateControllerCommands();
+		bool AreBindingsCustomized() const;
 
-      void
-      reapply_layout ();
+		const Context& context;
+		const Dvars& dvars;
 
-      void
-      note_manual_rebind () noexcept;
+		std::string applied;
+	};
 
-      static size_t
-      command_keys (int client,
-                    bool controller_in_use,
-                    const char* command,
-                    int (&keys_out)[2]) noexcept;
+	const char* ControllerCommandFor(const char* command) noexcept;
 
-    private:
-      void
-      install_configured_layout (bool keep_config_bindings);
+	int ControllerBindingFor(int binding);
 
-      void
-      migrate_controller_commands ();
-
-      bool
-      bindings_customized () const;
-
-      const context& ctx_;
-      const dvars& dvars_;
-
-      std::string applied_;
-    };
-
-    const char*
-    controller_command_for (const char* command) noexcept;
-  }
+	int BindingForBindCommand(int key, const char* command);
 }

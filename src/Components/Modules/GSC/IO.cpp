@@ -1,24 +1,27 @@
-
-#include <Components/Modules/Events.hpp>
+#include "STDInclude.hpp"
 
 #include "IO.hpp"
 #include "Script.hpp"
+#include "../Events.hpp"
+#include "../Logger.hpp"
 
 namespace Components::GSC
 {
-	const char* IO::ForbiddenStrings[] = { R"(..)", R"(../)", R"(..\)" };
+	const char* IO::forbiddenStrings[] = { R"(..)", R"(../)", R"(..\)" };
 
 	FILE* IO::openScriptIOFileHandle;
 
-	std::filesystem::path IO::DefaultDestPath;
+	constexpr std::uintptr_t openFileEntry = 0x140423278;
+	constexpr std::uintptr_t closeFileEntry = 0x140423290;
+	constexpr std::uintptr_t emptyBuiltin = 0x140080E50;
 
 	bool IO::ValidatePath(const char* function, const char* path)
 	{
-		for (std::size_t i = 0; i < std::extent_v<decltype(ForbiddenStrings)>; ++i)
+		for (std::size_t i = 0; i < std::extent_v<decltype(forbiddenStrings)>; ++i)
 		{
-			if (std::strstr(path, ForbiddenStrings[i]) != nullptr)
+			if (std::strstr(path, forbiddenStrings[i]) != nullptr)
 			{
-				Logger::PrintError(Game::CON_CHANNEL_PARSERSCRIPT, "{}: directory traversal is not allowed!\n", function);
+				Logger::Error("{}: directory traversal is not allowed!\n", function);
 				return false;
 			}
 		}
@@ -29,23 +32,23 @@ namespace Components::GSC
 	std::filesystem::path IO::BuildPath(const char* path)
 	{
 		std::string spath = path;
+
 		if (!spath.starts_with(Game::SCRIPTDATA_DIR + "/"s) && !spath.starts_with(Game::SCRIPTDATA_DIR + "\\"s))
 		{
 			spath = Game::SCRIPTDATA_DIR + "/"s + spath;
 		}
 
-		std::filesystem::path coreRoot;
-		if (const auto basePath = Utils::GetBaseFilesLocation(); !basePath.empty())
+		std::filesystem::path coreRoot = Utils::GetBaseFilesLocation();
+
+		if (coreRoot.empty())
 		{
-			coreRoot = std::filesystem::path(basePath) / "zw3" / "core";
-		}
-		else
-		{
-			coreRoot = std::filesystem::current_path() / "zw3" / "core";
+			coreRoot = std::filesystem::current_path();
 		}
 
-		std::error_code ec;
-		std::filesystem::create_directories(coreRoot / Game::SCRIPTDATA_DIR, ec);
+		coreRoot = coreRoot / "zw3" / "core";
+
+		std::error_code error;
+		std::filesystem::create_directories(coreRoot / Game::SCRIPTDATA_DIR, error);
 
 		return coreRoot / spath;
 	}
@@ -63,14 +66,14 @@ namespace Components::GSC
 
 		if (mode != "read"s)
 		{
-			Logger::PrintError(Game::CON_CHANNEL_PARSERSCRIPT, "Valid openfile modes are 'read'\n");
+			Logger::Error("Valid openfile modes are 'read'\n");
 			Game::Scr_AddInt(-1);
 			return;
 		}
 
 		if (openScriptIOFileHandle)
 		{
-			Logger::PrintError(Game::CON_CHANNEL_PARSERSCRIPT, "OpenFile failed. {} files already open\n", 1);
+			Logger::Error("OpenFile failed. {} files already open\n", 1);
 			Game::Scr_AddInt(-1);
 			return;
 		}
@@ -79,9 +82,10 @@ namespace Components::GSC
 
 		_set_errno(0);
 		const auto result = fopen_s(&openScriptIOFileHandle, dest.string().data(), "r");
+
 		if (result || !openScriptIOFileHandle)
 		{
-			Logger::PrintError(Game::CON_CHANNEL_PARSERSCRIPT, "OpenFile failed. '{}'", result);
+			Logger::Error("OpenFile failed. '{}'", result);
 			Game::Scr_AddInt(-1);
 			return;
 		}
@@ -93,22 +97,23 @@ namespace Components::GSC
 	{
 		if (!openScriptIOFileHandle)
 		{
-			Logger::PrintError(Game::CON_CHANNEL_PARSERSCRIPT, "ReadStream failed. File stream was not opened\n");
+			Logger::Error("ReadStream failed. File stream was not opened\n");
 			return;
 		}
 
 		char line[1024]{};
+
 		if (std::fgets(line, sizeof(line), openScriptIOFileHandle) != nullptr)
 		{
 			Game::Scr_AddString(line);
 			return;
 		}
 
-		Logger::Warning(Game::CON_CHANNEL_PARSERSCRIPT, "ReadStream failed.\n");
+		Logger::Warning("ReadStream failed.\n");
 
 		if (std::feof(openScriptIOFileHandle))
 		{
-			Logger::Print(Game::CON_CHANNEL_PARSERSCRIPT, "ReadStream: EOF reached\n");
+			Logger::Print("ReadStream: EOF reached\n");
 		}
 	}
 
@@ -116,7 +121,7 @@ namespace Components::GSC
 	{
 		if (!openScriptIOFileHandle)
 		{
-			Logger::PrintError(Game::CON_CHANNEL_PARSERSCRIPT, "CloseFile failed. File stream was not opened\n");
+			Logger::Error("CloseFile failed. File stream was not opened\n");
 			Game::Scr_AddInt(-1);
 			return;
 		}
@@ -127,172 +132,188 @@ namespace Components::GSC
 
 	void IO::AddScriptFunctions()
 	{
-		Script::AddFunction("FileWrite", [] // gsc: FileWrite(<filepath>, <string>, <mode>)
+		Script::AddFunction("FileWrite", []
+		{
+			const auto* filepath = Game::Scr_GetString(0);
+			const auto* text = Game::Scr_GetString(1);
+			const auto* mode = Game::Scr_GetString(2);
+
+			if (!ValidatePath("FileWrite", filepath))
 			{
-				const auto* filepath = Game::Scr_GetString(0);
-				const auto* text = Game::Scr_GetString(1);
-				const auto* mode = Game::Scr_GetString(2);
+				return;
+			}
 
-				if (!ValidatePath("FileWrite", filepath))
-				{
-					return;
-				}
-
-				if (mode != "append"s && mode != "write"s)
-				{
-					Logger::Warning(Game::CON_CHANNEL_PARSERSCRIPT, "FileWrite: mode not defined or was wrong, defaulting to 'write'\n");
-					mode = "write";
-				}
-
-				const auto append = mode == "append"s;
-				const auto dest = BuildPath(filepath);
-				Utils::IO::WriteFile(dest.string(), text, append);
-			});
-
-		Script::AddFunction("FileRead", [] // gsc: FileRead(<filepath>)
+			if (mode != "append"s && mode != "write"s)
 			{
-				const auto* filepath = Game::Scr_GetString(0);
-				if (!ValidatePath("FileRead", filepath))
-				{
-					return;
-				}
+				Logger::Warning("FileWrite: mode not defined or was wrong, defaulting to 'write'\n");
+				mode = "write";
+			}
 
-				const auto dest = BuildPath(filepath);
+			const auto append = mode == "append"s;
+			const auto dest = BuildPath(filepath);
+			Utils::IO::WriteFile(dest.string(), text, append);
+		});
 
-				std::string file;
-				if (!Utils::IO::ReadFile(dest.string(), &file))
-				{
-					Logger::PrintError(Game::CON_CHANNEL_PARSERSCRIPT, "FileRead: file '{}' not found!\n", dest.string());
-					return;
-				}
+		Script::AddFunction("FileRead", []
+		{
+			const auto* filepath = Game::Scr_GetString(0);
 
-				file = file.substr(0, (1 << 16) - 1); // 65535 is the max string size for the SL system
-				Game::Scr_AddString(file.data());
-			});
-
-		Script::AddFunction("FileExists", [] // gsc: FileExists(<filepath>)
+			if (!ValidatePath("FileRead", filepath))
 			{
-				const auto* filepath = Game::Scr_GetString(0);
-				if (!ValidatePath("FileExists", filepath))
-				{
-					return;
-				}
+				return;
+			}
 
-				const auto dest = BuildPath(filepath);
-				Game::Scr_AddBool(Utils::IO::FileExists(dest.string()));
-			});
+			const auto dest = BuildPath(filepath);
 
-		Script::AddFunction("FileRemove", [] // gsc: FileRemove(<filepath>)
+			std::string file;
+
+			if (!Utils::IO::ReadFile(dest.string(), &file))
 			{
-				const auto* filepath = Game::Scr_GetString(0);
-				if (!ValidatePath("FileRemove", filepath))
-				{
-					return;
-				}
+				Logger::Error("FileRead: file '{}' not found!\n", dest.string());
+				return;
+			}
 
-				const auto dest = BuildPath(filepath);
-				Game::Scr_AddBool(Utils::IO::RemoveFile(dest.string()));
-			});
+			file = file.substr(0, (1 << 16) - 1);
+			Game::Scr_AddString(file.data());
+		});
 
-		Script::AddFunction("FileRename", [] // gsc: FileRename(<filepath>, <filepath>)
+		Script::AddFunction("FileExists", []
+		{
+			const auto* filepath = Game::Scr_GetString(0);
+
+			if (!ValidatePath("FileExists", filepath))
 			{
-				const auto* filepath = Game::Scr_GetString(0);
-				const auto* destpath = Game::Scr_GetString(0);
-				if (!ValidatePath("FileRename", filepath) || !ValidatePath("FileRename", destpath))
-				{
-					return;
-				}
+				return;
+			}
 
-				const auto from = BuildPath(filepath);
-				const auto to = BuildPath(destpath);
+			const auto dest = BuildPath(filepath);
+			Game::Scr_AddBool(Utils::IO::FileExists(dest.string()));
+		});
 
-				std::error_code err;
-				std::filesystem::rename(from, to, err);
-				if (err.value())
-				{
-					Logger::PrintError(Game::CON_CHANNEL_PARSERSCRIPT, "FileRename: failed to rename file! Error message: {}\n", err.message());
-					Game::Scr_AddInt(-1);
-					return;
-				}
+		Script::AddFunction("FileRemove", []
+		{
+			const auto* filepath = Game::Scr_GetString(0);
 
-				Game::Scr_AddInt(1);
-			});
-
-		Script::AddFunction("FileCopy", [] // gsc: FileCopy(<filepath>, <filepath>)
+			if (!ValidatePath("FileRemove", filepath))
 			{
-				const auto* filepath = Game::Scr_GetString(0);
-				const auto* destpath = Game::Scr_GetString(0);
-				if (!ValidatePath("FileCopy", filepath) || !ValidatePath("FileCopy", destpath))
-				{
-					return;
-				}
+				return;
+			}
 
-				const auto from = BuildPath(filepath);
-				const auto to = BuildPath(destpath);
+			const auto dest = BuildPath(filepath);
+			Game::Scr_AddBool(Utils::IO::RemoveFile(dest.string()));
+		});
 
-				std::error_code err;
-				std::filesystem::copy(from, to, err);
-				if (err.value())
-				{
-					Logger::PrintError(Game::CON_CHANNEL_PARSERSCRIPT, "FileCopy: failed to copy file! Error message: {}\n", err.message());
-					Game::Scr_AddInt(-1);
-					return;
-				}
+		Script::AddFunction("FileRename", []
+		{
+			const auto* filepath = Game::Scr_GetString(0);
+			const auto* destpath = Game::Scr_GetString(0);
 
-				Game::Scr_AddInt(1);
-			});
+			if (!ValidatePath("FileRename", filepath) || !ValidatePath("FileRename", destpath))
+			{
+				return;
+			}
+
+			const auto from = BuildPath(filepath);
+			const auto to = BuildPath(destpath);
+
+			std::error_code err;
+			std::filesystem::rename(from, to, err);
+
+			if (err.value())
+			{
+				Logger::Error("FileRename: failed to rename file! Error message: {}\n", err.message());
+				Game::Scr_AddInt(-1);
+				return;
+			}
+
+			Game::Scr_AddInt(1);
+		});
+
+		Script::AddFunction("FileCopy", []
+		{
+			const auto* filepath = Game::Scr_GetString(0);
+			const auto* destpath = Game::Scr_GetString(0);
+
+			if (!ValidatePath("FileCopy", filepath) || !ValidatePath("FileCopy", destpath))
+			{
+				return;
+			}
+
+			const auto from = BuildPath(filepath);
+			const auto to = BuildPath(destpath);
+
+			std::error_code err;
+			std::filesystem::copy(from, to, err);
+
+			if (err.value())
+			{
+				Logger::Error("FileCopy: failed to copy file! Error message: {}\n", err.message());
+				Game::Scr_AddInt(-1);
+				return;
+			}
+
+			Game::Scr_AddInt(1);
+		});
 
 		Script::AddFunction("ReadStream", GScr_ReadStream);
 
-		Script::AddMethod("setanim", [](Game::scr_entref_t entref) // Usage: self setanim(<int>);
-			{
-				const auto* ent = Script::Scr_GetPlayerEntity(entref);
-				int anim = Game::Scr_GetInt(0);
-				ent->client->ps.weapState->weapAnim = anim;
-				ent->client->ps.weapState[0x0].weaponDelay = 0;
-				ent->client->ps.weapState[0x0].weaponRestrictKickTime = 0;
-				ent->client->ps.weapState[0x0].weaponState = 0;
-				ent->client->ps.weapState[0x0].weaponTime = 0;
-				ent->client->ps.weapState[0x1].weaponDelay = 0;
-				ent->client->ps.weapState[0x1].weaponRestrictKickTime = 0;
-				ent->client->ps.weapState[0x1].weaponState = 0;
-				ent->client->ps.weapState[0x1].weaponTime = 0;
-			});
+		Script::AddMethod("setanim", [](const Game::scr_entref_t entref)
+		{
+			auto* const ent = Script::Scr_GetPlayerEntity(entref);
+			const int anim = Game::Scr_GetInt(0);
 
-		Script::AddMethod("setAnimTime", [](Game::scr_entref_t entref) // Usage: self setanimtime(<int>);
-			{
-				const auto* ent = Script::Scr_GetPlayerEntity(entref);
-				int anim = Game::Scr_GetInt(0);
-				ent->client->ps.weapState[0x0].weaponTime = anim;
-				ent->client->ps.weapState[0x1].weaponTime = anim;
-			});
+			ent->client->ps.weapState[0].weapAnim = anim;
 
-		Script::AddFunction("SetAnim", [] // gsc: SetAnim(<AnimIndex>)
+			for (auto& hand : ent->client->ps.weapState)
 			{
-				Utils::Hook::Set<int>(0x59B270, 0);
-			});
+				hand.weaponDelay = 0;
+				hand.weaponRestrictKickTime = 0;
+				hand.weaponState = 0;
+				hand.weaponTime = 0;
+			}
+		});
+
+		Script::AddMethod("setAnimTime", [](const Game::scr_entref_t entref)
+		{
+			auto* const ent = Script::Scr_GetPlayerEntity(entref);
+			const int time = Game::Scr_GetInt(0);
+
+			for (auto& hand : ent->client->ps.weapState)
+			{
+				hand.weaponTime = time;
+			}
+		});
 	}
 
 	IO::IO()
 	{
 		openScriptIOFileHandle = nullptr;
-		DefaultDestPath = "userraw"s;
 
 		AddScriptFunctions();
 
-		Utils::Hook::Set<Game::BuiltinFunction>(0x79A858, GScr_OpenFile);
-		Utils::Hook::Set<int>(0x79A85C, 0);
+		const bool isOpenFileIntact = Utils::Hook::Get<std::uintptr_t>(openFileEntry + 8) == Utils::Hook::Rebase(emptyBuiltin);
+		const bool isCloseFileIntact = Utils::Hook::Get<std::uintptr_t>(closeFileEntry + 8) == Utils::Hook::Rebase(emptyBuiltin);
 
-		Utils::Hook::Set<Game::BuiltinFunction>(0x79A864, GScr_CloseFile);
-		Utils::Hook::Set<int>(0x79A868, 0);
+		if (!isOpenFileIntact || !isCloseFileIntact)
+		{
+			Logger::Error("io: the openfile and closefile entries do not read as expected, they stay the engine's\n");
+		}
+		else
+		{
+			Utils::Hook::Set<Game::BuiltinFunction>(openFileEntry + 8, GScr_OpenFile);
+			Utils::Hook::Set<int>(openFileEntry + 16, 0);
+
+			Utils::Hook::Set<Game::BuiltinFunction>(closeFileEntry + 8, GScr_CloseFile);
+			Utils::Hook::Set<int>(closeFileEntry + 16, 0);
+		}
 
 		Events::OnVMShutdown([]
+		{
+			if (openScriptIOFileHandle)
 			{
-				if (openScriptIOFileHandle)
-				{
-					std::fclose(openScriptIOFileHandle);
-					openScriptIOFileHandle = nullptr;
-				}
-			});
+				std::fclose(openScriptIOFileHandle);
+				openScriptIOFileHandle = nullptr;
+			}
+		});
 	}
 }

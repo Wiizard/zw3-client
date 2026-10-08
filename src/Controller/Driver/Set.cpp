@@ -1,206 +1,218 @@
-#include "Set.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Driver/Set.hpp"
+#include "Controller/Driver/DualSense.hpp"
+#include "Controller/Driver/DualSenseEdge.hpp"
+#include "Controller/Driver/DualShock4.hpp"
+#include "Controller/Driver/PlayStation.hpp"
+#include "Controller/Driver/XInput.hpp"
 
-#include <cassert>
-#include <variant>
-#include <algorithm>
-
-#include "XInput.hpp"
-#include "DualShock4.hpp"
-#include "DualSense.hpp"
-#include "DualSenseEdge.hpp"
-#include "PlayStation.hpp"
-
-namespace Controller
+namespace Controller::Driver
 {
-  namespace driver
-  {
-    set::
-    set (const context& ctx, const transport::xinput_module& x)
-      : ctx_ (ctx), xinput_ (x)
-    {
-    }
+	DriverSet::DriverSet(const Context& context, const Transport::XInputModule& xinput)
+		: context(context),
+		xinput(xinput)
+	{
+	}
 
-    set::
-    ~set () = default;
+	DriverSet::~DriverSet() = default;
 
-    std::unique_ptr<driver>
-    set::
-    bind (const device_connection& d, std::unique_ptr<transport::hid_device>& hid)
-    {
-      switch (d.identity.family)
-      {
-        case family::xbox:
-          {
-            const auto* b (std::get_if<xinput_binding> (&d.binding));
+	DriverSet::Entry::Entry(DeviceConnection connection, std::unique_ptr<Transport::HidDevice> opened, std::unique_ptr<Driver> bound)
+		: device(std::move(connection)),
+		hid(std::move(opened)),
+		driver(std::move(bound))
+	{
+	}
 
-            if (b == nullptr)
-              break;
+	DriverSet::Entry& DriverSet::Entry::operator=(Entry&& other)
+	{
+		this->driver.reset();
 
-            return std::make_unique<xinput_driver> (ctx_, xinput_, d.id, b->index);
-          }
+		this->device = std::move(other.device);
+		this->hid = std::move(other.hid);
+		this->driver = std::move(other.driver);
 
-        case family::dualshock4:
-        case family::dualsense:
-        case family::dualsense_edge:
-          {
-            if (hid == nullptr)
-              break;
+		return *this;
+	}
 
-            assert (hid->link () == connection::usb ||
-                    hid->link () == connection::bluetooth);
+	std::unique_ptr<Driver> DriverSet::TryBind(const DeviceConnection& device, const std::unique_ptr<Transport::HidDevice>& hid)
+	{
+		switch (device.identity.family)
+		{
+		case Family::Xbox:
+		{
+			const auto* binding = std::get_if<XInputBinding>(&device.binding);
 
-            if (hid->link () == connection::bluetooth)
-              enable_extended_reports (ctx_, *hid, d.id);
+			if (binding == nullptr)
+			{
+				return nullptr;
+			}
 
-            switch (d.identity.family)
-            {
-              case family::dualshock4:
-                return std::make_unique<dualshock4_driver> (ctx_, *hid, d.id);
+			return std::make_unique<XInputDriver>(this->context, this->xinput, device.id, binding->index);
+		}
 
-              case family::dualsense:
-                return std::make_unique<dualsense_driver> (ctx_, *hid, d.id);
+		case Family::DualShock4:
+		case Family::DualSense:
+		case Family::DualSenseEdge:
+		{
+			if (hid == nullptr)
+			{
+				return nullptr;
+			}
 
-              case family::dualsense_edge:
-                return std::make_unique<dualsense_edge_driver> (ctx_, *hid, d.id);
+			assert(hid->Link() == Connection::Usb || hid->Link() == Connection::Bluetooth);
 
-              default:
-                break;
-            }
+			if (hid->Link() == Connection::Bluetooth)
+			{
+				TryEnableExtendedReports(this->context, *hid, device.id);
+			}
 
-            break;
-          }
+			if (device.identity.family == Family::DualShock4)
+			{
+				return std::make_unique<DualShock4Driver>(this->context, *hid, device.id);
+			}
 
-        case family::unknown:
-          break;
-      }
+			if (device.identity.family == Family::DualSense)
+			{
+				return std::make_unique<DualSenseDriver>(this->context, *hid, device.id);
+			}
 
-      return nullptr;
-    }
+			return std::make_unique<DualSenseEdgeDriver>(this->context, *hid, device.id);
+		}
 
-    void
-    set::
-    reconcile (const registry& r)
-    {
-      const uint64_t g (r.generation ());
+		case Family::Unknown:
+			break;
+		}
 
-      if (reconciled_ && g == generation_)
-        return;
+		return nullptr;
+	}
 
-      generation_ = g;
-      reconciled_ = true;
+	void DriverSet::Reconcile(const Registry& registry)
+	{
+		const std::uint64_t registryGeneration = registry.Generation();
 
-      std::vector<device_connection> current;
-      r.for_each ([&current] (const device_connection& d) {current.push_back (d);});
+		if (this->isReconciled && registryGeneration == this->generation)
+		{
+			return;
+		}
 
-      std::erase_if (entries_, [this, &current] (const entry& e)
-      {
-        const bool gone (
-          std::none_of (current.begin (), current.end (),
-                        [&e] (const device_connection& d) {return d.id == e.device.id;}));
+		this->generation = registryGeneration;
+		this->isReconciled = true;
 
-        if (gone)
-          ctx_.report (severity::info, facility::driver, errc::none, e.device.id,
-                       std::string ("driver released: ") +
-                       to_string (e.device.identity.family));
+		std::vector<DeviceConnection> current;
 
-        return gone;
-      });
+		registry.ForEach([&current](const DeviceConnection& device)
+		{
+			current.push_back(device);
+		});
 
-      for (device_connection& d: current)
-      {
-        const bool bound (
-          std::any_of (entries_.begin (), entries_.end (),
-                       [&d] (const entry& e) {return e.device.id == d.id;}));
+		std::erase_if(this->entries, [this, &current](const Entry& entry)
+		{
+			const bool isGone = std::none_of(current.begin(), current.end(), [&entry](const DeviceConnection& device)
+			{
+				return device.id == entry.device.id;
+			});
 
-        if (bound)
-          continue;
+			if (isGone)
+			{
+				this->context.Report(Severity::Info, Facility::Driver, ErrorCode::None, entry.device.id, std::format("driver released: {}", ToString(entry.device.identity.family)));
+			}
 
-        std::unique_ptr<transport::hid_device> hid;
+			return isGone;
+		});
 
-        if (const auto* b = std::get_if<hid_binding> (&d.binding))
-        {
-          hid = transport::open (ctx_, b->path);
+		for (auto& device : current)
+		{
+			const bool isBound = std::any_of(this->entries.begin(), this->entries.end(), [&device](const Entry& entry)
+			{
+				return entry.device.id == device.id;
+			});
 
-          if (hid == nullptr)
-            continue;
-        }
+			if (isBound)
+			{
+				continue;
+			}
 
-        std::unique_ptr<driver> drv (bind (d, hid));
+			std::unique_ptr<Transport::HidDevice> hid;
 
-        if (drv == nullptr)
-        {
-          ctx_.report (severity::warning, facility::driver, errc::unsupported_device,
-                       d.id,
-                       std::string ("no driver binds ") + to_string (d.identity.family) +
-                       " over " + to_string (d.transport));
-          continue;
-        }
+			if (const auto* binding = std::get_if<HidBinding>(&device.binding))
+			{
+				hid = Transport::TryOpen(this->context, binding->path);
 
-        ctx_.report (severity::info, facility::driver, errc::none, d.id,
-                     std::string ("driver bound: ") + to_string (d.identity.family) +
-                     " over " + to_string (d.transport));
+				if (hid == nullptr)
+				{
+					continue;
+				}
+			}
 
-        entries_.push_back (entry {std::move (d), std::move (hid), std::move (drv)});
-      }
-    }
+			auto bound = this->TryBind(device, hid);
 
-    void
-    set::
-    for_each (function_ref<void (driver&, const device_connection&)> fn)
-    {
-      for (entry& e: entries_)
-        fn (*e.drv, e.device);
-    }
+			if (bound == nullptr)
+			{
+				this->context.Report(Severity::Warning, Facility::Driver, ErrorCode::UnsupportedDevice, device.id,
+					std::format("no driver binds {} over {}", ToString(device.identity.family), ToString(device.transport)));
+				continue;
+			}
 
-    void
-    set::
-    configure (const output_policy& p)
-    {
-      for (entry& e: entries_)
-      {
-        if (e.drv != nullptr)
-          e.drv->configure (p);
-      }
-    }
+			this->context.Report(Severity::Info, Facility::Driver, ErrorCode::None, device.id,
+				std::format("driver bound: {} over {}", ToString(device.identity.family), ToString(device.transport)));
 
-    void
-    set::
-    stop_haptic (device_id id, uint32_t tag)
-    {
-      for (entry& e: entries_)
-      {
-        if (e.device.id == id && e.drv != nullptr)
-          e.drv->stop_haptic (tag);
-      }
-    }
+			this->entries.push_back(Entry{ std::move(device), std::move(hid), std::move(bound) });
+		}
+	}
 
-    std::string
-    set::
-    diagnostics (device_id id) const
-    {
-      for (const entry& e: entries_)
-      {
-        if (e.device.id == id && e.drv != nullptr)
-          return e.drv->diagnostics ();
-      }
+	void DriverSet::ForEach(const std::function<void(Driver&, const DeviceConnection&)>& visit)
+	{
+		for (auto& entry : this->entries)
+		{
+			visit(*entry.driver, entry.device);
+		}
+	}
 
-      return {};
-    }
+	void DriverSet::Configure(const OutputPolicy& policy)
+	{
+		for (auto& entry : this->entries)
+		{
+			if (entry.driver != nullptr)
+			{
+				entry.driver->Configure(policy);
+			}
+		}
+	}
 
-    void
-    set::
-    submit (device_id id, const output_request& request)
-    {
-      for (entry& e: entries_)
-      {
-        if (e.device.id == id)
-        {
-          e.drv->submit (request);
-          return;
-        }
-      }
-    }
-  }
+	void DriverSet::StopHaptic(DeviceId id, std::uint32_t tag)
+	{
+		for (auto& entry : this->entries)
+		{
+			if (entry.device.id == id && entry.driver != nullptr)
+			{
+				entry.driver->StopHaptic(tag);
+			}
+		}
+	}
+
+	std::string DriverSet::Diagnostics(DeviceId id) const
+	{
+		for (const auto& entry : this->entries)
+		{
+			if (entry.device.id == id && entry.driver != nullptr)
+			{
+				return entry.driver->Diagnostics();
+			}
+		}
+
+		return {};
+	}
+
+	void DriverSet::Submit(DeviceId id, const OutputRequest& request)
+	{
+		for (auto& entry : this->entries)
+		{
+			if (entry.device.id == id)
+			{
+				entry.driver->Submit(request);
+				return;
+			}
+		}
+	}
 }

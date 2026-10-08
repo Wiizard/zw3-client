@@ -1,39 +1,34 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "Id.hpp"
-#include "Identity.hpp"
-#include "Capability.hpp"
-
-#include <variant>
+#include "Controller/Device/Capability.hpp"
+#include "Controller/Device/Id.hpp"
+#include "Controller/Device/Identity.hpp"
 
 namespace Controller
 {
-  struct xinput_binding
-  {
-    user_index index;
-  };
+	struct XInputBinding
+	{
+		UserIndex index;
+	};
 
-  struct hid_binding
-  {
-    std::wstring path;
-  };
+	struct HidBinding
+	{
+		std::wstring path;
+	};
 
-  using transport_binding = std::variant<std::monostate,
-                                    xinput_binding,
-                                    hid_binding>;
+	using TransportBinding = std::variant<std::monostate, XInputBinding, HidBinding>;
 
-  bool
-  same_binding (const transport_binding&, const transport_binding&) noexcept;
+	bool IsSameBinding(const TransportBinding& left, const TransportBinding& right) noexcept;
 
-  struct device_connection
-  {
-    device_id id {};
-    device_identity identity {};
-    Controller::transport_kind transport {transport_kind::unknown};
-    connection link {connection::unknown};
-    capabilities caps {};
-    transport_binding binding {};
-  };
+	struct DeviceConnection
+	{
+		DeviceId id{};
+		DeviceIdentity identity{};
+		TransportKind transport = TransportKind::Unknown;
+		Connection link = Connection::Unknown;
+		Capabilities caps{};
+		TransportBinding binding{};
+	};
 }

@@ -1,51 +1,54 @@
+#include "STDInclude.hpp"
+
 #include "IStringTable.hpp"
 
 namespace Assets
 {
-	void IStringTable::saveStringTableCellArray(Components::ZoneBuilder::Zone* builder, Game::StringTableCell* values, int count)
+	void IStringTable::SaveStringTableCellArray(Components::ZoneBuilder::Zone* builder, const Game::StringTableCell* values, int count)
 	{
-		AssertSize(Game::StringTableCell, 8);
-
-		Utils::Stream* buffer = builder->getBuffer();
-
-		Game::StringTableCell* destValues = buffer->dest<Game::StringTableCell>();
-		buffer->saveArray(destValues, count);
+		auto* const buffer = builder->GetBuffer();
+		auto* const destValues = buffer->Dest<Game::X86::StringTableCell>();
 
 		for (int i = 0; i < count; ++i)
 		{
-			Game::StringTableCell* destValue = &destValues[i];
-			Game::StringTableCell* value = &values[i];
+			const auto record = Game::X86::Convert(values[i]);
+			buffer->Save(&record);
+		}
 
-			buffer->saveString(value->string);
-			Utils::Stream::ClearPointer(&destValue->string);
+		for (int i = 0; i < count; ++i)
+		{
+			if (values[i].string)
+			{
+				buffer->SaveString(values[i].string);
+				Utils::Stream::ClearPointer(&destValues[i].string);
+			}
 		}
 	}
 
-	void IStringTable::save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
+	void IStringTable::Save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
 	{
-		AssertSize(Game::StringTable, 16);
+		auto* const buffer = builder->GetBuffer();
+		const auto* const asset = header.stringTable;
+		auto* const dest = buffer->Dest<Game::X86::StringTable>();
+		const auto record = Game::X86::Convert(*asset);
+		buffer->Save(&record);
 
-		Utils::Stream* buffer = builder->getBuffer();
-		Game::StringTable* asset = header.stringTable;
-		Game::StringTable* dest = buffer->dest<Game::StringTable>();
-		buffer->save(asset, sizeof(Game::StringTable));
-
-		buffer->pushBlock(Game::XFILE_BLOCK_VIRTUAL);
+		buffer->PushBlock(Game::XFILE_BLOCK_VIRTUAL);
 
 		if (asset->name)
 		{
-			buffer->saveString(builder->getAssetName(this->getType(), asset->name));
+			buffer->SaveString(builder->GetAssetName(this->GetType(), asset->name));
 			Utils::Stream::ClearPointer(&dest->name);
 		}
 
 		if (asset->values)
 		{
-			buffer->align(Utils::Stream::ALIGN_4);
+			buffer->Align(Utils::Stream::ALIGN_4);
 
-			this->saveStringTableCellArray(builder, asset->values, asset->columnCount * asset->rowCount);
+			SaveStringTableCellArray(builder, asset->values, asset->columnCount * asset->rowCount);
 			Utils::Stream::ClearPointer(&dest->values);
 		}
 
-		buffer->popBlock();
+		buffer->PopBlock();
 	}
 }

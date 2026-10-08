@@ -1,127 +1,120 @@
-#include "StickLayout.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Mapping/StickLayout.hpp"
 
-#include <cctype>
-#include <algorithm>
-
-namespace Controller
+namespace Controller::Mapping
 {
-  namespace mapping
-  {
-    namespace
-    {
-      std::string
-      lowercase (std::string_view s)
-      {
-        std::string r (s);
+	static bool IsLayoutName(std::string_view name, std::string_view layout) noexcept
+	{
+		return name.size() == layout.size() && _strnicmp(name.data(), layout.data(), name.size()) == 0;
+	}
 
-        std::transform (r.begin (), r.end (), r.begin (), [] (char c)
-        {
-          return static_cast<char> (
-            std::tolower (static_cast<unsigned char> (c)));
-        });
+	static float Squared(float component, StickVector stick) noexcept
+	{
+		return std::clamp(stick.Magnitude() * component, -1.0f, 1.0f);
+	}
 
-        return r;
-      }
+	static VirtualAxis AxisFor(StickLayout layout, Stick which, bool isHorizontal) noexcept
+	{
+		const bool isSouthpaw = layout == StickLayout::Southpaw || layout == StickLayout::LegacySouthpaw;
+		const bool isLegacy = layout == StickLayout::Legacy || layout == StickLayout::LegacySouthpaw;
 
-      float
-      squared (float component, stick_vector v) noexcept
-      {
-        return std::clamp (v.magnitude () * component, -1.0f, 1.0f);
-      }
-    }
+		const bool isMoveStick = (which == Stick::Left) != isSouthpaw;
 
-    const char*
-    to_string (virtual_axis a) noexcept
-    {
-      switch (a)
-      {
-        case virtual_axis::side:    return "side";
-        case virtual_axis::forward: return "forward";
-        case virtual_axis::yaw:     return "yaw";
-        case virtual_axis::pitch:   return "pitch";
-      }
+		if (!isHorizontal)
+		{
+			if (isMoveStick)
+			{
+				return VirtualAxis::Forward;
+			}
 
-      return "unknown";
-    }
+			return VirtualAxis::Pitch;
+		}
 
-    const char*
-    to_string (stick_layout l) noexcept
-    {
-      switch (l)
-      {
-        case stick_layout::standard:        return "thumbstick_default";
-        case stick_layout::southpaw:        return "thumbstick_southpaw";
-        case stick_layout::legacy:          return "thumbstick_legacy";
-        case stick_layout::legacy_southpaw: return "thumbstick_legacysouthpaw";
-      }
+		if (isMoveStick)
+		{
+			if (isLegacy)
+			{
+				return VirtualAxis::Yaw;
+			}
 
-      return "thumbstick_default";
-    }
+			return VirtualAxis::Side;
+		}
 
-    stick_layout
-    stick_layout_from_name (std::string_view name) noexcept
-    {
-      const std::string n (lowercase (name));
+		if (isLegacy)
+		{
+			return VirtualAxis::Side;
+		}
 
-      if (n == "thumbstick_legacysouthpaw")
-        return stick_layout::legacy_southpaw;
+		return VirtualAxis::Yaw;
+	}
 
-      if (n == "thumbstick_legacy")
-        return stick_layout::legacy;
+	StickLayout StickLayoutFromName(std::string_view name)
+	{
+		if (IsLayoutName(name, "thumbstick_legacysouthpaw"))
+		{
+			return StickLayout::LegacySouthpaw;
+		}
 
-      if (n == "thumbstick_southpaw")
-        return stick_layout::southpaw;
+		if (IsLayoutName(name, "thumbstick_legacy"))
+		{
+			return StickLayout::Legacy;
+		}
 
-      return stick_layout::standard;
-    }
+		if (IsLayoutName(name, "thumbstick_southpaw"))
+		{
+			return StickLayout::Southpaw;
+		}
 
-    virtual_axis
-    axis_for (stick_layout l, stick which, bool horizontal) noexcept
-    {
-      const bool southpaw (l == stick_layout::southpaw ||
-                           l == stick_layout::legacy_southpaw);
-      const bool legacy (l == stick_layout::legacy ||
-                         l == stick_layout::legacy_southpaw);
+		return StickLayout::Standard;
+	}
 
-      const bool move_stick ((which == stick::left) != southpaw);
+	ResolvedAxes Resolve(StickLayout layout, StickVector left, StickVector right) noexcept
+	{
+		ResolvedAxes axes;
 
-      if (!horizontal)
-        return move_stick ? virtual_axis::forward : virtual_axis::pitch;
+		static constexpr Stick sticks[] = { Stick::Left, Stick::Right };
+		static constexpr bool orientations[] = { true, false };
 
-      if (move_stick)
-        return legacy ? virtual_axis::yaw : virtual_axis::side;
+		for (const auto stick : sticks)
+		{
+			StickVector vector = left;
 
-      return legacy ? virtual_axis::side : virtual_axis::yaw;
-    }
+			if (stick == Stick::Right)
+			{
+				vector = right;
+			}
 
-    resolved_axes
-    resolve (stick_layout l, stick_vector left, stick_vector right) noexcept
-    {
-      resolved_axes r;
+			for (const bool isHorizontal : orientations)
+			{
+				float component = vector.y;
 
-      const stick sticks[] {stick::left, stick::right};
+				if (isHorizontal)
+				{
+					component = vector.x;
+				}
 
-      for (stick s: sticks)
-      {
-        const stick_vector& v (s == stick::left ? left : right);
+				switch (AxisFor(layout, stick, isHorizontal))
+				{
+				case VirtualAxis::Side:
+					axes.side = Squared(component, vector);
+					break;
 
-        for (bool horizontal: {true, false})
-        {
-          const float component (horizontal ? v.x : v.y);
+				case VirtualAxis::Forward:
+					axes.forward = Squared(component, vector);
+					break;
 
-          switch (axis_for (l, s, horizontal))
-          {
-            case virtual_axis::side:    r.side = squared (component, v);    break;
-            case virtual_axis::forward: r.forward = squared (component, v); break;
-            case virtual_axis::yaw:     r.yaw = component;                  break;
-            case virtual_axis::pitch:   r.pitch = component;                break;
-          }
-        }
-      }
+				case VirtualAxis::Yaw:
+					axes.yaw = component;
+					break;
 
-      return r;
-    }
-  }
+				case VirtualAxis::Pitch:
+					axes.pitch = component;
+					break;
+				}
+			}
+		}
+
+		return axes;
+	}
 }

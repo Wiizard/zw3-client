@@ -1,84 +1,116 @@
-#include "Changelog.hpp"
+#include "STDInclude.hpp"
+
+#include <version.hpp>
+
 #include "News.hpp"
+#include "Changelog.hpp"
+#include "Command.hpp"
+#include "Dedicated.hpp"
+#include "Dvar.hpp"
+#include "Events.hpp"
+#include "Localization.hpp"
+#include "Logger.hpp"
+#include "Scheduler.hpp"
 #include "StartupMessages.hpp"
-#include "rapidjson/document.h"
-#include "version.h"
-
-#define NEWS_MOTD_DEFAULT "Welcome to Call of Duty: Zombie Warfare 3!"
-
-/*
-  MOTD, Changelog and popup messages are fetched as JSON using Cache::GetFile.
-  {
-     "motd":string,
-     "popmenu":[
-	    {
-		   "title":string,
-		   "message":string,
-		   "revisions":array of strings,
-		   "show":bool
-	    }
-     ],
-     "changelog":string
-  }
-
-  Popups are shown on startup using StartupMessages::AddMessage.
-  In any case where theres invalid data in the response/the request failed,
-  the default values are used or, in case of popups, they are discarded.
-  We only accept a valid response, anything that doesn't match the above format is discarded.
-*/
+#include "UIScript.hpp"
 
 namespace Components
 {
+	constexpr const char* motdDefault = "Welcome to Call of Duty: Zombie Warfare 3!";
+
+	constexpr std::uintptr_t NewsTicker_TextTestJump = 0x14026181D;
+	constexpr std::uintptr_t NewsTicker_UI_SafeTranslateStringCall = 0x140261823;
+	constexpr std::uintptr_t NewsTicker_UI_SetScissorRectCall = 0x1402618B7;
+	constexpr std::uintptr_t UI_SafeTranslateString = 0x140272770;
+	constexpr std::uintptr_t UI_SetScissorRect = 0x140272F40;
+
+	static const std::uint8_t textTestJump[] = { 0x75, 0x0C };
+
+	static Utils::Hook translateHook;
+
 	const char* News::GetNewsText()
 	{
 		return Localization::Get("MPUI_MOTD_TEXT");
 	}
 
-	std::optional<std::string> News::ExtractStringByMemberName(const rapidjson::Document& document, const std::string& memberName)
+	void News::FetchInfo()
 	{
-		if (document.HasMember(memberName) && document[memberName].IsString())
-			return document[memberName].GetString();
+		const auto result = Utils::Cache::GetFile("/info");
 
-		return std::nullopt;
+		if (result.empty())
+		{
+			return;
+		}
+
+		Scheduler::Once([result]
+		{
+			ApplyInfo(result);
+		}, Scheduler::Pipeline::MAIN);
 	}
 
-	std::vector<std::pair<std::string, std::string>> News::CollectPopmenus(const rapidjson::Document& document)
+	void News::ApplyInfo(const std::string& info)
 	{
-		std::vector<std::pair<std::string, std::string>> messages;
+		rapidjson::Document jsonDocument{};
+		const rapidjson::ParseResult parseResult = jsonDocument.Parse(info);
+
+		if (!parseResult || !jsonDocument.IsObject())
+		{
+			return;
+		}
+
+		if (ProcessPopmenus(jsonDocument))
+		{
+			StartupMessages::Show();
+		}
+	}
+
+	bool News::ProcessPopmenus(const rapidjson::Document& document)
+	{
 		if (!document.HasMember("popmenu") || !document["popmenu"].IsArray())
-			return messages;
+		{
+			return false;
+		}
+
+		bool didAdd = false;
 
 		for (const auto& menuItem : document["popmenu"].GetArray())
 		{
-			auto item = ExtractPopmenuItem(menuItem);
+			const auto item = ExtractPopmenuItem(menuItem);
+
 			if (!item.has_value())
+			{
 				continue;
+			}
 
 			if (ShouldShowForRevision(menuItem["revisions"]))
-				messages.push_back(std::move(*item));
+			{
+				StartupMessages::AddMessage(item->second, item->first);
+				didAdd = true;
+			}
 		}
-		return messages;
+
+		return didAdd;
 	}
 
 	std::optional<std::pair<std::string, std::string>> News::ExtractPopmenuItem(const rapidjson::Value& menuItem)
 	{
-		if (!menuItem.HasMember("title") ||
-			!menuItem.HasMember("message") ||
-			!menuItem.HasMember("revisions") ||
-			!menuItem.HasMember("show"))
+		if (!menuItem.HasMember("title") || !menuItem.HasMember("message") || !menuItem.HasMember("revisions") || !menuItem.HasMember("show"))
 		{
 			return std::nullopt;
 		}
-			
 
-		if (!menuItem["show"].GetBool())
+		if (!menuItem["show"].IsBool() || !menuItem["show"].GetBool())
+		{
 			return std::nullopt;
+		}
 
 		const auto& title = menuItem["title"];
 		const auto& message = menuItem["message"];
 
 		if (!title.IsString() || !message.IsString())
+		{
 			return std::nullopt;
+		}
 
 		return std::make_pair(title.GetString(), message.GetString());
 	}
@@ -86,30 +118,43 @@ namespace Components
 	bool News::ShouldShowForRevision(const rapidjson::Value& revisions)
 	{
 		if (!revisions.IsArray())
+		{
 			return false;
+		}
 
 		for (const auto& revision : revisions.GetArray())
 		{
 			if (!revision.IsString())
+			{
 				continue;
+			}
 
-			const std::string revStr = revision.GetString();
-			if (revStr == REVISION_STR || revStr == "any")
+			const std::string revisionText = revision.GetString();
+
+			if (revisionText == REVISION_STR || revisionText == "any")
+			{
 				return true;
+			}
 		}
+
 		return false;
 	}
 
 	News::News()
 	{
-		if (ZoneBuilder::IsEnabled() || Dedicated::IsEnabled()) return; // Maybe also dedi?
-
-		Dvar::Register<bool>("g_firstLaunch", true, Game::DVAR_ARCHIVE, "");
-
-		// Called by main_text.menu
-		UIScript::Add("checkFirstLaunch", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+		if (Dedicated::IsEnabled())
 		{
-			if (Dvar::Var("g_firstLaunch").get<bool>())
+			return;
+		}
+
+		Events::OnDvarInit([]
+		{
+			Dvar::Register("g_firstLaunch", true, Game::DVAR_ARCHIVE, "");
+		});
+
+		UIScript::Add("checkFirstLaunch", []([[maybe_unused]] const UIScript::Token& token)
+		{
+			if (Dvar::Var("g_firstLaunch").Get<bool>())
 			{
 				Command::Execute("openmenu menu_first_launch", false);
 			}
@@ -117,46 +162,35 @@ namespace Components
 			StartupMessages::Show();
 		});
 
-		UIScript::Add("visitWebsite", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+		UIScript::Add("visitWebsite", []([[maybe_unused]] const UIScript::Token& token)
 		{
 			Utils::OpenUrl("https://zw3.eu");
 		});
 
 		Localization::Set("MPUI_CHANGELOG_TEXT", "Loading...");
-		Localization::Set("MPUI_MOTD_TEXT", NEWS_MOTD_DEFAULT);
+		Localization::Set("MPUI_MOTD_TEXT", motdDefault);
 		Changelog::SetChangelog("Changelog not available.");
 
-		// make newsfeed (ticker) menu items not cut off based on safe area
-		Utils::Hook::Nop(0x63892D, 5);
+		Scheduler::Once(FetchInfo, Scheduler::Pipeline::ASYNC);
 
-		// hook for getting the news ticker string
-		Utils::Hook::Nop(0x6388BB, 2); // skip the "if (item->text[0] == '@')" localize check
-		Utils::Hook(0x6388C1, GetNewsText, HOOK_CALL).install()->quick();
+		const bool isTickerExpected = Utils::Hook::MatchesBytes(NewsTicker_TextTestJump, textTestJump, sizeof(textTestJump))
+			&& Utils::Hook::BranchesTo(NewsTicker_UI_SafeTranslateStringCall, UI_SafeTranslateString, HOOK_CALL)
+			&& Utils::Hook::BranchesTo(NewsTicker_UI_SetScissorRectCall, UI_SetScissorRect, HOOK_CALL);
 
-		// A cache miss can block in WinINet for several seconds. Defaults and
-		// locally registered UI are ready immediately; only the remote refresh
-		// runs on the existing async scheduler.
-		Scheduler::Once([]
+		if (!isTickerExpected)
 		{
-			const auto result = Utils::Cache::GetFile("/info");
-			if (result.empty()) return;
+			Logger::Error("news: the news ticker does not read as expected, it keeps its own text\n");
+			return;
+		}
 
-			rapidjson::Document jsonDocument{};
-			const rapidjson::ParseResult parseResult = jsonDocument.Parse(result);
-			if (!parseResult || !jsonDocument.IsObject()) return;
+		if (!translateHook.Initialize(NewsTicker_UI_SafeTranslateStringCall, reinterpret_cast<void*>(GetNewsText), HOOK_CALL)->Install()->IsInstalled())
+		{
+			Logger::Error("news: could not seat the news ticker hook, it keeps its own text\n");
+			return;
+		}
 
-			auto messages = CollectPopmenus(jsonDocument);
-			if (messages.empty()) return;
-			Scheduler::Once([messages = std::move(messages)]
-			{
-				for (const auto& [title, body] : messages)
-					StartupMessages::AddMessage(body, title);
-				StartupMessages::Show();
-			}, Scheduler::Pipeline::MAIN);
-		}, Scheduler::Pipeline::ASYNC);
-	}
-
-	void News::preDestroy()
-	{
+		translateHook.Quick();
+		Utils::Hook::Nop(NewsTicker_TextTestJump, sizeof(textTestJump));
+		Utils::Hook::Nop(NewsTicker_UI_SetScissorRectCall, 5);
 	}
 }

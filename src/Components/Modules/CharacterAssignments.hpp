@@ -2,17 +2,6 @@
 
 #include <Utils/InfoString.hpp>
 
-#include <algorithm>
-#include <array>
-#include <atomic>
-#include <cctype>
-#include <cstdint>
-#include <cstdlib>
-#include <mutex>
-#include <string>
-#include <unordered_map>
-#include <unordered_set>
-
 namespace Components::CharacterAssignments
 {
 	enum class Character : std::uint8_t
@@ -24,7 +13,7 @@ namespace Components::CharacterAssignments
 		Takeo
 	};
 
-	inline constexpr std::array<Character, 4> Characters
+	inline constexpr std::array<Character, 4> characters
 	{
 		Character::Richtofen,
 		Character::Dempsey,
@@ -32,17 +21,21 @@ namespace Components::CharacterAssignments
 		Character::Takeo
 	};
 
-	inline std::array<std::atomic<std::uint8_t>, Game::MAX_CLIENTS> ClientCharacters{};
-	inline std::array<std::atomic_bool, Game::MAX_CLIENTS> BotReservations{};
-	inline std::array<std::atomic<int>, Game::MAX_CLIENTS> BotReservationStarted{};
-	inline std::atomic<int> DesiredPartySize{ 1 };
+	inline std::array<std::atomic<std::uint8_t>, Game::MAX_CLIENTS> clientCharacters{};
+	inline std::array<std::atomic_bool, Game::MAX_CLIENTS> botReservations{};
+	inline std::array<std::atomic<int>, Game::MAX_CLIENTS> botReservationStarted{};
+	inline std::atomic<int> desiredPartySize{ 1 };
 
-	inline std::mutex StateMutex;
-	inline std::unordered_map<std::uint64_t, Character> RealCharacters;
-	inline std::uint64_t PendingReplacementXuid = 0;
-	inline Character PendingReplacementCharacter = Character::None;
-	inline int PendingReplacementStarted = 0;
-	inline std::unordered_map<std::uint64_t, int> RecentReplacements;
+	inline std::mutex stateMutex;
+	inline std::unordered_map<std::uint64_t, Character> realCharacters;
+	inline std::uint64_t pendingReplacementXuid = 0;
+	inline Character pendingReplacementCharacter = Character::None;
+	inline int pendingReplacementStarted = 0;
+	inline std::unordered_map<std::uint64_t, int> recentReplacements;
+
+	constexpr int replacementLifetimeMs = 30000;
+	constexpr int staleBotReservationMs = 2000;
+	constexpr int maxPartySize = 4;
 
 	inline std::string Normalize(const std::string& value)
 	{
@@ -57,11 +50,11 @@ namespace Components::CharacterAssignments
 				continue;
 			}
 
-			result.push_back(static_cast<char>(
-				std::tolower(static_cast<unsigned char>(value[i]))));
+			result.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(value[i]))));
 		}
 
 		const auto first = result.find_first_not_of(" \t");
+
 		if (first == std::string::npos)
 		{
 			return {};
@@ -74,10 +67,27 @@ namespace Components::CharacterAssignments
 	inline Character Parse(const std::string& value)
 	{
 		const auto normalized = Normalize(value);
-		if (normalized == "richtofen") return Character::Richtofen;
-		if (normalized == "dempsey") return Character::Dempsey;
-		if (normalized == "nikolai") return Character::Nikolai;
-		if (normalized == "takeo") return Character::Takeo;
+
+		if (normalized == "richtofen")
+		{
+			return Character::Richtofen;
+		}
+
+		if (normalized == "dempsey")
+		{
+			return Character::Dempsey;
+		}
+
+		if (normalized == "nikolai")
+		{
+			return Character::Nikolai;
+		}
+
+		if (normalized == "takeo")
+		{
+			return Character::Takeo;
+		}
+
 		return Character::None;
 	}
 
@@ -85,11 +95,16 @@ namespace Components::CharacterAssignments
 	{
 		switch (character)
 		{
-		case Character::Richtofen: return "Richtofen";
-		case Character::Dempsey: return "Dempsey";
-		case Character::Nikolai: return "Nikolai";
-		case Character::Takeo: return "Takeo";
-		default: return "None";
+		case Character::Richtofen:
+			return "Richtofen";
+		case Character::Dempsey:
+			return "Dempsey";
+		case Character::Nikolai:
+			return "Nikolai";
+		case Character::Takeo:
+			return "Takeo";
+		default:
+			return "None";
 		}
 	}
 
@@ -98,25 +113,29 @@ namespace Components::CharacterAssignments
 		return character != Character::None;
 	}
 
+	inline bool IsClientNum(const int clientNum)
+	{
+		return clientNum >= 0 && clientNum < static_cast<int>(Game::MAX_CLIENTS);
+	}
+
 	inline void SetDesiredPartySize(const int size)
 	{
-		DesiredPartySize.store(std::clamp(size, 1, 4), std::memory_order_release);
+		desiredPartySize.store(std::clamp(size, 1, maxPartySize), std::memory_order_release);
 	}
 
 	inline int GetDesiredPartySize()
 	{
-		return std::clamp(DesiredPartySize.load(std::memory_order_acquire), 1, 4);
+		return std::clamp(desiredPartySize.load(std::memory_order_acquire), 1, maxPartySize);
 	}
 
 	inline Character GetClientCharacterId(const int clientNum)
 	{
-		if (clientNum < 0 || clientNum >= Game::MAX_CLIENTS)
+		if (!IsClientNum(clientNum))
 		{
 			return Character::None;
 		}
 
-		return static_cast<Character>(
-			ClientCharacters[clientNum].load(std::memory_order_acquire));
+		return static_cast<Character>(clientCharacters[clientNum].load(std::memory_order_acquire));
 	}
 
 	inline std::string GetClientCharacter(const int clientNum)
@@ -126,13 +145,12 @@ namespace Components::CharacterAssignments
 
 	inline void SetClientCharacter(const int clientNum, const Character character)
 	{
-		if (clientNum < 0 || clientNum >= Game::MAX_CLIENTS)
+		if (!IsClientNum(clientNum))
 		{
 			return;
 		}
 
-		ClientCharacters[clientNum].store(
-			static_cast<std::uint8_t>(character), std::memory_order_release);
+		clientCharacters[clientNum].store(static_cast<std::uint8_t>(character), std::memory_order_release);
 	}
 
 	inline void ClearClientCharacter(const int clientNum)
@@ -142,24 +160,30 @@ namespace Components::CharacterAssignments
 
 	inline bool IsBotReserved(const int clientNum)
 	{
-		if (clientNum < 0 || clientNum >= Game::MAX_CLIENTS)
+		if (!IsClientNum(clientNum))
 		{
 			return false;
 		}
 
-		return BotReservations[clientNum].load(std::memory_order_acquire);
+		return botReservations[clientNum].load(std::memory_order_acquire);
 	}
 
-	inline void SetBotReserved(const int clientNum, const bool reserved)
+	inline void SetBotReserved(const int clientNum, const bool isReserved)
 	{
-		if (clientNum < 0 || clientNum >= Game::MAX_CLIENTS)
+		if (!IsClientNum(clientNum))
 		{
 			return;
 		}
 
-		BotReservations[clientNum].store(reserved, std::memory_order_release);
-		BotReservationStarted[clientNum].store(
-			reserved ? Game::Sys_Milliseconds() : 0, std::memory_order_release);
+		int started = 0;
+
+		if (isReserved)
+		{
+			started = Game::Sys_Milliseconds();
+		}
+
+		botReservations[clientNum].store(isReserved, std::memory_order_release);
+		botReservationStarted[clientNum].store(started, std::memory_order_release);
 	}
 
 	inline std::uint64_t GetClientXuid(const Game::client_s& client)
@@ -169,31 +193,30 @@ namespace Components::CharacterAssignments
 			return client.steamID;
 		}
 
-		Utils::InfoString info(client.userinfo);
-		const auto value = info.get("xuid");
+		const Utils::InfoString info(client.userinfo);
+		const auto value = info.Get("xuid");
+
 		if (value.empty())
 		{
 			return 0;
 		}
 
-		return std::strtoull(value.c_str(), nullptr, 16);
+		return std::strtoull(value.data(), nullptr, 16);
 	}
 
-	inline bool IsCharacterUsedLocked(const Character character,
-		const std::uint64_t ignoredXuid = 0, const int ignoredClientNum = -1)
+	inline bool IsCharacterUsedLocked(const Character character, const std::uint64_t ignoredXuid = 0, const int ignoredClientNum = -1)
 	{
 		if (!IsValid(character))
 		{
 			return false;
 		}
 
-		if (PendingReplacementXuid != 0 && PendingReplacementXuid != ignoredXuid &&
-			PendingReplacementCharacter == character)
+		if (pendingReplacementXuid != 0 && pendingReplacementXuid != ignoredXuid && pendingReplacementCharacter == character)
 		{
 			return true;
 		}
 
-		for (const auto& [xuid, assigned] : RealCharacters)
+		for (const auto& [xuid, assigned] : realCharacters)
 		{
 			if (xuid != ignoredXuid && assigned == character)
 			{
@@ -201,10 +224,9 @@ namespace Components::CharacterAssignments
 			}
 		}
 
-		for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
+		for (int clientNum = 0; clientNum < static_cast<int>(Game::MAX_CLIENTS); ++clientNum)
 		{
-			if (clientNum != ignoredClientNum &&
-				GetClientCharacterId(clientNum) == character)
+			if (clientNum != ignoredClientNum && GetClientCharacterId(clientNum) == character)
 			{
 				return true;
 			}
@@ -213,19 +235,18 @@ namespace Components::CharacterAssignments
 		return false;
 	}
 
-	inline bool IsCharacterUsed(const Character character,
-		const int ignoredClientNum = -1)
+	inline bool IsCharacterUsed(const Character character, const int ignoredClientNum = -1)
 	{
-		std::scoped_lock lock(StateMutex);
+		std::scoped_lock lock(stateMutex);
 		return IsCharacterUsedLocked(character, 0, ignoredClientNum);
 	}
 
-	inline Character FirstFreeCharacterLocked(const std::uint64_t ignoredXuid = 0,
-		const int ignoredClientNum = -1, const std::size_t start = 0)
+	inline Character FirstFreeCharacterLocked(const std::uint64_t ignoredXuid = 0, const int ignoredClientNum = -1, const std::size_t start = 0)
 	{
-		for (std::size_t offset = 0; offset < Characters.size(); ++offset)
+		for (std::size_t offset = 0; offset < characters.size(); ++offset)
 		{
-			const auto character = Characters[(start + offset) % Characters.size()];
+			const auto character = characters[(start + offset) % characters.size()];
+
 			if (!IsCharacterUsedLocked(character, ignoredXuid, ignoredClientNum))
 			{
 				return character;
@@ -235,37 +256,35 @@ namespace Components::CharacterAssignments
 		return Character::None;
 	}
 
-	inline Character EnsureRealCharacter(const std::uint64_t xuid,
-		const Character preferred = Character::None, const int clientNum = -1)
+	inline Character EnsureRealCharacter(const std::uint64_t xuid, const Character preferred = Character::None, const int clientNum = -1)
 	{
 		if (xuid == 0)
 		{
 			return Character::None;
 		}
 
-		std::scoped_lock lock(StateMutex);
-		if (const auto found = RealCharacters.find(xuid);
-			found != RealCharacters.end())
+		std::scoped_lock lock(stateMutex);
+
+		if (const auto found = realCharacters.find(xuid); found != realCharacters.end())
 		{
 			return found->second;
 		}
 
 		Character character = Character::None;
-		if (IsValid(preferred) &&
-			!IsCharacterUsedLocked(preferred, xuid, clientNum))
+
+		if (IsValid(preferred) && !IsCharacterUsedLocked(preferred, xuid, clientNum))
 		{
 			character = preferred;
 		}
 
 		if (!IsValid(character))
 		{
-			character = FirstFreeCharacterLocked(xuid, clientNum,
-				static_cast<std::size_t>(xuid % Characters.size()));
+			character = FirstFreeCharacterLocked(xuid, clientNum, static_cast<std::size_t>(xuid % characters.size()));
 		}
 
 		if (IsValid(character))
 		{
-			RealCharacters[xuid] = character;
+			realCharacters[xuid] = character;
 		}
 
 		return character;
@@ -278,27 +297,28 @@ namespace Components::CharacterAssignments
 			return;
 		}
 
-		std::scoped_lock lock(StateMutex);
-		RealCharacters.erase(xuid);
-		RecentReplacements.erase(xuid);
-		if (PendingReplacementXuid == xuid)
+		std::scoped_lock lock(stateMutex);
+		realCharacters.erase(xuid);
+		recentReplacements.erase(xuid);
+
+		if (pendingReplacementXuid == xuid)
 		{
-			PendingReplacementXuid = 0;
-			PendingReplacementCharacter = Character::None;
-			PendingReplacementStarted = 0;
+			pendingReplacementXuid = 0;
+			pendingReplacementCharacter = Character::None;
+			pendingReplacementStarted = 0;
 		}
 	}
 
-	inline void PruneRealCharacters(
-		const std::unordered_set<std::uint64_t>& activeXuids)
+	inline void PruneRealCharacters(const std::unordered_set<std::uint64_t>& activeXuids)
 	{
-		std::scoped_lock lock(StateMutex);
-		for (auto it = RealCharacters.begin(); it != RealCharacters.end();)
+		std::scoped_lock lock(stateMutex);
+
+		for (auto it = realCharacters.begin(); it != realCharacters.end();)
 		{
 			if (!activeXuids.contains(it->first))
 			{
-				RecentReplacements.erase(it->first);
-				it = RealCharacters.erase(it);
+				recentReplacements.erase(it->first);
+				it = realCharacters.erase(it);
 			}
 			else
 			{
@@ -309,12 +329,11 @@ namespace Components::CharacterAssignments
 
 	inline void CleanupReplacementStateLocked(const int now)
 	{
-		for (auto it = RecentReplacements.begin();
-			it != RecentReplacements.end();)
+		for (auto it = recentReplacements.begin(); it != recentReplacements.end();)
 		{
-			if (now - it->second >= 30000)
+			if (now - it->second >= replacementLifetimeMs)
 			{
-				it = RecentReplacements.erase(it);
+				it = recentReplacements.erase(it);
 			}
 			else
 			{
@@ -322,59 +341,57 @@ namespace Components::CharacterAssignments
 			}
 		}
 
-		if (PendingReplacementXuid != 0 && PendingReplacementStarted > 0 &&
-			now - PendingReplacementStarted >= 30000)
+		if (pendingReplacementXuid != 0 && pendingReplacementStarted > 0 && now - pendingReplacementStarted >= replacementLifetimeMs)
 		{
-			PendingReplacementXuid = 0;
-			PendingReplacementCharacter = Character::None;
-			PendingReplacementStarted = 0;
+			pendingReplacementXuid = 0;
+			pendingReplacementCharacter = Character::None;
+			pendingReplacementStarted = 0;
 		}
 	}
 
-	inline bool BeginReplacement(const std::uint64_t xuid,
-		const Character character, const int now)
+	inline bool BeginReplacement(const std::uint64_t xuid, const Character character, const int now)
 	{
 		if (xuid == 0)
 		{
 			return false;
 		}
 
-		std::scoped_lock lock(StateMutex);
+		std::scoped_lock lock(stateMutex);
 		CleanupReplacementStateLocked(now);
-		if (PendingReplacementXuid != 0 || RecentReplacements.contains(xuid))
+
+		if (pendingReplacementXuid != 0 || recentReplacements.contains(xuid))
 		{
 			return false;
 		}
 
-		PendingReplacementXuid = xuid;
-		PendingReplacementCharacter = character;
-		PendingReplacementStarted = now;
+		pendingReplacementXuid = xuid;
+		pendingReplacementCharacter = character;
+		pendingReplacementStarted = now;
 		return true;
 	}
 
-	inline bool IsReplacementPendingOrRecent(const std::uint64_t xuid,
-		const int now)
+	inline bool IsReplacementPendingOrRecent(const std::uint64_t xuid, const int now)
 	{
 		if (xuid == 0)
 		{
 			return true;
 		}
 
-		std::scoped_lock lock(StateMutex);
+		std::scoped_lock lock(stateMutex);
 		CleanupReplacementStateLocked(now);
-		return PendingReplacementXuid == xuid || RecentReplacements.contains(xuid);
+		return pendingReplacementXuid == xuid || recentReplacements.contains(xuid);
 	}
 
 	inline bool HasPendingAdmission(const int now)
 	{
-		std::scoped_lock lock(StateMutex);
+		std::scoped_lock lock(stateMutex);
 		CleanupReplacementStateLocked(now);
-		return PendingReplacementXuid != 0;
+		return pendingReplacementXuid != 0;
 	}
 
 	inline Character ResolveClientCharacter(const int clientNum)
 	{
-		if (clientNum < 0 || clientNum >= Game::MAX_CLIENTS)
+		if (!IsClientNum(clientNum))
 		{
 			return Character::None;
 		}
@@ -390,63 +407,64 @@ namespace Components::CharacterAssignments
 				return existing;
 			}
 
-			if (client.header.state >= Game::CS_CONNECTED || client.bIsTestClient)
+			if (client.header.state < Game::CS_CONNECTED && !client.bIsTestClient)
 			{
-				std::scoped_lock lock(StateMutex);
-				const auto character = FirstFreeCharacterLocked(0, clientNum,
-					static_cast<std::size_t>(clientNum) % Characters.size());
-				if (IsValid(character))
-				{
-					SetClientCharacter(clientNum, character);
-					if (client.bIsTestClient)
-					{
-						SetBotReserved(clientNum, true);
-					}
-				}
-				return character;
+				return Character::None;
 			}
 
-			return Character::None;
+			std::scoped_lock lock(stateMutex);
+			const auto character = FirstFreeCharacterLocked(0, clientNum, static_cast<std::size_t>(clientNum) % characters.size());
+
+			if (IsValid(character))
+			{
+				SetClientCharacter(clientNum, character);
+
+				if (client.bIsTestClient)
+				{
+					SetBotReserved(clientNum, true);
+				}
+			}
+
+			return character;
 		}
 
-		std::scoped_lock lock(StateMutex);
+		std::scoped_lock lock(stateMutex);
 		const int now = Game::Sys_Milliseconds();
 		CleanupReplacementStateLocked(now);
 
 		Character character = Character::None;
-		const bool completingAdmission = PendingReplacementXuid == xuid;
-		if (completingAdmission && IsValid(PendingReplacementCharacter))
+		const bool isCompletingAdmission = pendingReplacementXuid == xuid;
+
+		if (isCompletingAdmission && IsValid(pendingReplacementCharacter))
 		{
-			character = PendingReplacementCharacter;
-			RealCharacters[xuid] = character;
+			character = pendingReplacementCharacter;
+			realCharacters[xuid] = character;
 		}
-		else if (const auto found = RealCharacters.find(xuid);
-			found != RealCharacters.end())
+		else if (const auto found = realCharacters.find(xuid); found != realCharacters.end())
 		{
 			character = found->second;
 		}
-		else if (IsValid(existing) &&
-			!IsCharacterUsedLocked(existing, xuid, clientNum))
+		else if (IsValid(existing) && !IsCharacterUsedLocked(existing, xuid, clientNum))
 		{
 			character = existing;
-			RealCharacters[xuid] = character;
+			realCharacters[xuid] = character;
 		}
 		else
 		{
-			character = FirstFreeCharacterLocked(xuid, clientNum,
-				static_cast<std::size_t>(xuid % Characters.size()));
+			character = FirstFreeCharacterLocked(xuid, clientNum, static_cast<std::size_t>(xuid % characters.size()));
+
 			if (IsValid(character))
 			{
-				RealCharacters[xuid] = character;
+				realCharacters[xuid] = character;
 			}
 		}
 
-		if (completingAdmission)
+		if (isCompletingAdmission)
 		{
-			RecentReplacements[xuid] = now;
-			PendingReplacementXuid = 0;
-			PendingReplacementCharacter = Character::None;
-			PendingReplacementStarted = 0;
+			recentReplacements[xuid] = now;
+			pendingReplacementXuid = 0;
+			pendingReplacementCharacter = Character::None;
+			pendingReplacementStarted = 0;
 		}
 
 		if (IsValid(character))
@@ -458,15 +476,14 @@ namespace Components::CharacterAssignments
 		return character;
 	}
 
-	inline bool IsXuidConnected(const std::uint64_t xuid,
-		const int ignoredClientNum = -1)
+	inline bool IsXuidConnected(const std::uint64_t xuid, const int ignoredClientNum = -1)
 	{
 		if (xuid == 0)
 		{
 			return false;
 		}
 
-		for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
+		for (int clientNum = 0; clientNum < static_cast<int>(Game::MAX_CLIENTS); ++clientNum)
 		{
 			if (clientNum == ignoredClientNum)
 			{
@@ -474,8 +491,8 @@ namespace Components::CharacterAssignments
 			}
 
 			const auto& client = Game::svs_clients[clientNum];
-			if (client.header.state >= Game::CS_CONNECTED &&
-				GetClientXuid(client) == xuid)
+
+			if (client.header.state >= Game::CS_CONNECTED && GetClientXuid(client) == xuid)
 			{
 				return true;
 			}
@@ -489,33 +506,33 @@ namespace Components::CharacterAssignments
 		std::unordered_set<std::uint64_t> xuids;
 		std::unordered_set<std::string> activeFallbackNames;
 
-		for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
+		for (int clientNum = 0; clientNum < static_cast<int>(Game::MAX_CLIENTS); ++clientNum)
 		{
 			const auto& client = Game::svs_clients[clientNum];
+
 			if (client.header.state < Game::CS_CONNECTED)
 			{
 				continue;
 			}
 
 			const auto xuid = GetClientXuid(client);
+
 			if (xuid != 0)
 			{
 				xuids.insert(xuid);
 			}
-			else if (!client.bIsTestClient &&
-				client.header.state >= Game::CS_ACTIVE && client.name[0])
+			else if (!client.bIsTestClient && client.header.state >= Game::CS_ACTIVE && client.name[0])
 			{
 				activeFallbackNames.insert(Normalize(client.name));
 			}
 		}
 
-		return std::clamp(static_cast<int>(
-			xuids.size() + activeFallbackNames.size()), 0, 4);
+		return std::clamp(static_cast<int>(xuids.size() + activeFallbackNames.size()), 0, maxPartySize);
 	}
 
 	inline void PruneStaleBotReservations(const int now)
 	{
-		for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
+		for (int clientNum = 0; clientNum < static_cast<int>(Game::MAX_CLIENTS); ++clientNum)
 		{
 			if (!IsBotReserved(clientNum))
 			{
@@ -523,10 +540,9 @@ namespace Components::CharacterAssignments
 			}
 
 			const auto& client = Game::svs_clients[clientNum];
-			const int started = BotReservationStarted[clientNum].load(
-				std::memory_order_acquire);
-			if (client.header.state == Game::CS_FREE && started > 0 &&
-				now - started >= 2000)
+			const int started = botReservationStarted[clientNum].load(std::memory_order_acquire);
+
+			if (client.header.state == Game::CS_FREE && started > 0 && now - started >= staleBotReservationMs)
 			{
 				SetBotReserved(clientNum, false);
 				ClearClientCharacter(clientNum);
@@ -539,22 +555,29 @@ namespace Components::CharacterAssignments
 		PruneStaleBotReservations(Game::Sys_Milliseconds());
 
 		int count = 0;
-		for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
+
+		for (int clientNum = 0; clientNum < static_cast<int>(Game::MAX_CLIENTS); ++clientNum)
 		{
 			if (IsBotReserved(clientNum))
 			{
 				++count;
 			}
 		}
+
 		return count;
 	}
 
 	inline int GetDesiredBotCount(const int now)
 	{
 		const int realPlayers = CountConnectedRealPlayers();
-		const int pendingAdmissions = HasPendingAdmission(now) ? 1 : 0;
-		return std::clamp(GetDesiredPartySize() - realPlayers - pendingAdmissions,
-			0, 3);
+		int pendingAdmissions = 0;
+
+		if (HasPendingAdmission(now))
+		{
+			pendingAdmissions = 1;
+		}
+
+		return std::clamp(GetDesiredPartySize() - realPlayers - pendingAdmissions, 0, maxPartySize - 1);
 	}
 
 	inline void ClearClientSlot(const int clientNum)
@@ -565,15 +588,15 @@ namespace Components::CharacterAssignments
 
 	inline void ResetAll()
 	{
-		std::scoped_lock lock(StateMutex);
-		RealCharacters.clear();
-		PendingReplacementXuid = 0;
-		PendingReplacementCharacter = Character::None;
-		PendingReplacementStarted = 0;
-		RecentReplacements.clear();
-		DesiredPartySize.store(1, std::memory_order_release);
+		std::scoped_lock lock(stateMutex);
+		realCharacters.clear();
+		pendingReplacementXuid = 0;
+		pendingReplacementCharacter = Character::None;
+		pendingReplacementStarted = 0;
+		recentReplacements.clear();
+		desiredPartySize.store(1, std::memory_order_release);
 
-		for (int clientNum = 0; clientNum < Game::MAX_CLIENTS; ++clientNum)
+		for (int clientNum = 0; clientNum < static_cast<int>(Game::MAX_CLIENTS); ++clientNum)
 		{
 			SetBotReserved(clientNum, false);
 			ClearClientCharacter(clientNum);

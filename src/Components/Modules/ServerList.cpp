@@ -1,57 +1,117 @@
-#include <Utils/InfoString.hpp>
-#include <Utils/WebIO.hpp>
+#include "STDInclude.hpp"
 
-#include "Discovery.hpp"
-#include "Events.hpp"
-#include "Node.hpp"
-#include "Party.hpp"
 #include "ServerList.hpp"
+#include "Command.hpp"
+#include "Friends.hpp"
+#include "Logger.hpp"
+#include "Localization.hpp"
+#include "Maps.hpp"
+#include "Scheduler.hpp"
+#include "UIFeeder.hpp"
+#include "UIScript.hpp"
+#include "ServerInfo.hpp"
+#include "Party.hpp"
+#include "Discovery.hpp"
+#include "Node.hpp"
 #include "TextRenderer.hpp"
 #include "Toast.hpp"
-#include "UIFeeder.hpp"
-
-#include <rapidjson/document.h>
-#include <rapidjson/prettywriter.h>
-#include <rapidjson/stringbuffer.h>
-#include <version.hpp>
 
 namespace Components
 {
-	bool ServerList::SortAsc = false;
-	int ServerList::SortKey = static_cast<std::underlying_type_t<Column>>(Column::Players);
+	int ServerList::sortKey = static_cast<std::underlying_type_t<Column>>(Column::Players);
+	bool ServerList::sortAsc = false;
 
-	unsigned int ServerList::CurrentServer = 0;
-	ServerList::Container ServerList::RefreshContainer;
+	unsigned int ServerList::currentServer = 0;
+	ServerList::Container ServerList::refreshContainer;
 
-	std::vector<ServerList::ServerInfo> ServerList::OnlineList;
-	std::vector<ServerList::ServerInfo> ServerList::OfflineList;
-	std::vector<ServerList::ServerInfo> ServerList::FavouriteList;
+	std::vector<ServerList::ServerInfo> ServerList::onlineList;
+	std::vector<ServerList::ServerInfo> ServerList::offlineList;
+	std::vector<ServerList::ServerInfo> ServerList::favouriteList;
 
-	std::vector<unsigned int> ServerList::VisibleList;
+	std::vector<unsigned int> ServerList::visibleList;
 
-	bool ServerList::UseMasterServer = false;
 
-	Dvar::Var ServerList::UIServerSelected;
-	Dvar::Var ServerList::UIServerSelectedMap;
-	Dvar::Var ServerList::NETServerQueryLimit;
-	Dvar::Var ServerList::NETServerFrames;
-	Dvar::Var ServerList::NETServerDeadTimeout;
+	bool ServerList::useMasterServer = false;
+
+	Dvar::Var ServerList::uiServerSelected;
+	Dvar::Var ServerList::uiServerSelectedMap;
+	Dvar::Var ServerList::netServerQueryLimit;
+	Dvar::Var ServerList::netServerFrames;
+	Dvar::Var ServerList::netServerDeadTimeout;
+
+	static const Utils::Hook::LeaSite masterServerNameDefaultLea = { 0x1401F4D11, Utils::Hook::leaRdx, 0x14038C4B8 };
+
+	constexpr std::uintptr_t Com_InitDvars_MasterServerNameFlags = 0x1401F4D0D;
+	constexpr std::uintptr_t Com_InitDvars_MasterPortFlags = 0x1401F4D71;
+
+	static const std::uint8_t masterServerNameFlags[] = { 0x44, 0x8D, 0x47, 0x04 };
+	static const std::uint8_t masterPortFlags[] = { 0xC7, 0x44, 0x24, 0x20, 0x04, 0x00, 0x00, 0x00 };
+
+	constexpr std::uintptr_t UI_OwnerDrawWidth_NetSourceReset = 0x140270A5C;
+	constexpr std::uintptr_t Dvar_SetInt = 0x140287670;
+
+	constexpr float serversFeeder = 2.0f;
+
+	constexpr const char* favouriteFile = "zw3/players/favourites.json";
+
+	constexpr int netSourceOwnerDraw = 220;
+	constexpr int joinGametypeOwnerDraw = 253;
+
+	constexpr int clientLimit = 18;
+
+	constexpr unsigned short firstPort = 28960;
+
+	constexpr auto heartbeatInterval = std::chrono::seconds(30);
+	constexpr auto deadCheckInterval = std::chrono::seconds(30);
+	constexpr auto cacheSaveInterval = std::chrono::seconds(30);
+
+	static std::string GetZombieModeName(const std::string& zombieMode)
+	{
+		if (zombieMode.empty() || zombieMode == "0")
+		{
+			return "Normal";
+		}
+
+		if (zombieMode == "1")
+		{
+			return "Classic";
+		}
+
+		if (zombieMode == "2")
+		{
+			return "Hardcore";
+		}
+
+		return {};
+	}
+
+	static int GetNetSource()
+	{
+		const Game::dvar_t* const dvar = *Game::ui_netSource;
+
+		if (!dvar)
+		{
+			return -1;
+		}
+
+		return dvar->current.integer;
+	}
 
 	std::vector<ServerList::ServerInfo>* ServerList::GetList()
 	{
 		if (IsOnlineList())
 		{
-			return &OnlineList;
+			return &onlineList;
 		}
 
 		if (IsOfflineList())
 		{
-			return &OfflineList;
+			return &offlineList;
 		}
 
 		if (IsFavouriteList())
 		{
-			return &FavouriteList;
+			return &favouriteList;
 		}
 
 		return nullptr;
@@ -59,60 +119,83 @@ namespace Components
 
 	bool ServerList::IsFavouriteList()
 	{
-		return (*Game::ui_netSource)->current.integer == 2;
+		return GetNetSource() == 2;
 	}
 
 	bool ServerList::IsOfflineList()
 	{
-		return (*Game::ui_netSource)->current.integer == 0;
+		return GetNetSource() == 0;
 	}
 
 	bool ServerList::IsOnlineList()
 	{
-		return (*Game::ui_netSource)->current.integer == 1;
+		return GetNetSource() == 1;
 	}
 
 	unsigned int ServerList::GetServerCount()
 	{
-		return VisibleList.size();
+		return static_cast<unsigned int>(visibleList.size());
 	}
 
 	const char* ServerList::GetServerText(unsigned int index, int column)
 	{
-		auto* info = GetServer(index);
+		auto* const server = GetServer(index);
 
-		if (info)
+		if (!server)
 		{
-			return GetServerInfoText(info, column);
+			return "";
 		}
 
-		return "";
+		return GetServerInfoText(server, column);
 	}
 
 	const char* ServerList::GetServerInfoText(ServerInfo* server, int column, bool sorting)
 	{
-		if (!server) return "";
+		if (!server)
+		{
+			return "";
+		}
 
 		switch (static_cast<Column>(column))
 		{
 		case Column::Password:
 		{
-			return (server->password ? ":icon_locked:" : "");
+			if (server->password)
+			{
+				return ":icon_locked:";
+			}
+
+			return "";
 		}
 
 		case Column::Matchtype:
 		{
-			return ((server->matchType == 1) ? "P" : "M");
+			if (server->matchType == 1)
+			{
+				return "P";
+			}
+
+			return "M";
 		}
 
 		case Column::AimAssist:
 		{
-			return ((server->aimassist == 1) ? ":headshot:" : "");
+			if (server->aimassist)
+			{
+				return ":headshot:";
+			}
+
+			return "";
 		}
 
 		case Column::VoiceChat:
 		{
-			return ((server->voice == 1) ? ":voice_on:" : "");
+			if (server->voice)
+			{
+				return ":voice_on:";
+			}
+
+			return "";
 		}
 
 		case Column::Hostname:
@@ -142,15 +225,14 @@ namespace Components
 
 		case Column::Gametype:
 		{
-			return Game::UI_LocalizeGameType(server->gametype.data());
+			return Game::UI_GetGameTypeDisplayName(server->gametype.data());
 		}
 
 		case Column::Mod:
 		{
 			if (Utils::String::StartsWith(server->mod, "mods/"))
 			{
-				// Can point to '\0' which is fine
-				return (server->mod.data() + 5);
+				return server->mod.data() + 5;
 			}
 
 			return "";
@@ -158,18 +240,19 @@ namespace Components
 
 		case Column::Ping:
 		{
-			if (server->ping < 75) // Below this is a good ping
+			if (server->ping < 75)
 			{
 				return Utils::String::VA("^2%i", server->ping);
 			}
 
-			if (server->ping < 150) // Below this is a medium ping
+			if (server->ping < 150)
 			{
 				return Utils::String::VA("^3%i", server->ping);
 			}
 
 			return Utils::String::VA("^1%i", server->ping);
 		}
+
 		default:
 		{
 			break;
@@ -181,281 +264,487 @@ namespace Components
 
 	void ServerList::SelectServer(unsigned int index)
 	{
-		CurrentServer = index;
+		currentServer = index;
 
-		auto* serverInfo = GetCurrentServer();
+		const auto* const server = GetCurrentServer();
 
-		if (serverInfo)
+		if (!server)
 		{
-			UIServerSelected.set(true);
-			UIServerSelectedMap.set(serverInfo->mapname);
-			Dvar::Var("ui_serverSelectedGametype").set(serverInfo->gametype);
+			uiServerSelected.Set(false);
+			return;
 		}
-		else
-		{
-			UIServerSelected.set(false);
-		}
+
+		uiServerSelected.Set(true);
+		uiServerSelectedMap.Set(server->mapname);
+		Dvar::Find("ui_serverSelectedGametype").Set(server->gametype);
 	}
 
-	void ServerList::UpdateVisibleList([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+	void ServerList::UpdateVisibleList([[maybe_unused]] const UIScript::Token& token)
 	{
-		auto* list = GetList();
-		if (!list) return;
+		auto* const list = GetList();
 
-		const std::vector tempList(*list);
+		if (!list)
+		{
+			return;
+		}
 
-		if (tempList.empty())
+		const std::vector snapshot(*list);
+
+		if (snapshot.empty())
 		{
 			Refresh();
 		}
 		else
 		{
-			std::lock_guard _(RefreshContainer.mutex);
-
-			for (const auto& server : tempList)
+			for (const auto& server : snapshot)
 			{
 				InsertRequest(server.addr);
 			}
 		}
+
+		Toast::Show("cardicon_headshot", "Server Browser", "Servers refreshed", 3000);
 	}
 
-	void ServerList::RefreshVisibleList([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+	void ServerList::RefreshVisibleList([[maybe_unused]] const UIScript::Token& token)
 	{
-		Scheduler::Once([info]()
-			{
-				RefreshVisibleListInternal(UIScript::Token(), info);
-			}, Scheduler::Pipeline::CLIENT);
+		Scheduler::Once(RefreshVisibleListInternal, Scheduler::Pipeline::CLIENT);
 	}
 
-	void ServerList::RefreshVisibleListInternal([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info, bool refresh)
+	void ServerList::RefreshVisibleListInternal()
 	{
-		Game::Dvar_SetBoolByName("ui_serverSelected", false);
+		uiServerSelected.Set(false);
 
-		VisibleList.clear();
+		visibleList.clear();
 
-		auto* list = GetList();
-		if (!list) return;
+		auto* const list = GetList();
 
-		if (refresh)
+		if (!list)
 		{
-			Refresh();
 			return;
 		}
 
-		auto ui_browserShowFull = Dvar::Var("ui_browserShowFull").get<bool>();
-		auto ui_browserShowEmpty = Dvar::Var("ui_browserShowEmpty").get<bool>();
-		auto ui_browserShowHardcore = Dvar::Var("ui_browserKillcam").get<int>();
-		auto ui_browserShowPassword = Dvar::Var("ui_browserShowPassword").get<int>();
-		auto ui_browserMod = Dvar::Var("ui_browserMod").get<int>();
-		auto ui_joinGametype = (*Game::ui_joinGametype)->current.integer;
+		const auto showFull = Dvar::Find("ui_browserShowFull").Get<bool>();
+		const auto showEmpty = Dvar::Find("ui_browserShowEmpty").Get<bool>();
+		const auto showHardcore = Dvar::Find("ui_browserKillcam").Get<int>();
+		const auto showPassword = Dvar::Find("ui_browserShowPassword").Get<int>();
+		const auto showMod = Dvar::Find("ui_browserMod").Get<int>();
+		const auto joinGametype = *Game::ui_joinGametype ? (*Game::ui_joinGametype)->current.integer : 0;
 
 		for (unsigned int i = 0; i < list->size(); ++i)
 		{
-			auto* serverInfo = &(*list)[i];
+			const auto& server = (*list)[i];
 
-			// Filter full servers
-			if (!ui_browserShowFull && serverInfo->clients >= serverInfo->maxClients) continue;
+			if (!showFull && server.clients >= server.maxClients)
+			{
+				continue;
+			}
 
-			// Filter empty servers
-			if (!ui_browserShowEmpty && serverInfo->clients <= 0) continue;
+			if (!showEmpty && server.clients <= 0)
+			{
+				continue;
+			}
 
-			// Filter hardcore servers
-			if ((ui_browserShowHardcore == 0 && serverInfo->hardcore) || (ui_browserShowHardcore == 1 && !serverInfo->hardcore)) continue;
+			if ((showHardcore == 0 && server.hardcore) || (showHardcore == 1 && !server.hardcore))
+			{
+				continue;
+			}
 
-			// Filter servers with password
-			if ((ui_browserShowPassword == 0 && serverInfo->password) || (ui_browserShowPassword == 1 && !serverInfo->password)) continue;
+			if ((showPassword == 0 && server.password) || (showPassword == 1 && !server.password))
+			{
+				continue;
+			}
 
-			// Don't show modded servers
-			if ((ui_browserMod == 0 && static_cast<int>(serverInfo->mod.size())) || (ui_browserMod == 1 && serverInfo->mod.empty())) continue;
+			if ((showMod == 0 && !server.mod.empty()) || (showMod == 1 && server.mod.empty()))
+			{
+				continue;
+			}
 
-			// Filter by gametype
-			if (ui_joinGametype > 0 && (ui_joinGametype - 1) < *Game::gameTypeCount && Game::gameTypes[(ui_joinGametype - 1)].gameType != serverInfo->gametype) continue;
+			if (joinGametype > 0 && (joinGametype - 1) < *Game::gameTypeCount
+				&& Game::gameTypes[joinGametype - 1].gameType != server.gametype)
+			{
+				continue;
+			}
 
-			VisibleList.push_back(i);
+			visibleList.push_back(i);
 		}
 
 		SortList();
 	}
 
-	void ServerList::ParseNewMasterServerResponse(const std::string& servers)
+
+	static const char* const masterServerHost = "master.zw3.eu";
+
+	static std::vector<std::string> SplitMasterEntries(const std::string& reply)
 	{
-		std::lock_guard _(RefreshContainer.mutex);
+		std::vector<std::string> entries;
 
-		rapidjson::Document doc{};
-		const rapidjson::ParseResult result = doc.Parse(servers);
-		if (!result || !doc.IsObject())
+		const auto arrayAt = reply.find("\"servers\"");
+
+		if (arrayAt == std::string::npos)
 		{
-			UseMasterServer = false;
-			Logger::Print("Unable to parse JSON response.\n");
+			return entries;
+		}
+
+		auto at = reply.find('[', arrayAt);
+
+		if (at == std::string::npos)
+		{
+			return entries;
+		}
+
+		int depth = 0;
+		std::size_t start = 0;
+		bool isInString = false;
+
+		for (; at < reply.size(); ++at)
+		{
+			const char current = reply[at];
+
+			if (isInString)
+			{
+				if (current == '\\')
+				{
+					++at;
+				}
+				else if (current == '"')
+				{
+					isInString = false;
+				}
+
+				continue;
+			}
+
+			if (current == '"')
+			{
+				isInString = true;
+				continue;
+			}
+
+			if (current == '{')
+			{
+				if (!depth)
+				{
+					start = at;
+				}
+
+				++depth;
+				continue;
+			}
+
+			if (current == '}')
+			{
+				--depth;
+
+				if (!depth)
+				{
+					entries.push_back(reply.substr(start, at - start + 1));
+				}
+
+				continue;
+			}
+
+			if (current == ']' && !depth)
+			{
+				break;
+			}
+		}
+
+		return entries;
+	}
+
+	static std::string ReadMasterValue(const std::string& entry, const std::string& key)
+	{
+		const auto quoted = "\"" + key + "\"";
+		const auto at = entry.find(quoted);
+
+		if (at == std::string::npos)
+		{
+			return {};
+		}
+
+		auto colon = entry.find(':', at + quoted.size());
+
+		if (colon == std::string::npos)
+		{
+			return {};
+		}
+
+		++colon;
+
+		while (colon < entry.size() && std::isspace(static_cast<unsigned char>(entry[colon])))
+		{
+			++colon;
+		}
+
+		if (colon >= entry.size())
+		{
+			return {};
+		}
+
+		if (entry[colon] == '"')
+		{
+			const auto end = entry.find('"', colon + 1);
+
+			if (end == std::string::npos)
+			{
+				return {};
+			}
+
+			return entry.substr(colon + 1, end - colon - 1);
+		}
+
+		const auto end = entry.find_first_of(",}", colon);
+		auto value = entry.substr(colon, (end == std::string::npos ? entry.size() : end) - colon);
+
+		Utils::String::Trim(value);
+
+		return value;
+	}
+
+	constexpr const char* serverCacheFile = "zw3/players/server_cache.json";
+
+	void ServerList::LoadServerCache()
+	{
+		const auto cache = Utils::IO::ReadFile(serverCacheFile);
+
+		if (cache.empty())
+		{
 			return;
 		}
 
-		if (!doc.HasMember("servers"))
+		nlohmann::json root;
+
+		try
 		{
-			UseMasterServer = false;
-			Logger::Print("Unable to parse JSON response: we were unable to find any server.\n");
+			root = nlohmann::json::parse(cache);
+		}
+		catch (const nlohmann::json::parse_error& ex)
+		{
+			Logger::Error("JSON parse error in server cache: {}\n", ex.what());
 			return;
 		}
 
-		const rapidjson::Value& list = doc["servers"];
-		if (!list.IsArray() || list.Empty())
+		if (!root.is_object() || !root.contains("servers") || !root["servers"].is_array())
 		{
-			UseMasterServer = false;
-			Logger::Print("Unable to parse JSON response: we were unable to find any server.\n");
+			Logger::Print("server cache file is invalid\n");
 			return;
 		}
 
-		Logger::Print("Response from the master server contains {} servers\n", list.Size());
+		const auto& servers = root["servers"];
+		auto* const list = &onlineList;
 
-		std::size_t count = 0;
+		Logger::Print("loading {} cached servers...\n", servers.size());
 
-		for (const auto& entry : list.GetArray())
+		for (const auto& entry : servers)
 		{
-			if (!entry.HasMember("ip") || !entry.HasMember("port"))
+			if (!entry.is_object())
 			{
 				continue;
 			}
 
-			if (!entry["ip"].IsString() || !entry["port"].IsInt())
+			try
 			{
-				continue;
-			}
+				ServerInfo server{};
 
-			if (!entry.HasMember("ip") || !entry["protocol"].IsInt())
+				server.addr = Network::Address(entry.value("address", std::string()));
+				server.hostname = entry.value("hostname", std::string());
+				server.mapname = entry.value("mapname", std::string());
+				server.gametype = entry.value("gametype", std::string());
+				server.mod = entry.value("mod", std::string());
+				server.version = entry.value("version", std::string());
+				server.clients = entry.value("clients", 0);
+				server.bots = entry.value("bots", 0);
+				server.maxClients = entry.value("maxClients", 0);
+				server.password = entry.value("password", false);
+				server.ping = entry.value("ping", 999);
+				server.matchType = entry.value("matchType", 0);
+				server.securityLevel = entry.value("securityLevel", 0);
+				server.protocol = entry.value("protocol", Components::ServerInfo::GetProtocol());
+				server.hardcore = entry.value("hardcore", false);
+				server.svRunning = entry.value("svRunning", false);
+				server.aimassist = entry.value("aimassist", false);
+				server.voice = entry.value("voice", false);
+				server.lastSeen = entry.value("lastSeen", std::time(nullptr));
+				server.hash = std::hash<ServerInfo>()(server);
+
+				if (!IsServerDuplicate(list, server))
+				{
+					list->push_back(server);
+				}
+			}
+			catch (const std::exception& ex)
 			{
-				continue;
+				Logger::Error("error loading cached server: {}\n", ex.what());
 			}
-
-			const auto protocol = entry["protocol"].GetInt();
-
-			if (protocol != PROTOCOL)
-			{
-				// We can't connect to it anyway
-				continue;
-			}
-
-			// Using VA because it's faster
-			Network::Address server(Utils::String::VA("%s:%u", entry["ip"].GetString(), entry["port"].GetInt()));
-			server.setType(Game::NA_IP); // Just making sure...
-
-			InsertRequest(server);
-			++count;
 		}
 
-		if (!count)
+		Scheduler::Once(RefreshVisibleListInternal, Scheduler::Pipeline::CLIENT);
+
+		Logger::Print("loaded {} servers from cache\n", list->size());
+	}
+
+	void ServerList::SaveServerCache()
+	{
+		if (!IsOnlineList())
 		{
-			UseMasterServer = false;
-			Logger::Print("Despite receiving what looked like a valid response from the master server, we got {} servers.\n", count);
 			return;
 		}
 
-		UseMasterServer = true;
-		Logger::Print("Response from the master server was successfully parsed. We got {} servers\n", count);
+		const auto* const list = GetList();
+
+		if (!list || list->empty())
+		{
+			return;
+		}
+
+		nlohmann::json::array_t servers;
+
+		for (const auto& server : *list)
+		{
+			nlohmann::json entry;
+
+			entry["address"] = server.addr.GetString();
+			entry["hostname"] = server.hostname;
+			entry["mapname"] = server.mapname;
+			entry["gametype"] = server.gametype;
+			entry["mod"] = server.mod;
+			entry["version"] = server.version;
+			entry["clients"] = server.clients;
+			entry["bots"] = server.bots;
+			entry["maxClients"] = server.maxClients;
+			entry["password"] = server.password;
+			entry["ping"] = server.ping;
+			entry["matchType"] = server.matchType;
+			entry["securityLevel"] = server.securityLevel;
+			entry["protocol"] = server.protocol;
+			entry["hardcore"] = server.hardcore;
+			entry["svRunning"] = server.svRunning;
+			entry["aimassist"] = server.aimassist;
+			entry["voice"] = server.voice;
+			entry["lastSeen"] = server.lastSeen;
+
+			servers.push_back(entry);
+		}
+
+		nlohmann::json root;
+		root["servers"] = servers;
+		root["timestamp"] = std::time(nullptr);
+
+		Utils::IO::WriteFile(serverCacheFile, root.dump());
+
+		Logger::Print("saved {} servers to cache\n", servers.size());
+	}
+
+	void ServerList::FetchMasterList()
+	{
+		const auto protocol = Components::ServerInfo::GetProtocol();
+		const auto url = std::format("http://{}/v1/servers/zw3?protocol={}", masterServerHost, protocol);
+
+		std::thread([url, protocol]
+		{
+			const auto reply = Utils::WebIO("zw3", url).SetTimeout(5000)->Get();
+
+			Scheduler::Once([reply, url, protocol]
+			{
+				if (reply.empty())
+				{
+					Logger::Print("master: no answer from {}\n", url);
+					Toast::Show("cardicon_redhand", "^1Error", "Could not get a response.\n", 5000);
+
+					useMasterServer = false;
+					return;
+				}
+
+				std::size_t queued = 0;
+
+				for (const auto& entry : SplitMasterEntries(reply))
+				{
+					const auto ip = ReadMasterValue(entry, "ip");
+					const auto port = ReadMasterValue(entry, "port");
+
+					if (ip.empty() || port.empty())
+					{
+						continue;
+					}
+
+					if (std::strtol(ReadMasterValue(entry, "protocol").data(), nullptr, 10) != protocol)
+					{
+						continue;
+					}
+
+					Network::Address server(std::format("{}:{}", ip, port));
+					server.SetType(Game::NA_IP);
+
+					InsertRequest(server);
+					++queued;
+				}
+
+				if (!queued)
+				{
+					useMasterServer = false;
+					Logger::Print("master: no servers in the answer from {}\n", url);
+					return;
+				}
+
+				useMasterServer = true;
+				Logger::Print("master: {} servers queued for query\n", queued);
+			}, Scheduler::Pipeline::CLIENT);
+		}).detach();
 	}
 
 	void ServerList::Refresh()
 	{
-		Dvar::Var("ui_serverSelected").set(false);
+		uiServerSelected.Set(false);
 
-		auto* list = GetList();
+		auto* const list = GetList();
 
 		const bool hasCachedServers = list && !list->empty();
 
-		// Clear the visible list only when presenting the online view *without*
-		// a populated cache. Favourites and offline entries arrive through their
-		// own asynchronous channels and should retain continuity rather than
-		// flicker in and out of existence.
-		//
-		// In other words: only the online list gets the broom, and only when
-		// it shows up empty-handed.
-		//
 		if (!hasCachedServers && IsOnlineList())
-			VisibleList.clear();
+		{
+			visibleList.clear();
+		}
 
 		{
-			std::lock_guard _(RefreshContainer.mutex);
-			RefreshContainer.servers.clear();
-
-			// Record that the visible set must be rebuilt after the first discovery
-			// pass when starting without a cache. Note that in this situation the
-			// browser has no prior ordering or selection state, so the initial
-			// snapshot must drive the first stable view.
-			//
-			RefreshContainer.needsInitialRefresh = true;
+			std::lock_guard _(refreshContainer.mutex);
+			refreshContainer.servers.clear();
+			refreshContainer.needsInitialRefresh = true;
 		}
 
 		if (IsOfflineList())
 		{
 			Discovery::Perform();
 
-			// After LAN discovery completes, rebuild the visible list so that any
-			// newly-found offline servers are surfaced to the UI.
-			//
-			Scheduler::Once([]()
-				{
-					RefreshVisibleListInternal(UIScript::Token(), nullptr);
-				}, Scheduler::Pipeline::CLIENT);
+			Scheduler::Once(RefreshVisibleListInternal, Scheduler::Pipeline::CLIENT);
+			return;
 		}
-		else if (IsOnlineList())
+
+		if (IsOnlineList())
 		{
-			// Warms the list early and lets the first discovery cycle reconcile
-			// cached state with the actual network view.
-			//
-			if (hasCachedServers && list)
+			if (!hasCachedServers)
+			{
+				Toast::Show("cardicon_redhand", "Fetching Servers", "This may take some time. Please wait...", 3000);
+			}
+
+			FetchMasterList();
+
+			if (hasCachedServers)
 			{
 				for (const auto& server : *list)
 				{
 					InsertRequest(server.addr);
 				}
 			}
-			const auto masterPort = (*Game::com_masterPort)->current.unsignedInt;
-			const auto* masterServerName = (*Game::com_masterServerName)->current.string;
 
-			RefreshContainer.awaitingList = true;
-			RefreshContainer.awaitTime = Game::Sys_Milliseconds();
-
-			if (!hasCachedServers)
-			{
-				Toast::Show("cardicon_redhand", "Fetching Servers", "This may take some time. Please wait...", 3000);
-			}
-
-			std::jthread([masterServerName, masterPort]()
-				{
-					const auto host = "master.zw3.eu";
-					const auto url = std::format("http://{}/v1/servers/zw3?protocol={}", host, PROTOCOL);
-					const auto reply = Utils::WebIO("zw3", url).setTimeout(5000)->get();
-
-					Scheduler::Once([reply, masterServerName, masterPort, url]()
-						{
-							{
-								std::lock_guard _(RefreshContainer.mutex);
-								RefreshContainer.awaitingList = false;
-							}
-
-							if (reply.empty())
-							{
-								Logger::Print("Response was empty or the request timed out.\n", url);
-								Toast::Show("cardicon_redhand", "^1Error", std::format("Could not get a response.\n", url), 5000);
-								UseMasterServer = false;
-								return;
-							}
-
-							ParseNewMasterServerResponse(reply);
-							RefreshContainer.host = Network::Address(std::format("{}:{}", masterServerName, masterPort));
-						}, Scheduler::Pipeline::CLIENT);
-				}).detach();
+			Scheduler::Once(RefreshVisibleListInternal, Scheduler::Pipeline::CLIENT);
+			return;
 		}
-		else if (IsFavouriteList())
-		{
-			LoadFavourties();
 
-			// Same as discovery, that is, after favourites are loaded, rebuild the
-			// visible list to make them surfaced to the UI.
-			//
-			Scheduler::Once([]()
-				{
-					RefreshVisibleListInternal(UIScript::Token(), nullptr);
-				}, Scheduler::Pipeline::CLIENT);
+		if (IsFavouriteList())
+		{
+			LoadFavourites();
+
+			Scheduler::Once(RefreshVisibleListInternal, Scheduler::Pipeline::CLIENT);
 		}
 	}
 
@@ -463,17 +752,19 @@ namespace Components
 	{
 		std::vector<std::string> servers;
 
-		const auto parseData = Utils::IO::ReadFile(FavouriteFile);
+		const auto parseData = Utils::IO::ReadFile(favouriteFile);
+
 		if (!parseData.empty())
 		{
 			nlohmann::json object;
+
 			try
 			{
 				object = nlohmann::json::parse(parseData);
 			}
 			catch (const nlohmann::json::parse_error& ex)
 			{
-				Logger::PrintError(Game::CON_CHANNEL_ERROR, "JSON Parse Error: {}\n", ex.what());
+				Logger::Error("JSON Parse Error: {}\n", ex.what());
 				return;
 			}
 
@@ -485,9 +776,14 @@ namespace Components
 			}
 
 			const nlohmann::json::array_t storedServers = object;
+
 			for (const auto& storedServer : storedServers)
 			{
-				if (!storedServer.is_string()) continue;
+				if (!storedServer.is_string())
+				{
+					continue;
+				}
+
 				if (storedServer.get<std::string>() == server)
 				{
 					Game::ShowMessageBox("Server already marked as favourite.", "Error");
@@ -501,7 +797,7 @@ namespace Components
 		servers.push_back(server);
 
 		const auto data = nlohmann::json(servers);
-		Utils::IO::WriteFile(FavouriteFile, data.dump());
+		Utils::IO::WriteFile(favouriteFile, data.dump());
 		Game::ShowMessageBox("Server added to favourites.", "Success");
 	}
 
@@ -509,17 +805,19 @@ namespace Components
 	{
 		std::vector<std::string> servers;
 
-		const auto parseData = Utils::IO::ReadFile(FavouriteFile);
+		const auto parseData = Utils::IO::ReadFile(favouriteFile);
+
 		if (!parseData.empty())
 		{
 			nlohmann::json object;
+
 			try
 			{
 				object = nlohmann::json::parse(parseData);
 			}
 			catch (const nlohmann::json::parse_error& ex)
 			{
-				Logger::PrintError(Game::CON_CHANNEL_ERROR, "JSON Parse Error: {}\n", ex.what());
+				Logger::Error("JSON Parse Error: {}\n", ex.what());
 				return;
 			}
 
@@ -530,8 +828,9 @@ namespace Components
 				return;
 			}
 
-			const nlohmann::json::array_t arr = object;
-			for (auto& storedServer : arr)
+			const nlohmann::json::array_t storedServers = object;
+
+			for (const auto& storedServer : storedServers)
 			{
 				if (storedServer.is_string() && storedServer.get<std::string>() != server)
 				{
@@ -541,41 +840,48 @@ namespace Components
 		}
 
 		const auto data = nlohmann::json(servers);
-		Utils::IO::WriteFile(FavouriteFile, data.dump());
+		Utils::IO::WriteFile(favouriteFile, data.dump());
 
-		auto* list = GetList();
-		if (list) list->clear();
+		auto* const list = GetList();
 
-		Scheduler::Once([]()
-			{
-				RefreshVisibleListInternal(UIScript::Token(), nullptr);
-			}, Scheduler::Pipeline::CLIENT);
+		if (list)
+		{
+			list->clear();
+		}
+
+		Scheduler::Once(RefreshVisibleListInternal, Scheduler::Pipeline::CLIENT);
 	}
 
-	void ServerList::LoadFavourties()
+	void ServerList::LoadFavourites()
 	{
 		if (!IsFavouriteList())
 		{
 			return;
 		}
 
-		auto* list = GetList();
-		if (list) list->clear();
+		auto* const list = GetList();
 
-		const auto parseData = Utils::IO::ReadFile(FavouriteFile);
+		if (list)
+		{
+			list->clear();
+		}
+
+		const auto parseData = Utils::IO::ReadFile(favouriteFile);
+
 		if (parseData.empty())
 		{
 			return;
 		}
 
 		nlohmann::json object;
+
 		try
 		{
 			object = nlohmann::json::parse(parseData);
 		}
 		catch (const nlohmann::json::parse_error& ex)
 		{
-			Logger::PrintError(Game::CON_CHANNEL_ERROR, "JSON Parse Error: {}\n", ex.what());
+			Logger::Error("JSON Parse Error: {}\n", ex.what());
 			return;
 		}
 
@@ -587,470 +893,172 @@ namespace Components
 		}
 
 		const nlohmann::json::array_t servers = object;
+
 		for (const auto& server : servers)
 		{
-			if (!server.is_string()) continue;
-			InsertRequest(server.get<std::string>());
-		}
-	}
-
-	void ServerList::LoadServerCache()
-	{
-		std::string cache(Utils::IO::ReadFile(ServerCacheFile));
-		if (cache.empty())
-			return;
-
-		nlohmann::json root;
-		try
-		{
-			root = nlohmann::json::parse(cache);
-		}
-		catch (const nlohmann::json::parse_error& e)
-		{
-			Logger::PrintError(Game::CON_CHANNEL_ERROR,
-				"JSON parse error in server cache: {}\n",
-				e.what());
-
-			// Treat malformed cache data as non-fatal. The cache is simply ignored
-			// and a fresh list will be constructed via the normal discovery path.
-			//
-			return;
-		}
-
-		if (!root.is_object() ||
-			!root.contains("servers") ||
-			!root["servers"].is_array())
-		{
-			Logger::Print("server cache file is invalid\n");
-
-			// non-fatal. (see above)
-			//
-			return;
-		}
-
-		const auto& servers = root["servers"];
-
-		// Always load cache into OnlineList, not the current view's list
-		//
-		auto* list = &OnlineList;
-
-		Logger::Print("loading {} cached servers...\n", servers.size());
-
-		for (const nlohmann::json& entry : servers)
-		{
-			if (!entry.is_object())
+			if (!server.is_string())
+			{
 				continue;
-
-			try
-			{
-				ServerInfo s;
-
-				s.addr = Network::Address(entry.value("address", ""));
-				s.hostname = entry.value("hostname", "");
-				s.mapname = entry.value("mapname", "");
-				s.gametype = entry.value("gametype", "");
-				s.mod = entry.value("mod", "");
-				s.version = entry.value("version", "");
-				s.clients = entry.value("clients", 0);
-				s.bots = entry.value("bots", 0);
-				s.maxClients = entry.value("maxClients", 0);
-				s.password = entry.value("password", false);
-				s.ping = entry.value("ping", 999);
-				s.matchType = entry.value("matchType", 0);
-				s.securityLevel = entry.value("securityLevel", 0);
-				s.protocol = entry.value("protocol", PROTOCOL);
-				s.hardcore = entry.value("hardcore", false);
-				s.svRunning = entry.value("svRunning", false);
-				s.aimassist = entry.value("aimassist", false);
-				s.voice = entry.value("voice", false);
-				s.lastSeen = entry.value("lastSeen", std::time(nullptr));
-
-				std::hash<ServerInfo> h;
-				s.hash = h(s);
-
-				if (!IsServerDuplicate(list, s))
-					list->push_back(s);
 			}
-			catch (const std::exception& e)
-			{
-				Logger::PrintError(Game::CON_CHANNEL_ERROR,
-					"error loading cached server: {}\n",
-					e.what());
-			}
-		}
 
-		// Recompute visibility after population.
-		//
-		Scheduler::Once([]()
-			{
-				RefreshVisibleListInternal(UIScript::Token(), nullptr);
-			}, Scheduler::Pipeline::CLIENT);
-
-		Logger::Print("loaded {} servers from cache\n", list->size());
-	}
-
-	void ServerList::SaveServerCache()
-	{
-		if (!IsOnlineList())
-			return;
-
-		auto* list = GetList();
-		if (list == nullptr || list->empty())
-			return;
-
-		nlohmann::json::array_t servers;
-
-		for (const ServerInfo& s : *list)
-		{
-			nlohmann::json e;
-
-			e["address"] = s.addr.getString();
-			e["hostname"] = s.hostname;
-			e["mapname"] = s.mapname;
-			e["gametype"] = s.gametype;
-			e["mod"] = s.mod;
-			e["version"] = s.version;
-			e["clients"] = s.clients;
-			e["bots"] = s.bots;
-			e["maxClients"] = s.maxClients;
-			e["password"] = s.password;
-			e["ping"] = s.ping;
-			e["matchType"] = s.matchType;
-			e["securityLevel"] = s.securityLevel;
-			e["protocol"] = s.protocol;
-			e["hardcore"] = s.hardcore;
-			e["svRunning"] = s.svRunning;
-			e["aimassist"] = s.aimassist;
-			e["voice"] = s.voice;
-			e["lastSeen"] = s.lastSeen;
-
-			servers.push_back(e);
-		}
-
-		nlohmann::json root;
-
-		root["servers"] = servers;
-		root["timestamp"] = std::time(nullptr);
-		root["version"] = REVISION_STR;
-
-		Utils::IO::WriteFile(ServerCacheFile, root.dump());
-
-		// Note that ephemeral entries are not included, so the cached set may
-		// differ from the full set returned by live node queries.
-		//
-		Logger::Print("saved {} servers to cache\n", servers.size());
-	}
-
-	void ServerList::RemoveDeadServers()
-	{
-		if (!IsOnlineList())
-			return;
-
-		auto* list(GetList());
-		if (list == nullptr || list->empty())
-			return;
-
-		const std::time_t now(std::time(nullptr));
-		const std::time_t timeout(NETServerDeadTimeout.get<int>());
-
-		std::size_t removed(0);
-
-		// Prune entries that have not produced a response within the configured
-		// timeout window.
-		//
-		for (auto i(list->begin()); i != list->end(); )
-		{
-			if (now - i->lastSeen > timeout)
-			{
-				Logger::Print("removing dead server: {} (last seen {} seconds ago)\n",
-					i->addr.getString(), now - i->lastSeen);
-
-				i = list->erase(i);
-				++removed;
-			}
-			else
-				++i;
-		}
-
-		if (removed > 0)
-		{
-			Logger::Print("removed {} dead servers from cache\n", removed);
-
-			// Note that we do not persist the cache here. While it may appear natural
-			// to save immediately after pruning, the periodic cache-save interval is
-			// aligned with the heartbeat/dead-check cadence. In practice, removal
-			// only occurs during those cycles, which guarantees that a scheduled
-			// cache write will follow in the same frame or shortly thereafter.
-			//
-			Scheduler::Once([]()
-				{
-					RefreshVisibleListInternal(UIScript::Token(), nullptr);
-				}, Scheduler::Pipeline::CLIENT);
+			InsertRequest(Network::Address(server.get<std::string>()));
 		}
 	}
 
-	void ServerList::HeartbeatServers()
+	void ServerList::InsertRequest(const Network::Address& address)
 	{
-		if (!IsOnlineList())
-			return;
+		std::lock_guard _(refreshContainer.mutex);
 
-		auto* list(GetList());
-		if (list == nullptr || list->empty())
-			return;
-
-		Logger::Print("starting heartbeat check for {} cached servers\n",
-			list->size());
-
-		// Note that we issue getinfo requests for each cached server to refresh
-		// without requiring a full discovery sweep.
-		//
-		std::lock_guard lock(RefreshContainer.mutex);
-
-		for (const ServerInfo& s : *list)
+		for (const auto& queued : refreshContainer.servers)
 		{
-			bool queued(false);
-
-			for (const Container::ServerContainer& c : RefreshContainer.servers)
+			if (queued.target == address)
 			{
-				if (c.target == s.addr)
-				{
-					queued = true;
-					break;
-				}
-			}
-
-			if (!queued)
-			{
-				Container::ServerContainer c;
-				c.sent = false;
-				c.target = s.addr;
-				c.sourceList = 1; // OnlineList
-
-				RefreshContainer.servers.push_back(c);
+				return;
 			}
 		}
 
-		Logger::Print("queued {} servers for heartbeat ping\n",
-			RefreshContainer.servers.size());
-	}
+		Container::ServerContainer request;
+		request.sent = false;
+		request.sendTime = 0;
+		request.target = address;
+		request.sourceList = GetNetSource();
 
-	void ServerList::InsertRequest(Network::Address address)
-	{
-		std::lock_guard _(RefreshContainer.mutex);
-
-		Container::ServerContainer c;
-		c.sent = false;
-		c.target = address;
-		c.sourceList = (*Game::ui_netSource)->current.integer;
-
-		auto alreadyInserted = false;
-		for (auto& s : RefreshContainer.servers)
-		{
-			if (s.target == c.target)
-			{
-				alreadyInserted = true;
-				break;
-			}
-		}
-
-		if (!alreadyInserted)
-			RefreshContainer.servers.push_back(c);
+		refreshContainer.servers.push_back(request);
 	}
 
 	void ServerList::Insert(const Network::Address& address, const Utils::InfoString& info)
 	{
-		std::lock_guard _(RefreshContainer.mutex);
+		std::lock_guard _(refreshContainer.mutex);
 
-		for (auto i = RefreshContainer.servers.begin(); i != RefreshContainer.servers.end();)
+		for (auto i = refreshContainer.servers.begin(); i != refreshContainer.servers.end();)
 		{
-			// Our desired server
-			if ((i->target != address) || !i->sent)
+			if (i->target != address || !i->sent)
 			{
 				++i;
 				continue;
 			}
 
-			// Challenge did not match
-			if (i->challenge != info.get("challenge"))
+			if (i->challenge != info.Get("challenge"))
 			{
-				// Shall we remove the server from the queue?
-				// Better not, it might send a second response with the correct challenge.
-				// This might happen when users refresh twice (or more often) in a short period of time
 				break;
 			}
 
-			ServerInfo server;
-			server.hostname = info.get("hostname");
-			server.mapname = info.get("mapname");
-			//server.gametype = info.get("gametype");
-			server.version = info.get("version");
-			server.mod = info.get("fs_game");
-			server.matchType = std::strtol(info.get("matchtype").data(), nullptr, 10);
-			server.clients = std::strtol(info.get("clients").data(), nullptr, 10);
-			server.bots = std::strtol(info.get("bots").data(), nullptr, 10);
-			server.securityLevel = std::strtol(info.get("securityLevel").data(), nullptr, 10);
-			server.maxClients = std::strtol(info.get("sv_maxclients").data(), nullptr, 10);
-			server.password = info.get("isPrivate") == "1"s;
-			server.aimassist = info.get("aimAssist") == "1";
-			server.voice = info.get("voiceChat") == "1"s;
-			server.hardcore = info.get("hc") == "1"s;
-			server.svRunning = info.get("sv_running") == "1"s;
-			server.ping = (Game::Sys_Milliseconds() - i->sendTime);
+			ServerInfo server{};
+			server.hostname = info.Get("hostname");
+			server.mapname = info.Get("mapname");
+			server.gametype = GetZombieModeName(info.Get("zombiemode"));
+			server.version = info.Get("version");
+			server.mod = info.Get("fs_game");
+			server.matchType = std::strtol(info.Get("matchtype").data(), nullptr, 10);
+			server.clients = std::strtol(info.Get("clients").data(), nullptr, 10);
+			server.bots = std::strtol(info.Get("bots").data(), nullptr, 10);
+			server.securityLevel = std::strtol(info.Get("securityLevel").data(), nullptr, 10);
+			server.maxClients = std::strtol(info.Get("sv_maxclients").data(), nullptr, 10);
+			server.protocol = std::strtol(info.Get("protocol").data(), nullptr, 10);
+			server.password = info.Get("isPrivate") == "1";
+			server.aimassist = info.Get("aimAssist") == "1";
+			server.voice = info.Get("voiceChat") == "1";
+			server.hardcore = info.Get("hc") == "1";
+			server.svRunning = info.Get("sv_running") == "1";
+			server.ping = Game::Sys_Milliseconds() - i->sendTime;
 			server.addr = address;
 			server.lastSeen = std::time(nullptr);
 
-			std::hash<ServerInfo> hashFn;
-			server.hash = hashFn(server);
+			server.hash = std::hash<ServerInfo>()(server);
 
-			// more secure
 			server.hostname = TextRenderer::StripMaterialTextIcons(server.hostname);
 
-			if (server.hostname.empty() || std::all_of(server.hostname.begin(), server.hostname.end(), isspace))
+			const bool isBlankHostname = std::all_of(server.hostname.begin(), server.hostname.end(), [](const char letter)
 			{
-				// Invalid server name containing only emojis
+				return std::isspace(static_cast<unsigned char>(letter)) != 0;
+			});
+
+			if (server.hostname.empty() || isBlankHostname)
+			{
 				return;
 			}
 
 			server.mapname = TextRenderer::StripMaterialTextIcons(server.mapname);
+			server.gametype = TextRenderer::StripMaterialTextIcons(server.gametype);
 			server.mod = TextRenderer::StripMaterialTextIcons(server.mod);
 
-			const auto zombiemode = info.get("zombiemode");
-			if (!zombiemode.empty())
-			{
-				std::map<std::string, std::string> zGametype =
-				{
-					{"0", "Normal"},
-					{"1", "Classic"},
-					{"2", "Hardcore"}
-				};
-				server.gametype = zGametype[zombiemode];
-			}
-			else
-			{
-				server.gametype = std::string("Normal");
-			}
+			std::vector<ServerInfo>* target = nullptr;
 
-			server.gametype = TextRenderer::StripMaterialTextIcons(server.gametype);
-
-			// Select the appropriate server list based on the origin of this query.
-			// While the mapping is intentionally explicit rather than "clever", it
-			// also serves as a gentle reminder that magic numbers age poorly.
-			//
-			// Note that an unrecognised source is treated as a logic error rather
-			// than something we try to auto-correct, if the caller is confused,
-			// letting it fail fast is usually kinder to both of us.
-			//
-			std::vector<ServerInfo>* l = nullptr;
 			const auto sourceList = i->sourceList;
+
 			switch (sourceList)
 			{
-			case 0: l = &OfflineList; break;
-			case 1: l = &OnlineList; break;
-			case 2: l = &FavouriteList; break;
-			default: return;
+			case 0:
+				target = &offlineList;
+				break;
+			case 1:
+				target = &onlineList;
+				break;
+			case 2:
+				target = &favouriteList;
+				break;
+			default:
+				return;
 			}
 
-			// Remove server from queue
-			i = RefreshContainer.servers.erase(i);
+			refreshContainer.servers.erase(i);
 
-			if (info.get("zwnet_show_in_server_browser") == "0")
+			if (info.Get("zwnet_show_in_server_browser") == "0")
 			{
-				std::erase_if(*l, [&address](const ServerInfo& existing)
+				std::erase_if(*target, [&address](const ServerInfo& known)
 				{
-					return existing.addr == address;
+					return known.addr == address;
 				});
-				if (sourceList == (*Game::ui_netSource)->current.integer)
+
+				if (sourceList == GetNetSource())
 				{
-					Scheduler::Once([]
-					{
-						RefreshVisibleListInternal(UIScript::Token(), nullptr);
-					}, Scheduler::Pipeline::CLIENT);
+					Scheduler::Once(RefreshVisibleListInternal, Scheduler::Pipeline::CLIENT);
 				}
+
 				return;
 			}
 
-			// Servers with more than 18 players or less than 0 players are faking for sure
-			// So lets ignore those
-			if (static_cast<std::size_t>(server.clients) > Game::MAX_CLIENTS || static_cast<std::size_t>(server.maxClients) > Game::MAX_CLIENTS)
+			if (server.clients > clientLimit || server.maxClients > clientLimit)
 			{
 				return;
 			}
 
-			// Check if already inserted and update in-place
-			bool found(false);
-			for (auto& s : *l)
+			bool found = false;
+
+			for (auto& known : *target)
 			{
-				if (s.addr == address)
+				if (known.addr == address)
 				{
-					// Update entry in-place to retain list position.
-					//
-					s = server;
+					known = server;
 					found = true;
 					break;
 				}
 			}
 
-			if (info.get("gamename") == "IW4"s && server.matchType)
+			if (info.Get("gamename") != "IW4" || !server.matchType)
 			{
-				// NOTE: The visible list is not refreshed here during normal
-				// operation. Recomputing visibility on each heartbeat causes the
-				// browser to re-sort while player counts fluctuate, which makes
-				// entries appear to "jump" during normal activity.
-				//
-				// ... Well, turn out that during initial discovery, the browser is
-				// still forming its first stable view, so entries must be allowed to
-				// surface incrementally as responses arrive.
-				//
-				if (!found && !IsServerDuplicate(l, server))
-				{
-					l->push_back(server);
-				}
-
-				const auto currentSource = (*Game::ui_netSource)->current.integer;
-				if (RefreshContainer.needsInitialRefresh && sourceList == currentSource)
-				{
-					Scheduler::Once([]()
-						{
-							RefreshVisibleListInternal(UIScript::Token(), nullptr);
-						}, Scheduler::Pipeline::CLIENT);
-				}
+				return;
 			}
+
+			if (!found && !IsServerDuplicate(target, server))
+			{
+				target->push_back(server);
+			}
+
+			if (refreshContainer.needsInitialRefresh && sourceList == GetNetSource())
+			{
+				Scheduler::Once(RefreshVisibleListInternal, Scheduler::Pipeline::CLIENT);
+			}
+
+			return;
 		}
-	}
-
-	bool ServerList::CompareVersion(const std::string& version1, const std::string& version2)
-	{
-		auto subVersions1 = Utils::String::Split(version1, '.');
-		auto subVersions2 = Utils::String::Split(version2, '.');
-
-		while (subVersions1.size() >= 3) subVersions1.pop_back();
-		while (subVersions2.size() >= 3) subVersions2.pop_back();
-		if (subVersions1.size() != subVersions2.size()) return false;
-
-		for (std::size_t i = 0; i < subVersions1.size(); ++i)
-		{
-			try
-			{
-				if (std::stoi(subVersions1[i]) != std::stoi(subVersions2[i]))
-				{
-					return false;
-				}
-			}
-			catch (const std::exception& ex)
-			{
-				Logger::PrintError(Game::CON_CHANNEL_ERROR, "{} while performing numeric comparison between {} and {}\n", ex.what(), subVersions1[i], subVersions2[i]);
-				return false;
-			}
-		}
-
-		return true;
 	}
 
 	bool ServerList::IsServerDuplicate(const std::vector<ServerInfo>* list, const ServerInfo& server)
 	{
-		for (auto l = list->begin(); l != list->end(); ++l)
+		for (const auto& known : *list)
 		{
-			if (l->hash == server.hash)
+			if (known.hash == server.hash)
 			{
 				return true;
 			}
@@ -1061,229 +1069,224 @@ namespace Components
 
 	ServerList::ServerInfo* ServerList::GetCurrentServer()
 	{
-		return GetServer(CurrentServer);
-	}
-
-	void ServerList::SortList()
-	{
-		// Only sort when the serverlist is open
-		if (!IsServerListOpen()) return;
-
-		std::ranges::stable_sort(VisibleList, [](const unsigned int& server1, const unsigned int& server2) -> bool
-			{
-				ServerInfo* info1 = nullptr;
-				ServerInfo* info2 = nullptr;
-
-				auto* list = GetList();
-				if (!list) return false;
-
-				if (list->size() > server1) info1 = &(*list)[server1];
-				if (list->size() > server2) info2 = &(*list)[server2];
-
-				if (!info1) return false;
-				if (!info2) return false;
-
-				// Numerical comparisons
-				if (SortKey == static_cast<std::underlying_type_t<Column>>(Column::Ping))
-				{
-					return info1->ping < info2->ping;
-				}
-
-				if (SortKey == static_cast<std::underlying_type_t<Column>>(Column::Players))
-				{
-					return info1->clients < info2->clients;
-				}
-
-				auto text1 = Utils::String::ToLower(TextRenderer::StripColors(GetServerInfoText(info1, SortKey, true)));
-				auto text2 = Utils::String::ToLower(TextRenderer::StripColors(GetServerInfoText(info2, SortKey, true)));
-
-				// ASCII-based comparison
-				return text1.compare(text2) < 0;
-			});
-
-		if (!SortAsc) std::ranges::reverse(VisibleList);
+		return GetServer(currentServer);
 	}
 
 	ServerList::ServerInfo* ServerList::GetServer(unsigned int index)
 	{
-		if (VisibleList.size() > index)
+		if (visibleList.size() <= index)
 		{
-			auto* list = GetList();
-			if (!list) return nullptr;
+			return nullptr;
+		}
 
-			if (list->size() > VisibleList[index])
+		auto* const list = GetList();
+
+		if (!list || list->size() <= visibleList[index])
+		{
+			return nullptr;
+		}
+
+		return &(*list)[visibleList[index]];
+	}
+
+	void ServerList::SortList()
+	{
+		if (!IsServerListOpen())
+		{
+			return;
+		}
+
+		std::ranges::stable_sort(visibleList, [](const unsigned int first, const unsigned int second)
+		{
+			auto* const list = GetList();
+
+			if (!list || list->size() <= first || list->size() <= second)
 			{
-				return &(*list)[VisibleList[index]];
+				return false;
+			}
+
+			ServerInfo* const one = &(*list)[first];
+			ServerInfo* const other = &(*list)[second];
+
+			if (sortKey == static_cast<std::underlying_type_t<Column>>(Column::Ping))
+			{
+				return one->ping < other->ping;
+			}
+
+			if (sortKey == static_cast<std::underlying_type_t<Column>>(Column::Players))
+			{
+				return one->clients < other->clients;
+			}
+
+			const auto text = Utils::String::ToLower(TextRenderer::StripColors(GetServerInfoText(one, sortKey, true)));
+			const auto otherText = Utils::String::ToLower(TextRenderer::StripColors(GetServerInfoText(other, sortKey, true)));
+
+			return text.compare(otherText) < 0;
+		});
+
+		if (!sortAsc)
+		{
+			std::ranges::reverse(visibleList);
+		}
+	}
+
+	void ServerList::RemoveDeadServers()
+	{
+		auto* const list = GetList();
+
+		if (!list || list->empty())
+		{
+			return;
+		}
+
+		const std::time_t timeout = netServerDeadTimeout.Get<int>();
+
+		if (timeout <= 0)
+		{
+			return;
+		}
+
+		const auto now = std::time(nullptr);
+
+		std::size_t removed = 0;
+
+		for (auto i = list->begin(); i != list->end();)
+		{
+			if ((now - i->lastSeen) > timeout)
+			{
+				i = list->erase(i);
+				++removed;
+			}
+			else
+			{
+				++i;
 			}
 		}
 
-		return nullptr;
+		if (removed > 0)
+		{
+			Scheduler::Once(RefreshVisibleListInternal, Scheduler::Pipeline::CLIENT);
+		}
+	}
+
+	void ServerList::HeartbeatServers()
+	{
+		auto* const list = GetList();
+
+		if (!list || list->empty())
+		{
+			return;
+		}
+
+		for (const auto& server : *list)
+		{
+			InsertRequest(server.addr);
+		}
 	}
 
 	void ServerList::Frame()
 	{
-		static Utils::Time::Interval frameLimit;
-		static Utils::Time::Interval cacheSaveInterval;
-		static Utils::Time::Interval heartbeatInterval;
-		static Utils::Time::Interval deadServerCheckInterval;
+		static auto lastQuery = std::chrono::steady_clock::now();
+		static auto lastHeartbeat = std::chrono::steady_clock::now();
+		static auto lastDeadCheck = std::chrono::steady_clock::now();
+		static auto lastCacheSave = std::chrono::steady_clock::now();
 		static bool wasOpen = false;
 
-		// Skip update processing when the browser view is inactive.
-		//
 		if (!IsServerListOpen())
 		{
-			std::lock_guard _(RefreshContainer.mutex);
+			std::lock_guard _(refreshContainer.mutex);
 
-			if (!RefreshContainer.servers.empty())
-				RefreshContainer.servers.clear();
-
+			refreshContainer.servers.clear();
 			wasOpen = false;
 			return;
 		}
 
-		// Re-entry into the browser must clears accumulated idle time of existing
-		// entries to avoid classifying them as dead upon return.
-		//
-		//
 		if (!wasOpen)
 		{
 			wasOpen = true;
 
-			auto* l(GetList());
+			auto* const list = GetList();
 
-			if (l != nullptr && !l->empty())
+			if (list)
 			{
-				const auto now(std::time(nullptr));
+				const auto now = std::time(nullptr);
 
-				for (auto& s : *l)
-					s.lastSeen = now;
+				for (auto& server : *list)
+				{
+					server.lastSeen = now;
+				}
 			}
 
-			// Rebuild the visible list unconditionally when entering the browser.
-			// That is, whatever state the discovery subsystem believes it is in, the
-			// UI should start from a clean snapshot.
-			//
-			// Note that we also avoid any temptation to "optimize" based on
-			// assumptions about prior activity, which tends to work until the one
-			// time it doesn't.
-			//
-			Scheduler::Once([]()
-				{
-					RefreshVisibleListInternal(UIScript::Token(), nullptr);
-				}, Scheduler::Pipeline::CLIENT);
+			Scheduler::Once(RefreshVisibleListInternal, Scheduler::Pipeline::CLIENT);
 		}
 
-		const auto interval = static_cast<int>(1000.0f / static_cast<float>(NETServerFrames.get<int>()));
+		const auto frames = std::max(1, netServerFrames.Get<int>());
+		const auto interval = std::chrono::milliseconds(1000 / frames);
+		const auto now = std::chrono::steady_clock::now();
 
-		if (!frameLimit.elapsed(std::chrono::milliseconds(interval)))
+		if ((now - lastQuery) < interval)
 		{
 			return;
 		}
 
-		frameLimit.update();
+		lastQuery = now;
 
-		// FIXME: Intervals should come from a dvar (NET...). In practice, they
-		// interacts poorly with server frame processing, so their value is kept
-		// local for now.
-
-		// Periodically send heartbeat pings to cached servers
-		//
-		if (heartbeatInterval.elapsed(std::chrono::seconds(30)))
+		if ((now - lastHeartbeat) > heartbeatInterval)
 		{
-			heartbeatInterval.update();
+			lastHeartbeat = now;
 
 			if (IsOnlineList())
+			{
 				HeartbeatServers();
+			}
 		}
 
-		// Periodically check and remove dead servers
-		//
-		if (deadServerCheckInterval.elapsed(std::chrono::seconds(30)))
+		if ((now - lastDeadCheck) > deadCheckInterval)
 		{
-			deadServerCheckInterval.update();
+			lastDeadCheck = now;
 
 			if (IsOnlineList())
+			{
 				RemoveDeadServers();
+			}
 		}
 
-		// Periodically write current online list to on-disk cache
-		//
-		if (cacheSaveInterval.elapsed(std::chrono::seconds(30)))
+		if ((now - lastCacheSave) > cacheSaveInterval)
 		{
-			cacheSaveInterval.update();
-
-			if (IsOnlineList())
-			{
-				if (auto* list = GetList(); list != nullptr && !list->empty())
-					SaveServerCache();
-			}
+			lastCacheSave = now;
+			SaveServerCache();
 		}
 
-		std::lock_guard _(RefreshContainer.mutex);
-
-		if (RefreshContainer.awaitingList)
-		{
-			// Stop counting if we are out of the server browser menu
-			if (!IsServerListOpen())
-			{
-				RefreshContainer.awaitingList = false;
-			}
-
-			// Check if we haven't got a response within 5 seconds
-			if (Game::Sys_Milliseconds() - RefreshContainer.awaitTime > 5000)
-			{
-				RefreshContainer.awaitingList = false;
-				Logger::Print("We haven't received a response from the master within {} seconds!\n", (Game::Sys_Milliseconds() - RefreshContainer.awaitTime) / 1000);
-
-				UseMasterServer = false;
-				//Node::Synchronize();
-			}
-		}
+		std::lock_guard _(refreshContainer.mutex);
 
 		const auto challenge = Utils::Cryptography::Rand::GenerateChallenge();
-		auto requestLimit = NETServerQueryLimit.get<int>();
+		auto requestLimit = netServerQueryLimit.Get<int>();
 
-		bool hadPendingRequests = false;
-
-		for (std::size_t i = 0; i < RefreshContainer.servers.size() && requestLimit > 0; ++i)
+		for (std::size_t i = 0; i < refreshContainer.servers.size() && requestLimit > 0; ++i)
 		{
-			auto* server = &RefreshContainer.servers[i];
-			if (server->sent) continue;
+			auto& request = refreshContainer.servers[i];
 
-			// Found server we can send a request to
-			server->sent = true;
-			requestLimit--;
-			hadPendingRequests = true;
+			if (request.sent)
+			{
+				continue;
+			}
 
-			server->sendTime = Game::Sys_Milliseconds();
-			server->challenge = challenge;
+			request.sent = true;
+			request.sendTime = Game::Sys_Milliseconds();
+			request.challenge = challenge;
+			--requestLimit;
 
-			Network::SendCommand(server->target, "getinfo", server->challenge);
+			Network::SendCommand(request.target, "getinfo", request.challenge);
 		}
 
-		// If the list is populated and no requests remain pending, then the
-		// discovery phase has produced a stable snapshot. That is, the flag is
-		// lowered and the on-disk cache may be written.
-		//
-		// ... Actually we must check if there are any pending operations:
-		//
-		// 1. Server query requests in the queue (servers.empty())
-		// 2. Waiting for master server response (awaitingList)
-		//
-		// And only clear the flag and save cache when all operations are complete.
-		//
-		const bool hasAnyPendingRequests = !RefreshContainer.servers.empty() || RefreshContainer.awaitingList;
-
-		if (RefreshContainer.needsInitialRefresh && !hasAnyPendingRequests)
+		if (refreshContainer.needsInitialRefresh && refreshContainer.servers.empty())
 		{
-			auto* l(GetList());
+			auto* const list = GetList();
 
-			if (l != nullptr && !l->empty())
+			if (list && !list->empty())
 			{
-				RefreshContainer.needsInitialRefresh = false;
-
-				if (IsOnlineList())
-					SaveServerCache();
+				refreshContainer.needsInitialRefresh = false;
+				SaveServerCache();
 			}
 		}
 
@@ -1292,63 +1295,44 @@ namespace Components
 
 	void ServerList::UpdateSource()
 	{
-		auto source = (*Game::ui_netSource)->current.integer;
+		auto source = GetNetSource();
 
-		if (++source > (*Game::ui_netSource)->domain.integer.max)
+		const Game::dvar_t* const dvar = *Game::ui_netSource;
+
+		if (!dvar)
+		{
+			return;
+		}
+
+		if (++source > dvar->domain.integer.max)
 		{
 			source = 0;
 		}
 
-		Game::Dvar_SetInt(*Game::ui_netSource, source);
+		Game::Dvar_SetInt(dvar, source);
 
-		// Handle source transitions. Two conditions are relevant:
-		//
-		// 1. Cache not in flight: issue a normal Refresh() to load the new source.
-		// 2. Cache in flight: allow the cache path to invoke Refresh(), then schedule
-		//    a visible-list rebuild once the load completes.
-		//
-		Scheduler::Once([]()
-			{
-				bool cacheLoading = false;
-				{
-					std::lock_guard _(RefreshContainer.mutex);
-					cacheLoading = RefreshContainer.loadingCache;
-				}
-
-				if (!cacheLoading)
-				{
-					Refresh();
-				}
-				else
-				{
-					// Cache load is in progress. The cache path will invoke Refresh() on
-					// completion, but a visible-list rebuild is still required after a
-					// source change. Delay the rebuild briefly to allow the cache load to
-					// finish.
-					//
-					Scheduler::Once([]()
-						{
-							RefreshVisibleListInternal(UIScript::Token(), nullptr);
-						}, Scheduler::Pipeline::CLIENT, 200ms);
-				}
-			}, Scheduler::Pipeline::CLIENT);
+		Scheduler::Once(Refresh, Scheduler::Pipeline::CLIENT);
 	}
 
 	void ServerList::UpdateGameType()
 	{
-		auto gametype = (*Game::ui_joinGametype)->current.integer;
+		const Game::dvar_t* const dvar = *Game::ui_joinGametype;
+
+		if (!dvar)
+		{
+			return;
+		}
+
+		auto gametype = dvar->current.integer;
 
 		if (++gametype > *Game::gameTypeCount)
 		{
 			gametype = 0;
 		}
 
-		Game::Dvar_SetInt(*Game::ui_joinGametype, gametype);
+		Game::Dvar_SetInt(dvar, gametype);
 
-		Scheduler::Once([]()
-			{
-				RefreshVisibleListInternal(UIScript::Token(), nullptr);
-			}, Scheduler::Pipeline::CLIENT);
+		Scheduler::Once(RefreshVisibleListInternal, Scheduler::Pipeline::CLIENT);
 	}
 
 	void ServerList::UpdateVisibleInfo()
@@ -1357,39 +1341,40 @@ namespace Components
 		static auto players = 0;
 		static auto bots = 0;
 
-		auto* list = GetList();
+		const auto* const list = GetList();
 
-		if (list)
+		if (!list)
 		{
-			auto newSevers = static_cast<int>(list->size());
-			auto newPlayers = 0;
-			auto newBots = 0;
-
-			for (std::size_t i = 0; i < list->size(); ++i)
-			{
-				newPlayers += list->at(i).clients;
-				newBots += list->at(i).bots;
-			}
-
-			if (newSevers != servers || newPlayers != players || newBots != bots)
-			{
-				servers = newSevers;
-				players = newPlayers;
-				bots = newBots;
-
-				Localization::Set("MPUI_SERVERQUERIED", std::format("Servers: {}\nPlayers: {} ({})", servers, players, bots));
-			}
+			return;
 		}
-	}
 
-	bool ServerList::GetMasterServer(const char* ip, int port, Game::netadr_t& address)
-	{
-		return Game::NET_StringToAdr(Utils::String::VA("%s:%u", ip, port), &address);
+		auto newServers = static_cast<int>(list->size());
+		auto newPlayers = 0;
+		auto newBots = 0;
+
+		for (const auto& server : *list)
+		{
+			newPlayers += server.clients;
+			newBots += server.bots;
+		}
+
+		if (newServers == servers && newPlayers == players && newBots == bots)
+		{
+			return;
+		}
+
+		servers = newServers;
+		players = newPlayers;
+		bots = newBots;
+
+		Localization::Set("MPUI_SERVERQUERIED",
+			std::format("Servers: {}\nPlayers: {} ({})", servers, players, bots));
 	}
 
 	bool ServerList::IsServerListOpen()
 	{
-		auto* menu = Game::Menus_FindByName(Game::uiContext, "pc_join_unranked");
+		Game::menuDef_t* const menu = Game::Menus_FindByName(Game::uiContext, "pc_join_unranked");
+
 		if (!menu)
 		{
 			return false;
@@ -1398,211 +1383,204 @@ namespace Components
 		return Game::Menu_IsVisible(Game::uiContext, menu);
 	}
 
-	void ServerList::DisableQuickRefresh([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
-	{
-		//stub - just disable
-	}
-
 	ServerList::ServerList()
 	{
-		OnlineList.clear();
-		OfflineList.clear();
-		FavouriteList.clear();
-		VisibleList.clear();
-
-		RefreshContainer.loadingCache = false;
-
-		Events::OnDvarInit([]
-			{
-				UIServerSelected = Dvar::Register<bool>("ui_serverSelected", false,
-					Game::DVAR_NONE, "Whether a server has been selected in the serverlist");
-				UIServerSelectedMap = Dvar::Register<const char*>("ui_serverSelectedMap", "mp_afghan",
-					Game::DVAR_NONE, "Map of the selected server");
-
-				NETServerQueryLimit = Dvar::Register<int>("net_serverQueryLimit", 1,
-					1, 10, Dedicated::IsEnabled() ? Game::DVAR_NONE : Game::DVAR_ARCHIVE, "Amount of server queries per frame");
-				NETServerFrames = Dvar::Register<int>("net_serverFrames", 30,
-					1, 60, Dedicated::IsEnabled() ? Game::DVAR_NONE : Game::DVAR_ARCHIVE, "Amount of server query frames per second");
-				NETServerDeadTimeout = Dvar::Register<int>("net_serverDeadTimeout", 60,
-					1, 604800, Dedicated::IsEnabled() ? Game::DVAR_NONE : Game::DVAR_ARCHIVE, "Seconds after which unresponsive servers are removed from cache");
-			});
-
-		// Fix ui_netsource dvar
-		Utils::Hook::Nop(0x4CDEEC, 5); // Don't reset the netsource when gametypes aren't loaded
-
 		Localization::Set("MPUI_SERVERQUERIED", "Servers: 0\nPlayers: 0 (0)");
 
-		Network::OnClientPacket("getServersResponse", [](const Network::Address& address, [[maybe_unused]] const std::string& data)
+		Scheduler::Once([]
+		{
+			uiServerSelected = Dvar::Register("ui_serverSelected", false,
+				Game::DVAR_NONE, "Whether a server has been selected in the serverlist");
+			uiServerSelectedMap = Dvar::Register("ui_serverSelectedMap", "mp_afghan",
+				Game::DVAR_NONE, "Map of the selected server");
+			Dvar::Register("ui_serverSelectedGametype", "war",
+				Game::DVAR_NONE, "Gametype of the selected server");
+
+			netServerQueryLimit = Dvar::Register("net_serverQueryLimit", 1,
+				1, 10, Game::DVAR_ARCHIVE, "Amount of server queries per frame");
+			netServerFrames = Dvar::Register("net_serverFrames", 30,
+				1, 60, Game::DVAR_ARCHIVE, "Amount of server query frames per second");
+			netServerDeadTimeout = Dvar::Register("net_serverDeadTimeout", 60,
+				1, 604800, Game::DVAR_ARCHIVE, "Seconds after which unresponsive servers are removed from cache");
+		}, Scheduler::Pipeline::MAIN);
+
+		if (Utils::Hook::BranchesTo(UI_OwnerDrawWidth_NetSourceReset, Dvar_SetInt, HOOK_CALL))
+		{
+			Utils::Hook::Nop(UI_OwnerDrawWidth_NetSourceReset, 5);
+		}
+		else
+		{
+			Logger::Error("serverlist: UI_OwnerDrawWidth does not read as expected, the netsource still resets\n");
+		}
+
+		Network::OnPacket("infoResponse", [](Network::Address& address, const std::string& data)
+		{
+			const Utils::InfoString info(data);
+
+			if (Party::HandleJoinResponse(address, info))
 			{
-				if (RefreshContainer.host != address) return; // Only parse from host we sent to
+				return;
+			}
 
-				RefreshContainer.awaitingList = false;
+			Insert(address, info);
+			Friends::UpdateServer(address, info.Get("hostname"), info.Get("mapname"));
+		});
 
-				std::lock_guard _(RefreshContainer.mutex);
+		const bool isMasterExpected = Utils::Hook::IsLeaIntact(masterServerNameDefaultLea)
+			&& Utils::Hook::MatchesBytes(Com_InitDvars_MasterServerNameFlags, masterServerNameFlags, sizeof(masterServerNameFlags))
+			&& Utils::Hook::MatchesBytes(Com_InitDvars_MasterPortFlags, masterPortFlags, sizeof(masterPortFlags));
 
-				auto offset = 0;
-				const auto count = RefreshContainer.servers.size();
-				MasterEntry* entry;
+		if (!isMasterExpected || !Utils::Hook::TryPointLeaAt(masterServerNameDefaultLea, Utils::Hook::PlaceNearImage("master.zw3.eu")))
+		{
+			Logger::Error("serverlist: masterServerName's registration does not read as expected, it stays the engine's\n");
+		}
+		else
+		{
+			Utils::Hook::Set<std::uint8_t>(Com_InitDvars_MasterServerNameFlags + 3, Game::DVAR_NONE);
+			Utils::Hook::Set<std::uint32_t>(Com_InitDvars_MasterPortFlags + 4, Game::DVAR_NONE);
+		}
 
-				// Find first entry
-				do
-				{
-					entry = reinterpret_cast<MasterEntry*>(const_cast<char*>(data.data()) + offset++);
-				} while (!entry->HasSeparator() && !entry->IsEndToken());
+		UIFeeder::Add(serversFeeder, GetServerCount, GetServerText, SelectServer);
 
-				for (int i = 0; !entry[i].IsEndToken() && entry[i].HasSeparator(); ++i)
-				{
-					Network::Address serverAddr = address;
-					serverAddr.setIP(entry[i].ip);
-					serverAddr.setPort(ntohs(entry[i].port));
-					serverAddr.setType(Game::NA_IP);
-
-					InsertRequest(serverAddr);
-				}
-
-				Logger::Print("Parsed {} servers from master\n", RefreshContainer.servers.size() - count);
-			});
-
-		// Set default masterServerName + port and save it
-		Utils::Hook::Set<const char*>(0x60AD92, "master.zw3.eu");
-		Utils::Hook::Set<std::uint8_t>(0x60AD90, Game::DVAR_NONE); // masterServerName
-		Utils::Hook::Set<std::uint8_t>(0x60ADC6, Game::DVAR_NONE); // masterPort
-
-		// Add server list feeder
-		UIFeeder::Add(2.0f, GetServerCount, GetServerText, SelectServer);
-
-		// Add required UIScripts
 		UIScript::Add("UpdateFilter", RefreshVisibleList);
-		UIScript::Add("RefreshFilter", DisableQuickRefresh);
+		UIScript::Add("RefreshFilter", [](const UIScript::Token&)
+		{
+		});
 
-		UIScript::Add("RefreshServers",
-			[](const UIScript::Token&, const Game::uiInfo_s*)
+		UIScript::Add("RefreshServers", [](const UIScript::Token&)
+		{
+			if (onlineList.empty())
 			{
-				// Attempt to populate online list from on-disk cache before issuing a
-				// network-driven refresh.
-				//
-				auto* onlineList = &OnlineList;
+				LoadServerCache();
+				Refresh();
+				return;
+			}
 
-				{
-					std::lock_guard _(RefreshContainer.mutex);
-					if (RefreshContainer.loadingCache)
-					{
-						return; // cache load already in progress
-					}
-				}
+			Toast::Show("cardicon_headshot", "Server Browser", "Servers refreshed", 3000);
+			Refresh();
+		});
 
-				if (onlineList != nullptr && onlineList->empty())
-				{
-					{
-						std::lock_guard _(RefreshContainer.mutex);
-						RefreshContainer.loadingCache = true;
-					}
+		UIScript::Add("ServerSort", [](const UIScript::Token& token)
+		{
+			const auto key = token.Get<int>();
 
-					std::jthread([]()
-						{
-							LoadServerCache();
-							Scheduler::Once([]()
-								{
-									{
-										std::lock_guard _(RefreshContainer.mutex);
-										RefreshContainer.loadingCache = false;
-									}
-									ServerList::Refresh();
-								}, Scheduler::Pipeline::CLIENT);
-						}).detach();
-
-					return; // defer refresh until after the cache load completes
-				}
-
-				ServerList::Refresh();
-			});
-
-		UIScript::Add("JoinServer", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+			if (sortKey == key)
 			{
-				auto* serverInfo = GetServer(CurrentServer);
-				if (serverInfo)
-				{
-					Party::Connect(serverInfo->addr);
-				}
-			});
-
-		UIScript::Add("DownloadServerMod", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+				sortAsc = !sortAsc;
+			}
+			else
 			{
-				auto* serverInfo = GetServer(CurrentServer);
-				if (serverInfo)
-				{
-					Party::Connect(serverInfo->addr, true);
-				}
-			});
+				sortKey = key;
+				sortAsc = true;
+			}
 
-		UIScript::Add("ServerSort", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+			SortList();
+		});
+
+		UIScript::Add("JoinServer", [](const UIScript::Token&)
+		{
+			const auto* const server = GetCurrentServer();
+
+			if (!server)
 			{
-				const auto key = token.get<int>();
-				if (SortKey == key)
-				{
-					SortAsc = !SortAsc;
-				}
-				else
-				{
-					SortKey = key;
-					SortAsc = true;
-				}
+				return;
+			}
 
-				Logger::Print("Sorting server list by token: {}\n", SortKey);
-				SortList();
-			});
+			Party::Connect(server->addr);
+		});
 
-		UIScript::Add("CreateListFavorite", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+		UIScript::Add("DownloadServerMod", [](const UIScript::Token&)
+		{
+			const auto* const server = GetCurrentServer();
+
+			if (!server)
 			{
-				auto* serverInfo = GetCurrentServer();
-				if (info && serverInfo && serverInfo->addr.isValid())
-				{
-					StoreFavourite(serverInfo->addr.getString());
-				}
-			});
+				return;
+			}
 
-		UIScript::Add("CreateFavorite", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+			Party::Connect(server->addr, true);
+		});
+
+		UIScript::Add("CreateListFavorite", [](const UIScript::Token&)
+		{
+			const auto* const server = GetCurrentServer();
+
+			if (server && server->addr.IsValid())
 			{
-				const auto value = Dvar::Var("ui_favoriteAddress").get<std::string>();
-				if (!value.empty())
-				{
-					StoreFavourite(value);
-				}
-			});
+				StoreFavourite(server->addr.GetString());
+			}
+		});
 
-		UIScript::Add("CreateCurrentServerFavorite", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+		UIScript::Add("CreateFavorite", [](const UIScript::Token&)
+		{
+			const Dvar::Var favoriteAddress("ui_favoriteAddress");
+
+			if (!favoriteAddress.IsValid())
 			{
-				if (Game::CL_IsCgameInitialized())
-				{
-					const auto addressText = Network::Address(*Game::connectedHost).getString();
-					if (addressText != "0.0.0.0:0"s && addressText != "loopback"s)
-					{
-						StoreFavourite(addressText);
-					}
-				}
-			});
+				return;
+			}
 
-		UIScript::Add("DeleteFavorite", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+			const auto value = favoriteAddress.Get<std::string>();
+
+			if (!value.empty())
 			{
-				auto* serverInfo = GetCurrentServer();
-				if (serverInfo)
-				{
-					RemoveFavourite(serverInfo->addr.getString());
-				}
-			});
+				StoreFavourite(value);
+			}
+		});
 
-		// Add required ownerDraws
-		UIScript::AddOwnerDraw(220, UpdateSource);
-		UIScript::AddOwnerDraw(253, UpdateGameType);
+		UIScript::Add("CreateCurrentServerFavorite", [](const UIScript::Token&)
+		{
+			if (!Game::CL_IsCgameInitialized(0))
+			{
+				return;
+			}
 
-		// Add frame callback
+			const auto addressText = Network::Address(Game::clc_serverAddress).GetString();
+
+			if (addressText != "0.0.0.0:0" && addressText != "loopback")
+			{
+				StoreFavourite(addressText);
+			}
+		});
+
+		UIScript::Add("DeleteFavorite", [](const UIScript::Token&)
+		{
+			const auto* const server = GetCurrentServer();
+
+			if (server)
+			{
+				RemoveFavourite(server->addr.GetString());
+			}
+		});
+
+		UIScript::AddOwnerDraw(netSourceOwnerDraw, UpdateSource);
+		UIScript::AddOwnerDraw(joinGametypeOwnerDraw, UpdateGameType);
+
+		Command::Add("addserver", [](const Command::Params* params)
+		{
+			if (params->Size() < 2)
+			{
+				Logger::Print("usage: addserver <ip>[:port]\n");
+				return;
+			}
+
+			Network::Address target(params->Get(1));
+
+			if (!target.IsValid())
+			{
+				Logger::Print("could not parse {}\n", params->Get(1));
+				return;
+			}
+
+			if (target.GetPort() == 0)
+			{
+				target.SetPort(firstPort);
+			}
+
+			InsertRequest(target);
+			Logger::Print("queued {} for the server browser\n", target.GetString());
+		});
+
 		Scheduler::Loop(Frame, Scheduler::Pipeline::CLIENT);
 	}
-
-	/*void ServerList::preDestroy()
-	{
-		std::lock_guard _(RefreshContainer.mutex);
-		RefreshContainer.awaitingList = false;
-		RefreshContainer.servers.clear();
-	}*/
 }

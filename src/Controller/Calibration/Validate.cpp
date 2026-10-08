@@ -1,86 +1,79 @@
-#include "Validate.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Calibration/Validate.hpp"
 
-#include <cmath>
-
-namespace Controller
+namespace Controller::Calibration
 {
-  namespace calibration
-  {
-    namespace
-    {
-      bool
-      finite (float f) noexcept {return std::isfinite (f);}
+	static bool IsFinite(float value) noexcept
+	{
+		return std::isfinite(value);
+	}
 
-      bool
-      finite (const sensor_vec3& v) noexcept
-      {
-        return finite (v.x) && finite (v.y) && finite (v.z);
-      }
-    }
+	static bool IsFinite(const SensorVector& vector) noexcept
+	{
+		return IsFinite(vector.x) && IsFinite(vector.y) && IsFinite(vector.z);
+	}
 
-    bool
-    validate (const profile& p, std::string& why) noexcept
-    {
-      if (p.version == 0 || p.version > profile::current_version)
-      {
-        why = "unsupported calibration profile version";
-        return false;
-      }
+	bool IsValid(const Profile& profile, std::string& why)
+	{
+		if (profile.version == 0 || profile.version > Profile::currentVersion)
+		{
+			why = "unsupported calibration profile version";
+			return false;
+		}
 
-      for (const stick_calibration& s: p.sticks)
-      {
-        if (!finite (s.center_x) || !finite (s.center_y) ||
-            !finite (s.range_x) || !finite (s.range_y) ||
-            !finite (s.drift_threshold))
-        {
-          why = "stick calibration has a non-finite value";
-          return false;
-        }
+		for (const auto& stick : profile.sticks)
+		{
+			const bool isFinite = IsFinite(stick.centerX) && IsFinite(stick.centerY) && IsFinite(stick.rangeX) && IsFinite(stick.rangeY) && IsFinite(stick.driftThreshold);
 
-        if (s.range_x <= 0.0f || s.range_y <= 0.0f)
-        {
-          why = "stick calibration range must be strictly positive";
-          return false;
-        }
+			if (!isFinite)
+			{
+				why = "stick calibration has a non-finite value";
+				return false;
+			}
 
-        if (s.drift_threshold < 0.0f || s.drift_threshold >= 1.0f)
-        {
-          why = "stick drift threshold must be in [0, 1)";
-          return false;
-        }
-      }
+			if (stick.rangeX <= 0.0f || stick.rangeY <= 0.0f)
+			{
+				why = "stick calibration range must be strictly positive";
+				return false;
+			}
 
-      for (const trigger_calibration& t: p.triggers)
-      {
-        if (!finite (t.min) || !finite (t.max))
-        {
-          why = "trigger calibration has a non-finite value";
-          return false;
-        }
+			if (stick.driftThreshold < 0.0f || stick.driftThreshold >= 1.0f)
+			{
+				why = "stick drift threshold must be in [0, 1)";
+				return false;
+			}
+		}
 
-        if (t.max <= t.min)
-        {
-          why = "trigger calibration max must exceed min";
-          return false;
-        }
-      }
+		for (const auto& trigger : profile.triggers)
+		{
+			if (!IsFinite(trigger.min) || !IsFinite(trigger.max))
+			{
+				why = "trigger calibration has a non-finite value";
+				return false;
+			}
 
-      if (!finite (p.motion.gyro_bias) || !finite (p.motion.accel_bias) ||
-          !finite (p.motion.gyro_scale) || !finite (p.motion.accel_scale))
-      {
-        why = "motion calibration has a non-finite value";
-        return false;
-      }
+			if (trigger.max <= trigger.min)
+			{
+				why = "trigger calibration max must exceed min";
+				return false;
+			}
+		}
 
-      if (!finite (p.smoothing) || p.smoothing < 0.0f)
-      {
-        why = "smoothing time constant must be finite and non-negative";
-        return false;
-      }
+		const auto& motion = profile.motion;
 
-      return true;
-    }
-  }
+		if (!IsFinite(motion.gyroBias) || !IsFinite(motion.accelBias) || !IsFinite(motion.gyroScale) || !IsFinite(motion.accelScale))
+		{
+			why = "motion calibration has a non-finite value";
+			return false;
+		}
+
+		if (!IsFinite(profile.smoothing) || profile.smoothing < 0.0f)
+		{
+			why = "smoothing time constant must be finite and non-negative";
+			return false;
+		}
+
+		return true;
+	}
 }

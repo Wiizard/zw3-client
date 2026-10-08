@@ -5,20 +5,30 @@ namespace Game::Engine
 	class FastCriticalSectionScopeRead
 	{
 	public:
-		FastCriticalSectionScopeRead(FastCriticalSection* cs);
+		explicit FastCriticalSectionScopeRead(FastCriticalSection* critSect);
 		~FastCriticalSectionScopeRead();
 
+		FastCriticalSectionScopeRead(FastCriticalSectionScopeRead&&) = delete;
+		FastCriticalSectionScopeRead(const FastCriticalSectionScopeRead&) = delete;
+		FastCriticalSectionScopeRead& operator=(FastCriticalSectionScopeRead&&) = delete;
+		FastCriticalSectionScopeRead& operator=(const FastCriticalSectionScopeRead&) = delete;
+
 	private:
-		FastCriticalSection* cs_;
+		FastCriticalSection* critSect;
 	};
 
 	class FastCriticalSectionScopeWrite
 	{
 	public:
-		FastCriticalSectionScopeWrite(FastCriticalSection* cs);
+		explicit FastCriticalSectionScopeWrite(FastCriticalSection* critSect);
 		~FastCriticalSectionScopeWrite();
 
+		FastCriticalSectionScopeWrite(FastCriticalSectionScopeWrite&&) = delete;
+		FastCriticalSectionScopeWrite(const FastCriticalSectionScopeWrite&) = delete;
+		FastCriticalSectionScopeWrite& operator=(FastCriticalSectionScopeWrite&&) = delete;
+		FastCriticalSectionScopeWrite& operator=(const FastCriticalSectionScopeWrite&) = delete;
+
 	private:
-		FastCriticalSection* cs_;
+		FastCriticalSection* critSect;
 	};
 }

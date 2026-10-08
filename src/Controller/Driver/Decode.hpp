@@ -1,51 +1,35 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Sample/Axis.hpp"
-#include "../Sample/Button.hpp"
+#include "Controller/Sample/Axis.hpp"
+#include "Controller/Sample/Button.hpp"
 
-namespace Controller
+namespace Controller::Driver
 {
-  namespace driver
-  {
-    uint8_t
-    rd_u8 (std::span<const std::byte>, size_t offset) noexcept;
+	std::uint8_t ReadU8(std::span<const std::byte> data, std::size_t offset) noexcept;
+	std::uint16_t ReadLe16(std::span<const std::byte> data, std::size_t offset) noexcept;
+	std::int16_t ReadLe16Signed(std::span<const std::byte> data, std::size_t offset) noexcept;
+	std::uint32_t ReadLe32(std::span<const std::byte> data, std::size_t offset) noexcept;
 
-    uint16_t
-    rd_le16 (std::span<const std::byte>, size_t offset) noexcept;
+	std::uint32_t Crc32Le(std::uint32_t crc, std::span<const std::byte> data) noexcept;
 
-    int16_t
-    rd_le16s (std::span<const std::byte>, size_t offset) noexcept;
+	inline constexpr std::uint8_t psInputCrcSeed = 0xA1;
+	inline constexpr std::uint8_t psOutputCrcSeed = 0xA2;
 
-    uint32_t
-    rd_le32 (std::span<const std::byte>, size_t offset) noexcept;
+	bool IsPsCrc32Valid(std::uint8_t seed, std::span<const std::byte> data, std::uint32_t expected) noexcept;
 
-    uint32_t
-    crc32_le (uint32_t init, std::span<const std::byte>) noexcept;
+	struct PsTouchPoint
+	{
+		bool isActive;
+		std::uint8_t id;
+		std::uint16_t x;
+		std::uint16_t y;
+	};
 
-    inline constexpr uint8_t ps_input_crc_seed {0xA1};
-    inline constexpr uint8_t ps_output_crc_seed {0xA2};
-    inline constexpr uint8_t ps_feature_crc_seed {0xA3};
+	PsTouchPoint DecodeTouchPoint(std::span<const std::byte> point) noexcept;
 
-    bool
-    verify_ps_crc32 (uint8_t seed, std::span<const std::byte> data, uint32_t expected) noexcept;
+	void ApplyHat(ButtonSet& buttons, std::uint8_t hat) noexcept;
 
-    struct ps_touch_point
-    {
-      bool active;
-      uint8_t id;
-      uint16_t x;
-      uint16_t y;
-    };
-
-    ps_touch_point
-    decode_touch_point (std::span<const std::byte> p) noexcept;
-
-    void
-    apply_hat (button_set&, uint8_t hat) noexcept;
-
-    stick_vector
-    normalize_ps_stick (uint8_t x, uint8_t y) noexcept;
-  }
+	StickVector NormalizePsStick(std::uint8_t x, std::uint8_t y) noexcept;
 }

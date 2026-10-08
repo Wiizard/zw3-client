@@ -1,82 +1,57 @@
 #pragma once
 
-#include "Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "Error.hpp"
-#include "Device/Id.hpp"
+#include "Controller/Error.hpp"
+#include "Controller/Device/Id.hpp"
 
 namespace Controller
 {
-  enum class facility : uint8_t
-  {
-    runtime,
-    discovery,
-    transport,
-    driver,
-    decode,
-    sample,
-    calibration,
-    mapping,
-    aim,
-    steam,
-    engine,
-    debug,
-  };
+	enum class Facility : std::uint8_t
+	{
+		Runtime,
+		Discovery,
+		Transport,
+		Driver,
+		Decode,
+		Sample,
+		Calibration,
+		Mapping,
+		Aim,
+		Steam,
+		Engine,
+		Debug,
+	};
 
-  const char*
-  to_string (facility) noexcept;
+	const char* ToString(Facility facility) noexcept;
 
-  enum class severity : uint8_t
-  {
-    info,
-    warning,
-    error,
-  };
+	enum class Severity : std::uint8_t
+	{
+		Info,
+		Warning,
+		Error,
+	};
 
-  const char*
-  to_string (severity) noexcept;
+	struct Diagnostic
+	{
+		Severity level = Severity::Info;
+		Facility origin = Facility::Runtime;
+		ErrorCode code = ErrorCode::None;
+		DeviceId device{};
+		std::string message;
+	};
 
-  struct diagnostic
-  {
-    severity level {severity::info};
-    facility origin {facility::runtime};
-    errc code {errc::none};
-    device_id device {};
-    std::string message;
-  };
+	class DiagnosticSink
+	{
+	public:
+		virtual ~DiagnosticSink() = default;
 
-  class diagnostic_sink
-  {
-  public:
-    virtual
-    ~diagnostic_sink () = default;
+		virtual void Consume(const Diagnostic& diagnostic) = 0;
+	};
 
-    virtual void
-    consume (const diagnostic&) = 0;
-  };
-
-  class logging_sink: public diagnostic_sink
-  {
-  public:
-    void
-    consume (const diagnostic&) override;
-  };
-
-  void
-  report (diagnostic_sink&,
-          severity,
-          facility,
-          errc,
-          device_id,
-          std::string message);
-
-  inline void
-  report (diagnostic_sink& sink,
-          severity level,
-          facility origin,
-          errc code,
-          std::string message)
-  {
-    report (sink, level, origin, code, no_device, std::move (message));
-  }
+	class LoggingSink : public DiagnosticSink
+	{
+	public:
+		void Consume(const Diagnostic& diagnostic) override;
+	};
 }

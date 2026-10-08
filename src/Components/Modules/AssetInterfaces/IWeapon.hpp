@@ -5,14 +5,24 @@ namespace Assets
 	class IWeapon : public Components::AssetHandler::IAsset
 	{
 	public:
-		Game::XAssetType getType() override { return Game::XAssetType::ASSET_TYPE_WEAPON; }
 		IWeapon();
 
-		void save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder) override;
-		void mark(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder) override;
-		void load(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder) override;
+		Game::XAssetType GetType() override
+		{
+			return Game::ASSET_TYPE_WEAPON;
+		}
+
+		void Save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder) override;
+		void Mark(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder) override;
+		void Load(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder) override;
+		bool HasDump() override
+		{
+			return true;
+		}
+
+		void Dump(Game::XAssetHeader header) override;
 
 	private:
-		void writeWeaponDef(Game::WeaponDef* def, Components::ZoneBuilder::Zone* builder, Utils::Stream* buffer);
+		void WriteWeaponDef(const Game::WeaponCompleteDef* weapon, Components::ZoneBuilder::Zone* builder, Utils::Stream* buffer);
 	};
 }

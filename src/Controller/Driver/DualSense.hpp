@@ -1,95 +1,71 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Context.hpp"
-#include "../Haptic/Stream.hpp"
-#include "Driver.hpp"
-#include "../Transport/Hid.hpp"
+#include "Controller/Context.hpp"
+#include "Controller/Driver/Driver.hpp"
+#include "Controller/Haptic/Stream.hpp"
+#include "Controller/Transport/Hid.hpp"
 
-namespace Controller
+namespace Controller::Driver
 {
-  namespace driver
-  {
-    bool
-    decode_dualsense (std::span<const std::byte> report,
-                      connection link,
-                      raw_sample& raw,
-                      canonical_sample& canonical,
-                      bool edge = false) noexcept;
+	bool TryDecodeDualSense(std::span<const std::byte> report, Connection link, RawSample& raw, CanonicalSample& canonical, bool isEdge);
 
-    class dualsense_driver: public driver
-    {
-    public:
-      dualsense_driver (const context&, transport::hid_device&, device_id);
+	class DualSenseDriver : public Driver
+	{
+	public:
+		DualSenseDriver(const Context& context, Transport::HidDevice& hid, DeviceId device);
 
-      Controller::family
-      family () const noexcept override {return Controller::family::dualsense;}
+		Controller::Family Family() const noexcept override
+		{
+			return Controller::Family::DualSense;
+		}
 
-      device_id
-      device () const noexcept override {return device_;}
+		DeviceId Device() const noexcept override
+		{
+			return this->device;
+		}
 
-      bool
-      poll (raw_sample&, canonical_sample&) noexcept override;
+		bool TryPoll(RawSample& raw, CanonicalSample& canonical) override;
+		void Submit(const OutputRequest& request) override;
+		void Configure(const OutputPolicy& outputPolicy) override;
+		void StopHaptic(std::uint32_t tag) override;
+		std::string Diagnostics() const override;
 
-      void
-      submit (const output_request&) noexcept override;
+	protected:
+		void SubmitReport(const OutputRequest& request);
+		void QueueRumble(const RumbleRequest& request);
+		void FlushRumble();
 
-      void
-      configure (const output_policy&) noexcept override;
+		bool TryStartHaptics();
+		bool TryPlayWaveform(const RumbleRequest& request);
+		bool TryPlayEffect(const Haptic::Effect& effect);
 
-      void
-      stop_haptic (uint32_t) noexcept override;
+		bool TryReadAndDecode(RawSample& raw, CanonicalSample& canonical, bool isEdge);
 
-      std::string
-      diagnostics () const override;
+		const Context& context;
+		Transport::HidDevice& hid;
+		DeviceId device;
+		Connection link;
 
-    protected:
-      void
-      submit_report (const output_request&) noexcept;
+		std::uint8_t bluetoothOutputSequence = 0;
 
-      void
-      queue_rumble (const rumble_request&) noexcept;
+		bool hasReportedMinimal = false;
 
-      void
-      flush_rumble () noexcept;
+		OutputPolicy policy{};
 
-      bool
-      ensure_haptics () noexcept;
+		RumbleRequest pendingRumble{};
+		bool isRumblePending = false;
+		bool hasSentRumble = false;
+		Timestamp lastRumble{};
 
-      bool
-      play_waveform (const rumble_request&) noexcept;
+		std::unique_ptr<Haptic::Stream> haptics;
 
-      bool
-      play_effect (const haptic::effect&) noexcept;
+		bool haveHapticsFailed = false;
 
-      bool
-      read_and_decode (raw_sample&, canonical_sample&, bool edge) noexcept;
+		bool hasReportedFallback = false;
+		bool hasReportedEffectDrop = false;
 
-      const context& ctx_;
-      transport::hid_device& hid_;
-      device_id device_;
-      connection link_;
-
-      uint8_t bt_output_sequence_ {0};
-
-      bool minimal_reported_ {false};
-
-      output_policy policy_ {};
-
-      rumble_request pending_rumble_ {};
-      bool rumble_pending_ {false};
-      bool rumble_sent_ {false};
-      timestamp last_rumble_ {};
-
-      std::unique_ptr<haptic::stream> haptics_;
-
-      bool haptics_failed_ {false};
-
-      bool reported_fallback_ {false};
-      bool reported_effect_drop_ {false};
-
-      bool emulating_ {false};
-    };
-  }
+		bool isEmulating = false;
+	};
 }

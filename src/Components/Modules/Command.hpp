@@ -5,8 +5,6 @@ namespace Components
 	class Command : public Component
 	{
 	public:
-		static_assert(sizeof(Game::cmd_function_s) == 0x18);
-
 		class Params
 		{
 		public:
@@ -18,13 +16,13 @@ namespace Components
 			Params& operator=(Params&&) = delete;
 			Params& operator=(const Params&) = delete;
 
-			[[nodiscard]] virtual int size() const noexcept = 0;
-			[[nodiscard]] virtual const char* get(int index) const noexcept = 0;
-			[[nodiscard]] virtual std::string join(int index) const;
+			[[nodiscard]] virtual int Size() const = 0;
+			[[nodiscard]] virtual const char* Get(int index) const = 0;
+			[[nodiscard]] virtual std::string Join(int index) const;
 
-			virtual const char* operator[](const int index)
+			virtual const char* operator[](int index)
 			{
-				return this->get(index);
+				return this->Get(index);
 			}
 		};
 
@@ -33,11 +31,11 @@ namespace Components
 		public:
 			ClientParams();
 
-			[[nodiscard]] int size() const noexcept override;
-			[[nodiscard]] const char* get(int index) const noexcept override;
+			[[nodiscard]] int Size() const override;
+			[[nodiscard]] const char* Get(int index) const override;
 
 		private:
-			int nesting_;
+			int nesting;
 		};
 
 		class ServerParams final : public Params
@@ -45,28 +43,35 @@ namespace Components
 		public:
 			ServerParams();
 
-			[[nodiscard]] int size() const noexcept override;
-			[[nodiscard]] const char* get(int index) const noexcept override;
+			[[nodiscard]] int Size() const override;
+			[[nodiscard]] const char* Get(int index) const override;
 
 		private:
-			int nesting_;
+			int nesting;
 		};
+
+		using Callback = std::function<void(const Params*)>;
 
 		Command();
 
-		using commandCallback = std::function<void(const Params*)>;
-
 		static void Add(const char* name, const std::function<void()>& callback);
-		static void Add(const char* name, const commandCallback& callback);
-		static void AddRaw(const char* name, void(*callback)(), bool key = false);
-		static void AddSV(const char* name, const commandCallback& callback);
+		static void Add(const char* name, const Callback& callback);
+		static void AddRaw(const char* name, void(*callback)());
+		static void AddSV(const char* name, const Callback& callback);
+
 		static void Execute(std::string command, bool sync = true);
 
 		static Game::cmd_function_s* Find(const std::string& command);
 
+		static bool AddBindable(const char* name);
+
+		static int GetBinding(const char* name);
+
+		static void ExecBinding(int localClientNum, int binding, int key);
+
 	private:
-		static std::unordered_map<std::string, commandCallback> FunctionMap;
-		static std::unordered_map<std::string, commandCallback> FunctionMapSV;
+		static std::unordered_map<std::string, Callback> clientCallbacks;
+		static std::unordered_map<std::string, Callback> serverCallbacks;
 
 		static Game::cmd_function_s* Allocate();
 
@@ -75,7 +80,7 @@ namespace Components
 		static void MainCallback();
 		static void MainCallbackSV();
 
-		static const std::vector<std::string>& GetExceptions();
-		static bool CL_ShouldSendNotify_Hk(const char* cmd);
+		static bool TryExtendBindCommands();
+		static void Key_ExecBinding_Hook(int localClientNum, int binding, int key);
 	};
 }

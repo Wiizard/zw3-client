@@ -1,0 +1,1952 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Components">
+      <UniqueIdentifier>{6B7DD516-5735-1764-C03C-F0BFAC13B254}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Components\Modules">
+      <UniqueIdentifier>{3345A020-1F29-6176-8889-5BC9748C4BF8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Components\Modules\AssetInterfaces">
+      <UniqueIdentifier>{729C625F-4BCE-49C2-8A63-7D03C312D867}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Components\Modules\BotAI">
+      <UniqueIdentifier>{71BA6553-5DDF-B4D3-862A-9A6372AEB3F1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Components\Modules\BotAI\Control">
+      <UniqueIdentifier>{214CF64D-0D9D-E18F-3601-D05122B174F9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Components\Modules\BotAI\Navgen">
+      <UniqueIdentifier>{FFBA80EC-6B9E-8F2C-74A1-BD68E003567D}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Components\Modules\BotAI\Waypoints">
+      <UniqueIdentifier>{0E860B18-FAC1-0E82-63D4-26794F2FB79C}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Components\Modules\BotAI\Waypoints\Maps">
+      <UniqueIdentifier>{2EE3558E-9A72-1779-A36E-F8900F7D5285}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Components\Modules\GSC">
+      <UniqueIdentifier>{7FA5F054-6B9F-19A7-540C-B0B740A57F13}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Controller">
+      <UniqueIdentifier>{49720951-9F6E-499B-9FCA-245213EBEF0F}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Controller\Aim">
+      <UniqueIdentifier>{EF85D097-F6EF-4FA8-BA56-7993DA26C0F5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Controller\Calibration">
+      <UniqueIdentifier>{6E905CA6-B84E-45BA-93CE-12EB404CD457}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Controller\Device">
+      <UniqueIdentifier>{E8F4F51B-A5A4-422E-B11A-37F4B2A9E1BD}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Controller\Driver">
+      <UniqueIdentifier>{D2A42ADC-C278-4B5C-8A84-469677A584E3}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Controller\Engine">
+      <UniqueIdentifier>{27DAC4EC-A7CE-4081-8140-B1D0439B2E15}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Controller\Haptic">
+      <UniqueIdentifier>{48571CCC-1417-40F9-8275-B36756551215}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Controller\Mapping">
+      <UniqueIdentifier>{010ED855-7352-4ED8-ACC3-9140647B9548}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Controller\Sample">
+      <UniqueIdentifier>{1662CD67-8E6C-433A-A626-4BB2224D22EB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Controller\Transport">
+      <UniqueIdentifier>{B24D28B1-7C37-468D-B6D4-8DBC00A17107}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game">
+      <UniqueIdentifier>{7FA9857C-6BE0-860D-14CD-6C1000E3020F}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game\Engine">
+      <UniqueIdentifier>{D73A7F7D-DDE2-409D-ADF8-7AC3CC34C904}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game\Scripting">
+      <UniqueIdentifier>{4149B227-2D17-A62D-16AB-165402188292}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Steam">
+      <UniqueIdentifier>{7F481E0E-EB5C-46BF-B4DE-E91E20B242F0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Steam\Interfaces">
+      <UniqueIdentifier>{72FFC428-5EF8-E37A-872A-C9FF7382C386}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Utils">
+      <UniqueIdentifier>{F68B420E-62A0-6ABF-2B22-0E1F97F566F0}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\src\Components\Loader.hpp">
+      <Filter>Components</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ArenaLength.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetHandler.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\ILoadedSound.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\ISndCurve.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\Isnd_alias_list_t.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\ITracerDef.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IWeapon.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IFxEffectDef.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IPhysCollmap.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IPhysPreset.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IXAnimParts.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IXModel.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IXModelSurfs.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IclipMap_t.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IComWorld.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IFxWorld.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IGameWorldMp.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IGameWorldSp.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IGfxWorld.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IMapEnts.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IFont_s.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IGfxImage.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IGfxLightDef.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\ILocalizeEntry.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IMaterial.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IMaterialPixelShader.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IMaterialTechniqueSet.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IMaterialVertexDeclaration.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IMaterialVertexShader.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IMenuList.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IRawFile.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IStringTable.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\IStructuredDataDefSet.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\AssetInterfaces\ImenuDef_t.hpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Auth.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Bans.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\BotAI\BotAI.hpp">
+      <Filter>Components\Modules\BotAI</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\BotAI\BotControl.hpp">
+      <Filter>Components\Modules\BotAI</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\BotAI\Control\Ai.hpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\BotAI\Control\Identity.hpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\BotAI\Control\Loadout.hpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\BotAI\Control\Lobby.hpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\BotAI\Control\Objectives.hpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\BotAI\Control\Personality.hpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\BotAI\Control\Skill.hpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\BotAI\Control\State.hpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\BotAI\Control\Tasks.hpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\BotAI\Control\WeaponData.hpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\BotAI\Iw4.hpp">
+      <Filter>Components\Modules\BotAI</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\BotAI\Navgen\Internal.hpp">
+      <Filter>Components\Modules\BotAI\Navgen</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\BotAI\Navgen\Navgen.hpp">
+      <Filter>Components\Modules\BotAI\Navgen</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\BotAI\Waypoints\Waypoints.hpp">
+      <Filter>Components\Modules\BotAI\Waypoints</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Bots.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Branding.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Bullet.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\CardTitles.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Ceg.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Changelog.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\CharacterAssignments.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Chat.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ClanTags.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ClientCommand.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ClientSlots.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Command.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ConfigStrings.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ConnectProtocol.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Console.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\D3D9Ex.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Debug.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Dedicated.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Discord.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Discovery.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Download.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Dvar.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Elevators.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Events.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Exception.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\FastFiles.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\FileSystem.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Flags.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Friends.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\GSC\Entity.hpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\GSC\Field.hpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\GSC\GSC.hpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\GSC\IO.hpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\GSC\Int64.hpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\GSC\Script.hpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\GSC\ScriptError.hpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\GSC\ScriptExtension.hpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\GSC\ScriptPatches.hpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\GSC\ScriptStorage.hpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\GSC\String.hpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\GSC\UserInfo.hpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Gamepad.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Handshake.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\HudParallax.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Huffman.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\IPCPipe.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Leaderboard.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Lean.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\LobbyAudio.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\LobbyScene.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\LobbyCombat.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\LobbyTransition.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Localization.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Logger.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\MapDump.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\MapRotation.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Maps.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Materials.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\MenuDvarList.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Menus.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ModList.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ModelCache.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ModelSurfs.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Network.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\NetworkDebug.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\News.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Node.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Party.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\PlayerMovement.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\PlayerName.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Playlist.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\QuickPatch.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\RCon.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\RawFiles.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\RawMouse.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Renderer.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Rumble.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\SPLoadscreens.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Scheduler.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Security.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ServerCommands.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ServerInfo.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ServerList.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Session.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Singleton.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\SlowMotion.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Sound.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\StartupMessages.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Stats.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Steam.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\StringTable.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\StructuredData.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\TextRenderer.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Theatre.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Threading.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Toast.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\UIFeeder.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\UIScript.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\UPnP.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Updater.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ViewModelFxSetup.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\VisionFile.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Voice.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Vote.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Weapon.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\WeaponFields.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Window.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ZW3Changelog.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ZWNet.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ZoneBuilder.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ZoneConvert.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Zones.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ZonesLayouts.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Aim\Assist.hpp">
+      <Filter>Controller\Aim</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Aim\Calibration.hpp">
+      <Filter>Controller\Aim</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Aim\Deadzone.hpp">
+      <Filter>Controller\Aim</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Aim\Graph.hpp">
+      <Filter>Controller\Aim</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Aim\Integrator.hpp">
+      <Filter>Controller\Aim</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Aim\Types.hpp">
+      <Filter>Controller\Aim</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Calibration\Normalize.hpp">
+      <Filter>Controller\Calibration</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Calibration\Profile.hpp">
+      <Filter>Controller\Calibration</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Calibration\Store.hpp">
+      <Filter>Controller\Calibration</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Calibration\Validate.hpp">
+      <Filter>Controller\Calibration</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Clock.hpp">
+      <Filter>Controller</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Context.hpp">
+      <Filter>Controller</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Device\Capability.hpp">
+      <Filter>Controller\Device</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Device\Connection.hpp">
+      <Filter>Controller\Device</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Device\Discovery.hpp">
+      <Filter>Controller\Device</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Device\Id.hpp">
+      <Filter>Controller\Device</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Device\Identity.hpp">
+      <Filter>Controller\Device</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Device\Registry.hpp">
+      <Filter>Controller\Device</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Diagnostic.hpp">
+      <Filter>Controller</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Driver\Decode.hpp">
+      <Filter>Controller\Driver</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Driver\Driver.hpp">
+      <Filter>Controller\Driver</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Driver\DualSense.hpp">
+      <Filter>Controller\Driver</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Driver\DualSenseEdge.hpp">
+      <Filter>Controller\Driver</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Driver\DualShock4.hpp">
+      <Filter>Controller\Driver</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Driver\Output.hpp">
+      <Filter>Controller\Driver</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Driver\OutputReport.hpp">
+      <Filter>Controller\Driver</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Driver\PlayStation.hpp">
+      <Filter>Controller\Driver</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Driver\Set.hpp">
+      <Filter>Controller\Driver</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Driver\XInput.hpp">
+      <Filter>Controller\Driver</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Engine\Bind.hpp">
+      <Filter>Controller\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Engine\Command.hpp">
+      <Filter>Controller\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Engine\Dvar.hpp">
+      <Filter>Controller\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Engine\Engine.hpp">
+      <Filter>Controller\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Engine\Feedback.hpp">
+      <Filter>Controller\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Engine\Hook.hpp">
+      <Filter>Controller\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Engine\Key.hpp">
+      <Filter>Controller\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Engine\NetMove.hpp">
+      <Filter>Controller\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Engine\Rumble.hpp">
+      <Filter>Controller\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Engine\View.hpp">
+      <Filter>Controller\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Error.hpp">
+      <Filter>Controller</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Haptic\Effect.hpp">
+      <Filter>Controller\Haptic</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Haptic\Mixer.hpp">
+      <Filter>Controller\Haptic</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Haptic\Stream.hpp">
+      <Filter>Controller\Haptic</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Mapping\Binding.hpp">
+      <Filter>Controller\Mapping</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Mapping\Glyph.hpp">
+      <Filter>Controller\Mapping</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Mapping\Key.hpp">
+      <Filter>Controller\Mapping</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Mapping\Logical.hpp">
+      <Filter>Controller\Mapping</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Mapping\Physical.hpp">
+      <Filter>Controller\Mapping</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Mapping\StickLayout.hpp">
+      <Filter>Controller\Mapping</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Runtime.hpp">
+      <Filter>Controller</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Sample\Axis.hpp">
+      <Filter>Controller\Sample</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Sample\Button.hpp">
+      <Filter>Controller\Sample</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Sample\Frame.hpp">
+      <Filter>Controller\Sample</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Sample\Motion.hpp">
+      <Filter>Controller\Sample</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Sample\Sample.hpp">
+      <Filter>Controller\Sample</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Sample\Touch.hpp">
+      <Filter>Controller\Sample</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Sample\Trigger.hpp">
+      <Filter>Controller\Sample</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Transport\Audio.hpp">
+      <Filter>Controller\Transport</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Transport\DeviceNotify.hpp">
+      <Filter>Controller\Transport</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Transport\Hid.hpp">
+      <Filter>Controller\Transport</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Transport\ReportStream.hpp">
+      <Filter>Controller\Transport</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Transport\XInputModule.hpp">
+      <Filter>Controller\Transport</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Controller\Types.hpp">
+      <Filter>Controller</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\BothGames.hpp">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\Client.hpp">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\Common.hpp">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\Database.hpp">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\Dvars.hpp">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\Engine\FastCriticalSection.hpp">
+      <Filter>Game\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\Engine\Hunk.hpp">
+      <Filter>Game\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\Engine\LargeLocal.hpp">
+      <Filter>Game\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\Engine\ScopedCriticalSection.hpp">
+      <Filter>Game\Engine</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\FileSystem.hpp">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\Functions.hpp">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\Game.hpp">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\PlayerMovement.hpp">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\Script.hpp">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\Scripting\Function.hpp">
+      <Filter>Game\Scripting</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\Scripting\StackIsolation.hpp">
+      <Filter>Game\Scripting</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\Server.hpp">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\Structs.hpp">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\StructsX86.hpp">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\System.hpp">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Game\Zone.hpp">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\STDInclude.hpp" />
+    <ClInclude Include="..\src\Steam\Interfaces\SteamApps.hpp">
+      <Filter>Steam\Interfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Steam\Interfaces\SteamFriends.hpp">
+      <Filter>Steam\Interfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Steam\Interfaces\SteamGameServer.hpp">
+      <Filter>Steam\Interfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Steam\Interfaces\SteamMatchmaking.hpp">
+      <Filter>Steam\Interfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Steam\Interfaces\SteamNetworking.hpp">
+      <Filter>Steam\Interfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Steam\Interfaces\SteamRemoteStorage.hpp">
+      <Filter>Steam\Interfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Steam\Interfaces\SteamUser.hpp">
+      <Filter>Steam\Interfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Steam\Interfaces\SteamUtils.hpp">
+      <Filter>Steam\Interfaces</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Steam\Proxy.hpp">
+      <Filter>Steam</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Steam\Steam.hpp">
+      <Filter>Steam</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\Cache.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\CSV.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\Chain.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\Compression.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\Concurrency.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\CrashMarker.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\Cryptography.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\Entities.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\Hooking.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\Huffman.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\HuffmanTree.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\IO.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\AesCtr.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\IW4xZoneDecoder.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\InflateReadAhead.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\InfoString.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\JSON.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\Library.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\MapPreview.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\Maths.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\Memory.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\MenuPreprocessor.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\NamedMutex.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\StagedTextureUpload.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\Stream.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\String.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\Thread.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\Time.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\Utils.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Utils\WebIO.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\src\Components\Loader.cpp">
+      <Filter>Components</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ArenaLength.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetHandler.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\ILoadedSound.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\ISndCurve.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\Isnd_alias_list_t.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\ITracerDef.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IWeapon.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IFxEffectDef.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IPhysCollmap.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IPhysPreset.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IXAnimParts.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IXModel.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IXModelSurfs.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IclipMap_t.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IComWorld.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IFxWorld.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IGameWorldMp.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IGameWorldSp.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IGfxWorld.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IMapEnts.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IFont_s.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IGfxImage.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IGfxLightDef.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\ILocalizeEntry.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IMaterial.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IMaterialPixelShader.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IMaterialTechniqueSet.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IMaterialVertexDeclaration.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IMaterialVertexShader.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IMenuList.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IRawFile.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IStringTable.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\IStructuredDataDefSet.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\AssetInterfaces\ImenuDef_t.cpp">
+      <Filter>Components\Modules\AssetInterfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Auth.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Bans.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\BotAI.cpp">
+      <Filter>Components\Modules\BotAI</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Ai.cpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Combat.cpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Engine.cpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Goals.cpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Identity.cpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Killstreaks.cpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Loadout.cpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Lobby.cpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Memory.cpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Objectives.cpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Perception.cpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Personality.cpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Targeting.cpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Tasks.cpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Walk.cpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\WeaponData.cpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Control\Weapons.cpp">
+      <Filter>Components\Modules\BotAI\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Iw4.cpp">
+      <Filter>Components\Modules\BotAI</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Navgen\Annotate.cpp">
+      <Filter>Components\Modules\BotAI\Navgen</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Navgen\Fill.cpp">
+      <Filter>Components\Modules\BotAI\Navgen</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Navgen\Graph.cpp">
+      <Filter>Components\Modules\BotAI\Navgen</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Navgen\Output.cpp">
+      <Filter>Components\Modules\BotAI\Navgen</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Navgen\Prune.cpp">
+      <Filter>Components\Modules\BotAI\Navgen</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Navgen\Sight.cpp">
+      <Filter>Components\Modules\BotAI\Navgen</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Navgen\Tools.cpp">
+      <Filter>Components\Modules\BotAI\Navgen</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Navgen\Trace.cpp">
+      <Filter>Components\Modules\BotAI\Navgen</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Navgen\Walls.cpp">
+      <Filter>Components\Modules\BotAI\Navgen</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Navgen\World.cpp">
+      <Filter>Components\Modules\BotAI\Navgen</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_abandon.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_afghan.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_bloc.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_boneyard.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_brecourt.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_checkpoint.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_compact.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_complex.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_crash.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_derail.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_estate.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_favela.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_fuel2.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_highrise.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_invasion.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_nightshift.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_overgrown.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_quarry.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_rundown.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_rust.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_storm.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_strike.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_subbase.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_terminal.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_trailerpark.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_underpass.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Maps\mp_vacant.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints\Maps</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Registry.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Waypoints.cpp">
+      <Filter>Components\Modules\BotAI\Waypoints</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Bots.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Branding.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Bullet.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\CardTitles.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Ceg.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Changelog.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Chat.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ClanTags.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ClientCommand.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ClientSlots.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Command.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ConfigStrings.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ConnectProtocol.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Console.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\D3D9Ex.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Debug.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Dedicated.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Discord.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Discovery.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Download.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Dvar.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Elevators.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Events.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Exception.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\FastFiles.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\FileSystem.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Flags.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Friends.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\GSC\Entity.cpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\GSC\Field.cpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\GSC\GSC.cpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\GSC\IO.cpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\GSC\Int64.cpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\GSC\Script.cpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\GSC\ScriptError.cpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\GSC\ScriptExtension.cpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\GSC\ScriptPatches.cpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\GSC\ScriptStorage.cpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\GSC\String.cpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\GSC\UserInfo.cpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Gamepad.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Handshake.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\HudParallax.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Huffman.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\IPCPipe.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Leaderboard.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Lean.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\LobbyAudio.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\LobbyScene.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Localization.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Logger.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\MapDump.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\MapRotation.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Maps.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Materials.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\MenuDvarList.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Menus.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ModList.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ModelCache.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ModelSurfs.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Network.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\NetworkDebug.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\News.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Node.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Party.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\PlayerMovement.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\PlayerName.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Playlist.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\QuickPatch.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\RCon.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\RawFiles.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\RawMouse.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Renderer.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Rumble.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\SPLoadscreens.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Scheduler.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Security.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ServerCommands.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ServerInfo.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ServerList.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Session.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Singleton.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\SlowMotion.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Sound.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\StartupMessages.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Stats.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Steam.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\StringTable.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\StructuredData.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\TextRenderer.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Theatre.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Threading.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Toast.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\UIFeeder.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\UIScript.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\UPnP.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Updater.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ViewModelFx.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\VisionFile.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Voice.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Vote.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Weapon.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Window.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ZW3Changelog.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ZWNet.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ZoneBuilder.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ZoneConvert.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Zones.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Aim\Assist.cpp">
+      <Filter>Controller\Aim</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Aim\Calibration.cpp">
+      <Filter>Controller\Aim</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Aim\Deadzone.cpp">
+      <Filter>Controller\Aim</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Aim\Graph.cpp">
+      <Filter>Controller\Aim</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Aim\Integrator.cpp">
+      <Filter>Controller\Aim</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Calibration\Normalize.cpp">
+      <Filter>Controller\Calibration</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Calibration\Profile.cpp">
+      <Filter>Controller\Calibration</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Calibration\Store.cpp">
+      <Filter>Controller\Calibration</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Calibration\Validate.cpp">
+      <Filter>Controller\Calibration</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Context.cpp">
+      <Filter>Controller</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Device\Connection.cpp">
+      <Filter>Controller\Device</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Device\Discovery.cpp">
+      <Filter>Controller\Device</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Device\Id.cpp">
+      <Filter>Controller\Device</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Device\Identity.cpp">
+      <Filter>Controller\Device</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Device\Registry.cpp">
+      <Filter>Controller\Device</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Diagnostic.cpp">
+      <Filter>Controller</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Driver\Decode.cpp">
+      <Filter>Controller\Driver</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Driver\DualSense.cpp">
+      <Filter>Controller\Driver</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Driver\DualSenseEdge.cpp">
+      <Filter>Controller\Driver</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Driver\DualShock4.cpp">
+      <Filter>Controller\Driver</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Driver\OutputReport.cpp">
+      <Filter>Controller\Driver</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Driver\PlayStation.cpp">
+      <Filter>Controller\Driver</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Driver\Set.cpp">
+      <Filter>Controller\Driver</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Driver\XInput.cpp">
+      <Filter>Controller\Driver</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Engine\Bind.cpp">
+      <Filter>Controller\Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Engine\Command.cpp">
+      <Filter>Controller\Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Engine\Dvar.cpp">
+      <Filter>Controller\Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Engine\Engine.cpp">
+      <Filter>Controller\Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Engine\Feedback.cpp">
+      <Filter>Controller\Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Engine\Hook.cpp">
+      <Filter>Controller\Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Engine\Key.cpp">
+      <Filter>Controller\Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Engine\NetMove.cpp">
+      <Filter>Controller\Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Engine\Rumble.cpp">
+      <Filter>Controller\Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Engine\View.cpp">
+      <Filter>Controller\Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Error.cpp">
+      <Filter>Controller</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Haptic\Effect.cpp">
+      <Filter>Controller\Haptic</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Haptic\Mixer.cpp">
+      <Filter>Controller\Haptic</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Haptic\Stream.cpp">
+      <Filter>Controller\Haptic</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Mapping\Binding.cpp">
+      <Filter>Controller\Mapping</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Mapping\Glyph.cpp">
+      <Filter>Controller\Mapping</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Mapping\Key.cpp">
+      <Filter>Controller\Mapping</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Mapping\Logical.cpp">
+      <Filter>Controller\Mapping</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Mapping\Physical.cpp">
+      <Filter>Controller\Mapping</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Mapping\StickLayout.cpp">
+      <Filter>Controller\Mapping</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Runtime.cpp">
+      <Filter>Controller</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Sample\Axis.cpp">
+      <Filter>Controller\Sample</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Transport\Audio.cpp">
+      <Filter>Controller\Transport</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Transport\DeviceNotify.cpp">
+      <Filter>Controller\Transport</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Transport\Hid.cpp">
+      <Filter>Controller\Transport</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Transport\ReportStream.cpp">
+      <Filter>Controller\Transport</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Controller\Transport\XInputModule.cpp">
+      <Filter>Controller\Transport</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\DllMain.cpp" />
+    <ClCompile Include="..\src\Game\BothGames.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\Client.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\Common.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\Database.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\Dvars.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\Engine\FastCriticalSection.cpp">
+      <Filter>Game\Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\Engine\Hunk.cpp">
+      <Filter>Game\Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\Engine\LargeLocal.cpp">
+      <Filter>Game\Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\Engine\ScopedCriticalSection.cpp">
+      <Filter>Game\Engine</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\FileSystem.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\Functions.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\Game.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\PlayerMovement.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\Script.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\Scripting\Function.cpp">
+      <Filter>Game\Scripting</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\Scripting\StackIsolation.cpp">
+      <Filter>Game\Scripting</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\Server.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\System.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Game\Zone.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\STDInclude.cpp" />
+    <ClCompile Include="..\src\Steam\Interfaces\SteamApps.cpp">
+      <Filter>Steam\Interfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Steam\Interfaces\SteamFriends.cpp">
+      <Filter>Steam\Interfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Steam\Interfaces\SteamGameServer.cpp">
+      <Filter>Steam\Interfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Steam\Interfaces\SteamMatchmaking.cpp">
+      <Filter>Steam\Interfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Steam\Interfaces\SteamNetworking.cpp">
+      <Filter>Steam\Interfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Steam\Interfaces\SteamRemoteStorage.cpp">
+      <Filter>Steam\Interfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Steam\Interfaces\SteamUser.cpp">
+      <Filter>Steam\Interfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Steam\Interfaces\SteamUtils.cpp">
+      <Filter>Steam\Interfaces</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Steam\Proxy.cpp">
+      <Filter>Steam</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Steam\Steam.cpp">
+      <Filter>Steam</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\Cache.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\CSV.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\Compression.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\CrashMarker.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\Cryptography.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\Entities.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\Hooking.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\Huffman.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\IO.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\InfoString.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\JSON.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\Library.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\Maths.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\Memory.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\MenuPreprocessor.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\NamedMutex.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\String.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\Stream.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\Thread.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\Time.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\Utils.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Utils\WebIO.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="..\src\Resource.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Masm Include="..\src\Components\Modules\ArenaLengthStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\AssetHandlerStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\AuthStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\BotsStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\CardTitlesStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\ClanTagsStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\ClientSlotsStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\DedicatedStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\ElevatorsStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\GSC\ScriptExtensionStubs.asm">
+      <Filter>Components\Modules\GSC</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\GamepadStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\MapsStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\MaterialsStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\NetworkStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\PlayerMovementStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\QuickPatchStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\RendererStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\RumbleStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\SlowMotionStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\SoundStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\TheatreStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\ThreadingStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\VisionFileStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\VoiceStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+    <Masm Include="..\src\Components\Modules\WeaponStubs.asm">
+      <Filter>Components\Modules</Filter>
+    </Masm>
+  </ItemGroup>
+</Project>

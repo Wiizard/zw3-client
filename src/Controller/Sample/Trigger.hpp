@@ -1,23 +1,20 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
 namespace Controller
 {
-  enum class trigger_side : uint8_t
-  {
-    left,
-    right,
-  };
+	enum class TriggerSide : std::uint8_t
+	{
+		Left,
+		Right,
+	};
 
-  inline constexpr size_t trigger_count {2};
+	inline constexpr std::size_t triggerCount = 2;
 
-  const char*
-  to_string (trigger_side) noexcept;
-
-  struct trigger_sample
-  {
-    uint16_t raw {0};
-    float normalized {0.0f};
-  };
+	struct TriggerSample
+	{
+		std::uint16_t raw = 0;
+		float normalized = 0.0f;
+	};
 }

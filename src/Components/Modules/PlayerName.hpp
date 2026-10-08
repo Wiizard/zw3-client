@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Dvar.hpp"
+
 namespace Components
 {
 	class PlayerName : public Component
@@ -15,11 +17,11 @@ namespace Components
 		static Dvar::Var sv_allowColoredNames;
 
 		static char* CleanStrStub(char* string);
-		static void ClientCleanName();
+		static void ClientCleanName_Hk(const char* name, char* buffer, int size);
 
 		static bool IsBadChar(int c);
 		static bool CopyClientNameCheck(char* dest, const char* source, int size);
 		static void DropClient(Game::client_s* drop);
-		static void SV_UserinfoChangedStub();
+		static void SV_UserinfoChanged_Hk(char* dest, const char* source, int size);
 	};
 }

@@ -1,104 +1,92 @@
+#include "STDInclude.hpp"
+
 #include "Flags.hpp"
 
 namespace Components
 {
-	std::vector<std::string> Flags::EnabledFlags;
+	std::vector<std::string> Flags::enabledFlags;
+	bool Flags::isParsed = false;
 
 	bool Flags::HasFlag(const std::string& flag)
 	{
 		ParseFlags();
 
-		for (const auto& entry : EnabledFlags)
-		{
-			if (!_stricmp(entry.c_str(), flag.c_str()))
-			{
-				return true;
-			}
-		}
+		const auto wanted = Utils::String::ToLower(flag);
 
-		return false;
+		return std::ranges::any_of(enabledFlags, [&wanted](const std::string& entry)
+		{
+			return Utils::String::ToLower(entry) == wanted;
+		});
 	}
 
 	void Flags::ParseFlags()
 	{
-		static bool p(false);
-
-		if (p)
+		if (isParsed)
+		{
 			return;
-
-		p = true;
-
-		// Note that the engine's parser mishandles trailing quotes. So here we
-		// strip them all globally from the raw OS buffers by shifting characters
-		// in-place. We cannot just replace them with spaces because that would
-		// naturally break space-separated values.
-		//
-		if (char* b = GetCommandLineA())
-		{
-			char* r(b);
-			char* w(b);
-
-			while (*r != '\0')
-			{
-				if (*r != '\"')
-					*w++ = *r;
-
-				r++;
-			}
-
-			*w = '\0';
 		}
 
-		if (wchar_t* b = GetCommandLineW())
+		isParsed = true;
+
+		if (char* const buffer = GetCommandLineA())
 		{
-			wchar_t* r(b);
-			wchar_t* w(b);
+			char* read = buffer;
+			char* write = buffer;
 
-			while (*r != L'\0')
+			while (*read != '\0')
 			{
-				if (*r != L'\"')
-					*w++ = *r;
-
-				r++;
-			}
-
-			*w = L'\0';
-		}
-
-		int c(0);
-
-		// Parse the arguments. Since we already removed the quotes from the OS
-		// buffer above, CommandLineToArgvW() will parse the resulting clean
-		// string. This is perfectly safe as we are only looking for the '-'
-		// prefix anyway.
-		//
-		const auto a(CommandLineToArgvW(GetCommandLineW(), &c));
-
-		if (a)
-		{
-			for (int i(0); i < c; ++i)
-			{
-				std::wstring f(a[i]);
-
-				if (f[0] == L'-')
+				if (*read != '\"')
 				{
-					f.erase(f.begin());
-					EnabledFlags.emplace_back(Utils::String::Convert(f));
+					*write = *read;
+					++write;
 				}
+
+				++read;
 			}
 
-			LocalFree(a);
+			*write = '\0';
 		}
 
-		// Work around a Wine issue. If we are running dedicated and they did not
-		// specify output channels, force stdout so we actually see the logs.
-		//
-		if (Utils::IsWineEnvironment() &&
-			Dedicated::IsEnabled() &&
-			!HasFlag("console") &&
-			!HasFlag("stdout"))
+		if (wchar_t* const buffer = GetCommandLineW())
 		{
-			EnabledFlags.emplace_back("stdout");
+			wchar_t* read = buffer;
+			wchar_t* write = buffer;
+
+			while (*read != L'\0')
+			{
+				if (*read != L'\"')
+				{
+					*write = *read;
+					++write;
+				}
+
+				++read;
+			}
+
+			*write = L'\0';
 		}
+
+		int count = 0;
+		wchar_t** const arguments = CommandLineToArgvW(GetCommandLineW(), &count);
+
+		if (!arguments)
+		{
+			return;
+		}
+
+		for (int i = 0; i < count; ++i)
+		{
+			std::wstring argument(arguments[i]);
+
+			if (argument.empty() || argument.front() != L'-')
+			{
+				continue;
+			}
+
+			argument.erase(argument.begin());
+			enabledFlags.emplace_back(Utils::String::Convert(argument));
+		}
+
+		LocalFree(arguments);
 	}
 }

@@ -1,35 +1,35 @@
 #pragma once
 
+#include "Dvar.hpp"
+
 namespace Components
 {
 	class Localization : public Component
 	{
 	public:
 		Localization();
-		~Localization();
 
-		static void Set(const std::string& psLocalReference, const std::string& psNewString);
+		static void Set(const std::string& reference, const std::string& value);
 		static const char* Get(const char* key);
-
-		static std::optional<std::string> PrefixOverride;
-		static void ParseOutput(const std::function<void(Game::LocalizeEntry*)>& callback);
 
 		static const char* LocalizeMapName(const char* mapName);
 		static const char* GetMapImageName(const char* mapName);
 
 	private:
-		static std::recursive_mutex LocalizeMutex;
-		static std::unordered_map<std::string, Game::LocalizeEntry*> LocalizeMap;
-		static Dvar::Var UseLocalization;
+		static std::unordered_map<std::string, std::string> strings;
+		static std::mutex stringsMutex;
+		static Dvar::Var ui_localize;
 
-		static std::function<void(Game::LocalizeEntry*)> ParseCallback;
+		static bool IsTranslating();
 
-		static void __stdcall SetStringStub(const char* psLocalReference, const char* psNewString, int bSentenceIsEnglish);
-
-		static void SaveParseOutput(Game::LocalizeEntry* asset);
+		static const char* SEH_StringEd_GetString_Stub(const char* reference);
+		static void* SEH_SafeTranslateString_Lookup(unsigned int type, const char* reference);
+		static void SEH_GetLocalizedTokenReference(char* token, std::size_t tokenSize);
+		static const char* SEH_LocalizeTextMessage_Stub(const char* inputBuffer, const char* messageType, int errType);
 
 		static void SetCredits();
 
-		static const char* SEH_LocalizeTextMessageStub(const char* pszInputBuffer, const char* pszMessageType, Game::msgLocErrType_t errType);
+		static void GSCr_LocalizeText();
+		static void GSCr_LocalizeGametype();
 	};
 }

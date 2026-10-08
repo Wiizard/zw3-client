@@ -1,262 +1,244 @@
-#include "Discovery.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
-
-#include <cassert>
-#include <algorithm>
-
-#include "../Transport/Hid.hpp"
+#include "Controller/Device/Discovery.hpp"
+#include "Controller/Transport/Hid.hpp"
 
 namespace Controller
 {
-  namespace
-  {
-    constexpr clock::duration fallback_interval {std::chrono::seconds (5)};
+	static constexpr Clock::Duration fallbackInterval{ std::chrono::seconds(5) };
 
-    constexpr uint8_t subtype_wheel {0x02};
-    constexpr uint8_t subtype_arcade_stick {0x03};
-    constexpr uint8_t subtype_flight_stick {0x04};
-    constexpr uint8_t subtype_dance_pad {0x05};
-    constexpr uint8_t subtype_guitar {0x06};
-    constexpr uint8_t subtype_guitar_alternate {0x07};
-    constexpr uint8_t subtype_drum_kit {0x08};
-    constexpr uint8_t subtype_guitar_bass {0x0B};
+	static constexpr std::uint8_t subtypeWheel = 0x02;
+	static constexpr std::uint8_t subtypeArcadeStick = 0x03;
+	static constexpr std::uint8_t subtypeFlightStick = 0x04;
+	static constexpr std::uint8_t subtypeDancePad = 0x05;
+	static constexpr std::uint8_t subtypeGuitar = 0x06;
+	static constexpr std::uint8_t subtypeGuitarAlternate = 0x07;
+	static constexpr std::uint8_t subtypeDrumKit = 0x08;
+	static constexpr std::uint8_t subtypeGuitarBass = 0x0B;
 
-    bool
-    maps_onto_a_gamepad (uint8_t subtype) noexcept
-    {
-      switch (subtype)
-      {
-        case subtype_wheel:
-        case subtype_arcade_stick:
-        case subtype_flight_stick:
-        case subtype_dance_pad:
-        case subtype_guitar:
-        case subtype_guitar_alternate:
-        case subtype_guitar_bass:
-        case subtype_drum_kit:
-          return false;
+	static bool IsGamepadLike(std::uint8_t subtype) noexcept
+	{
+		switch (subtype)
+		{
+		case subtypeWheel:
+		case subtypeArcadeStick:
+		case subtypeFlightStick:
+		case subtypeDancePad:
+		case subtypeGuitar:
+		case subtypeGuitarAlternate:
+		case subtypeGuitarBass:
+		case subtypeDrumKit:
+			return false;
 
-        default:
-          return true;
-      }
-    }
-  }
+		default:
+			return true;
+		}
+	}
 
-  namespace
-  {
-    constexpr capabilities dualsense_capabilities {
-      capability::gyroscope |
-      capability::accelerometer |
-      capability::touchpad |
-      capability::battery |
-      capability::microphone_button |
-      capability::rumble |
-      capability::haptics |
-      capability::adaptive_triggers |
-      capability::light_bar |
-      capability::player_leds};
+	static Capabilities CapabilitiesFor(Family family) noexcept
+	{
+		Capabilities caps;
 
-    capabilities
-    capabilities_for (family f) noexcept
-    {
-      switch (f)
-      {
-        case family::xbox:
-          return capabilities (capability::rumble);
+		switch (family)
+		{
+		case Family::Xbox:
+			caps.Add(Capability::Rumble);
+			break;
 
-        case family::dualshock4:
-          return capability::gyroscope |
-                 capability::accelerometer |
-                 capability::touchpad |
-                 capability::battery |
-                 capability::rumble |
-                 capability::light_bar;
+		case Family::DualShock4:
+			caps.Add(Capability::Gyroscope).Add(Capability::Accelerometer).Add(Capability::Touchpad).Add(Capability::Battery);
+			caps.Add(Capability::Rumble).Add(Capability::LightBar);
+			break;
 
-        case family::dualsense:
-          return dualsense_capabilities;
+		case Family::DualSense:
+		case Family::DualSenseEdge:
+			caps.Add(Capability::Gyroscope).Add(Capability::Accelerometer).Add(Capability::Touchpad).Add(Capability::Battery);
+			caps.Add(Capability::MicrophoneButton).Add(Capability::Rumble).Add(Capability::Haptics).Add(Capability::AdaptiveTriggers);
+			caps.Add(Capability::LightBar).Add(Capability::PlayerLeds);
 
-        case family::dualsense_edge:
-          return dualsense_capabilities | capability::back_buttons;
+			if (family == Family::DualSenseEdge)
+			{
+				caps.Add(Capability::BackButtons);
+			}
 
-        case family::unknown:
-          break;
-      }
+			break;
 
-      return capabilities ();
-    }
-  }
+		case Family::Unknown:
+			break;
+		}
 
-  discovery::
-  discovery (const context& ctx,
-             registry& r,
-             const transport::xinput_module& x)
-    : ctx_ (ctx),
-      registry_ (r),
-      xinput_ (x),
-      notifier_ (ctx),
-      thread_ ([this] (std::stop_token t) {run (std::move (t));})
-  {
-  }
+		return caps;
+	}
 
-  void
-  discovery::
-  scan ()
-  {
-    const bool changed (notifier_.consume ());
-    const timestamp now (clock::now ());
+	Discovery::Discovery(const Context& context, Registry& registry, const Transport::XInputModule& xinput)
+		: context(context),
+		registry(registry),
+		xinput(xinput),
+		notifier(context),
+		thread([this](std::stop_token stop)
+		{
+			this->Run(stop);
+		})
+	{
+	}
 
-    if (!changed && scanned_ &&
-        (!notifier_.failed () || now - last_scan_ < fallback_interval))
-      return;
+	void Discovery::Scan()
+	{
+		const bool hasChanged = this->notifier.Consume();
+		const Timestamp now = Clock::Now();
 
-    last_scan_ = now;
-    scanned_ = true;
+		const bool isFallbackDue = this->notifier.HasFailed() && now - this->lastScan >= fallbackInterval;
 
-    pending_.store (true, std::memory_order_release);
-    pending_.notify_one ();
-  }
+		if (!hasChanged && this->hasScanned && !isFallbackDue)
+		{
+			return;
+		}
 
-  void
-  discovery::
-  run (std::stop_token stop) noexcept
-  {
-    const std::stop_callback wake (stop, [this] () noexcept
-    {
-      pending_.store (true, std::memory_order_release);
-      pending_.notify_one ();
-    });
+		this->lastScan = now;
+		this->hasScanned = true;
 
-    while (!stop.stop_requested ())
-    {
-      pending_.wait (false, std::memory_order_acquire);
+		this->isPending.store(true, std::memory_order_release);
+		this->isPending.notify_one();
+	}
 
-      if (stop.stop_requested ())
-        return;
+	void Discovery::Run(const std::stop_token& stop)
+	{
+		const std::stop_callback wake(stop, [this]() noexcept
+		{
+			this->isPending.store(true, std::memory_order_release);
+			this->isPending.notify_one();
+		});
 
-      pending_.store (false, std::memory_order_relaxed);
+		while (!stop.stop_requested())
+		{
+			this->isPending.wait(false, std::memory_order_acquire);
 
-      try
-      {
-        scan_now ();
-      }
-      catch (const std::exception& e)
-      {
-        ctx_.report (severity::warning, facility::discovery,
-                     errc::transport_failure,
-                     std::string ("device scan failed: ") + e.what ());
-      }
-    }
-  }
+			if (stop.stop_requested())
+			{
+				return;
+			}
 
-  void
-  discovery::
-  scan_now ()
-  {
-    std::vector<transport_binding> seen;
-    seen.reserve (user_index::count + 4);
+			this->isPending.store(false, std::memory_order_relaxed);
 
-    scan_xinput (seen);
-    scan_hid (seen);
+			try
+			{
+				this->ScanNow();
+			}
+			catch (const std::exception& exception)
+			{
+				this->context.Report(Severity::Warning, Facility::Discovery, ErrorCode::TransportFailure, std::format("device scan failed: {}", exception.what()));
+			}
+		}
+	}
 
-    retire_unseen (seen);
-  }
+	void Discovery::ScanNow()
+	{
+		std::vector<TransportBinding> seen;
+		seen.reserve(UserIndex::count + 4);
 
-  void
-  discovery::
-  scan_xinput (std::vector<transport_binding>& seen)
-  {
-    if (!xinput_.loaded ())
-      return;
+		this->ScanXInput(seen);
+		this->ScanHid(seen);
 
-    for (uint8_t i (0); i < user_index::count; ++i)
-    {
-      XINPUT_STATE state {};
+		this->RetireUnseen(seen);
+	}
 
-      if (xinput_.get_state (i, state) != ERROR_SUCCESS)
-        continue;
+	void Discovery::ScanXInput(std::vector<TransportBinding>& seen)
+	{
+		if (!this->xinput.IsLoaded())
+		{
+			return;
+		}
 
-      XINPUT_CAPABILITIES caps {};
+		for (std::uint8_t i = 0; i < UserIndex::count; ++i)
+		{
+			XINPUT_STATE state{};
 
-      if (xinput_.get_capabilities (i, 0, caps) == ERROR_SUCCESS &&
-          !maps_onto_a_gamepad (caps.SubType))
-        continue;
+			if (this->xinput.GetState(i, state) != ERROR_SUCCESS)
+			{
+				continue;
+			}
 
-      const user_index slot (i);
+			XINPUT_CAPABILITIES caps{};
 
-      registry_.add (device_identity {family::xbox, std::nullopt, std::nullopt, std::nullopt},
-                     transport_kind::xinput,
-                     connection::unknown,
-                     capabilities_for (family::xbox),
-                     xinput_binding {slot});
+			if (this->xinput.GetCapabilities(i, 0, caps) == ERROR_SUCCESS && !IsGamepadLike(caps.SubType))
+			{
+				continue;
+			}
 
-      seen.push_back (xinput_binding {slot});
-    }
-  }
+			const UserIndex slot(i);
 
-  void
-  discovery::
-  scan_hid (std::vector<transport_binding>& seen)
-  {
-    std::vector<std::wstring> unbound;
+			DeviceConnection connection;
+			connection.identity = DeviceIdentity{ Family::Xbox, std::nullopt, std::nullopt, std::nullopt };
+			connection.transport = TransportKind::XInput;
+			connection.link = Connection::Unknown;
+			connection.caps = CapabilitiesFor(Family::Xbox);
+			connection.binding = XInputBinding{ slot };
 
-    for (transport::hid_enumeration_entry& e: transport::enumerate (ctx_))
-    {
-      const family f (classify (e.attributes.vendor, e.attributes.product));
+			this->registry.Add(connection);
 
-      assert (f != family::unknown);
+			seen.push_back(XInputBinding{ slot });
+		}
+	}
 
-      if (e.link == connection::unknown)
-      {
-        if (std::find (unbound_.begin (), unbound_.end (), e.path) == unbound_.end ())
-          ctx_.report (severity::warning, facility::discovery,
-                       errc::ambiguous_identity,
-                       std::string ("HID device ") +
-                       to_string (f) +
-                       " reports an input report of " +
-                       std::to_string (e.input_report_length) +
-                       " bytes; the drivers decode 64-byte (USB) and 78-byte "
-                       "(Bluetooth) framing, so no driver is bound");
+	void Discovery::ScanHid(std::vector<TransportBinding>& seen)
+	{
+		std::vector<std::wstring> stillUnbound;
 
-        unbound.push_back (std::move (e.path));
-        continue;
-      }
+		for (auto& entry : Transport::Enumerate(this->context))
+		{
+			const Family family = Classify(entry.attributes.vendor, entry.attributes.product);
 
-      registry_.add (device_identity {f,
-                                      e.attributes.vendor,
-                                      e.attributes.product,
-                                      e.attributes.version},
-                     transport_kind::hid,
-                     e.link,
-                     capabilities_for (f),
-                     hid_binding {e.path});
+			assert(family != Family::Unknown);
 
-      seen.push_back (hid_binding {std::move (e.path)});
-    }
+			if (entry.link == Connection::Unknown)
+			{
+				const bool isNew = std::find(this->unbound.begin(), this->unbound.end(), entry.path) == this->unbound.end();
 
-    unbound_ = std::move (unbound);
-  }
+				if (isNew)
+				{
+					this->context.Report(Severity::Warning, Facility::Discovery, ErrorCode::AmbiguousIdentity,
+						std::format("HID device {} reports an input report of {} bytes; the drivers decode 64-byte (USB) and 78-byte (Bluetooth) framing, so no driver is bound", ToString(family), entry.inputReportLength));
+				}
 
-  void
-  discovery::
-  retire_unseen (const std::vector<transport_binding>& seen)
-  {
-    std::vector<device_id> departed;
+				stillUnbound.push_back(std::move(entry.path));
+				continue;
+			}
 
-    registry_.for_each ([&seen, &departed] (const device_connection& d)
-    {
-      const bool present (
-        std::any_of (seen.begin (), seen.end (),
-                     [&d] (const transport_binding& b)
-                     {
-                       return same_binding (d.binding, b);
-                     }));
+			DeviceConnection connection;
+			connection.identity = DeviceIdentity{ family, entry.attributes.vendor, entry.attributes.product, entry.attributes.version };
+			connection.transport = TransportKind::Hid;
+			connection.link = entry.link;
+			connection.caps = CapabilitiesFor(family);
+			connection.binding = HidBinding{ entry.path };
 
-      if (!present)
-        departed.push_back (d.id);
-    });
+			this->registry.Add(connection);
 
-    for (device_id id: departed)
-      registry_.remove (id);
-  }
+			seen.push_back(HidBinding{ std::move(entry.path) });
+		}
+
+		this->unbound = std::move(stillUnbound);
+	}
+
+	void Discovery::RetireUnseen(const std::vector<TransportBinding>& seen)
+	{
+		std::vector<DeviceId> departed;
+
+		this->registry.ForEach([&seen, &departed](const DeviceConnection& device)
+		{
+			const bool isPresent = std::any_of(seen.begin(), seen.end(), [&device](const TransportBinding& binding)
+			{
+				return IsSameBinding(device.binding, binding);
+			});
+
+			if (!isPresent)
+			{
+				departed.push_back(device.id);
+			}
+		});
+
+		for (const auto id : departed)
+		{
+			this->registry.Remove(id);
+		}
+	}
 }

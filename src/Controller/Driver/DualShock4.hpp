@@ -1,68 +1,53 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Context.hpp"
-#include "Driver.hpp"
-#include "../Transport/Hid.hpp"
+#include "Controller/Context.hpp"
+#include "Controller/Driver/Driver.hpp"
+#include "Controller/Transport/Hid.hpp"
 
-namespace Controller
+namespace Controller::Driver
 {
-  namespace driver
-  {
-    bool
-    decode_dualshock4 (std::span<const std::byte> report,
-                       connection link,
-                       raw_sample& raw,
-                       canonical_sample& canonical) noexcept;
+	bool TryDecodeDualShock4(std::span<const std::byte> report, Connection link, RawSample& raw, CanonicalSample& canonical);
 
-    class dualshock4_driver: public driver
-    {
-    public:
-      dualshock4_driver (const context&, transport::hid_device&, device_id);
+	class DualShock4Driver : public Driver
+	{
+	public:
+		DualShock4Driver(const Context& context, Transport::HidDevice& hid, DeviceId device);
 
-      Controller::family
-      family () const noexcept override {return Controller::family::dualshock4;}
+		Controller::Family Family() const noexcept override
+		{
+			return Controller::Family::DualShock4;
+		}
 
-      device_id
-      device () const noexcept override {return device_;}
+		DeviceId Device() const noexcept override
+		{
+			return this->device;
+		}
 
-      bool
-      poll (raw_sample&, canonical_sample&) noexcept override;
+		bool TryPoll(RawSample& raw, CanonicalSample& canonical) override;
+		void Submit(const OutputRequest& request) override;
+		void Configure(const OutputPolicy& outputPolicy) override;
+		std::string Diagnostics() const override;
 
-      void
-      submit (const output_request&) noexcept override;
+	private:
+		void SubmitReport(const OutputRequest& request);
+		void QueueRumble(const RumbleRequest& request);
+		void FlushRumble();
 
-      void
-      configure (const output_policy&) noexcept override;
+		const Context& context;
+		Transport::HidDevice& hid;
+		DeviceId device;
+		Connection link;
 
-      std::string
-      diagnostics () const override;
+		bool hasReportedMinimal = false;
+		bool hasReportedUnencodable = false;
 
-    private:
-      void
-      submit_report (const output_request&) noexcept;
+		OutputPolicy policy{};
 
-      void
-      queue_rumble (const rumble_request&) noexcept;
-
-      void
-      flush_rumble () noexcept;
-
-      const context& ctx_;
-      transport::hid_device& hid_;
-      device_id device_;
-      connection link_;
-
-      bool minimal_reported_ {false};
-      bool unencodable_reported_ {false};
-
-      output_policy policy_ {};
-
-      rumble_request pending_rumble_ {};
-      bool rumble_pending_ {false};
-      bool rumble_sent_ {false};
-      timestamp last_rumble_ {};
-    };
-  }
+		RumbleRequest pendingRumble{};
+		bool isRumblePending = false;
+		bool hasSentRumble = false;
+		Timestamp lastRumble{};
+	};
 }

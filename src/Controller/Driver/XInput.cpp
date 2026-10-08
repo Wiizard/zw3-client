@@ -1,184 +1,161 @@
-#include "XInput.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Driver/XInput.hpp"
 
-#include <cmath>
-#include <variant>
-#include <algorithm>
-
-namespace Controller
+namespace Controller::Driver
 {
-  namespace driver
-  {
-    namespace
-    {
-      constexpr uint16_t xinput_gamepad_guide {0x0400};
+	static constexpr std::uint16_t xinputGamepadGuide = 0x0400;
 
-      constexpr float thumb_full_scale {32767.0f};
+	static constexpr float thumbFullScale = 32767.0f;
 
-      stick_vector
-      normalize_stick (int16_t rx, int16_t ry) noexcept
-      {
-        float x (std::clamp (static_cast<float> (rx) / thumb_full_scale,
-                             -1.0f, 1.0f));
-        float y (std::clamp (static_cast<float> (ry) / thumb_full_scale,
-                             -1.0f, 1.0f));
+	static StickVector NormalizeStick(std::int16_t rawX, std::int16_t rawY) noexcept
+	{
+		float x = std::clamp(static_cast<float>(rawX) / thumbFullScale, -1.0f, 1.0f);
+		float y = std::clamp(static_cast<float>(rawY) / thumbFullScale, -1.0f, 1.0f);
 
-        float m (std::sqrt (x * x + y * y));
-        if (m > 1.0f)
-        {
-          x /= m;
-          y /= m;
-        }
+		const float magnitude = std::sqrt(x * x + y * y);
 
-        return {x, y};
-      }
+		if (magnitude > 1.0f)
+		{
+			x /= magnitude;
+			y /= magnitude;
+		}
 
-      trigger_sample
-      decode_trigger (uint8_t raw) noexcept
-      {
-        return {raw, static_cast<float> (raw) / 255.0f};
-      }
+		return { x, y };
+	}
 
-      button_set
-      decode_buttons (uint16_t w, bool have_guide) noexcept
-      {
-        button_set s;
+	static TriggerSample DecodeTrigger(std::uint8_t raw) noexcept
+	{
+		return { raw, static_cast<float>(raw) / 255.0f };
+	}
 
-        s.set (button::face_south, (w & XINPUT_GAMEPAD_A) != 0);
-        s.set (button::face_east,  (w & XINPUT_GAMEPAD_B) != 0);
-        s.set (button::face_west,  (w & XINPUT_GAMEPAD_X) != 0);
-        s.set (button::face_north, (w & XINPUT_GAMEPAD_Y) != 0);
+	static ButtonSet DecodeButtons(std::uint16_t pressed, bool hasGuide) noexcept
+	{
+		ButtonSet buttons;
 
-        s.set (button::dpad_up,    (w & XINPUT_GAMEPAD_DPAD_UP) != 0);
-        s.set (button::dpad_down,  (w & XINPUT_GAMEPAD_DPAD_DOWN) != 0);
-        s.set (button::dpad_left,  (w & XINPUT_GAMEPAD_DPAD_LEFT) != 0);
-        s.set (button::dpad_right, (w & XINPUT_GAMEPAD_DPAD_RIGHT) != 0);
+		buttons.Set(Button::FaceSouth, (pressed & XINPUT_GAMEPAD_A) != 0);
+		buttons.Set(Button::FaceEast, (pressed & XINPUT_GAMEPAD_B) != 0);
+		buttons.Set(Button::FaceWest, (pressed & XINPUT_GAMEPAD_X) != 0);
+		buttons.Set(Button::FaceNorth, (pressed & XINPUT_GAMEPAD_Y) != 0);
 
-        s.set (button::l1, (w & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0);
-        s.set (button::r1, (w & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0);
-        s.set (button::l3, (w & XINPUT_GAMEPAD_LEFT_THUMB) != 0);
-        s.set (button::r3, (w & XINPUT_GAMEPAD_RIGHT_THUMB) != 0);
+		buttons.Set(Button::DpadUp, (pressed & XINPUT_GAMEPAD_DPAD_UP) != 0);
+		buttons.Set(Button::DpadDown, (pressed & XINPUT_GAMEPAD_DPAD_DOWN) != 0);
+		buttons.Set(Button::DpadLeft, (pressed & XINPUT_GAMEPAD_DPAD_LEFT) != 0);
+		buttons.Set(Button::DpadRight, (pressed & XINPUT_GAMEPAD_DPAD_RIGHT) != 0);
 
-        s.set (button::start, (w & XINPUT_GAMEPAD_START) != 0);
-        s.set (button::back,  (w & XINPUT_GAMEPAD_BACK) != 0);
+		buttons.Set(Button::L1, (pressed & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0);
+		buttons.Set(Button::R1, (pressed & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0);
+		buttons.Set(Button::L3, (pressed & XINPUT_GAMEPAD_LEFT_THUMB) != 0);
+		buttons.Set(Button::R3, (pressed & XINPUT_GAMEPAD_RIGHT_THUMB) != 0);
 
-        if (have_guide)
-          s.set (button::guide, (w & xinput_gamepad_guide) != 0);
+		buttons.Set(Button::Start, (pressed & XINPUT_GAMEPAD_START) != 0);
+		buttons.Set(Button::Back, (pressed & XINPUT_GAMEPAD_BACK) != 0);
 
-        return s;
-      }
+		if (hasGuide)
+		{
+			buttons.Set(Button::Guide, (pressed & xinputGamepadGuide) != 0);
+		}
 
-      WORD
-      scale_motor (float v) noexcept
-      {
-        return static_cast<WORD> (std::clamp (v, 0.0f, 1.0f) * 65535.0f);
-      }
-    }
+		return buttons;
+	}
 
-    void
-    decode_xinput (const XINPUT_GAMEPAD& g,
-                   bool has_guide,
-                   raw_sample& raw,
-                   canonical_sample& canonical) noexcept
-    {
-      raw.sticks[static_cast<size_t> (stick::left)]  = {g.sThumbLX, g.sThumbLY};
-      raw.sticks[static_cast<size_t> (stick::right)] = {g.sThumbRX, g.sThumbRY};
-      raw.triggers[static_cast<size_t> (trigger_side::left)]  = g.bLeftTrigger;
-      raw.triggers[static_cast<size_t> (trigger_side::right)] = g.bRightTrigger;
-      raw.buttons = g.wButtons;
+	static WORD ScaleMotor(float value) noexcept
+	{
+		return static_cast<WORD>(std::clamp(value, 0.0f, 1.0f) * 65535.0f);
+	}
 
-      button_set buttons (decode_buttons (g.wButtons, has_guide));
+	void DecodeXInput(const XINPUT_GAMEPAD& gamepad, bool hasGuide, RawSample& raw, CanonicalSample& canonical) noexcept
+	{
+		raw.sticks[static_cast<std::size_t>(Stick::Left)] = { gamepad.sThumbLX, gamepad.sThumbLY };
+		raw.sticks[static_cast<std::size_t>(Stick::Right)] = { gamepad.sThumbRX, gamepad.sThumbRY };
+		raw.triggers[static_cast<std::size_t>(TriggerSide::Left)] = gamepad.bLeftTrigger;
+		raw.triggers[static_cast<std::size_t>(TriggerSide::Right)] = gamepad.bRightTrigger;
+		raw.buttons = gamepad.wButtons;
 
-      buttons.set (button::l2, g.bLeftTrigger  > XINPUT_GAMEPAD_TRIGGER_THRESHOLD);
-      buttons.set (button::r2, g.bRightTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD);
+		ButtonSet buttons = DecodeButtons(gamepad.wButtons, hasGuide);
 
-      canonical.buttons = buttons;
+		buttons.Set(Button::L2, gamepad.bLeftTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD);
+		buttons.Set(Button::R2, gamepad.bRightTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD);
 
-      auto& left (canonical.sticks[static_cast<size_t> (stick::left)]);
-      auto& right (canonical.sticks[static_cast<size_t> (stick::right)]);
-      left = {};
-      right = {};
-      left.raw = {g.sThumbLX, g.sThumbLY};
-      left.normalized = normalize_stick (g.sThumbLX, g.sThumbLY);
-      right.raw = {g.sThumbRX, g.sThumbRY};
-      right.normalized = normalize_stick (g.sThumbRX, g.sThumbRY);
+		canonical.buttons = buttons;
 
-      canonical.triggers[static_cast<size_t> (trigger_side::left)] =
-        decode_trigger (g.bLeftTrigger);
-      canonical.triggers[static_cast<size_t> (trigger_side::right)] =
-        decode_trigger (g.bRightTrigger);
+		auto& left = canonical.sticks[static_cast<std::size_t>(Stick::Left)];
+		auto& right = canonical.sticks[static_cast<std::size_t>(Stick::Right)];
+		left = {};
+		right = {};
+		left.raw = { gamepad.sThumbLX, gamepad.sThumbLY };
+		left.normalized = NormalizeStick(gamepad.sThumbLX, gamepad.sThumbLY);
+		right.raw = { gamepad.sThumbRX, gamepad.sThumbRY };
+		right.normalized = NormalizeStick(gamepad.sThumbRX, gamepad.sThumbRY);
 
-      canonical.touch.reset ();
-      canonical.motion.reset ();
-      canonical.battery.reset ();
+		canonical.triggers[static_cast<std::size_t>(TriggerSide::Left)] = DecodeTrigger(gamepad.bLeftTrigger);
+		canonical.triggers[static_cast<std::size_t>(TriggerSide::Right)] = DecodeTrigger(gamepad.bRightTrigger);
 
-      canonical.caps = capability::rumble;
-    }
+		canonical.touch.reset();
+		canonical.motion.reset();
+		canonical.battery.reset();
 
-    xinput_driver::
-    xinput_driver (const context& ctx,
-                   const transport::xinput_module& module,
-                   device_id device,
-                   user_index index)
-      : ctx_ (ctx), module_ (module), device_ (device), index_ (index)
-    {
-    }
+		canonical.caps = Capability::Rumble;
+	}
 
-    bool
-    xinput_driver::
-    poll (raw_sample& raw, canonical_sample& canonical) noexcept
-    {
-      XINPUT_STATE st {};
+	XInputDriver::XInputDriver(const Context& context, const Transport::XInputModule& xinput, DeviceId device, UserIndex index)
+		: context(context),
+		xinput(xinput),
+		device(device),
+		index(index)
+	{
+	}
 
-      if (module_.get_state (index_.value (), st) != ERROR_SUCCESS)
-      {
-        have_packet_ = false;
-        return false;
-      }
+	bool XInputDriver::TryPoll(RawSample& raw, CanonicalSample& canonical)
+	{
+		XINPUT_STATE state{};
 
-      if (have_packet_ && st.dwPacketNumber == last_packet_)
-        return false;
+		if (this->xinput.GetState(this->index.Value(), state) != ERROR_SUCCESS)
+		{
+			this->hasPacket = false;
+			return false;
+		}
 
-      have_packet_ = true;
-      last_packet_ = st.dwPacketNumber;
+		if (this->hasPacket && state.dwPacketNumber == this->lastPacket)
+		{
+			return false;
+		}
 
-      decode_xinput (st.Gamepad, module_.has_guide_button (), raw, canonical);
-      return true;
-    }
+		this->hasPacket = true;
+		this->lastPacket = state.dwPacketNumber;
 
-    void
-    xinput_driver::
-    submit (const output_request& request) noexcept
-    {
-      if (const auto* r = std::get_if<rumble_request> (&request))
-      {
-        XINPUT_VIBRATION v {};
-        v.wLeftMotorSpeed = scale_motor (r->low_frequency);
-        v.wRightMotorSpeed = scale_motor (r->high_frequency);
+		DecodeXInput(state.Gamepad, this->xinput.HasGuideButton(), raw, canonical);
+		return true;
+	}
 
-        if (module_.set_state (index_.value (), v) != ERROR_SUCCESS)
-          ctx_.report (severity::warning, facility::driver, errc::output_rejected,
-                       device_, "XInput rumble output failed");
+	void XInputDriver::Submit(const OutputRequest& request)
+	{
+		if (const auto* rumble = std::get_if<RumbleRequest>(&request))
+		{
+			XINPUT_VIBRATION vibration{};
+			vibration.wLeftMotorSpeed = ScaleMotor(rumble->lowFrequency);
+			vibration.wRightMotorSpeed = ScaleMotor(rumble->highFrequency);
 
-        return;
-      }
+			if (this->xinput.SetState(this->index.Value(), vibration) != ERROR_SUCCESS)
+			{
+				this->context.Report(Severity::Warning, Facility::Driver, ErrorCode::OutputRejected, this->device, "XInput rumble output failed");
+			}
 
-      if (unsupported_reported_)
-        return;
+			return;
+		}
 
-      unsupported_reported_ = true;
+		if (this->hasReportedUnsupported)
+		{
+			return;
+		}
 
-      ctx_.report (severity::info, facility::driver, errc::output_rejected,
-                   device_, "XInput driver ignores a non-rumble output request");
-    }
+		this->hasReportedUnsupported = true;
 
-    std::string
-    xinput_driver::
-    diagnostics () const
-    {
-      return "haptics: unavailable, because an XInput controller exposes nothing "
-             "but its two rumble motors";
-    }
-  }
+		this->context.Report(Severity::Info, Facility::Driver, ErrorCode::OutputRejected, this->device, "XInput driver ignores a non-rumble output request");
+	}
+
+	std::string XInputDriver::Diagnostics() const
+	{
+		return "haptics: unavailable, because an XInput controller exposes nothing but its two rumble motors";
+	}
 }

@@ -1,48 +1,88 @@
+#include "STDInclude.hpp"
+
 #include "IMaterialPixelShader.hpp"
+#include "../FileSystem.hpp"
 
 namespace Assets
 {
+	constexpr unsigned short GFX_RENDERER_SHADER_SM3 = 0;
 
-	void IMaterialPixelShader::load(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder)
+	void IMaterialPixelShader::Load(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder)
 	{
-		if (!header->data) this->loadBinary(header, name, builder); // Check if we need to import a new one into the game
-		if (!header->data) this->loadNative(header, name, builder); // Check if there is a native one
+		if (!header->data)
+		{
+			this->LoadBinary(header, name, builder);
+		}
+
+		if (!header->data)
+		{
+			this->LoadNative(header, name, builder);
+		}
 	}
 
-	void IMaterialPixelShader::loadNative(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* /*builder*/)
+	void IMaterialPixelShader::LoadNative(Game::XAssetHeader* header, const std::string& name, [[maybe_unused]] Components::ZoneBuilder::Zone* builder)
 	{
-		header->pixelShader = Components::AssetHandler::FindOriginalAsset(this->getType(), name.data()).pixelShader;
+		header->pixelShader = Components::AssetHandler::FindLoadedAsset(this->GetType(), name.data()).pixelShader;
 	}
 
-	void IMaterialPixelShader::loadBinary(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder)
+	void IMaterialPixelShader::LoadBinary(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder)
 	{
-		header->pixelShader = builder->getIW4OfApi()->read<Game::MaterialPixelShader>(Game::XAssetType::ASSET_TYPE_PIXELSHADER, name);
+		Components::FileSystem::File shaderFile(std::format("ps/{}.cso", name));
+
+		if (!shaderFile.Exists())
+		{
+			return;
+		}
+
+		const auto& program = shaderFile.GetBuffer();
+		auto* const allocator = builder->GetAllocator();
+
+		auto* const shader = allocator->Allocate<Game::MaterialPixelShader>();
+		shader->name = allocator->DuplicateString(name);
+		shader->prog.loadDef.loadForRenderer = GFX_RENDERER_SHADER_SM3;
+		shader->prog.loadDef.programSize = static_cast<unsigned short>(program.size() / sizeof(std::uint32_t));
+		shader->prog.loadDef.program = allocator->AllocateArray<unsigned int>(shader->prog.loadDef.programSize);
+		std::memcpy(shader->prog.loadDef.program, program.data(), shader->prog.loadDef.programSize * sizeof(std::uint32_t));
+
+		header->pixelShader = shader;
 	}
 
-	void IMaterialPixelShader::save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
+	void IMaterialPixelShader::Save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
 	{
-		AssertSize(Game::MaterialPixelShader, 16);
+		auto* const buffer = builder->GetBuffer();
+		const auto* const asset = header.pixelShader;
+		auto* const dest = buffer->Dest<Game::X86::MaterialPixelShader>();
+		const auto record = Game::X86::Convert(*asset);
+		buffer->Save(&record);
 
-		Utils::Stream* buffer = builder->getBuffer();
-		Game::MaterialPixelShader* asset = header.pixelShader;
-		Game::MaterialPixelShader* dest = buffer->dest<Game::MaterialPixelShader>();
-		buffer->save(asset);
-
-		buffer->pushBlock(Game::XFILE_BLOCK_VIRTUAL);
+		buffer->PushBlock(Game::XFILE_BLOCK_VIRTUAL);
 
 		if (asset->name)
 		{
-			buffer->saveString(builder->getAssetName(this->getType(), asset->name));
+			buffer->SaveString(builder->GetAssetName(this->GetType(), asset->name));
 			Utils::Stream::ClearPointer(&dest->name);
 		}
 
 		if (asset->prog.loadDef.program)
 		{
-			buffer->align(Utils::Stream::ALIGN_4);
-			buffer->saveArray(asset->prog.loadDef.program, asset->prog.loadDef.programSize);
+			buffer->Align(Utils::Stream::ALIGN_4);
+			buffer->SaveArray(asset->prog.loadDef.program, asset->prog.loadDef.programSize);
 			Utils::Stream::ClearPointer(&dest->prog.loadDef.program);
 		}
 
-		buffer->popBlock();
+		buffer->PopBlock();
+	}
+
+	void IMaterialPixelShader::Dump(Game::XAssetHeader header)
+	{
+		const auto* const asset = header.pixelShader;
+
+		if (!asset->prog.loadDef.program)
+		{
+			return;
+		}
+
+		const std::string program(reinterpret_cast<const char*>(asset->prog.loadDef.program), asset->prog.loadDef.programSize * sizeof(std::uint32_t));
+		Utils::IO::WriteFile(std::format("{}/ps/{}.cso", Components::ZoneBuilder::GetDumpingZonePath(), asset->name), program);
 	}
 }

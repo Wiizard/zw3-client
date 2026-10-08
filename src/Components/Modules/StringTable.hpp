@@ -8,8 +8,10 @@ namespace Components
 		StringTable();
 
 	private:
-		static std::unordered_map<std::string, Game::StringTable*> StringTableMap;
+		static std::mutex tablesMutex;
+		static std::unordered_map<std::string, Game::StringTable*> tables;
+		static Utils::Memory::Allocator allocator;
 
-		static Game::StringTable* LoadObject(std::string filename);
+		static Game::StringTable* LoadObject(const std::string& filename);
 	};
 }

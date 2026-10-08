@@ -1,5 +1,8 @@
 #pragma once
 
+#include "Dvar.hpp"
+#include "Network.hpp"
+
 namespace Components
 {
 	class RCon : public Component
@@ -8,16 +11,6 @@ namespace Components
 		RCon();
 
 	private:
-		class Container
-		{
-		public:
-			int timestamp{};
-			std::string output{};
-			std::string command{};
-			std::string challenge{};
-			Network::Address address{};
-		};
-
 		class CryptoKeyRSA
 		{
 		public:
@@ -37,17 +30,17 @@ namespace Components
 			static Utils::Cryptography::RSA::Key GetPrivateKeyInternal();
 		};
 
-		static std::unordered_map<std::uint32_t, int> RateLimit;
+		static std::unordered_map<std::uint32_t, int> rateLimit;
 
-		static std::vector<std::size_t> RConAddresses;
+		static std::vector<std::size_t> rconAddresses;
 
-		static std::string Password;
+		static std::string password;
 
-		static std::string RConOutputBuffer;
+		static std::string rconOutputBuffer;
 
-		static Dvar::Var RConPassword;
-		static Dvar::Var RConLogRequests;
-		static Dvar::Var RConTimeout;
+		static Dvar::Var rcon_password;
+		static Dvar::Var rcon_log_requests;
+		static Dvar::Var rcon_timeout;
 
 		static void AddCommands();
 

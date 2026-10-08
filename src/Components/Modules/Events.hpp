@@ -1,5 +1,10 @@
 #pragma once
 
+namespace Game
+{
+	struct client_s;
+}
+
 namespace Components
 {
 	class Events : public Component
@@ -13,16 +18,14 @@ namespace Components
 
 		Events();
 
-		// Server side
+		static bool IsInstalled();
+
 		static void OnClientDisconnect(const std::function<void(int clientNum)>& callback);
 
-		// Server side
 		static void OnClientConnect(const std::function<void(Game::client_s* cl)>& callback);
 
-		// Client side
 		static void OnSteamDisconnect(const std::function<void()>& callback);
 
-		// Client side - called at the VERY END of CL_Disconnect
 		static void OnCLDisconnected(const std::function<void(bool)>& callback);
 
 		static void OnVMShutdown(const std::function<void()>& callback);
@@ -35,55 +38,44 @@ namespace Components
 
 		static void OnClientKeyMove(const std::function<void(Game::usercmd_s*)>& callback);
 
-		// Client & Server (triggered once)
 		static void OnSVInit(const std::function<void()>& callback);
 
-		// Client & Server (triggered once)
-		// Required for String Dvars (game will crash if the dvar subsystem wasn't initialised)
 		static void OnDvarInit(const std::function<void()>& callback);
 
-		// Client & Server (triggered once)
 		static void OnNetworkInit(const std::function<void()>& callback);
 
-		// Client & Server (triggered every FS/Vidrestart)
 		static void OnCGameInit(const std::function<void()>& callback);
 
 	private:
-		static Utils::Concurrency::Container<ClientCallback> ClientDisconnectTasks_;
-		static Utils::Concurrency::Container<ClientConnectCallback> ClientConnectTasks_;
-		static Utils::Concurrency::Container<Callback> SteamDisconnectTasks_;
-		static Utils::Concurrency::Container<Callback> ShutdownSystemTasks_;
-		static Utils::Concurrency::Container<Callback> ClientInitTasks_;
-		static Utils::Concurrency::Container<Callback> ServerInitTasks_;
-		static Utils::Concurrency::Container<Callback> DvarInitTasks_;
-		static Utils::Concurrency::Container<Callback> NetworkInitTasks_;
-		static Utils::Concurrency::Container<Callback> CGameInitTasks_;
-		static Utils::Concurrency::Container<Callback> UIInitTasks_;
-		static Utils::Concurrency::Container<CLDisconnectCallback> CL_DisconnectedTask_;
+		static bool isInstalled;
 
-		// For speed this one does not use concurrency container. Be careful
-		static ClientCmdCallback ClientCmdButtonsTasks_;
-		static ClientCmdCallback ClientKeyMoveTasks_;
+		static Utils::Concurrency::Container<ClientCallback> clientDisconnectTasks;
+		static Utils::Concurrency::Container<ClientConnectCallback> clientConnectTasks;
+		static Utils::Concurrency::Container<Callback> steamDisconnectTasks;
+		static Utils::Concurrency::Container<Callback> shutdownSystemTasks;
+		static Utils::Concurrency::Container<Callback> clientInitTasks;
+		static Utils::Concurrency::Container<Callback> serverInitTasks;
+		static Utils::Concurrency::Container<Callback> dvarInitTasks;
+		static Utils::Concurrency::Container<Callback> networkInitTasks;
+		static Utils::Concurrency::Container<Callback> cgameInitTasks;
+		static Utils::Concurrency::Container<Callback> uiInitTasks;
+		static Utils::Concurrency::Container<CLDisconnectCallback> disconnectedTasks;
 
-		static void ClientDisconnect_Hk(int clientNum);
-		static void SV_UserinfoChanged_Hk(Game::client_s* cl);
-		static void SteamDisconnect_Hk();
-		static void Scr_ShutdownSystem_Hk(unsigned char sys);
-		static void CL_InitOnceForAllClients_HK();
-		static void CL_Disconnect_Hk(bool wasConnected);
+		static ClientCmdCallback clientCmdButtonsTasks;
+		static ClientCmdCallback clientKeyMoveTasks;
 
-		static void CL_CmdButtons(Game::usercmd_s* cmd);
-		static void CL_CmdButtons_Stub();
-		static void CL_Disconnect_Stub();
-		static void CL_KeyMove(Game::usercmd_s* cmd);
-		static void CL_KeyMove_Stub();
-		static void SV_Init_Hk();
-		static void Com_InitDvars_Hk();
-
-		static void NetworkStart();
-		static void UI_Init_Hk(int localClientNum);
-		static void NET_OpenSocks_Hk();
-
-		static int CL_InitCGame_Hk();
+		static void ClientDisconnect_Hook(int clientNum);
+		static void SV_UserinfoChanged_Hook(Game::client_s* cl);
+		static void CL_SteamDisconnect_Hook();
+		static void Scr_ShutdownSystem_Hook(unsigned char sys);
+		static void CL_InitOnceForAllClients_Hook();
+		static void CL_CmdButtons_Hook(int localClientNum, Game::usercmd_s* cmd);
+		static void CL_KeyMove_Hook(int localClientNum, Game::usercmd_s* cmd);
+		static int CL_InitCGame_Hook();
+		static void Com_InitDvars_Hook();
+		static void SV_InitGameMode_Hook();
+		static void NET_Config_Hook(int enableNetworking);
+		static void UI_Init_Hook(int localClientNum);
+		static void CL_Disconnect_Hook(int localClientNum);
 	};
 }

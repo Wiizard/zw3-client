@@ -8,9 +8,8 @@ namespace Components
 		class UserMapContainer
 		{
 		public:
-			UserMapContainer() : wasFreed(false), hash(0), hashComputed(false) {}
-			UserMapContainer(const std::string& _mapname)
-				: wasFreed(false), hash(0), hashComputed(false), mapname(_mapname)
+			UserMapContainer() : wasFreed(false), hash(0), isHashComputed(false) {}
+			UserMapContainer(const std::string& name) : wasFreed(false), hash(0), isHashComputed(false), mapname(name)
 			{
 				ZeroMemory(&this->searchPath, sizeof(this->searchPath));
 				Maps::ForceRefreshArenas();
@@ -18,58 +17,57 @@ namespace Components
 
 			~UserMapContainer()
 			{
-				this->freeIwd();
-				this->clear();
+				this->FreeIwd();
+				this->Clear();
 			}
 
-			// Map hashes are only needed for network compatibility checks. Keep
-			// them out of the normal local map-loading path until first requested.
-			unsigned int getHash();
-			const std::string& getName() const { return this->mapname; }
-			bool isValid() const { return !this->mapname.empty(); }
-			void clear()
+			unsigned int GetHash();
+			std::string GetName() const { return this->mapname; }
+			bool IsValid() const { return !this->mapname.empty(); }
+
+			void Clear()
 			{
-				bool wasValid = this->isValid();
+				const bool wasValid = this->IsValid();
 				this->mapname.clear();
 				this->hash = 0;
-				this->hashComputed = false;
+				this->isHashComputed = false;
+
 				if (wasValid)
 				{
 					Maps::ForceRefreshArenas();
 				}
 			}
 
-			void loadIwd();
-			void freeIwd();
+			void LoadIwd();
+			void FreeIwd();
 
-			void reloadIwd();
+			void ReloadIwd();
 
-			void handlePackfile(void* packfile);
+			void HandlePackfile(void* packfile);
 
 		private:
 			bool wasFreed;
 			unsigned int hash;
-			bool hashComputed;
+			bool isHashComputed;
 			std::string mapname;
-			Game::searchpath_s searchPath;
+			Game::searchpath_s searchPath{};
 		};
 
 		Maps();
-		~Maps();
 
-		static void HandleAsSPMap();
-
-		static std::string CurrentMainZone;
-		static const char* UserMapFiles[4];
-
-		static bool CheckMapInstalled(const std::string& mapname, bool error = false, bool dlcIsTrue = false);
+		static std::string currentMainZone;
+		static const char* userMapFiles[4];
 
 		static UserMapContainer* GetUserMap();
 		static unsigned int GetUsermapHash(const std::string& map);
 
-		static Game::XAssetEntry* GetAssetEntryPool();
-		static bool IsCustomMap();
 		static bool IsUserMap(const std::string& mapname);
+
+		static bool CheckMapInstalled(const std::string& mapname, bool error = false, bool dlcIsTrue = false);
+
+		static bool IsDlcInstalled(int index);
+
+		static int TriggerReconnectForMap(Game::msg_t* msg, const char* mapname);
 
 		static void ScanCustomMaps();
 		static std::string GetArenaPath(const std::string& mapName);
@@ -77,6 +75,8 @@ namespace Components
 
 		static std::unordered_map<std::string, std::string> ParseCustomMapArena(const std::string& singleMapArena);
 		static void SynchronizeMapDvars(const std::string& rawMapName);
+
+		static void HandleAsSPMap();
 
 	private:
 		class DLC
@@ -94,51 +94,39 @@ namespace Components
 			bool requiresTeamZones;
 		};
 
-		static bool SPMap;
-		static UserMapContainer UserMap;
-		static std::vector<DLC> DlcPacks;
+		static UserMapContainer userMap;
+		static std::vector<DLC> dlcPacks;
 
-		static std::vector<std::pair<std::string, std::string>> DependencyList;
-		static std::vector<std::string> CurrentDependencies;
-		static std::vector<std::string> FoundCustomMaps;
-
-		static Dvar::Var RListSModels;
+		static std::vector<std::string> currentDependencies;
+		static std::vector<std::string> foundCustomMaps;
 
 		static void ForceRefreshArenas();
 
 		static void GetBSPName(char* buffer, size_t size, const char* format, const char* mapname);
-		static void LoadAssetRestrict(Game::XAssetType type, Game::XAssetHeader asset, std::string_view name, bool* restrict);
-		static void LoadMapZones(Game::XZoneInfo *zoneInfo, unsigned int zoneCount, int sync);
-		static void UnloadMapZones(Game::XZoneInfo *zoneInfo, unsigned int zoneCount, int sync);
+		static void LoadNewMapCommand(char* buffer, int size, const char* format, const char* mapname, const char* gametype);
+		static void LoadAssetRestrict(unsigned int type, void* asset, const std::string& name, bool* restrict);
+		static void LoadMapZones(Game::XZoneInfo* zoneInfo, unsigned int zoneCount, int sync);
+		static void UnloadMapZones(Game::XZoneInfo* zoneInfo, unsigned int zoneCount, int sync);
 
-		static void OverrideMapEnts(Game::MapEnts* ents);
 		static MapDependencies GetDependenciesForMap(const std::string& map);
 
 		static int IgnoreEntityStub(const char* entity);
 
-		static Game::G_GlassData* GetWorldData();
-		static void GetWorldDataStub();
-
-		static void LoadRawSun();
-
-		static void AddDlc(DLC dlc);
-		static void UpdateDlcStatus();
-
 		static void PrepareUsermap(const char* mapname);
-		static void SpawnServerStub();
-		static void LoadMapLoadscreenStub();
-
-		static int TriggerReconnectForMap(Game::msg_t* msg, const char* mapname);
-		static void RotateCheckStub();
-		static void LoadNewMapCommand(char* buffer, size_t size, const char* format, const char* mapname, const char* gametype);
+		static void LoadLoadscreenZone_Stub(Game::XZoneInfo* zoneInfo, unsigned int zoneCount, int sync);
 
 		static const char* LoadArenaFileStub(const char* name, char* buffer, int size);
 
-		static void HideModel();
-		static void HideModelStub();
+		static std::vector<DLC> StockDlcs();
+		static void AddDlc(DLC dlc);
+		static void UpdateDlcStatus();
 
-		static void G_SpawnTurretHook(Game::gentity_s* ent, int unk, int unk2);
-		static bool SV_SetTriggerModelHook(Game::gentity_s* ent);
-		static unsigned short CM_TriggerModelBounds_Hk(unsigned int brushModelPointer, Game::Bounds* bounds);
+		static void G_SpawnTurretHook(Game::gentity_s* ent, const char* weaponInfoName, int scriptSpawned);
+		static unsigned short CM_TriggerModelBounds_Hk(unsigned int triggerIndex, Game::Bounds* bounds);
+		static void G_InitGlass_Hk();
+
+		static void GSCr_GetMapArenaInfo();
+		static void GSCr_GetMapList();
+
 	};
 }

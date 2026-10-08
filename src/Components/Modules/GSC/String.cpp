@@ -1,22 +1,22 @@
+#include "STDInclude.hpp"
 
 #include "Script.hpp"
 #include "String.hpp"
 
 namespace Components::GSC
 {
-	using namespace Utils::String;
-
 	void String::AddScriptFunctions()
 	{
-		Script::AddFunction("ToUpper", [] // gsc: ToUpper(<string>)
+		Script::AddFunction("ToUpper", []
 		{
 			const auto scriptValue = Game::Scr_GetConstString(0);
 			const auto* string = Game::SL_ConvertToString(scriptValue);
 
-			char out[1024]{}; // 1024 is the max for a string in this SL system
+			char out[1024]{};
 			bool changed = false;
 
 			std::size_t i = 0;
+
 			while (i < sizeof(out))
 			{
 				const auto value = *string;
@@ -28,7 +28,7 @@ namespace Components::GSC
 					changed = true;
 				}
 
-				if (result == '\0') // Finished converting string
+				if (result == '\0')
 				{
 					break;
 				}
@@ -37,10 +37,9 @@ namespace Components::GSC
 				++i;
 			}
 
-			// Null terminating character was overwritten
 			if (i >= sizeof(out))
 			{
-				Game::Scr_Error("string too long");
+				Script::Scr_Error("string too long");
 				return;
 			}
 
@@ -63,20 +62,19 @@ namespace Components::GSC
 
 			if (!str)
 			{
-				Game::Scr_Error("GetChar: Illegal parameter!");
+				Script::Scr_Error("GetChar: Illegal parameter!");
 				return;
 			}
 
 			if (static_cast<std::size_t>(index) >= std::strlen(str))
 			{
-				Game::Scr_Error("GetChar: char index is out of bounds");
+				Script::Scr_Error("GetChar: char index is out of bounds");
 			}
 
 			Game::Scr_AddInt(str[index]);
 		});
 
-		// Func present on IW5
-		Script::AddFunction("StrICmp", [] // gsc: StrICmp(<string>, <string>)
+		Script::AddFunction("StrICmp", []
 		{
 			const auto* string1 = Game::SL_ConvertToString(Game::Scr_GetConstString(0));
 			const auto* string2 = Game::SL_ConvertToString(Game::Scr_GetConstString(1));
@@ -84,32 +82,30 @@ namespace Components::GSC
 			Game::Scr_AddInt(_stricmp(string1, string2));
 		});
 
-		// Func present on IW5
-		Script::AddFunction("IsEndStr", [] // gsc: IsEndStr(<string>, <string>)
+		Script::AddFunction("IsEndStr", []
 		{
 			const auto* str = Game::Scr_GetString(0);
 			const auto* suffix = Game::Scr_GetString(1);
 
 			if (!str || !suffix)
 			{
-				Game::Scr_Error("IsEndStr: Illegal parameters!");
+				Script::Scr_Error("IsEndStr: Illegal parameters!");
 				return;
 			}
 
-			const auto str_len = std::strlen(str);
-			const auto suffix_len = std::strlen(suffix);
+			const auto strLength = std::strlen(str);
+			const auto suffixLength = std::strlen(suffix);
 
-			if (suffix_len > str_len)
+			if (suffixLength > strLength)
 			{
 				Game::Scr_AddBool(0);
 				return;
 			}
 
-			Game::Scr_AddBool(std::memcmp(str + str_len - suffix_len, suffix, suffix_len) == 0);
+			Game::Scr_AddBool(std::memcmp(str + strLength - suffixLength, suffix, suffixLength) == 0);
 		});
 
-		// Func present on IW5
-		Script::AddFunction("Float", [] // gsc: Float()
+		Script::AddFunction("Float", []
 		{
 			switch (Game::Scr_GetType(0))
 			{
@@ -123,31 +119,32 @@ namespace Components::GSC
 				Game::Scr_AddFloat(static_cast<float>(Game::Scr_GetInt(0)));
 				break;
 			default:
-				Game::Scr_ParamError(0, VA("cannot cast %s to float", Game::Scr_GetTypeName(0)));
+				Script::Scr_ParamError(0, Utils::String::VA("cannot cast %s to float", Game::Scr_GetTypeName(0)));
 				break;
 			}
 		});
 
-		Script::AddFunction("Strtol", [] // gsc: Strtol(<string>, <int>)
+		Script::AddFunction("Strtol", []
 		{
 			const auto* input = Game::Scr_GetString(0);
 			const auto base = Game::Scr_GetInt(1);
 
 			char* end;
 			const auto result = std::strtol(input, &end, base);
+
 			if (input == end)
 			{
-				Game::Scr_ParamError(0, "cannot cast string to int");
+				Script::Scr_ParamError(0, "cannot cast string to int");
 			}
 
 			Game::Scr_AddInt(result);
 		});
 
-		Script::AddFunction("IString", [] // gsc: IString(<string>)
+		Script::AddFunction("IString", []
 		{
 			if (Game::Scr_GetType(0) != Game::VAR_STRING)
 			{
-				Game::Scr_ParamError(0, VA("cannot cast %s to istring", Game::Scr_GetTypeName(0)));
+				Script::Scr_ParamError(0, Utils::String::VA("cannot cast %s to istring", Game::Scr_GetTypeName(0)));
 				return;
 			}
 

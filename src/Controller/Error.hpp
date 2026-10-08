@@ -1,55 +1,38 @@
 #pragma once
 
-#include "Types.hpp"
+#include "Controller/Types.hpp"
 
 namespace Controller
 {
-  enum class errc : uint8_t
-  {
-    none,
+	enum class ErrorCode : std::uint8_t
+	{
+		None,
 
-    device_unavailable,
-    ambiguous_identity,
-    unsupported_device,
+		DeviceUnavailable,
+		AmbiguousIdentity,
+		UnsupportedDevice,
 
-    transport_failure,
+		TransportFailure,
 
-    report_malformed,
-    report_truncated,
-    checksum_mismatch,
+		ReportMalformed,
+		ReportTruncated,
+		ChecksumMismatch,
 
-    output_rejected,
+		OutputRejected,
 
-    calibration_invalid,
-    calibration_version,
+		CalibrationInvalid,
+		CalibrationVersion,
 
-    graph_invalid,
+		GraphInvalid,
 
-    binding_invalid,
+		BindingInvalid,
 
-    steam_unavailable,
-    steam_unsuitable,
+		SteamUnavailable,
+		SteamUnsuitable,
 
-    hook_failed,
-    dvar_registration,
-  };
+		HookFailed,
+		DvarRegistration,
+	};
 
-  const char*
-  to_string (errc) noexcept;
-
-  std::ostream&
-  operator<< (std::ostream&, errc);
-
-  class error: public std::runtime_error
-  {
-  public:
-    error (errc, const std::string& what);
-    error (errc, const char* what);
-
-    errc
-    code () const noexcept {return code_;}
-
-  private:
-    errc code_;
-  };
+	const char* ToString(ErrorCode code) noexcept;
 }

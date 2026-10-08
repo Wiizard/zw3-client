@@ -1,8 +1,7 @@
 #pragma once
 
-#define NODE_HALFLIFE (3 * 60 * 1000) // 3min
-#define NODE_MAX_NODES_TO_SEND 64
-#define NODE_SEND_RATE 500ms
+#include "Dvar.hpp"
+#include "Network.hpp"
 
 namespace Components
 {
@@ -24,17 +23,16 @@ namespace Components
 			std::optional<Utils::Time::Point> lastRequest;
 			std::optional<Utils::Time::Point> lastResponse;
 
-			[[nodiscard]] bool isValid() const;
-			[[nodiscard]] bool isDead() const;
+			[[nodiscard]] bool IsValid() const;
+			[[nodiscard]] bool IsDead() const;
 
-			[[nodiscard]] bool requiresRequest() const;
-			void sendRequest();
+			[[nodiscard]] bool RequiresRequest() const;
+			void SendRequest();
 
-			void reset();
+			void Reset();
 		};
 
 		Node();
-		void preDestroy() override;
 
 		static void Add(const Network::Address& address);
 		static std::vector<Entry> GetNodes();
@@ -42,11 +40,11 @@ namespace Components
 		static void Synchronize();
 
 	private:
-		static std::recursive_mutex Mutex;
-		static std::vector<Entry> Nodes;
-		static bool WasIngame;
+		static std::recursive_mutex mutex;
+		static std::vector<Entry> nodes;
+		static bool wasIngame;
 
-		static const Game::dvar_t* net_natFix;
+		static Dvar::Var net_natFix;
 
 		static void HandleResponse(const Network::Address& address, const std::string& data);
 

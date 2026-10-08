@@ -1,128 +1,133 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "Engine.hpp"
-#include "../Context.hpp"
-
-namespace Controller
+namespace Controller::Engine
 {
-  namespace engine
-  {
-    struct dvars
-    {
-      dvar_t* enabled {};
-      dvar_t* present {};
-      dvar_t* in_use {};
-      dvar_t* rumble {};
-      dvar_t* style {};
+	struct Dvars
+	{
+		Game::dvar_t* enabled = nullptr;
+		Game::dvar_t* present = nullptr;
+		Game::dvar_t* inUse = nullptr;
+		Game::dvar_t* rumble = nullptr;
+		Game::dvar_t* style = nullptr;
 
-      dvar_t* haptics {};
-      dvar_t* haptic_intensity {};
-      dvar_t* rumble_scale_low {};
-      dvar_t* rumble_scale_high {};
-      dvar_t* adaptive_triggers {};
-      dvar_t* output_interval {};
+		Game::dvar_t* haptics = nullptr;
+		Game::dvar_t* hapticIntensity = nullptr;
+		Game::dvar_t* rumbleScaleLow = nullptr;
+		Game::dvar_t* rumbleScaleHigh = nullptr;
+		Game::dvar_t* adaptiveTriggers = nullptr;
+		Game::dvar_t* outputInterval = nullptr;
 
-      dvar_t* adaptive_trigger_strength {};
-      dvar_t* adaptive_trigger_light {};
-      dvar_t* adaptive_trigger_heavy {};
-      dvar_t* adaptive_trigger_light_start {};
-      dvar_t* adaptive_trigger_light_end {};
-      dvar_t* adaptive_trigger_heavy_start {};
-      dvar_t* adaptive_trigger_heavy_end {};
-      dvar_t* adaptive_trigger_ads {};
+		Game::dvar_t* adaptiveTriggerStrength = nullptr;
+		Game::dvar_t* adaptiveTriggerLight = nullptr;
+		Game::dvar_t* adaptiveTriggerHeavy = nullptr;
+		Game::dvar_t* adaptiveTriggerLightStart = nullptr;
+		Game::dvar_t* adaptiveTriggerLightEnd = nullptr;
+		Game::dvar_t* adaptiveTriggerHeavyStart = nullptr;
+		Game::dvar_t* adaptiveTriggerHeavyEnd = nullptr;
+		Game::dvar_t* adaptiveTriggerAds = nullptr;
 
-      dvar_t* light_bar {};
-      dvar_t* light_bar_brightness {};
-      dvar_t* light_bar_r {};
-      dvar_t* light_bar_g {};
-      dvar_t* light_bar_b {};
+		Game::dvar_t* lightBar = nullptr;
+		Game::dvar_t* lightBarBrightness = nullptr;
+		Game::dvar_t* lightBarRed = nullptr;
+		Game::dvar_t* lightBarGreen = nullptr;
+		Game::dvar_t* lightBarBlue = nullptr;
 
-      dvar_t* stick_deadzone_min {};
-      dvar_t* stick_deadzone_max {};
-      dvar_t* stick_anti_deadzone {};
-      dvar_t* button_deadzone {};
-      dvar_t* button_deadzone_hysteresis {};
-      dvar_t* stick_pressed {};
-      dvar_t* stick_pressed_hysteresis {};
+		Game::dvar_t* stickDeadzoneMin = nullptr;
+		Game::dvar_t* stickDeadzoneMax = nullptr;
+		Game::dvar_t* stickAntiDeadzone = nullptr;
+		Game::dvar_t* buttonDeadzone = nullptr;
+		Game::dvar_t* buttonDeadzoneHysteresis = nullptr;
+		Game::dvar_t* stickPressed = nullptr;
+		Game::dvar_t* stickPressedHysteresis = nullptr;
 
-      dvar_t* buttons_config {};
-      dvar_t* sticks_config {};
+		Game::dvar_t* buttonsConfig = nullptr;
+		Game::dvar_t* sticksConfig = nullptr;
 
-      dvar_t* menu_scroll_delay_first {};
-      dvar_t* menu_scroll_delay_rest {};
-      dvar_t* menu_scroll_delay_min {};
-      dvar_t* menu_scroll_accel_time {};
+		Game::dvar_t* menuScrollDelayFirst = nullptr;
+		Game::dvar_t* menuScrollDelayRest = nullptr;
+		Game::dvar_t* menuScrollDelayMin = nullptr;
+		Game::dvar_t* menuScrollAccelTime = nullptr;
 
-      dvar_t* use_hold_time {};
+		Game::dvar_t* useHoldTime = nullptr;
 
-      dvar_t* release_delay_enabled {};
-      dvar_t* release_delay {};
-      dvar_t* release_delay_scale {};
-      dvar_t* release_delay_sprint_only {};
-      dvar_t* release_grace {};
+		Game::dvar_t* releaseDelayEnabled = nullptr;
+		Game::dvar_t* releaseDelay = nullptr;
+		Game::dvar_t* releaseDelayScale = nullptr;
+		Game::dvar_t* releaseDelaySprintOnly = nullptr;
+		Game::dvar_t* releaseGrace = nullptr;
 
-      dvar_t* invert_pitch {};
-      dvar_t* view_sensitivity {};
-      dvar_t* aim_assist_enabled {};
-      dvar_t* turnrate_pitch {};
-      dvar_t* turnrate_pitch_ads {};
-      dvar_t* turnrate_yaw {};
-      dvar_t* turnrate_yaw_ads {};
-      dvar_t* accel_enabled {};
-      dvar_t* accel_rate {};
-      dvar_t* graph_enabled {};
-      dvar_t* graph_index {};
-      dvar_t* scale_view_axis {};
+		Game::dvar_t* invertPitch = nullptr;
+		Game::dvar_t* viewSensitivity = nullptr;
+		Game::dvar_t* aimAssistEnabled = nullptr;
+		Game::dvar_t* turnRatePitch = nullptr;
+		Game::dvar_t* turnRatePitchAds = nullptr;
+		Game::dvar_t* turnRateYaw = nullptr;
+		Game::dvar_t* turnRateYawAds = nullptr;
+		Game::dvar_t* accelEnabled = nullptr;
+		Game::dvar_t* accelRate = nullptr;
+		Game::dvar_t* graphEnabled = nullptr;
+		Game::dvar_t* graphIndex = nullptr;
+		Game::dvar_t* scaleViewAxis = nullptr;
 
-      dvar_t* slowdown_enabled {};
-      dvar_t* gpad_slowdown_enabled {};
-      dvar_t* slowdown_pitch_scale {};
-      dvar_t* slowdown_pitch_scale_ads {};
-      dvar_t* slowdown_yaw_scale {};
-      dvar_t* slowdown_yaw_scale_ads {};
-      dvar_t* lockon_enabled {};
-      dvar_t* gpad_lockon_enabled {};
-      dvar_t* lockon_deflection {};
-      dvar_t* lockon_strength {};
-      dvar_t* lockon_pitch_strength {};
-      dvar_t* aim_assist_range_scale {};
-    };
+		Game::dvar_t* slowdownEnabled = nullptr;
+		Game::dvar_t* gpadSlowdownEnabled = nullptr;
+		Game::dvar_t* slowdownPitchScale = nullptr;
+		Game::dvar_t* slowdownPitchScaleAds = nullptr;
+		Game::dvar_t* slowdownYawScale = nullptr;
+		Game::dvar_t* slowdownYawScaleAds = nullptr;
+		Game::dvar_t* lockOnEnabled = nullptr;
+		Game::dvar_t* gpadLockOnEnabled = nullptr;
+		Game::dvar_t* lockOnDeflection = nullptr;
+		Game::dvar_t* lockOnStrength = nullptr;
+		Game::dvar_t* lockOnPitchStrength = nullptr;
+		Game::dvar_t* aimAssistRangeScale = nullptr;
+	};
 
-    dvars&
-    registered_dvars () noexcept;
+	Dvars& RegisteredDvars() noexcept;
 
-    void
-    register_dvars ();
+	void RegisterDvars();
 
-    void
-    publish_present (const dvars&, bool present) noexcept;
+	void PublishPresent(const Dvars& dvars, bool isPresent);
 
-    inline bool
-    read (dvar_t* d, bool fallback) noexcept
-    {
-      return d != nullptr ? d->current.enabled : fallback;
-    }
+	inline bool Read(const Game::dvar_t* dvar, bool fallback) noexcept
+	{
+		if (dvar == nullptr)
+		{
+			return fallback;
+		}
 
-    inline float
-    read (dvar_t* d, float fallback) noexcept
-    {
-      return d != nullptr ? d->current.value : fallback;
-    }
+		return dvar->current.enabled;
+	}
 
-    inline int
-    read (dvar_t* d, int fallback) noexcept
-    {
-      return d != nullptr ? d->current.integer : fallback;
-    }
+	inline float Read(const Game::dvar_t* dvar, float fallback) noexcept
+	{
+		if (dvar == nullptr)
+		{
+			return fallback;
+		}
 
-    inline const char*
-    read (dvar_t* d, const char* fallback) noexcept
-    {
-      return d != nullptr && d->current.string != nullptr
-        ? d->current.string
-        : fallback;
-    }
-  }
+		return dvar->current.value;
+	}
+
+	inline int Read(const Game::dvar_t* dvar, int fallback) noexcept
+	{
+		if (dvar == nullptr)
+		{
+			return fallback;
+		}
+
+		return dvar->current.integer;
+	}
+
+	inline const char* Read(const Game::dvar_t* dvar, const char* fallback) noexcept
+	{
+		if (dvar == nullptr || dvar->current.string == nullptr)
+		{
+			return fallback;
+		}
+
+		return dvar->current.string;
+	}
 }

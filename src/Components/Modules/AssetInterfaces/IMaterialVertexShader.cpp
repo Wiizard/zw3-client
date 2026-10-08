@@ -1,49 +1,88 @@
-#include "IMaterialVertexShader.hpp"
+#include "STDInclude.hpp"
 
-#define GFX_RENDERER_SHADER_SM3 0
+#include "IMaterialVertexShader.hpp"
+#include "../FileSystem.hpp"
 
 namespace Assets
 {
-	void IMaterialVertexShader::load(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder)
+	constexpr unsigned short GFX_RENDERER_SHADER_SM3 = 0;
+
+	void IMaterialVertexShader::Load(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder)
 	{
-		if (!header->data) this->loadBinary(header, name, builder); // Check if we need to import a new one into the game
-		if (!header->data) this->loadNative(header, name, builder); // Check if there is a native one
+		if (!header->data)
+		{
+			this->LoadBinary(header, name, builder);
+		}
+
+		if (!header->data)
+		{
+			this->LoadNative(header, name, builder);
+		}
 	}
 
-	void IMaterialVertexShader::loadNative(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* /*builder*/)
+	void IMaterialVertexShader::LoadNative(Game::XAssetHeader* header, const std::string& name, [[maybe_unused]] Components::ZoneBuilder::Zone* builder)
 	{
-		header->vertexShader = Components::AssetHandler::FindOriginalAsset(this->getType(), name.data()).vertexShader;
+		header->vertexShader = Components::AssetHandler::FindLoadedAsset(this->GetType(), name.data()).vertexShader;
 	}
 
-	void IMaterialVertexShader::loadBinary(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder)
+	void IMaterialVertexShader::LoadBinary(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder)
 	{
-		header->vertexShader = builder->getIW4OfApi()->read<Game::MaterialVertexShader>(Game::XAssetType::ASSET_TYPE_VERTEXSHADER, name);
+		Components::FileSystem::File shaderFile(std::format("vs/{}.cso", name));
+
+		if (!shaderFile.Exists())
+		{
+			return;
+		}
+
+		const auto& program = shaderFile.GetBuffer();
+		auto* const allocator = builder->GetAllocator();
+
+		auto* const shader = allocator->Allocate<Game::MaterialVertexShader>();
+		shader->name = allocator->DuplicateString(name);
+		shader->prog.loadDef.loadForRenderer = GFX_RENDERER_SHADER_SM3;
+		shader->prog.loadDef.programSize = static_cast<unsigned short>(program.size() / sizeof(std::uint32_t));
+		shader->prog.loadDef.program = allocator->AllocateArray<unsigned int>(shader->prog.loadDef.programSize);
+		std::memcpy(shader->prog.loadDef.program, program.data(), shader->prog.loadDef.programSize * sizeof(std::uint32_t));
+
+		header->vertexShader = shader;
 	}
 
-	void IMaterialVertexShader::save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
+	void IMaterialVertexShader::Save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
 	{
-		AssertSize(Game::MaterialVertexShader, 16);
+		auto* const buffer = builder->GetBuffer();
+		const auto* const asset = header.vertexShader;
+		auto* const dest = buffer->Dest<Game::X86::MaterialVertexShader>();
+		const auto record = Game::X86::Convert(*asset);
+		buffer->Save(&record);
 
-		Utils::Stream* buffer = builder->getBuffer();
-		Game::MaterialVertexShader* asset = header.vertexShader;
-		Game::MaterialVertexShader* dest = buffer->dest<Game::MaterialVertexShader>();
-		buffer->save(asset);
-
-		buffer->pushBlock(Game::XFILE_BLOCK_VIRTUAL);
+		buffer->PushBlock(Game::XFILE_BLOCK_VIRTUAL);
 
 		if (asset->name)
 		{
-			buffer->saveString(builder->getAssetName(this->getType(), asset->name));
+			buffer->SaveString(builder->GetAssetName(this->GetType(), asset->name));
 			Utils::Stream::ClearPointer(&dest->name);
 		}
 
 		if (asset->prog.loadDef.program)
 		{
-			buffer->align(Utils::Stream::ALIGN_4);
-			buffer->saveArray(asset->prog.loadDef.program, asset->prog.loadDef.programSize);
+			buffer->Align(Utils::Stream::ALIGN_4);
+			buffer->SaveArray(asset->prog.loadDef.program, asset->prog.loadDef.programSize);
 			Utils::Stream::ClearPointer(&dest->prog.loadDef.program);
 		}
 
-		buffer->popBlock();
+		buffer->PopBlock();
+	}
+
+	void IMaterialVertexShader::Dump(Game::XAssetHeader header)
+	{
+		const auto* const asset = header.vertexShader;
+
+		if (!asset->prog.loadDef.program)
+		{
+			return;
+		}
+
+		const std::string program(reinterpret_cast<const char*>(asset->prog.loadDef.program), asset->prog.loadDef.programSize * sizeof(std::uint32_t));
+		Utils::IO::WriteFile(std::format("{}/vs/{}.cso", Components::ZoneBuilder::GetDumpingZonePath(), asset->name), program);
 	}
 }

@@ -1,48 +1,26 @@
 #pragma once
 
-#include <atomic>
+#include "UIScript.hpp"
 
 namespace Components
 {
-	class ZWNet final : public Component
+	class ZWNet : public Component
 	{
 	public:
 		ZWNet();
-		void preDestroy() override;
 
-		// Called by the trusted launcher after the identity proof/login exchange.
-		// Tokens are protected with Windows DPAPI before they touch disk.
 		static bool StoreSession(const std::string& accessToken, const std::string& refreshToken);
 		static void ResumeParty(const nlohmann::json& party);
 		static void JoinParty(const std::string& partyId);
 		static void JoinCapability(const std::string& capability);
 		static bool BeginEndpointJoin(const std::string& endpoint);
 		static bool BeginManagedReconnect(const std::string& endpoint);
-		// Called only by Party's managed getinfo timeout, before its generic error UI.
 		static bool TryRelayAfterDirectTimeout(const std::string& endpoint);
 		static bool TryGetSharedLobbyRank(const std::string& guid, int& level, int& prestige);
 
-	private:
-		// Function-local storage prevents non-trivial C++ initializers from running
-		// in DllMain before the ZW3 runtime and component loader are ready.
-		static std::atomic_bool& ActiveState();
-		static std::atomic_bool& SearchingState();
-		static std::atomic_bool& ClosingOnlineSessionState();
-		static std::atomic_bool& ServerJoinTransitionState();
-		static std::atomic_bool& OnlineEntryPendingState();
-		static std::atomic_bool& InGameState();
-		static bool& LoginInFlightState();
-		static std::mutex& StateMutex();
-		static std::string& AccessTokenState();
-		static std::string& RefreshTokenState();
-		static std::string& CurrentPartyIdState();
-		static std::string& CurrentPlayerIdState();
-		static std::string& CurrentProposalIdState();
-		static std::string& CurrentMatchIdState();
-		static std::mutex& AsyncTaskMutex();
-		static std::deque<std::function<void()>>& AsyncTasks();
-
 		static std::string SessionPath();
+
+	private:
 		static bool LoadSession();
 		static void ClearSession();
 		static std::optional<nlohmann::json> Request(const std::string& method, const std::string& path, const nlohmann::json& body = {});
@@ -54,9 +32,9 @@ namespace Components
 		static void AbandonOnlineSession();
 		static void Register();
 		static void SetState(const std::string& state, const std::string& error = {});
-		static void StartQuickPlay(std::string playlistId, std::int64_t playlistRevision,
-			std::uint64_t selectorGeneration);
-		static void RefreshPlaylistCatalog(bool force = false);
+		static std::optional<nlohmann::json> CurrentOrNewParty();
+		static void StartQuickPlay(const std::string& playlistId, std::int64_t playlistRevision, std::uint64_t selectorGeneration);
+		static void RefreshPlaylistCatalog(bool isForced = false);
 		static void ClearPlaylistCatalog();
 		static void BeginPlaylistSelection();
 		static void CancelPlaylistSelection();
@@ -65,23 +43,24 @@ namespace Components
 		static void ChangePlaylistPage(int direction);
 		static void AcknowledgePlaylistNotice();
 		static void PublishPlaylistCatalog();
+		static void SchedulePlaylistCatalogPublish();
 		static std::optional<nlohmann::json> PublishPartyContent();
 		static std::optional<nlohmann::json> ApplyPartyVisibility(nlohmann::json party);
 		static void RefreshPartyVisibility();
 		static void CapturePartyPrivacy();
 		static void CancelSearch();
 		static void CancelMatchmaking();
-		static void CloseOnlineSession(bool shuttingDown, bool terminal);
-		static void HandleServerDisconnect(bool terminal, bool wasMatchmaking = false);
+		static void CloseOnlineSession(bool isShuttingDown, bool isTerminal);
+		static void HandleServerDisconnect(bool isTerminal, bool wasMatchmaking);
 		static bool ReturnToMatchmakingLobby();
-		static void ScheduleReturnToIdleMatchmakingMenu();
-		static void ReturnToIdleMatchmakingMenu();
+		static void ScheduleReturnToIdleMenu();
+		static void ReturnToIdleMenu();
 		static void UpdatePresence();
 		static nlohmann::json PublishLocalRank(nlohmann::json party);
 		static void EnterLobby(std::string map);
 		static void RefreshLobby();
 		static void LeaveParty();
-		static void ToggleReady(bool ready);
+		static void ToggleReady(bool isReady);
 		static void StartPrivateMatch(std::string map);
 		static void VoteMap(const std::string& choice);
 		static void UpdateLobbyDvars(const nlohmann::json& party);
@@ -92,7 +71,7 @@ namespace Components
 		static void RefreshNetworkMetrics();
 		static void BeginJoinInProgressPreview(const nlohmann::json& status);
 		static void CancelJoinInProgressPreview();
-		static void ConnectMatch(const std::string& matchId, bool relay, bool reconnect = false);
+		static void ConnectMatch(const std::string& matchId, bool isRelay, bool isReconnect);
 		static void InitializeDvars();
 		static void EnqueueAsync(std::function<void()> task);
 		static void ProcessAsyncTasks();

@@ -1,56 +1,36 @@
-#include "PlayStation.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Driver/PlayStation.hpp"
+#include "Controller/Driver/Decode.hpp"
 
-#include <algorithm>
-
-#include "Decode.hpp"
-
-namespace Controller
+namespace Controller::Driver
 {
-  namespace driver
-  {
-    namespace
-    {
-      constexpr uint8_t ps_feature_calibration {0x05};
-      constexpr size_t ps_feature_calibration_size {41};
+	static constexpr std::uint8_t psFeatureCalibration = 0x05;
+	static constexpr std::size_t psFeatureCalibrationSize = 41;
 
-      constexpr uint8_t ps_report_bt_minimal {0x01};
+	static constexpr std::uint8_t psReportBluetoothMinimal = 0x01;
 
-      constexpr size_t max_feature_size {128};
-    }
+	static constexpr std::size_t maxFeatureSize = 128;
 
-    bool
-    enable_extended_reports (const context& ctx,
-                             transport::hid_device& hid,
-                             device_id device) noexcept
-    {
-      const size_t n (std::clamp (hid.feature_report_length (),
-                                  ps_feature_calibration_size,
-                                  max_feature_size));
+	bool TryEnableExtendedReports(const Context& context, Transport::HidDevice& hid, DeviceId device)
+	{
+		const std::size_t length = std::clamp(hid.FeatureReportLength(), psFeatureCalibrationSize, maxFeatureSize);
 
-      std::array<std::byte, max_feature_size> buf {};
-      buf[0] = static_cast<std::byte> (ps_feature_calibration);
+		std::array<std::byte, maxFeatureSize> buffer{};
+		buffer[0] = static_cast<std::byte>(psFeatureCalibration);
 
-      if (!hid.get_feature (std::span<std::byte> (buf.data (), n)))
-      {
-        ctx.report (severity::warning, facility::transport, errc::transport_failure,
-                    device,
-                    "unable to read the calibration feature report over Bluetooth; "
-                    "the controller may keep sending minimal reports and produce no "
-                    "input");
-        return false;
-      }
+		if (!hid.TryGetFeature(std::span<std::byte>(buffer.data(), length)))
+		{
+			context.Report(Severity::Warning, Facility::Transport, ErrorCode::TransportFailure, device,
+				"unable to read the calibration feature report over Bluetooth; the controller may keep sending minimal reports and produce no input");
+			return false;
+		}
 
-      return true;
-    }
+		return true;
+	}
 
-    bool
-    minimal_bluetooth_report (std::span<const std::byte> r, connection link) noexcept
-    {
-      return link == connection::bluetooth &&
-             !r.empty () &&
-             rd_u8 (r, 0) == ps_report_bt_minimal;
-    }
-  }
+	bool IsMinimalBluetoothReport(std::span<const std::byte> report, Connection link) noexcept
+	{
+		return link == Connection::Bluetooth && !report.empty() && ReadU8(report, 0) == psReportBluetoothMinimal;
+	}
 }

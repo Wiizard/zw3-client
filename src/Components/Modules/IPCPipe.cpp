@@ -1,235 +1,229 @@
-#include <proto/ipc.pb.h>
+#include "STDInclude.hpp"
 
 #include "IPCPipe.hpp"
+#include "Command.hpp"
+#include "Dedicated.hpp"
+#include "Logger.hpp"
+#include "Scheduler.hpp"
+#include "Singleton.hpp"
 
 namespace Components
 {
-	Pipe IPCPipe::ServerPipe;
-	Pipe IPCPipe::ClientPipe;
+	Pipe IPCPipe::serverPipe;
+	Pipe IPCPipe::clientPipe;
 
-#pragma region Pipe
-
-	Pipe::Pipe() : connectCallback(nullptr), pipe(INVALID_HANDLE_VALUE), threadAttached(false), type(IPCTYPE_NONE), reconnectAttempt(0)
-	{
-		this->destroy();
-	}
+	constexpr const char* pipeNameServer = "ZW3-Server";
+	constexpr const char* pipeNameClient = "ZW3-Client";
+	constexpr unsigned int maxReconnects = 3;
 
 	Pipe::~Pipe()
 	{
-		this->destroy();
+		this->Destroy();
 	}
 
-	bool Pipe::connect(const std::string& name)
+	bool Pipe::Connect(const std::string& name)
 	{
-		this->destroy();
+		this->Destroy();
 
-		this->type = IPCTYPE_CLIENT;
-		this->setName(name);
+		this->type = Type::Client;
+		this->pipeFile = std::format("\\\\.\\Pipe\\{}", name);
+		this->pipe = CreateFileA(this->pipeFile.data(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
 
-		this->pipe = CreateFileA(this->pipeFile, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
-
-		if (INVALID_HANDLE_VALUE == this->pipe)
+		if (this->pipe == INVALID_HANDLE_VALUE)
 		{
-			Logger::Print("Failed to connect to the pipe\n");
-
-			if (this->reconnectAttempt < IPC_MAX_RECONNECTS)
+			if (this->reconnectAttempt < maxReconnects)
 			{
-				Logger::Print("Attempting to reconnect to the pipe.\n");
 				++this->reconnectAttempt;
-				std::this_thread::sleep_for(500ms);
+				std::this_thread::sleep_for(std::chrono::milliseconds(500));
+				return this->Connect(name);
+			}
 
-				return this->connect(name);
-			}
-			else
-			{
-				this->destroy();
-				return false;
-			}
+			this->Destroy();
+			return false;
 		}
 
 		this->reconnectAttempt = 0;
-		Logger::Print("Successfully connected to the pipe\n");
-
 		return true;
 	}
 
-	bool Pipe::create(const std::string& name)
+	bool Pipe::Create(const std::string& name)
 	{
-		this->destroy();
+		this->Destroy();
 
-		this->type = IPCTYPE_SERVER;
-		this->setName(name);
+		this->type = Type::Server;
+		this->pipeFile = std::format("\\\\.\\Pipe\\{}", name);
+		this->pipe = CreateNamedPipeA(this->pipeFile.data(), PIPE_ACCESS_DUPLEX, PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+			PIPE_UNLIMITED_INSTANCES, sizeof(this->packet), sizeof(this->packet), NMPWAIT_USE_DEFAULT_WAIT, nullptr);
 
-		this->pipe = CreateNamedPipeA(this->pipeFile, PIPE_ACCESS_DUPLEX, PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT, PIPE_UNLIMITED_INSTANCES, sizeof(this->packet), sizeof(this->packet), NMPWAIT_USE_DEFAULT_WAIT, nullptr);
-
-		if (INVALID_HANDLE_VALUE != this->pipe && this->pipe)
+		if (this->pipe == INVALID_HANDLE_VALUE || !this->pipe)
 		{
-			this->threadAttached = true;
-			this->thread = std::thread(ReceiveThread, this);
-
-			Logger::Print("Pipe successfully created\n");
-			return true;
+			this->Destroy();
+			return false;
 		}
 
-		Logger::Print("Failed to create the pipe\n");
-		this->destroy();
-		return false;
+		this->isThreadAttached = true;
+		this->thread = std::jthread(ReceiveThread, this);
+		return true;
 	}
 
-	void Pipe::onConnect(Pipe::Callback callback)
+	void Pipe::OnConnect(const std::function<void()>& callback)
 	{
 		this->connectCallback = callback;
 	}
 
-	void Pipe::setCallback(const std::string& command, Utils::Slot<Pipe::PacketCallback> callback)
+	void Pipe::SetCallback(const std::string& command, const PacketCallback& callback)
 	{
 		this->packetCallbacks[command] = callback;
 	}
 
-	bool Pipe::write(const std::string& command, const std::string& data)
+	bool Pipe::Write(const std::string& command, const std::string& data)
 	{
-		if (this->type != IPCTYPE_CLIENT || this->pipe == INVALID_HANDLE_VALUE) return false;
+		if (this->type != Type::Client || this->pipe == INVALID_HANDLE_VALUE || !this->pipe)
+		{
+			return false;
+		}
 
-		Packet _packet;
-		strcpy_s(_packet.command, command.data());
-		strcpy_s(_packet.buffer, data.data());
+		Packet outgoing{};
+		strncpy_s(outgoing.command, command.data(), _TRUNCATE);
+		strncpy_s(outgoing.buffer, data.data(), _TRUNCATE);
 
-		DWORD cbBytes;
-		return (WriteFile(this->pipe, &_packet, sizeof(_packet), &cbBytes, nullptr) || GetLastError() == ERROR_IO_PENDING);
+		DWORD written = 0;
+		return WriteFile(this->pipe, &outgoing, sizeof(outgoing), &written, nullptr) || GetLastError() == ERROR_IO_PENDING;
 	}
 
-	void Pipe::destroy()
+	void Pipe::Destroy()
 	{
-		if (this->pipe && INVALID_HANDLE_VALUE != this->pipe)
+		if (this->pipe && this->pipe != INVALID_HANDLE_VALUE)
 		{
 			CancelIoEx(this->pipe, nullptr);
 
-			if (this->type == IPCTYPE_SERVER) DisconnectNamedPipe(this->pipe);
+			if (this->type == Type::Server)
+			{
+				DisconnectNamedPipe(this->pipe);
+			}
 
 			CloseHandle(this->pipe);
-			Logger::Print("Disconnected from the pipe.\n");
 		}
 
-		this->pipe = nullptr;
-		this->threadAttached = false;
+		this->pipe = INVALID_HANDLE_VALUE;
+		this->isThreadAttached = false;
 
 		if (this->thread.joinable())
 		{
-			Logger::Print("Terminating pipe thread...\n");
-
 			this->thread.join();
-
-			Logger::Print("Pipe thread terminated.\n");
 		}
-	}
-
-	void Pipe::setName(const std::string& name)
-	{
-		ZeroMemory(this->pipeName, sizeof(this->pipeName));
-		ZeroMemory(this->pipeFile, sizeof(this->pipeFile));
-
-		strncpy_s(this->pipeName, name.data(), sizeof(this->pipeName));
-		sprintf_s(this->pipeFile, "\\\\.\\Pipe\\%s", this->pipeName);
 	}
 
 	void Pipe::ReceiveThread(Pipe* pipe)
 	{
-		if (!pipe || pipe->type != IPCTYPE_SERVER || pipe->pipe == INVALID_HANDLE_VALUE || !pipe->pipe) return;
-
-		if (ConnectNamedPipe(pipe->pipe, nullptr) == FALSE)
+		if (!pipe || pipe->type != Type::Server || pipe->pipe == INVALID_HANDLE_VALUE || !pipe->pipe)
 		{
-			Logger::Print("Failed to initialize pipe reading.\n");
 			return;
 		}
 
-		Logger::Print("Client connected to the pipe\n");
-		pipe->connectCallback();
-
-		DWORD cbBytes;
-
-		while (pipe->threadAttached && pipe->pipe && pipe->pipe != INVALID_HANDLE_VALUE)
+		if (!ConnectNamedPipe(pipe->pipe, nullptr) && GetLastError() != ERROR_PIPE_CONNECTED)
 		{
-			auto bResult = ReadFile(pipe->pipe, &pipe->packet, sizeof(pipe->packet), &cbBytes, nullptr);
+			return;
+		}
 
-			if (bResult && cbBytes)
+		if (pipe->connectCallback)
+		{
+			pipe->connectCallback();
+		}
+
+		while (pipe->isThreadAttached && pipe->pipe && pipe->pipe != INVALID_HANDLE_VALUE)
+		{
+			DWORD read = 0;
+
+			if (ReadFile(pipe->pipe, &pipe->packet, sizeof(pipe->packet), &read, nullptr) && read)
 			{
-				if (pipe->packetCallbacks.contains(pipe->packet.command))
+				pipe->packet.command[commandSize - 1] = 0;
+				pipe->packet.buffer[bufferSize - 1] = 0;
+
+				const auto callback = pipe->packetCallbacks.find(pipe->packet.command);
+
+				if (callback != pipe->packetCallbacks.end())
 				{
-					pipe->packetCallbacks[pipe->packet.command](pipe->packet.buffer);
+					callback->second(pipe->packet.buffer);
 				}
 			}
-			else if (pipe->threadAttached && pipe->pipe != INVALID_HANDLE_VALUE)
+			else if (pipe->isThreadAttached && pipe->pipe != INVALID_HANDLE_VALUE)
 			{
-				Logger::PrintError(Game::CON_CHANNEL_ERROR, "Failed to read from client through pipe\n");
-
 				DisconnectNamedPipe(pipe->pipe);
 				ConnectNamedPipe(pipe->pipe, nullptr);
-				pipe->connectCallback();
+
+				if (pipe->connectCallback)
+				{
+					pipe->connectCallback();
+				}
 			}
 
 			ZeroMemory(&pipe->packet, sizeof(pipe->packet));
 		}
 	}
 
-#pragma endregion
-
-	// Callback to connect first instance's client pipe to the second instance's server pipe
 	void IPCPipe::ConnectClient()
 	{
 		if (Singleton::IsFirstInstance())
 		{
-			ClientPipe.connect(IPC_PIPE_NAME_CLIENT);
+			clientPipe.Connect(pipeNameClient);
 		}
 	}
 
-	// Writes to the process on the other end of the pipe
 	bool IPCPipe::Write(const std::string& command, const std::string& data)
 	{
-		return ClientPipe.write(command, data);
+		return clientPipe.Write(command, data);
 	}
 
-	// Installs a callback for receiving commands from the process on the other end of the pipe
-	void IPCPipe::On(const std::string& command, const Utils::Slot<Pipe::PacketCallback>& callback)
+	void IPCPipe::On(const std::string& command, const Pipe::PacketCallback& callback)
 	{
-		ServerPipe.setCallback(command, callback);
+		serverPipe.SetCallback(command, callback);
 	}
 
 	IPCPipe::IPCPipe()
 	{
-		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled()) return;
+		if (Dedicated::IsEnabled())
+		{
+			return;
+		}
 
-		// Server pipe
-		ServerPipe.onConnect(ConnectClient);
-		ServerPipe.create((Singleton::IsFirstInstance() ? IPC_PIPE_NAME_SERVER : IPC_PIPE_NAME_CLIENT));
+		serverPipe.OnConnect(ConnectClient);
 
-		// Connect second instance's client pipe to first instance's server pipe
 		if (!Singleton::IsFirstInstance())
 		{
-			ClientPipe.connect(IPC_PIPE_NAME_SERVER);
+			clientPipe.Connect(pipeNameServer);
 		}
+
+		Scheduler::Once([]
+		{
+			const char* name = pipeNameClient;
+
+			if (Singleton::IsFirstInstance())
+			{
+				name = pipeNameServer;
+			}
+
+			if (!serverPipe.Create(name))
+			{
+				Logger::Error("ipcpipe: could not create the pipe, iw4x64:// links cannot reach this copy\n");
+			}
+		}, Scheduler::Pipeline::MAIN);
 
 		On("ping", [](const std::string& data)
 		{
-			Logger::Print("Received ping form pipe, sending pong!\n");
+			Logger::Print("Received ping from pipe, sending pong!\n");
 			Write("pong", data);
 		});
 
 		On("pong", []([[maybe_unused]] const std::string& data)
 		{
-			Logger::Print("Received pong form pipe!\n");
+			Logger::Print("Received pong from pipe!\n");
 		});
 
-		// Test pipe functionality by sending pings
 		Command::Add("ipcping", []()
 		{
 			Logger::Print("Sending ping to pipe!\n");
 			Write("ping", {});
 		});
-	}
-
-	void IPCPipe::preDestroy()
-	{
-		ServerPipe.destroy();
-		ClientPipe.destroy();
 	}
 }

@@ -1,28 +1,37 @@
+#include "STDInclude.hpp"
+
+#include <discord_rpc.h>
+
 #include "Discord.hpp"
+#include "Dedicated.hpp"
+#include "Dvar.hpp"
 #include "Friends.hpp"
+#include "Logger.hpp"
 #include "Party.hpp"
+#include "Scheduler.hpp"
 #include "TextRenderer.hpp"
 #include "ZWNet.hpp"
 
-#include <algorithm>
-#include <discord_rpc.h>
-#include <Utils/WebIO.hpp>
-
 namespace Components
 {
-	static DiscordRichPresence DiscordPresence;
+	constexpr std::uintptr_t cg_snap = 0x140479D30;
 
-	std::atomic_bool Discord::Initialized_;
-	std::atomic_bool Discord::GameInitialized_;
+	constexpr auto applicationId = "1047291181404528660";
+	constexpr auto largeImage = "https://i.imghippo.com/files/wbSr4660zUs.png";
+
+	static DiscordRichPresence discordPresence;
+
+	static std::atomic_bool isInitialized = false;
+	static std::atomic_bool isGameInitialized = false;
 
 	static std::recursive_mutex discordUpdateMutex;
 	static unsigned int privateMatchNonce = 0;
-	static int64_t discordSessionStart = 0;
+	static std::int64_t discordSessionStart = 0;
 
-	std::string hostIP = "";
-	bool ipFetchInitiated = false;
-	static bool ipFetchInProgress = false;
-	static int64_t lastIpFetchAttempt = 0;
+	static std::string hostIP;
+	static bool isIpFetchInitiated = false;
+	static bool isIpFetchInProgress = false;
+	static std::int64_t lastIpFetchAttempt = 0;
 
 	static std::string lastDetails;
 	static std::string lastState;
@@ -31,50 +40,58 @@ namespace Components
 	static int lastPartySize = 0;
 	static int lastPartyMax = 0;
 	static int lastPartyPrivacy = -1;
-	static int64_t lastUpdateTime = 0;
+	static std::int64_t lastUpdateTime = 0;
 
-	static bool currentDiscordCanJoin = false;
-	static bool lastCanJoinDiscordParty = false;
-	static bool forcePresenceUpdate = false;
-	static bool timestampResetPending = false;
+	static bool canCurrentlyJoin = false;
+	static bool couldLastJoin = false;
+	static bool isPresenceUpdateForced = false;
+	static bool isTimestampResetPending = false;
 	static unsigned long long presenceGeneration = 0;
-	static std::atomic_bool discordJoinAuthorizationInFlight = false;
-	static std::atomic_ullong discordConnectionGeneration = 0;
-	static std::string discordJoinSecretOverride;
-	static std::string discordJoinSecretOverridePartyId;
-	static unsigned long long discordJoinSecretOverrideGeneration = 0;
+	static std::atomic_bool isJoinAuthorizationInFlight = false;
+	static std::atomic_ullong connectionGeneration = 0;
+	static std::string joinSecretOverride;
+	static std::string joinSecretOverridePartyId;
+	static unsigned long long joinSecretOverrideGeneration = 0;
+
+	static const char* NullIfEmpty(const std::string& text)
+	{
+		if (text.empty())
+		{
+			return nullptr;
+		}
+
+		return text.data();
+	}
 
 	static void PublishDiscordPresence()
 	{
 		DiscordRichPresence presence{};
 		presence.instance = 1;
-		presence.largeImageKey = "https://i.imghippo.com/files/wbSr4660zUs.png";
+		presence.largeImageKey = largeImage;
 		presence.startTimestamp = discordSessionStart;
-		presence.details = lastDetails.empty() ? nullptr : lastDetails.c_str();
-		presence.state = lastState.empty() ? nullptr : lastState.c_str();
-		presence.partyId = lastPartyId.empty() ? nullptr : lastPartyId.c_str();
-		presence.joinSecret = lastJoinSecret.empty() ? nullptr : lastJoinSecret.c_str();
+		presence.details = NullIfEmpty(lastDetails);
+		presence.state = NullIfEmpty(lastState);
+		presence.partyId = NullIfEmpty(lastPartyId);
+		presence.joinSecret = NullIfEmpty(lastJoinSecret);
 		presence.partySize = lastPartySize;
 		presence.partyMax = lastPartyMax;
 		presence.partyPrivacy = lastPartyPrivacy;
 
-		DiscordPresence = presence;
-		Discord_UpdatePresence(&DiscordPresence);
-		currentDiscordCanJoin = lastCanJoinDiscordParty;
+		discordPresence = presence;
+		Discord_UpdatePresence(&discordPresence);
+		canCurrentlyJoin = couldLastJoin;
 	}
 
 	static unsigned int GetDiscordNonce()
 	{
-		static auto nonce = Utils::Cryptography::Rand::GenerateInt();
+		static const auto nonce = Utils::Cryptography::Rand::GenerateInt();
 		return nonce;
 	}
 
-	static const char* GetPartyPrivacyName(int privacy)
+	static const char* GetPartyPrivacyName(const int privacy)
 	{
 		switch (privacy)
 		{
-		case 0:
-			return "Open";
 		case 1:
 			return "Invite-Only";
 		case 2:
@@ -84,80 +101,104 @@ namespace Components
 		}
 	}
 
+	static const char* VisibilityPrivacyName(const std::string& visibility)
+	{
+		if (visibility == "OPEN")
+		{
+			return "Open";
+		}
+
+		if (visibility == "CLOSED")
+		{
+			return "Closed";
+		}
+
+		return "Invite-Only";
+	}
+
 	bool Discord::IsZWNetPreGameState(const std::string& state)
 	{
-		return state == "SEARCH_STARTING"
-			|| state == "SEARCHING"
-			|| state == "MATCH_FOUND"
-			|| state == "MAP_VOTE"
-			|| state == "READY_CHECK"
-			|| state == "WAITING_FOR_READY"
-			|| state == "RESERVING_SERVER"
-			|| state == "STARTING_SERVER"
-			|| state == "SERVER_STARTING"
-			|| state == "COUNTDOWN"
-			|| state == "CONNECTING"
-			|| state == "DIRECT_CONNECTION"
+		return state == "SEARCH_STARTING" || state == "SEARCHING" || state == "MATCH_FOUND"
+			|| state == "MAP_VOTE" || state == "READY_CHECK" || state == "WAITING_FOR_READY"
+			|| state == "RESERVING_SERVER" || state == "STARTING_SERVER" || state == "SERVER_STARTING"
+			|| state == "COUNTDOWN" || state == "CONNECTING" || state == "DIRECT_CONNECTION"
 			|| state == "RELAY_CONNECTION";
 	}
 
 	static std::string GetZWNetPresenceState(const std::string& state, const int partySize, const int partyMax)
 	{
+		static const std::unordered_map<std::string, std::string> texts =
+		{
+			{ "SEARCH_STARTING", "Searching for available matches" },
+			{ "SEARCHING", "Searching for a match" },
+			{ "MATCH_FOUND", "Joining match lobby" },
+			{ "MAP_VOTE", "Voting for the next map" },
+			{ "READY_CHECK", "Waiting for all players to be ready" },
+			{ "WAITING_FOR_READY", "Waiting for all players to be ready" },
+			{ "RESERVING_SERVER", "Setting up match" },
+			{ "STARTING_SERVER", "Setting up match" },
+			{ "SERVER_STARTING", "Setting up match" },
+			{ "COUNTDOWN", "Starting match" },
+			{ "CONNECTING", "Connecting to match" },
+			{ "DIRECT_CONNECTION", "Joining match" },
+			{ "RELAY_CONNECTION", "Joining match" },
+			{ "IN_MATCH", "Playing matchmaking" },
+		};
+
+		if (state == "ERROR")
+		{
+			return "Unable to join game session";
+		}
+
+		std::string text = "Idle";
+		const auto known = texts.find(state);
+
+		if (known != texts.end())
+		{
+			text = known->second;
+		}
+
 		const auto currentPlayers = std::max(1, partySize);
 		const auto maximumPlayers = std::max(currentPlayers, partyMax);
 
-		std::string text;
-
-		if (state == "SEARCH_STARTING")
-			text = "Searching for available matches";
-		else if (state == "SEARCHING")
-			text = "Searching for a match";
-		else if (state == "MATCH_FOUND")
-			text = "Joining match lobby";
-		else if (state == "MAP_VOTE")
-			text = "Voting for the next map";
-		else if (state == "READY_CHECK" || state == "WAITING_FOR_READY")
-			text = "Waiting for all players to be ready";
-		else if (state == "RESERVING_SERVER" || state == "STARTING_SERVER" || state == "SERVER_STARTING")
-			text = "Setting up match";
-		else if (state == "COUNTDOWN")
-			text = "Starting match";
-		else if (state == "CONNECTING")
-			text = "Connecting to match";
-		else if (state == "DIRECT_CONNECTION" || state == "RELAY_CONNECTION")
-			text = "Joining match";
-		else if (state == "IN_MATCH")
-			text = "Playing matchmaking";
-		else if (state == "ERROR")
-			return "Unable to join game session";
-		else
-			text = "Idle";
-
-		return Utils::String::Format("{} ({}/{})", text, currentPlayers, maximumPlayers);
+		return std::format("{} ({}/{})", text, currentPlayers, maximumPlayers);
 	}
 
-	static std::string GetLoadingMapDisplayName()
+	static std::string GetMapDisplayName(const std::string& rawMapName)
 	{
-		auto rawMapName = Dvar::Var("mapname").get<std::string>();
+		const auto* displayName = Game::UI_GetMapDisplayName(rawMapName.data());
 
-		if (rawMapName.empty())
-			rawMapName = Dvar::Var("ui_mapname").get<std::string>();
-
-		if (rawMapName.empty())
-			return {};
-
-		const auto* displayName = Game::UI_GetMapDisplayName(rawMapName.c_str());
-
-		if (displayName && displayName[0])
+		if (displayName && *displayName)
+		{
 			return displayName;
+		}
 
 		return rawMapName;
 	}
 
+	static std::string GetLoadingMapDisplayName()
+	{
+		auto rawMapName = Dvar::Var("mapname").Get<std::string>();
+
+		if (rawMapName.empty())
+		{
+			rawMapName = Dvar::Var("ui_mapname").Get<std::string>();
+		}
+
+		if (rawMapName.empty())
+		{
+			return {};
+		}
+
+		return GetMapDisplayName(rawMapName);
+	}
+
 	static void Ready([[maybe_unused]] const DiscordUser* request)
 	{
-		ZeroMemory(&DiscordPresence, sizeof(DiscordPresence));
-		DiscordPresence.instance = 1;
+		std::lock_guard _(discordUpdateMutex);
+
+		ZeroMemory(&discordPresence, sizeof(discordPresence));
+		discordPresence.instance = 1;
 		Logger::Print("Discord: Ready\n");
 
 		lastDetails.clear();
@@ -167,84 +208,92 @@ namespace Components
 		lastPartySize = -1;
 		lastPartyMax = -1;
 		lastPartyPrivacy = -1;
-		lastCanJoinDiscordParty = false;
+		couldLastJoin = false;
 		lastUpdateTime = 0;
 		discordSessionStart = 0;
-		timestampResetPending = false;
+		isTimestampResetPending = false;
 		++presenceGeneration;
-		currentDiscordCanJoin = false;
-		discordJoinAuthorizationInFlight = false;
-		discordJoinSecretOverride.clear();
-		discordJoinSecretOverridePartyId.clear();
-		++discordJoinSecretOverrideGeneration;
-		++discordConnectionGeneration;
+		canCurrentlyJoin = false;
+		isJoinAuthorizationInFlight = false;
+		joinSecretOverride.clear();
+		joinSecretOverridePartyId.clear();
+		++joinSecretOverrideGeneration;
+		++connectionGeneration;
 
-		forcePresenceUpdate = true;
+		isPresenceUpdateForced = true;
 	}
 
 	void Discord::JoinGame(const char* joinSecret)
 	{
-		if (!Discord::GameInitialized_ || !joinSecret || !joinSecret[0])
+		if (!isGameInitialized || !joinSecret || !*joinSecret)
+		{
 			return;
+		}
+
 		Logger::Print("Discord: Processing a join invitation\n");
 
-		constexpr std::string_view zwnetCapabilityPrefix{"zwnet-cap:"};
-		constexpr std::string_view zwnetPrefix{"zwnet:"};
-		const std::string_view secret{joinSecret};
-		if (secret.starts_with(zwnetCapabilityPrefix))
+		constexpr std::string_view capabilityPrefix = "zwnet-cap:";
+		constexpr std::string_view partyPrefix = "zwnet:";
+		const std::string_view secret = joinSecret;
+
+		if (secret.starts_with(capabilityPrefix))
 		{
-			ZWNet::JoinCapability(std::string{
-				secret.substr(zwnetCapabilityPrefix.size())});
-			return;
-		}
-		if (secret.starts_with(zwnetPrefix))
-		{
-			ZWNet::JoinParty(std::string{secret.substr(zwnetPrefix.size())});
+			ZWNet::JoinCapability(std::string(secret.substr(capabilityPrefix.size())));
 			return;
 		}
 
-		const char* connect_cmd = Utils::String::VA("connect %s\n", joinSecret);
-		Game::Cbuf_AddText(0, connect_cmd);
+		if (secret.starts_with(partyPrefix))
+		{
+			ZWNet::JoinParty(std::string(secret.substr(partyPrefix.size())));
+			return;
+		}
+
+		Game::Cbuf_AddText(0, Utils::String::VA("connect %s\n", joinSecret));
 	}
 
 	static void Errored(const int errorCode, const char* message)
 	{
-		Logger::Print(Game::CON_CHANNEL_ERROR, "Discord: Error ({}): {}\n", errorCode, message);
+		Logger::Error("Discord: Error ({}): {}\n", errorCode, message);
 	}
 
-	static void FetchPublicIPAsync()
-	{
-		Utils::WebIO webio("zw3-get-host-ip");
-		bool success = false;
-		std::string ip = webio.get("https://api.ipify.org", &success);
-
-		if (success && !ip.empty() && ip != "0.0.0.0")
-		{
-			hostIP = ip;
-			forcePresenceUpdate = true;
-		}
-		else
-		{
-			hostIP.clear();
-			ipFetchInitiated = false;
-		}
-
-		ipFetchInProgress = false;
-	}
-
-	const char* Discord::GetHostDiscordInviteIP()
+	static const char* GetHostDiscordInviteIP()
 	{
 		if (!hostIP.empty() && hostIP != "0.0.0.0")
-			return hostIP.c_str();
+		{
+			return hostIP.data();
+		}
 
 		const auto now = std::time(nullptr);
 
-		if (!ipFetchInProgress && (!ipFetchInitiated || now - lastIpFetchAttempt >= 10))
+		if (!isIpFetchInProgress && (!isIpFetchInitiated || now - lastIpFetchAttempt >= 10))
 		{
-			ipFetchInitiated = true;
-			ipFetchInProgress = true;
+			isIpFetchInitiated = true;
+			isIpFetchInProgress = true;
 			lastIpFetchAttempt = now;
-			std::thread(FetchPublicIPAsync).detach();
+
+			Scheduler::Once([]
+			{
+				bool isSuccessful = false;
+				auto ip = Utils::WebIO("zw3-get-host-ip").Get("https://api.ipify.org", &isSuccessful);
+
+				Scheduler::Once([ip = std::move(ip), isSuccessful]
+				{
+					std::lock_guard _(discordUpdateMutex);
+
+					if (isSuccessful && !ip.empty() && ip != "0.0.0.0")
+					{
+						hostIP = ip;
+						isPresenceUpdateForced = true;
+					}
+					else
+					{
+						hostIP.clear();
+						isIpFetchInitiated = false;
+					}
+
+					isIpFetchInProgress = false;
+				}, Scheduler::Pipeline::MAIN);
+			}, Scheduler::Pipeline::ASYNC);
 		}
 
 		return "0.0.0.0";
@@ -255,7 +304,7 @@ namespace Components
 		std::string id;
 		std::string state;
 		std::string visibility;
-		int members{};
+		int members = 0;
 	};
 
 	static std::optional<ZWNetDiscordPartySnapshot> GetZWNetDiscordPartySnapshot()
@@ -265,135 +314,197 @@ namespace Components
 		const auto* state = Game::Dvar_FindVar("ui_zwnet_state");
 		const auto* visibility = Game::Dvar_FindVar("zwnet_lobby_visibility");
 		const auto* memberCount = Game::Dvar_FindVar("zwnet_lobby_member_count");
-		if (!lobbyActive || !partyId || !state || !visibility || !memberCount ||
-			lobbyActive->type != Game::DVAR_TYPE_BOOL ||
-			!lobbyActive->current.enabled ||
-			partyId->type != Game::DVAR_TYPE_STRING ||
-			state->type != Game::DVAR_TYPE_STRING ||
-			visibility->type != Game::DVAR_TYPE_STRING ||
-			memberCount->type != Game::DVAR_TYPE_INT)
+
+		if (!lobbyActive || !partyId || !state || !visibility || !memberCount)
 		{
 			return std::nullopt;
 		}
+
+		const bool areTypesRight = lobbyActive->type == Game::DVAR_TYPE_BOOL && partyId->type == Game::DVAR_TYPE_STRING
+			&& state->type == Game::DVAR_TYPE_STRING && visibility->type == Game::DVAR_TYPE_STRING && memberCount->type == Game::DVAR_TYPE_INT;
+
+		if (!areTypesRight || !lobbyActive->current.enabled || !partyId->current.string)
+		{
+			return std::nullopt;
+		}
+
 		ZWNetDiscordPartySnapshot snapshot;
-		snapshot.id = partyId->current.string ? partyId->current.string : "";
-		if (!snapshot.id.starts_with("pty_") || snapshot.id.size() > 80) return std::nullopt;
-		snapshot.state = state->current.string ? state->current.string : "";
-		snapshot.visibility = visibility->current.string
-			? visibility->current.string
-			: "";
-		snapshot.members = std::clamp(
-			memberCount->current.integer, 1, 4);
+		snapshot.id = partyId->current.string;
+
+		if (!snapshot.id.starts_with("pty_") || snapshot.id.size() > 80)
+		{
+			return std::nullopt;
+		}
+
+		if (state->current.string)
+		{
+			snapshot.state = state->current.string;
+		}
+
+		if (visibility->current.string)
+		{
+			snapshot.visibility = visibility->current.string;
+		}
+
+		snapshot.members = std::clamp(memberCount->current.integer, 1, 4);
 		return snapshot;
 	}
 
 	void Discord::JoinRequest(const DiscordUser* request)
 	{
-		if (!Initialized_ || !request || !request->userId || !request->userId[0]) return;
-		if (!GameInitialized_)
+		if (!isInitialized || !request || !request->userId || !*request->userId)
+		{
+			return;
+		}
+
+		if (!isGameInitialized)
 		{
 			Discord_Respond(request->userId, DISCORD_REPLY_IGNORE);
 			return;
 		}
+
 		Logger::Print("Discord: Received a join request\n");
 
 		const auto snapshot = GetZWNetDiscordPartySnapshot();
-		const auto advertisedZWNetParty = lastPartyId.starts_with("zwnet_");
-		if (advertisedZWNetParty && (!snapshot
-			|| lastPartyId != "zwnet_" + snapshot->id))
+		const bool isAdvertisingZWNetParty = lastPartyId.starts_with("zwnet_");
+
+		if (isAdvertisingZWNetParty && (!snapshot || lastPartyId != "zwnet_" + snapshot->id))
 		{
 			Discord_Respond(request->userId, DISCORD_REPLY_IGNORE);
 			return;
 		}
 
-		if (snapshot && snapshot->visibility == "INVITE_ONLY")
+		if (!snapshot || snapshot->visibility != "INVITE_ONLY")
 		{
-			if (!currentDiscordCanJoin || snapshot->members >= 4
-				|| discordJoinAuthorizationInFlight.exchange(true))
+			if (canCurrentlyJoin)
+			{
+				Discord_Respond(request->userId, DISCORD_REPLY_YES);
+			}
+			else
 			{
 				Discord_Respond(request->userId, DISCORD_REPLY_IGNORE);
-				return;
 			}
 
-			const std::string userId{request->userId};
-			const auto partyId = snapshot->id;
-			const auto connectionGeneration = discordConnectionGeneration.load();
-			Friends::AuthorizeDiscordPartyJoin(userId, partyId,
-				[userId, partyId, connectionGeneration](
-					std::optional<std::string> joinSecret)
-				{
-					if (discordConnectionGeneration.load() != connectionGeneration) return;
-					std::lock_guard lock(discordUpdateMutex);
-					if (!Initialized_ || !GameInitialized_)
-					{
-						discordJoinAuthorizationInFlight = false;
-						return;
-					}
-					const auto current = GetZWNetDiscordPartySnapshot();
-					const auto stillJoinable = joinSecret && current
-						&& current->id == partyId
-						&& current->visibility == "INVITE_ONLY"
-						&& current->members < 4;
-					if (!stillJoinable)
-					{
-						discordJoinAuthorizationInFlight = false;
-						Discord_Respond(userId.c_str(), DISCORD_REPLY_NO);
-						return;
-					}
-
-					discordJoinSecretOverride = std::move(*joinSecret);
-					discordJoinSecretOverridePartyId = partyId;
-					const auto overrideGeneration =
-						++discordJoinSecretOverrideGeneration;
-					forcePresenceUpdate = true;
-					UpdateDiscord();
-					Discord_Respond(userId.c_str(), DISCORD_REPLY_YES);
-
-					Scheduler::Once([partyId, overrideGeneration]
-					{
-						std::lock_guard resetLock(discordUpdateMutex);
-						if (overrideGeneration == discordJoinSecretOverrideGeneration &&
-							discordJoinSecretOverridePartyId == partyId)
-						{
-							discordJoinSecretOverride.clear();
-							discordJoinSecretOverridePartyId.clear();
-							forcePresenceUpdate = true;
-							discordJoinAuthorizationInFlight = false;
-						}
-					}, Scheduler::Pipeline::MAIN, 3s);
-				});
 			return;
 		}
 
-		Discord_Respond(request->userId, currentDiscordCanJoin
-			? DISCORD_REPLY_YES
-			: DISCORD_REPLY_IGNORE);
+		if (!canCurrentlyJoin || snapshot->members >= 4 || isJoinAuthorizationInFlight.exchange(true))
+		{
+			Discord_Respond(request->userId, DISCORD_REPLY_IGNORE);
+			return;
+		}
+
+		const std::string userId = request->userId;
+		const auto partyId = snapshot->id;
+		const auto generation = connectionGeneration.load();
+
+		Friends::AuthorizeDiscordPartyJoin(userId, partyId, [userId, partyId, generation](std::optional<std::string> joinSecret)
+		{
+			if (connectionGeneration.load() != generation)
+			{
+				return;
+			}
+
+			std::lock_guard _(discordUpdateMutex);
+
+			if (!isInitialized || !isGameInitialized)
+			{
+				isJoinAuthorizationInFlight = false;
+				return;
+			}
+
+			const auto current = GetZWNetDiscordPartySnapshot();
+			const bool isStillJoinable = joinSecret && current && current->id == partyId && current->visibility == "INVITE_ONLY" && current->members < 4;
+
+			if (!isStillJoinable)
+			{
+				isJoinAuthorizationInFlight = false;
+				Discord_Respond(userId.data(), DISCORD_REPLY_NO);
+				return;
+			}
+
+			joinSecretOverride = std::move(*joinSecret);
+			joinSecretOverridePartyId = partyId;
+			const auto overrideGeneration = ++joinSecretOverrideGeneration;
+			isPresenceUpdateForced = true;
+			UpdateDiscord();
+			Discord_Respond(userId.data(), DISCORD_REPLY_YES);
+
+			Scheduler::Once([partyId, overrideGeneration]
+			{
+				std::lock_guard resetLock(discordUpdateMutex);
+
+				if (overrideGeneration == joinSecretOverrideGeneration && joinSecretOverridePartyId == partyId)
+				{
+					joinSecretOverride.clear();
+					joinSecretOverridePartyId.clear();
+					isPresenceUpdateForced = true;
+					isJoinAuthorizationInFlight = false;
+				}
+			}, Scheduler::Pipeline::MAIN, 3s);
+		});
 	}
 
-	static void ApplyZWNetDiscordParty(const ZWNetDiscordPartySnapshot& snapshot,
-		std::string& partyId, std::string& joinSecret, int& partySize,
-		int& partyMax, int& partyPrivacy, bool& canJoin)
+	static void ApplyZWNetDiscordParty(const ZWNetDiscordPartySnapshot& snapshot, std::string& partyId, std::string& joinSecret, int& partySize, int& partyMax, int& partyPrivacy, bool& canJoin)
 	{
 		partyId = "zwnet_" + snapshot.id;
 		partySize = snapshot.members;
 		partyMax = 4;
-		partyPrivacy = snapshot.visibility == "OPEN"
-			? DISCORD_PARTY_PUBLIC
-			: DISCORD_PARTY_PRIVATE;
+		partyPrivacy = DISCORD_PARTY_PRIVATE;
 
-		// Discord keeps invite-only parties private. Their opaque party id only
-		// becomes usable after JoinRequest creates a receiver-specific backend
-		// invitation; the backend still rechecks friendship, capacity and state.
+		if (snapshot.visibility == "OPEN")
+		{
+			partyPrivacy = DISCORD_PARTY_PUBLIC;
+		}
+
 		canJoin = snapshot.visibility != "CLOSED" && partySize < partyMax;
-		joinSecret = canJoin ? "zwnet:" + snapshot.id : std::string{};
+		joinSecret.clear();
+
+		if (canJoin)
+		{
+			joinSecret = "zwnet:" + snapshot.id;
+		}
+	}
+
+	static std::string BotsSuffix(const int bots)
+	{
+		if (bots == 1)
+		{
+			return " (with 1 bot)";
+		}
+
+		return std::format(" (with {} bots)", bots);
+	}
+
+	static void ApplyHostedParty(const char* prefix, const bool isClosed, std::string& partyId, std::string& joinSecret, bool& canJoin)
+	{
+		if (privateMatchNonce == 0)
+		{
+			privateMatchNonce = Utils::Cryptography::Rand::GenerateInt();
+		}
+
+		const char* const publicIp = GetHostDiscordInviteIP();
+
+		if (!isClosed && std::strcmp(publicIp, "0.0.0.0") != 0)
+		{
+			joinSecret = std::format("{}:28960", publicIp);
+			partyId = std::format("{}_{}_{}", prefix, publicIp, privateMatchNonce);
+			canJoin = true;
+			return;
+		}
+
+		partyId = std::format("{}_pending_{}", prefix, privateMatchNonce);
+		canJoin = false;
 	}
 
 	void Discord::UpdateDiscord()
 	{
-		std::lock_guard lock(discordUpdateMutex);
+		std::lock_guard _(discordUpdateMutex);
 
-		if (!Initialized_)
+		if (!isInitialized)
+		{
 			return;
+		}
 
 		Discord_RunCallbacks();
 
@@ -405,24 +516,18 @@ namespace Components
 		bool isServerList = false;
 		bool isMainMenu = false;
 		bool isHosting = false;
-		bool isDedi = false;
 
-		if (GameInitialized_)
+		if (isGameInitialized)
 		{
-			isInGame = Game::CL_IsCgameInitialized();
-			isPrivateLobby = Discord::IsPrivateMatchOpen();
-			isPartyLobby = Discord::IsPartyLobbyOpen();
-			isZWNetMatchmaking = Discord::IsZWNetMatchmakingOpen();
-			isConnectMenu = Discord::IsConnectMenuOpen();
-			isServerList = Discord::IsServerListOpen();
-			isMainMenu = Discord::IsMainMenuOpen();
-			isHosting = Dvar::Var("party_host").get<bool>();
-			isDedi = Dvar::Var("sv_running").get<bool>();
+			isInGame = Game::CL_IsCgameInitialized(0);
+			isPrivateLobby = IsPrivateMatchOpen();
+			isPartyLobby = IsPartyLobbyOpen();
+			isZWNetMatchmaking = IsZWNetMatchmakingOpen();
+			isConnectMenu = IsConnectMenuOpen();
+			isServerList = IsServerListOpen();
+			isMainMenu = IsMainMenuOpen();
+			isHosting = Party::IsHostingParty();
 		}
-
-		DiscordRichPresence newPresence{};
-		newPresence.instance = 1;
-		newPresence.largeImageKey = "https://i.imghippo.com/files/wbSr4660zUs.png";
 
 		std::string details;
 		std::string state;
@@ -431,257 +536,261 @@ namespace Components
 		int partySize = 0;
 		int partyMax = 0;
 		int partyPrivacy = DISCORD_PARTY_PUBLIC;
-		bool canJoinDiscordParty = false;
+		bool canJoin = false;
 
-		if (!GameInitialized_)
+		if (!isGameInitialized)
 		{
 			details = "Launching game";
-			state.clear();
-			currentDiscordCanJoin = false;
+			canCurrentlyJoin = false;
 		}
 		else if (isConnectMenu)
 		{
 			const auto mapName = GetLoadingMapDisplayName();
-			state = mapName.empty()
-				? "Preparing game..."
-				: Utils::String::Format("Loading {}...", mapName);
-			canJoinDiscordParty = false;
 
-			if (const auto zwnetParty = GetZWNetDiscordPartySnapshot())
+			if (mapName.empty())
 			{
-				const auto* privacyName = zwnetParty->visibility == "OPEN"
-					? "Open"
-					: zwnetParty->visibility == "CLOSED" ? "Closed" : "Invite-Only";
+				state = "Preparing game...";
+			}
+			else
+			{
+				state = std::format("Loading {}...", mapName);
+			}
 
-				details = Utils::String::Format(
-					"In pre-game lobby ({})", privacyName);
-				ApplyZWNetDiscordParty(*zwnetParty, partyId, joinSecret,
-					partySize, partyMax, partyPrivacy, canJoinDiscordParty);
+			const auto zwnetParty = GetZWNetDiscordPartySnapshot();
+
+			if (zwnetParty)
+			{
+				details = std::format("In pre-game lobby ({})", VisibilityPrivacyName(zwnetParty->visibility));
+				ApplyZWNetDiscordParty(*zwnetParty, partyId, joinSecret, partySize, partyMax, partyPrivacy, canJoin);
 			}
 			else
 			{
 				details = "Loading map";
 			}
 		}
-		else if (!isInGame)
+		else if (!isInGame && isServerList)
 		{
-			if (isServerList)
-			{
-				details = "Browsing servers";
-				state = "";
-			}
-			else if (isZWNetMatchmaking)
-			{
-				if (const auto zwnetParty = GetZWNetDiscordPartySnapshot())
-				{
-					const auto* privacyName = zwnetParty->visibility == "OPEN"
-						? "Open"
-						: zwnetParty->visibility == "CLOSED" ? "Closed" : "Invite-Only";
-					details = Discord::IsZWNetPreGameState(zwnetParty->state)
-						? Utils::String::Format("In pre-game lobby ({})", privacyName)
-						: Utils::String::Format("In a public party ({})", privacyName);
-					ApplyZWNetDiscordParty(*zwnetParty, partyId, joinSecret,
-						partySize, partyMax, partyPrivacy, canJoinDiscordParty);
-					state = GetZWNetPresenceState(
-						zwnetParty->state, partySize, partyMax);
-				}
-				else
-				{
-					details = "Preparing ZW3 matchmaking";
-					state.clear();
-				}
-			}
-			else if (isMainMenu)
-			{
-				details = "At the main menu";
-				state = "";
-			}
-			else if (isPrivateLobby || isPartyLobby)
-			{
-				int privacy = Dvar::Var("partyPrivacy").get<int>();
-				if (privacy < 0 || privacy > 2)
-					privacy = 0;
-
-				const bool isOpen = privacy == 0;
-				const bool isClosed = privacy == 2;
-				const char* privacyName = GetPartyPrivacyName(privacy);
-
-				partyPrivacy = isOpen ? DISCORD_PARTY_PUBLIC : DISCORD_PARTY_PRIVATE;
-				details = isPrivateLobby
-					? Utils::String::Format("In a private party ({})", privacyName)
-					: Utils::String::Format("In a public party ({})", privacyName);
-
-				int realPlayers = Dvar::Var("party_realPlayers").get<int>();
-				int totalPlayers = Dvar::Var("party_currentPlayers").get<int>();
-				int numBots = totalPlayers - realPlayers;
-
-				partySize = realPlayers > 0 ? realPlayers : 1;
-				partyMax = 4;
-
-				if (isPartyLobby)
-				{
-					std::string raw = Dvar::Var("party_lobbyPlayerCount").get<std::string>();
-					int lobbyRealPlayers = 0;
-					int lobbyMaxPlayers = 0;
-					sscanf(raw.c_str(), "%d/%d", &lobbyRealPlayers, &lobbyMaxPlayers);
-
-					if (lobbyRealPlayers > 0)
-						partySize = lobbyRealPlayers;
-
-					if (lobbyMaxPlayers > 0)
-						partyMax = lobbyMaxPlayers;
-				}
-
-				if (partySize < 1)
-					partySize = 1;
-
-				if (partyMax < partySize)
-					partyMax = partySize;
-
-				if (isHosting)
-				{
-					if (isPrivateLobby)
-					{
-						state = numBots > 0
-							? Utils::String::Format("Setting up a private match (with {} bot{})", numBots, numBots == 1 ? "" : "s")
-							: "Setting up a private match";
-					}
-					else
-					{
-						state = Utils::String::Format("Waiting for players ({}/{})", partySize, partyMax);
-					}
-
-					if (privateMatchNonce == 0)
-						privateMatchNonce = Utils::Cryptography::Rand::GenerateInt();
-
-					const char* publicIp = Discord::GetHostDiscordInviteIP();
-					if (!isClosed && std::strcmp(publicIp, "0.0.0.0") != 0)
-					{
-						joinSecret = Utils::String::VA("%s:28960", publicIp);
-						partyId = Utils::String::VA("party_%s_%u", publicIp, privateMatchNonce);
-						canJoinDiscordParty = true;
-					}
-					else
-					{
-						partyId = Utils::String::VA("party_pending_%u", privateMatchNonce);
-						canJoinDiscordParty = false;
-					}
-				}
-				else
-				{
-					state = isPrivateLobby
-						? "Waiting for host to start a match"
-						: Utils::String::Format("Waiting in party ({}/{})", partySize, partyMax);
-
-					std::hash<Network::Address> hashFn;
-					const auto address = Party::Target();
-					partyId = Utils::String::VA("party_%zu_%u", hashFn(address), GetDiscordNonce());
-				}
-			}
+			details = "Browsing servers";
 		}
-		else
+		else if (!isInGame && isZWNetMatchmaking)
 		{
-			if (const auto zwnetParty = GetZWNetDiscordPartySnapshot())
+			const auto zwnetParty = GetZWNetDiscordPartySnapshot();
+
+			if (zwnetParty)
 			{
-				const auto* map = Game::UI_GetMapDisplayName(
-					(*Game::ui_mapname)->current.string);
-				details = Utils::String::Format("ZW3 matchmaking on {}", map);
-				state = GetZWNetPresenceState(
-					zwnetParty->state, zwnetParty->members, 4);
-				ApplyZWNetDiscordParty(*zwnetParty, partyId, joinSecret,
-					partySize, partyMax, partyPrivacy, canJoinDiscordParty);
+				const auto* privacyName = VisibilityPrivacyName(zwnetParty->visibility);
+
+				if (IsZWNetPreGameState(zwnetParty->state))
+				{
+					details = std::format("In pre-game lobby ({})", privacyName);
+				}
+				else
+				{
+					details = std::format("In a public party ({})", privacyName);
+				}
+
+				ApplyZWNetDiscordParty(*zwnetParty, partyId, joinSecret, partySize, partyMax, partyPrivacy, canJoin);
+				state = GetZWNetPresenceState(zwnetParty->state, partySize, partyMax);
 			}
 			else
 			{
-			const auto* map = Game::UI_GetMapDisplayName((*Game::ui_mapname)->current.string);
-			const int zModeVal = Dvar::Var("zombiemode").get<int>();
-			static const char* zModeNames[] = { "Normal", "Classic", "Hardcore" };
-			const char* zMode = (zModeVal >= 0 && zModeVal < 3) ? zModeNames[zModeVal] : "Normal";
+				details = "Preparing ZW3 matchmaking";
+			}
+		}
+		else if (!isInGame && isMainMenu)
+		{
+			details = "At the main menu";
+		}
+		else if (!isInGame && (isPrivateLobby || isPartyLobby))
+		{
+			int privacy = Dvar::Var("partyPrivacy").Get<int>();
 
-			details = Utils::String::Format("{} on {}", zMode, map);
+			if (privacy < 0 || privacy > 2)
+			{
+				privacy = 0;
+			}
+
+			if (privacy != 0)
+			{
+				partyPrivacy = DISCORD_PARTY_PRIVATE;
+			}
+
+			if (isPrivateLobby)
+			{
+				details = std::format("In a private party ({})", GetPartyPrivacyName(privacy));
+			}
+			else
+			{
+				details = std::format("In a public party ({})", GetPartyPrivacyName(privacy));
+			}
+
+			const int realPlayers = Dvar::Var("party_realPlayers").Get<int>();
+			const int totalPlayers = Dvar::Var("party_currentPlayers").Get<int>();
+			const int bots = totalPlayers - realPlayers;
+
+			partySize = std::max(realPlayers, 1);
+			partyMax = 4;
+
+			if (isPartyLobby)
+			{
+				const auto raw = Dvar::Var("party_lobbyPlayerCount").Get<std::string>();
+				int lobbyRealPlayers = 0;
+				int lobbyMaxPlayers = 0;
+
+				std::sscanf(raw.data(), "%d/%d", &lobbyRealPlayers, &lobbyMaxPlayers);
+
+				if (lobbyRealPlayers > 0)
+				{
+					partySize = lobbyRealPlayers;
+				}
+
+				if (lobbyMaxPlayers > 0)
+				{
+					partyMax = lobbyMaxPlayers;
+				}
+			}
+
+			partyMax = std::max(partyMax, partySize);
+
+			if (isHosting && isPrivateLobby && bots > 0)
+			{
+				state = "Setting up a private match" + BotsSuffix(bots);
+			}
+			else if (isHosting && isPrivateLobby)
+			{
+				state = "Setting up a private match";
+			}
+			else if (isHosting)
+			{
+				state = std::format("Waiting for players ({}/{})", partySize, partyMax);
+			}
+			else if (isPrivateLobby)
+			{
+				state = "Waiting for host to start a match";
+			}
+			else
+			{
+				state = std::format("Waiting in party ({}/{})", partySize, partyMax);
+			}
 
 			if (isHosting)
 			{
-				const int privacy = Dvar::Var("partyPrivacy").get<int>();
-				const bool isOpen = privacy == 0;
-				const bool isClosed = privacy == 2;
-				const char* privacyName = GetPartyPrivacyName(privacy);
+				ApplyHostedParty("party", privacy == 2, partyId, joinSecret, canJoin);
+			}
+			else
+			{
+				const std::hash<Network::Address> hashFn;
+				partyId = std::format("party_{}_{}", hashFn(Party::Target()), GetDiscordNonce());
+			}
+		}
+		else if (isInGame)
+		{
+			const auto map = GetMapDisplayName(Dvar::Var("ui_mapname").Get<std::string>());
+			const auto zwnetParty = GetZWNetDiscordPartySnapshot();
 
-				partyPrivacy = isOpen ? DISCORD_PARTY_PUBLIC : DISCORD_PARTY_PRIVATE;
-				details += Utils::String::Format(" ({})", privacyName);
+			if (zwnetParty)
+			{
+				details = std::format("ZW3 matchmaking on {}", map);
+				state = GetZWNetPresenceState(zwnetParty->state, zwnetParty->members, 4);
+				ApplyZWNetDiscordParty(*zwnetParty, partyId, joinSecret, partySize, partyMax, partyPrivacy, canJoin);
+			}
+			else if (isHosting)
+			{
+				static constexpr const char* zombieModeNames[] = { "Normal", "Classic", "Hardcore" };
 
-				int totalPlayers = Dvar::Var("party_currentPlayers").get<int>();
-				int realPlayers = Dvar::Var("party_realPlayers").get<int>();
-				int numBots = totalPlayers - realPlayers;
+				const int zombieMode = Dvar::Var("zombiemode").Get<int>();
+				const char* zombieModeName = "Normal";
 
-				state = numBots > 0
-					? Utils::String::Format("In a private match (with {} bot{})", numBots, numBots == 1 ? "" : "s")
-					: "In a private match";
-
-				if (privateMatchNonce == 0)
-					privateMatchNonce = Utils::Cryptography::Rand::GenerateInt();
-
-				const char* publicIp = Discord::GetHostDiscordInviteIP();
-				if (!isClosed && std::strcmp(publicIp, "0.0.0.0") != 0)
+				if (zombieMode >= 0 && zombieMode < static_cast<int>(std::size(zombieModeNames)))
 				{
-					joinSecret = Utils::String::VA("%s:28960", publicIp);
-					partyId = Utils::String::VA("match_%s_%u", publicIp, privateMatchNonce);
-					canJoinDiscordParty = true;
-				}
-				else
-				{
-					partyId = Utils::String::VA("match_pending_%u", privateMatchNonce);
-					canJoinDiscordParty = false;
+					zombieModeName = zombieModeNames[zombieMode];
 				}
 
-				partySize = realPlayers > 0 ? realPlayers : 1;
+				const int privacy = Dvar::Var("partyPrivacy").Get<int>();
+
+				if (privacy != 0)
+				{
+					partyPrivacy = DISCORD_PARTY_PRIVATE;
+				}
+
+				details = std::format("{} on {} ({})", zombieModeName, map, GetPartyPrivacyName(privacy));
+
+				const int totalPlayers = Dvar::Var("party_currentPlayers").Get<int>();
+				const int realPlayers = Dvar::Var("party_realPlayers").Get<int>();
+				const int bots = totalPlayers - realPlayers;
+
+				state = "In a private match";
+
+				if (bots > 0)
+				{
+					state += BotsSuffix(bots);
+				}
+
+				ApplyHostedParty("match", privacy == 2, partyId, joinSecret, canJoin);
+
+				partySize = std::max(realPlayers, 1);
 				partyMax = 4;
 			}
 			else
 			{
+				static constexpr const char* zombieModeNames[] = { "Normal", "Classic", "Hardcore" };
+
+				const int zombieMode = Dvar::Var("zombiemode").Get<int>();
+				const char* zombieModeName = "Normal";
+
+				if (zombieMode >= 0 && zombieMode < static_cast<int>(std::size(zombieModeNames)))
+				{
+					zombieModeName = zombieModeNames[zombieMode];
+				}
+
+				details = std::format("{} on {}", zombieModeName, map);
+
 				char hostNameBuffer[256]{};
 				TextRenderer::StripColors(Party::GetHostName().data(), hostNameBuffer, sizeof(hostNameBuffer));
 				TextRenderer::StripAllTextIcons(hostNameBuffer, hostNameBuffer, sizeof(hostNameBuffer));
 
 				state = hostNameBuffer;
 
-				std::hash<Network::Address> hashFn;
+				const std::hash<Network::Address> hashFn;
 				const auto address = Party::Target();
-				partyId = Utils::String::VA("%s_%zu", hostNameBuffer, hashFn(address) ^ GetDiscordNonce());
-				joinSecret = address.getCString();
 
-				partySize = Game::cgArray[0].snap ? Game::cgArray[0].snap->numClients : 1;
-				partyMax = Party::GetMaxClients();
+				partyId = std::format("{}_{}", hostNameBuffer, hashFn(address) ^ GetDiscordNonce());
+				joinSecret = address.GetString();
 
-				if (partySize < 1)
-					partySize = 1;
+				const auto* snap = *reinterpret_cast<const Game::snapshot_s* const*>(Utils::Hook::Rebase(cg_snap));
+				partySize = 1;
 
-				if (partyMax < partySize)
-					partyMax = partySize;
+				if (snap)
+				{
+					partySize = std::max(snap->numClients, 1);
+				}
 
-				canJoinDiscordParty = !joinSecret.empty();
+				partyMax = std::max(Party::GetMaxClients(), partySize);
+				canJoin = !joinSecret.empty();
 				partyPrivacy = DISCORD_PARTY_PUBLIC;
-			}
 			}
 		}
 
 		if (details.empty())
-			details = "At the main menu";
-		if (!discordJoinSecretOverride.empty() &&
-			partyId == "zwnet_" + discordJoinSecretOverridePartyId)
 		{
-			joinSecret = discordJoinSecretOverride;
-			canJoinDiscordParty = true;
+			details = "At the main menu";
+		}
+
+		if (!joinSecretOverride.empty() && partyId == "zwnet_" + joinSecretOverridePartyId)
+		{
+			joinSecret = joinSecretOverride;
+			canJoin = true;
 		}
 
 		const auto now = std::time(nullptr);
-		const bool presenceActivityChanged = details != lastDetails || state != lastState;
-		const bool presenceDataChanged = partyId != lastPartyId || joinSecret != lastJoinSecret
-			|| partySize != lastPartySize || partyMax != lastPartyMax || partyPrivacy != lastPartyPrivacy
-			|| canJoinDiscordParty != lastCanJoinDiscordParty;
+		const bool hasActivityChanged = details != lastDetails || state != lastState;
+		const bool hasDataChanged = partyId != lastPartyId || joinSecret != lastJoinSecret || partySize != lastPartySize
+			|| partyMax != lastPartyMax || partyPrivacy != lastPartyPrivacy || canJoin != couldLastJoin;
 
-		if (!forcePresenceUpdate && !presenceActivityChanged && !presenceDataChanged && now - lastUpdateTime < 1)
+		if (!isPresenceUpdateForced && !hasActivityChanged && !hasDataChanged && now - lastUpdateTime < 1)
+		{
 			return;
+		}
 
 		lastDetails = details;
 		lastState = state;
@@ -690,103 +799,87 @@ namespace Components
 		lastPartySize = partySize;
 		lastPartyMax = partyMax;
 		lastPartyPrivacy = partyPrivacy;
-		lastCanJoinDiscordParty = canJoinDiscordParty;
+		couldLastJoin = canJoin;
 		lastUpdateTime = now;
-		forcePresenceUpdate = false;
+		isPresenceUpdateForced = false;
 
-		if (presenceActivityChanged)
+		if (hasActivityChanged)
 		{
 			const auto generation = ++presenceGeneration;
 			const auto publishAt = std::chrono::steady_clock::now() + 100ms;
 
 			discordSessionStart = 0;
-			timestampResetPending = true;
+			isTimestampResetPending = true;
 			PublishDiscordPresence();
 
 			Scheduler::Schedule([generation, publishAt]
+			{
+				if (std::chrono::steady_clock::now() < publishAt)
 				{
-					if (std::chrono::steady_clock::now() < publishAt)
-						return false;
+					return false;
+				}
 
-					std::lock_guard lock(discordUpdateMutex);
+				std::lock_guard lock(discordUpdateMutex);
 
-					if (!Initialized_ || generation != presenceGeneration)
-						return true;
-
+				if (isInitialized && generation == presenceGeneration)
+				{
 					discordSessionStart = std::time(nullptr);
-					timestampResetPending = false;
+					isTimestampResetPending = false;
 					PublishDiscordPresence();
-					return true;
-				}, Scheduler::Pipeline::ASYNC, 25ms);
+				}
+
+				return true;
+			}, Scheduler::Pipeline::ASYNC, 25ms);
 
 			return;
 		}
 
-		if (timestampResetPending)
+		if (!isTimestampResetPending && !discordSessionStart)
 		{
-			PublishDiscordPresence();
-			return;
-		}
-
-		if (!discordSessionStart)
 			discordSessionStart = now;
+		}
 
 		PublishDiscordPresence();
 	}
 
+	static bool IsMenuOpen(Game::UiContext* context, const char* name)
+	{
+		auto* const menu = Game::Menus_FindByName(context, name);
+		return menu && Game::Menu_IsVisible(context, menu);
+	}
+
 	bool Discord::IsPrivateMatchOpen()
 	{
-		auto* menuPrivateLobby = Game::Menus_FindByName(Game::uiContext, "menu_xboxlive_privatelobby");
-		auto* menuCreateServer = Game::Menus_FindByName(Game::uiContext, "createserver");
-
-		return
-			(menuPrivateLobby && Game::Menu_IsVisible(Game::uiContext, menuPrivateLobby)) ||
-			(menuCreateServer && Game::Menu_IsVisible(Game::uiContext, menuCreateServer));
+		return IsMenuOpen(Game::uiContext, "menu_xboxlive_privatelobby") || IsMenuOpen(Game::uiContext, "createserver");
 	}
 
 	bool Discord::IsServerListOpen()
 	{
-		auto* menu = Game::Menus_FindByName(Game::uiContext, "pc_join_unranked");
-		return menu && Game::Menu_IsVisible(Game::uiContext, menu);
+		return IsMenuOpen(Game::uiContext, "pc_join_unranked");
 	}
 
 	bool Discord::IsMainMenuOpen()
 	{
-		auto* menuMain = Game::Menus_FindByName(Game::uiContext, "main_text");
-		auto* menuMainZW3 = Game::Menus_FindByName(Game::uiContext, "pregame_loaderror");
-
-		return
-			(menuMain && Game::Menu_IsVisible(Game::uiContext, menuMain)) ||
-			(menuMainZW3 && Game::Menu_IsVisible(Game::uiContext, menuMainZW3));
+		return IsMenuOpen(Game::uiContext, "main_text") || IsMenuOpen(Game::uiContext, "pregame_loaderror");
 	}
 
 	bool Discord::IsPartyLobbyOpen()
 	{
-		auto* menu = Game::Menus_FindByName(Game::uiContext, "menu_xboxlive_lobby");
-		return menu && Game::Menu_IsVisible(Game::uiContext, menu);
+		return IsMenuOpen(Game::uiContext, "menu_xboxlive_lobby");
 	}
 
 	bool Discord::IsZWNetMatchmakingOpen()
 	{
-		auto* menu = Game::Menus_FindByName(Game::uiContext, "zwnet_matchmaking");
-		return menu && Game::Menu_IsVisible(Game::uiContext, menu);
+		return IsMenuOpen(Game::uiContext, "zwnet_matchmaking");
 	}
 
 	bool Discord::IsConnectMenuOpen()
 	{
-		auto* uiMenu = Game::Menus_FindByName(Game::uiContext, "connect");
-		auto* cgameMenu = Game::Menus_FindByName(Game::cgDC, "connect");
-
-		return
-			(uiMenu && Game::Menu_IsVisible(Game::uiContext, uiMenu)) ||
-			(cgameMenu && Game::Menu_IsVisible(Game::cgDC, cgameMenu));
+		return IsMenuOpen(Game::uiContext, "connect") || IsMenuOpen(Game::cgDC, "connect");
 	}
 
 	void Discord::InitializeDiscord()
 	{
-		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled())
-			return;
-
 		DiscordEventHandlers handlers{};
 		handlers.ready = Ready;
 		handlers.errored = Errored;
@@ -794,50 +887,64 @@ namespace Components
 		handlers.joinGame = JoinGame;
 		handlers.joinRequest = JoinRequest;
 
-		Discord_Initialize("1047291181404528660", &handlers, 1, nullptr);
+		Discord_Initialize(applicationId, &handlers, 1, nullptr);
 
-		Initialized_ = true;
+		isInitialized = true;
 
 		Scheduler::Schedule([]
+		{
+			if (!isInitialized || isGameInitialized)
 			{
-				if (!Initialized_ || GameInitialized_)
-					return true;
+				return true;
+			}
 
-				Discord_RunCallbacks();
-				return false;
-			}, Scheduler::Pipeline::ASYNC, 250ms);
+			std::lock_guard _(discordUpdateMutex);
+			Discord_RunCallbacks();
+			return false;
+		}, Scheduler::Pipeline::ASYNC, 250ms);
 	}
 
 	Discord::Discord()
 	{
-		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled())
+		if (Dedicated::IsEnabled())
+		{
 			return;
+		}
 
 		InitializeDiscord();
 
 		Scheduler::OnGameInitialized([]
-			{
-				GameInitialized_ = true;
-				forcePresenceUpdate = true;
-				UpdateDiscord();
-				Scheduler::Loop(UpdateDiscord, Scheduler::Pipeline::MAIN, 1s);
-			}, Scheduler::Pipeline::MAIN);
-	}
-
-	void Discord::preDestroy()
-	{
-		if (!Initialized_)
-			return;
-
-		Initialized_ = false;
-		discordJoinAuthorizationInFlight = false;
 		{
-			std::lock_guard lock(discordUpdateMutex);
-			discordJoinSecretOverride.clear();
-			discordJoinSecretOverridePartyId.clear();
-			++discordJoinSecretOverrideGeneration;
-		}
-		++discordConnectionGeneration;
-		Discord_Shutdown();
+			isGameInitialized = true;
+
+			{
+				std::lock_guard _(discordUpdateMutex);
+				isPresenceUpdateForced = true;
+			}
+
+			UpdateDiscord();
+			Scheduler::Loop(UpdateDiscord, Scheduler::Pipeline::MAIN, 1s);
+		}, Scheduler::Pipeline::MAIN);
+
+		Scheduler::OnShutdown([]
+		{
+			if (!isInitialized)
+			{
+				return;
+			}
+
+			isInitialized = false;
+			isJoinAuthorizationInFlight = false;
+
+			{
+				std::lock_guard _(discordUpdateMutex);
+				joinSecretOverride.clear();
+				joinSecretOverridePartyId.clear();
+				++joinSecretOverrideGeneration;
+			}
+
+			++connectionGeneration;
+			Discord_Shutdown();
+		});
 	}
 }

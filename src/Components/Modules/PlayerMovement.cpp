@@ -1,292 +1,272 @@
+#include "STDInclude.hpp"
+
 #include "PlayerMovement.hpp"
 #include "Events.hpp"
 #include "GSC/Script.hpp"
+#include "Logger.hpp"
 
 constexpr int MASK_PLAYER_CLIP = 0x10000;
 constexpr int MASK_BARRIER_CLIP = 0x400;
 
+extern "C"
+{
+	void StepSlideMoveStub();
+	void ProjectVelocityStub();
+
+	Game::dvar_t* PlayerMovement_bg_bounces = nullptr;
+	Game::dvar_t* PlayerMovement_bg_bouncesAllAngles = nullptr;
+
+	std::uintptr_t PlayerMovement_StepSlideMoveSlopeTest = 0;
+	std::uintptr_t PlayerMovement_StepSlideMoveProject = 0;
+	std::uintptr_t PlayerMovement_StepSlideMoveRestore = 0;
+	std::uintptr_t PlayerMovement_ProjectVelocityScale = 0;
+	std::uintptr_t PlayerMovement_ProjectVelocityDone = 0;
+
+	void CrashLandScaleStub();
+	void JumpCheckStub();
+
+	Game::dvar_t* PlayerMovement_bg_disableLandingSlowdown = nullptr;
+	Game::dvar_t* PlayerMovement_bg_bunnyHopAuto = nullptr;
+
+	std::uintptr_t PlayerMovement_CrashLandScaleNext = 0;
+	std::uintptr_t PlayerMovement_CrashLandScaleDone = 0;
+	std::uintptr_t PlayerMovement_JumpCheckHeldBranch = 0;
+	std::uintptr_t PlayerMovement_JumpCheckJump = 0;
+
+	void RocketFireStub();
+
+	std::uintptr_t PlayerMovement_G_FireRocket = 0;
+
+	void PlayerMovement_ApplyRocketJump(Game::gentity_s* ent, const Game::weaponParms* wp)
+	{
+		Components::PlayerMovement::ApplyRocketJump(ent, wp);
+	}
+
+	void LadderClimbRateStub();
+
+	Game::dvar_t* PlayerMovement_bg_ladderFixedInput = nullptr;
+
+	void SprintRepressStub();
+
+	Game::dvar_t* PlayerMovement_bg_sprintIgnoreRepress = nullptr;
+
+	std::uintptr_t PlayerMovement_SprintRepressEnd = 0;
+	std::uintptr_t PlayerMovement_SprintRepressDone = 0;
+
+	void DivePerkTestStub();
+	void BackDiveScaleStub();
+
+	Game::dvar_t* PlayerMovement_bg_dive = nullptr;
+	Game::dvar_t* PlayerMovement_bg_omnimovementDive = nullptr;
+
+	std::uintptr_t PlayerMovement_BackDiveScale = 0;
+
+	void KeyMoveSprintBitStub();
+	void SprintIntentStub();
+	void WalkMoveSprintStrafeStub();
+	void MaxSpeedBackDiagonalStub();
+	void MaxSpeedBackPureStub();
+	void MovementDirClampStub();
+	void StrafeConditionStub();
+
+	Game::dvar_t* PlayerMovement_bg_omnimovement = nullptr;
+
+	std::uintptr_t PlayerMovement_KeyMoveSprintBlock = 0;
+	std::uintptr_t PlayerMovement_KeyMoveSprintDone = 0;
+	std::uintptr_t PlayerMovement_WalkMoveSprintScale = 0;
+	std::uintptr_t PlayerMovement_WalkMoveJumpCheck = 0;
+	std::uintptr_t PlayerMovement_player_backSpeedScale = 0;
+	std::uintptr_t PlayerMovement_MaxSpeedBackDiagonal = 0;
+	std::uintptr_t PlayerMovement_MaxSpeedBackPure = 0;
+	std::uintptr_t PlayerMovement_MaxSpeedDone = 0;
+}
+
 namespace Components
 {
-	typedef void(*PMoveSingle_t)(Game::pmove_s* pm);
-	typedef void(*PM_CheckLadderMove_t)(Game::pmove_s* pm, Game::pml_t* pml);
-	static PMoveSingle_t pmoveSingleOriginal = nullptr;
-	static PM_CheckLadderMove_t checkLadderMoveOriginal = nullptr;
+	constexpr std::uintptr_t Dvar_RegisterFloat_Engine = 0x140286050;
 
-	const Game::dvar_t* PlayerMovement::BGRocketJump;
-	const Game::dvar_t* PlayerMovement::BGRocketJumpScale;
-	const Game::dvar_t* PlayerMovement::BGPlayerEjection;
-	const Game::dvar_t* PlayerMovement::BGPlayerCollision;
-	const Game::dvar_t* PlayerMovement::BGClimbAnything;
-	const Game::dvar_t* PlayerMovement::CGNoclipScaler;
-	const Game::dvar_t* PlayerMovement::CGUfoScaler;
-	const Game::dvar_t* PlayerMovement::PlayerSpectateSpeedScale;
-	const Game::dvar_t* PlayerMovement::BGBounces;
-	const Game::dvar_t* PlayerMovement::BGBouncesAllAngles;
-	const Game::dvar_t* PlayerMovement::BGDisableLandingSlowdown;
-	const Game::dvar_t* PlayerMovement::BGBunnyHopAuto;
-	const Game::dvar_t* PlayerMovement::PlayerDuckedSpeedScale;
-	const Game::dvar_t* PlayerMovement::PlayerProneSpeedScale;
-	const Game::dvar_t* PlayerMovement::BGDisableBarrierClips;
-	const Game::dvar_t* PlayerMovement::BGOmnimovement;
-	const Game::dvar_t* PlayerMovement::BGDive;
-	const Game::dvar_t* PlayerMovement::BGOmnimovementDive;
+	constexpr std::uintptr_t BG_RegisterDvars_SpectateSpeedScaleCall = 0x14008C13A;
 
-	Game::dvar_t** PlayerMovement::player_sprintStrafeSpeedScale = reinterpret_cast<Game::dvar_t**>(0x7ADCEC);
-
-	void PlayerMovement::PM_PlayerTraceStub(Game::pmove_s* pm, Game::trace_t* results, const float* start, const float* end, Game::Bounds* bounds, int passEntityNum, int contentMask)
+	struct ScaleLoad
 	{
-		Game::PM_playerTrace(pm, results, start, end, bounds, passEntityNum, contentMask);
+		std::uintptr_t instruction;
+		std::array<std::uint8_t, 8> bytes;
+	};
 
-		if (results && BGClimbAnything->current.enabled)
-		{
-			results[0].surfaceFlags |= SURF_LADDER;
-		}
+	constexpr ScaleLoad proneScaleLoad = { 0x14008F6C1, { 0xF3, 0x0F, 0x10, 0x05, 0xAF, 0x57, 0x2D, 0x00 } };
+	constexpr ScaleLoad duckedScaleLoad = { 0x14008F6CA, { 0xF3, 0x0F, 0x10, 0x05, 0xDE, 0x57, 0x2D, 0x00 } };
+
+	constexpr ScaleLoad noclipScaleLoad = { 0x1400918B5, { 0xF3, 0x0F, 0x59, 0x35, 0x7B, 0x31, 0x35, 0x00 } };
+	constexpr ScaleLoad ufoScaleLoad = { 0x1400918C4, { 0xF3, 0x0F, 0x59, 0x35, 0x9C, 0x31, 0x35, 0x00 } };
+
+	constexpr std::uintptr_t PM_StepSlideMove_JumpedStepTest = 0x140095F96;
+	constexpr std::uintptr_t PM_StepSlideMove_SlopeTest = 0x140095F9B;
+	constexpr std::uintptr_t PM_StepSlideMove_Project = 0x140095FDE;
+	constexpr std::uintptr_t PM_StepSlideMove_Restore = 0x140095FA9;
+	static const std::uint8_t jumpedStepTest[] = { 0x45, 0x85, 0xED, 0x75, 0x0E };
+
+	constexpr std::uintptr_t PM_ProjectVelocity_UpwardTest = 0x140091C43;
+	constexpr std::uintptr_t PM_ProjectVelocity_Scale = 0x140091C49;
+	constexpr std::uintptr_t PM_ProjectVelocity_Done = 0x140091C64;
+	static const std::uint8_t upwardTest[] = { 0x45, 0x0F, 0x2F, 0xD1, 0x76, 0x1B };
+
+	constexpr std::uintptr_t PM_GroundTrace_JumpClearStateCall = 0x1400912A3;
+	constexpr std::uintptr_t Jump_ClearState = 0x140087600;
+
+	constexpr std::uintptr_t ClientEndFrame_StuckInClientCall = 0x140192EFA;
+	constexpr std::uintptr_t StuckInClient = 0x140195A20;
+
+	constexpr std::uintptr_t CM_TransformedCapsuleTraceCalls[] = { 0x140233D96, 0x1400C9D5E };
+	constexpr std::uintptr_t CM_TransformedCapsuleTrace = 0x1401EFF60;
+
+	constexpr std::uintptr_t PM_CrashLand_VelocityScale = 0x14008FF98;
+	constexpr std::uintptr_t PM_CrashLand_VelocityScaleNext = 0x14008FF9D;
+	constexpr std::uintptr_t PM_CrashLand_VelocityScaleDone = 0x14008FFCA;
+	static const std::uint8_t velocityScaleLoad[] = { 0xF3, 0x0F, 0x10, 0x47, 0x28 };
+
+	constexpr std::uintptr_t Jump_Check_HeldTest = 0x140087357;
+	constexpr std::uintptr_t Jump_Check_HeldBranch = 0x14008735E;
+	constexpr std::uintptr_t Jump_Check_Jump = 0x14008737E;
+	static const std::uint8_t heldTest[] = { 0xF7, 0x47, 0x34, 0x00, 0x04, 0x00, 0x00 };
+
+	constexpr std::uintptr_t FireWeapon_FireRocketCall = 0x140187CC9;
+	constexpr std::uintptr_t FireWeapon_CalcMuzzlePointsParms = 0x14018789A;
+	constexpr std::uintptr_t G_FireRocket = 0x140170FF0;
+	static const std::uint8_t calcMuzzlePointsParms[] = { 0x48, 0x8D, 0x55, 0x80, 0x48, 0x8B, 0xCB };
+
+	constexpr std::uintptr_t PM_CheckLadderMove_PlayerTraceCalls[] = { 0x14008F2D2, 0x14008F395 };
+	constexpr std::uintptr_t PM_playerTrace = 0x140094020;
+
+	constexpr std::uintptr_t Pmove_PmoveSingleCall = 0x140094335;
+	constexpr std::uintptr_t PmoveSingle = 0x1400944B0;
+	constexpr std::uintptr_t PmoveSingle_CheckLadderMoveCall = 0x140094F03;
+	constexpr std::uintptr_t PM_CheckLadderMove = 0x14008F090;
+
+	constexpr std::uintptr_t PM_LadderMove_ClimbRateClamp = 0x1400913F2;
+	static const std::uint8_t climbRateClamp[] = { 0x41, 0x0F, 0x28, 0xF8, 0xF3, 0x0F, 0x5D, 0xF8 };
+
+	constexpr std::uintptr_t PM_LadderMove_RightVectorCall = 0x14009141E;
+	constexpr std::uintptr_t ProjectPointOnPlane = 0x14027C490;
+
+	constexpr std::uintptr_t PM_UpdateSprint_RepressEndSetup = 0x14009280A;
+	constexpr std::uintptr_t PM_UpdateSprint_RepressEndCall = 0x140092810;
+	constexpr std::uintptr_t PM_UpdateSprint_Return = 0x140092A36;
+	static const std::uint8_t repressEndSetup[] = { 0x4C, 0x8B, 0xC6, 0x48, 0x8B, 0xD7 };
+
+	constexpr std::uintptr_t Jump_Start_DivePerkTest = 0x140087739;
+	constexpr std::uintptr_t Jump_Start_BackDiveScale = 0x1400877A8;
+	constexpr std::uintptr_t backDiveScale = 0x140364E7C;
+	static const std::uint8_t divePerkTest[] = { 0xF7, 0x83, 0x28, 0x04, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00 };
+	static const std::uint8_t backDiveScaleLoad[] = { 0xF3, 0x0F, 0x59, 0x15, 0xCC, 0xD6, 0x2D, 0x00 };
+
+	constexpr std::uintptr_t CL_KeyMove_BackActiveTest = 0x1400F6F64;
+	constexpr std::uintptr_t CL_KeyMove_SprintBlock = 0x1400F6F6B;
+	constexpr std::uintptr_t CL_KeyMove_SprintDone = 0x1400F6F91;
+	static const std::uint8_t backActiveTest[] = { 0x41, 0x80, 0x7A, 0x4C, 0x00, 0x75, 0x26 };
+
+	constexpr std::uintptr_t PM_UpdateSprint_ForwardGates[] = { 0x1400927BE, 0x1400928A3 };
+	static const std::uint8_t forwardGate[] = { 0x0F, 0xBE, 0x4F, 0x22, 0x3B, 0x48, 0x10 };
+
+	constexpr std::uintptr_t PM_WalkMove_SprintTest = 0x140093D1F;
+	constexpr std::uintptr_t PM_WalkMove_SprintStrafeScale = 0x140093D25;
+	constexpr std::uintptr_t PM_WalkMove_JumpCheck = 0x140093D43;
+	static const std::uint8_t sprintTest[] = { 0x0F, 0xBA, 0xE0, 0x0E, 0x73, 0x1E };
+
+	constexpr std::uintptr_t MaxSpeed_BackDiagonalTest = 0x140090629;
+	constexpr std::uintptr_t MaxSpeed_BackDiagonalScale = 0x140090634;
+	constexpr std::uintptr_t MaxSpeed_BackPureTest = 0x140090647;
+	constexpr std::uintptr_t MaxSpeed_BackPureScale = 0x140090652;
+	constexpr std::uintptr_t MaxSpeed_Done = 0x140090685;
+	constexpr std::uintptr_t player_backSpeedScale = 0x140440C10;
+	static const std::uint8_t backDiagonalTest[] = { 0x84, 0xC9, 0x79, 0x58, 0x48, 0x8B, 0x05, 0xDC, 0x05, 0x3B, 0x00 };
+	static const std::uint8_t backPureTest[] = { 0x84, 0xC9, 0x79, 0x3A, 0x48, 0x8B, 0x05, 0xBE, 0x05, 0x3B, 0x00 };
+
+	constexpr std::uintptr_t PM_SetMovementDir_Clamp = 0x140091E36;
+	static const std::uint8_t movementDirClamp[] = { 0x83, 0xF8, 0x5A, 0x7E, 0x11, 0x85, 0xC9, 0xB8, 0xA6, 0xFF, 0xFF, 0xFF, 0xBA, 0x5A, 0x00, 0x00, 0x00, 0x0F, 0x4F, 0xC2, 0x8B, 0xC8 };
+
+	constexpr std::uintptr_t StrafeCondition_Setup = 0x14009054D;
+	static const std::uint8_t strafeConditionSetup[] = { 0x48, 0x8B, 0x06, 0xBA, 0x07, 0x00, 0x00, 0x00 };
+
+	const Game::dvar_t* PlayerMovement::bg_playerEjection;
+	const Game::dvar_t* PlayerMovement::bg_playerCollision;
+	const Game::dvar_t* PlayerMovement::bg_rocketJump;
+	const Game::dvar_t* PlayerMovement::bg_rocketJumpScale;
+	const Game::dvar_t* PlayerMovement::bg_climbAnything;
+	const Game::dvar_t* PlayerMovement::bg_disableBarrierClips;
+
+	static Utils::Hook spectateSpeedScaleHook;
+	static Utils::Hook rocketFireHook;
+	static Utils::Hook ladderHooks[std::size(PM_CheckLadderMove_PlayerTraceCalls) + 2];
+	static Utils::Hook ladderInputHooks[2];
+	static Utils::Hook sprintRepressHook;
+	static Utils::Hook diveHooks[2];
+	static Utils::Hook omnimovementHooks[std::size(PM_UpdateSprint_ForwardGates) + 6];
+	static Utils::Hook bounceHooks[3];
+	static Utils::Hook gateHooks[std::size(CM_TransformedCapsuleTraceCalls) + 3];
+
+	static std::int64_t GetLoadDistance(const ScaleLoad& load, const Game::dvar_t* dvar)
+	{
+		const auto loadEnd = Utils::Hook::Rebase(load.instruction) + load.bytes.size();
+		return reinterpret_cast<std::int64_t>(&dvar->current.value) - static_cast<std::int64_t>(loadEnd);
 	}
 
-	__declspec(naked) void PlayerMovement::PM_PlayerDuckedSpeedScaleStub()
+	static bool CanLoadReach(const ScaleLoad& load, const Game::dvar_t* dvar)
 	{
-		__asm
-		{
-			push eax
-			mov eax, PlayerDuckedSpeedScale
-			fld dword ptr[eax + 0x10] // dvar_t.current.value
-			pop eax
-
-			// Game's code
-			pop ecx
-			ret
-		}
+		const auto distance = GetLoadDistance(load, dvar);
+		return distance >= std::numeric_limits<std::int32_t>::min() && distance <= std::numeric_limits<std::int32_t>::max();
 	}
 
-	__declspec(naked) void PlayerMovement::PM_PlayerProneSpeedScaleStub()
+	static void PointLoadAt(const ScaleLoad& load, const Game::dvar_t* dvar)
 	{
-		__asm
-		{
-			push eax
-			mov eax, PlayerProneSpeedScale
-			fld dword ptr[eax + 0x10] // dvar_t.current.value
-			pop eax
-
-			// Game's code
-			pop ecx
-			ret
-		}
+		Utils::Hook::Set<std::int32_t>(load.instruction + load.bytes.size() - sizeof(std::int32_t), static_cast<std::int32_t>(GetLoadDistance(load, dvar)));
 	}
 
-	__declspec(naked) void PlayerMovement::PM_MoveScale_Noclip()
+	Game::dvar_t* PlayerMovement::Dvar_RegisterSpectateSpeedScale(const char* dvarName, float value, float min, float max, [[maybe_unused]] unsigned int flags, const char* description)
 	{
-		__asm
-		{
-			mov eax, CGNoclipScaler
-			fld dword ptr[eax + 0x10] // dvar_t.current.value
-			fmul dword ptr[esp + 0xC]
-			fstp dword ptr[esp + 0xC]
-
-			push 0x56F43A
-			ret
-		}
+		return Game::Dvar_RegisterFloat(dvarName, value, min, max, Game::DVAR_CODINFO, description);
 	}
 
-	__declspec(naked) void PlayerMovement::PM_MoveScale_Ufo()
-	{
-		__asm
-		{
-			mov eax, CGUfoScaler
-			fld dword ptr[eax + 0x10] // dvar_t.current.value
-			fmul dword ptr[esp + 0xC]
-			fstp dword ptr[esp + 0xC]
-
-			push 0x56F44D
-			ret
-		}
-	}
-
-	__declspec(naked) void PlayerMovement::PM_MoveScale_Spectate()
-	{
-		__asm
-		{
-			mov eax, PlayerSpectateSpeedScale
-			fld dword ptr[eax + 0x10] // dvar_t.current.value
-			fmul dword ptr[esp + 0xC]
-			fstp dword ptr[esp + 0xC]
-
-			push 0x56F462
-			ret
-		}
-	}
-
-	__declspec(naked) void PlayerMovement::PM_StepSlideMoveStub()
-	{
-		__asm
-		{
-			// Check the value of BGBounces
-			push eax
-
-			mov eax, BGBounces
-			mov eax, dword ptr[eax + 0x10]
-			test eax, eax
-
-			pop eax
-
-			// Do not bounce if BGBounces is 0
-			jle noBounce
-
-			push eax
-
-			mov eax, BGBouncesAllAngles
-			mov eax, dword ptr[eax + 0x10]
-			cmp eax, 2
-
-			pop eax
-
-			// Do not apply all angles patch if BGBouncesAllAngles is not set to "all surfaces"
-			jne regularBounce
-
-			push 0x4B1B7D
-			ret
-
-			// Bounce
-			regularBounce :
-			push 0x4B1B34
-				ret
-
-				noBounce :
-			// Original game code
-			cmp dword ptr[esp + 0x24], 0
-				push 0x4B1B32
-				ret
-		}
-	}
-
-	// Double bounces
 	void PlayerMovement::Jump_ClearState_Hk(Game::playerState_s* ps)
 	{
-		if (BGBounces->current.integer == DOUBLE)
+		if (PlayerMovement_bg_bounces->current.integer == DOUBLE)
 		{
 			return;
 		}
 
-		Game::Jump_ClearState(ps);
-	}
-
-	__declspec(naked) void PlayerMovement::PM_ProjectVelocityStub()
-	{
-		__asm
-		{
-			push eax
-			mov eax, BGBouncesAllAngles
-			mov eax, dword ptr[eax + 0x10]
-			test eax, eax
-			pop eax
-
-			je noBounce
-
-			// Force the bounce
-			push 0x417B6F
-			ret
-
-			noBounce :
-			fstp ST(0)
-				pop esi
-				add esp, 0x10
-				ret
-		}
-	}
-
-	Game::gentity_s* PlayerMovement::Weapon_RocketLauncher_Fire_Hk(Game::gentity_s* ent, unsigned int weaponIndex,
-		float spread, Game::weaponParms* wp, const float* gunVel, Game::lockonFireParms* lockParms, bool magicBullet)
-	{
-		auto* result = Game::Weapon_RocketLauncher_Fire(ent, weaponIndex, spread, wp, gunVel, lockParms, magicBullet);
-
-		if (ent->client && BGRocketJump->current.enabled && wp->weapDef->inventoryType != Game::WEAPINVENTORY_EXCLUSIVE)
-		{
-			const auto scale = BGRocketJumpScale->current.value;
-			ent->client->ps.velocity[0] += (0.0f - wp->forward[0]) * scale;
-			ent->client->ps.velocity[1] += (0.0f - wp->forward[1]) * scale;
-			ent->client->ps.velocity[2] += (0.0f - wp->forward[2]) * scale;
-		}
-
-		return result;
+		reinterpret_cast<decltype(&Jump_ClearState_Hk)>(Utils::Hook::Rebase(Jump_ClearState))(ps);
 	}
 
 	int PlayerMovement::StuckInClient_Hk(Game::gentity_s* self)
 	{
-		if (BGPlayerEjection->current.enabled)
+		if (bg_playerEjection->current.enabled)
 		{
-			return Utils::Hook::Call<int(Game::gentity_s*)>(0x402D30)(self); // StuckInClient
+			return reinterpret_cast<decltype(&StuckInClient_Hk)>(Utils::Hook::Rebase(StuckInClient))(self);
 		}
 
 		return 0;
 	}
 
-	void PlayerMovement::CM_TransformedCapsuleTrace_Hk(Game::trace_t* results, const float* start, const float* end,
-		const Game::Bounds* bounds, const Game::Bounds* capsule, int contents, const float* origin, const float* angles)
+	void PlayerMovement::CM_TransformedCapsuleTrace_Hk(Game::trace_t* results, const float* start, const float* end, const Game::Bounds* bounds, const Game::Bounds* capsule, int contents, const float* origin, const float* angles)
 	{
-		if (BGPlayerCollision->current.enabled)
+		if (bg_playerCollision->current.enabled)
 		{
-			Utils::Hook::Call<void(Game::trace_t*, const float*, const float*,
-				const Game::Bounds*, const Game::Bounds*, int, const float*, const float*)>
-				(0x478300)
-				(results, start, end, bounds, capsule, contents, origin, angles); // CM_TransformedCapsuleTrace
+			reinterpret_cast<decltype(&CM_TransformedCapsuleTrace_Hk)>(Utils::Hook::Rebase(CM_TransformedCapsuleTrace))(results, start, end, bounds, capsule, contents, origin, angles);
 		}
 	}
 
-	void PlayerMovement::PM_CrashLand_Stub(const float* v, float scale, const float* result)
+	void PlayerMovement::PM_PlayerTraceStub(Game::pmove_s* pm, Game::trace_t* results, const float* start, const float* end, const Game::Bounds* bounds, int passEntityNum, int contentMask)
 	{
-		if (!BGDisableLandingSlowdown->current.enabled)
+		reinterpret_cast<decltype(&PM_PlayerTraceStub)>(Utils::Hook::Rebase(PM_playerTrace))(pm, results, start, end, bounds, passEntityNum, contentMask);
+
+		if (results && bg_climbAnything->current.enabled)
 		{
-			Utils::Hook::Call<void(const float*, float, const float*)>(0x4C12B0)(v, scale, result);
+			results[0].surfaceFlags |= SURF_LADDER;
 		}
-	}
-
-	__declspec(naked) void PlayerMovement::Jump_Check_Stub()
-	{
-		using namespace Game;
-
-		__asm
-		{
-			push eax
-			mov eax, BGBunnyHopAuto
-			cmp byte ptr[eax + 0x10], 1
-			pop eax
-
-			je autoHop
-
-			// Game's code
-			test dword ptr[ebp + 0x30], CMD_BUTTON_UP
-			push 0x4E9890
-			ret
-
-			autoHop :
-			push 0x4E989F
-				ret
-		}
-	}
-
-	void PlayerMovement::GScr_IsSprinting(const Game::scr_entref_t entref)
-	{
-		const auto* client = Game::GetEntity(entref)->client;
-		if (!client)
-		{
-			Game::Scr_Error("IsSprinting can only be called on a player");
-			return;
-		}
-
-		Game::Scr_AddBool(Game::PM_IsSprinting(&client->ps));
-	}
-
-	const Game::dvar_t* PlayerMovement::Dvar_RegisterSpectateSpeedScale(const char* dvarName, float value,
-		float min, float max, unsigned __int16 /*flags*/, const char* description)
-	{
-		PlayerSpectateSpeedScale = Game::Dvar_RegisterFloat(dvarName, value,
-			min, max, Game::DVAR_CODINFO, description);
-
-		return PlayerSpectateSpeedScale;
 	}
 
 	void PlayerMovement::PmoveSingle_Stub(Game::pmove_s* pm)
 	{
-		if (BGDisableBarrierClips && BGDisableBarrierClips->current.enabled)
+		if (bg_disableBarrierClips->current.enabled)
 		{
 			if (pm != nullptr && (pm->ps->pm_flags & Game::PMF_LADDER) == 0)
 			{
@@ -295,667 +275,383 @@ namespace Components
 			}
 		}
 
-		if (pmoveSingleOriginal)
-			pmoveSingleOriginal(pm);
+		reinterpret_cast<decltype(&PmoveSingle_Stub)>(Utils::Hook::Rebase(PmoveSingle))(pm);
 	}
-
 
 	void PlayerMovement::PM_CheckLadderMove_Stub(Game::pmove_s* pm, Game::pml_t* pml)
 	{
-		static_cast<void>(pml);
+		const auto shouldFixLadders = bg_disableBarrierClips->current.enabled && pm != nullptr;
 
-		const auto should_fix_ladders = (
-			BGDisableBarrierClips &&
-			BGDisableBarrierClips->current.enabled &&
-			pm != nullptr
-			);
-
-		if (should_fix_ladders)
+		if (shouldFixLadders)
 		{
 			pm->tracemask |= MASK_PLAYER_CLIP;
 		}
 
-		if (checkLadderMoveOriginal)
+		reinterpret_cast<decltype(&PM_CheckLadderMove_Stub)>(Utils::Hook::Rebase(PM_CheckLadderMove))(pm, pml);
 
-		if (should_fix_ladders && (pm->ps->pm_flags & Game::PMF_LADDER) == 0)
+		if (shouldFixLadders && (pm->ps->pm_flags & Game::PMF_LADDER) == 0)
 		{
 			pm->tracemask &= ~MASK_PLAYER_CLIP;
 		}
 	}
 
-	// Omnimovement
-
-	int PlayerMovement::ComputeHorizontalIntent(int forwardSpeed, int rightSpeed)
+	void PlayerMovement::PM_LadderMove_RightVector_Hk(const float* source, const float* ladderNormal, float* pmlRight)
 	{
-		if (!BGOmnimovement || !BGOmnimovement->current.enabled)
-			return forwardSpeed;
-		return std::max(std::abs(forwardSpeed), std::abs(rightSpeed));
-	}
-
-	// Stock PM_WalkMove behavior: rightmove *= player_sprintStrafeSpeedScale while sprinting
-	void PlayerMovement::ApplyStockSprintStrafeScale(Game::pmove_s* pm)
-	{
-		if (!pm || !pm->ps)
+		if (PlayerMovement_bg_ladderFixedInput->current.enabled)
 		{
+			const float lx = ladderNormal[0];
+			const float ly = ladderNormal[1];
+			const float len2 = lx * lx + ly * ly;
+
+			float invLen = 1.0f;
+			if (len2 > 0.0f)
+			{
+				invLen = 1.0f / std::sqrtf(len2);
+			}
+
+			pmlRight[0] = -ly * invLen;
+			pmlRight[1] = lx * invLen;
+			pmlRight[2] = 0.0f;
 			return;
 		}
 
-		if ((pm->ps->pm_flags & Game::PMF_SPRINTING) == 0)
+		reinterpret_cast<decltype(&PM_LadderMove_RightVector_Hk)>(Utils::Hook::Rebase(ProjectPointOnPlane))(source, ladderNormal, pmlRight);
+	}
+
+	void PlayerMovement::GScr_IsSprinting(const Game::scr_entref_t entref)
+	{
+		const auto* client = Game::GetEntity(entref)->client;
+		if (!client)
 		{
+			GSC::Script::Scr_Error("IsSprinting can only be called on a player");
 			return;
 		}
 
-		const auto* dvar = *player_sprintStrafeSpeedScale;
-		if (!dvar)
-		{
-			return;
-		}
-
-		float scaled = static_cast<float>(pm->cmd.rightmove) * dvar->current.value;
-		pm->cmd.rightmove = static_cast<char>(std::clamp(scaled, -127.0f, 127.0f));
+		Game::Scr_AddBool(Game::PM_IsSprinting(&client->ps));
 	}
 
-	// Allow the sprint bit to be written to cmd.buttons when the back key is
-	// held. Stock CL_KeyMove skips the sprint-bit update whenever the back
-	// kbutton's active flag is set, which is what prevents sprint from
-	// starting backward even after our PM_UpdateSprint hooks pass.
-	__declspec(naked) void PlayerMovement::CL_KeyMove_SprintBit_Stub()
+	void PlayerMovement::ApplyRocketJump(Game::gentity_s* ent, const Game::weaponParms* wp)
 	{
-		__asm
+		if (ent->client && bg_rocketJump->current.enabled && wp->weapDef->inventoryType != Game::WEAPINVENTORY_EXCLUSIVE)
 		{
-			// Check the value of BGOmnimovement
-			push eax
-			mov eax, BGOmnimovement
-			test eax, eax
-			jz doStock
-			cmp byte ptr[eax + 0x10], 0
-			jz doStock
-			pop eax
-
-			// Bypass the back-active check, fall through to the sprint kbutton block
-			push 0x5A6061
-			ret
-
-			doStock :
-			pop eax
-
-				// Original: cmp byte ptr [esi+4Ch], 0; jnz loc_5A6084
-				cmp byte ptr[esi + 0x4C], 0
-				jnz stockSkip
-
-				push 0x5A6061
-				ret
-
-				stockSkip :
-			push 0x5A6084
-				ret
+			const auto scale = bg_rocketJumpScale->current.value;
+			ent->client->ps.velocity[0] += (0.0f - wp->forward[0]) * scale;
+			ent->client->ps.velocity[1] += (0.0f - wp->forward[1]) * scale;
+			ent->client->ps.velocity[2] += (0.0f - wp->forward[2]) * scale;
 		}
-	}
-
-	// Replace the sprint-start gate's forwardmove argument with max(|forwardmove|, |rightmove|)
-	__declspec(naked) void PlayerMovement::PM_SprintStartInterferingButtons_Stub()
-	{
-		__asm
-		{
-			pushfd
-			push eax
-			push ecx
-			push edx
-
-			// ComputeHorizontalIntent(forwardmove, rightmove)
-			movsx eax, byte ptr[ebp + 0x1F]
-			push eax
-			push esi
-			call ComputeHorizontalIntent
-			add esp, 8
-
-			// Substitute esi (forwardSpeed) with the horizontal-intent magnitude
-			mov esi, eax
-
-			pop edx
-			pop ecx
-			pop eax
-			popfd
-
-			// Jump into the original function
-			push 0x56ED10
-			ret
-		}
-	}
-
-	// Replace the sprint-end gate's forwardmove argument with max(|forwardmove|, |rightmove|)
-	__declspec(naked) void PlayerMovement::PM_SprintEndingButtons_Stub()
-	{
-		__asm
-		{
-			pushfd
-			push eax
-			push ecx
-
-			// ComputeHorizontalIntent(forwardmove, rightmove)
-			movsx eax, byte ptr[ebp + 0x1F]
-			push eax
-			push edx
-			call ComputeHorizontalIntent
-			add esp, 8
-
-			// Substitute edx (forwardSpeed) with the horizontal-intent magnitude
-			mov edx, eax
-
-			pop ecx
-			pop eax
-			popfd
-
-			// Jump into the original function
-			push 0x56ED80
-			ret
-		}
-	}
-
-	// Skip the player_sprintStrafeSpeedScale attenuation in PM_WalkMove while sprinting
-	__declspec(naked) void PlayerMovement::PM_WalkMove_SprintStrafeStub()
-	{
-		__asm
-		{
-			// Check the value of BGOmnimovement
-			push eax
-			mov eax, BGOmnimovement
-			test eax, eax
-			jz doStock
-			cmp byte ptr[eax + 0x10], 0
-			jz doStock
-			pop eax
-
-			// Bypass the attenuation
-			push 0x573289
-			ret
-
-			doStock :
-			pop eax
-
-				// Apply the original rightmove scaling
-				push eax
-				push ecx
-				push edx
-				push edi
-				call ApplyStockSprintStrafeScale
-				add esp, 4
-				pop edx
-				pop ecx
-				pop eax
-
-				push 0x573289
-				ret
-		}
-	}
-
-	// Widen the PM_SetMovementDir clamp from +/-90 to +/-127 at the prone/ladder branch
-	__declspec(naked) void PlayerMovement::PM_SetMovementDir_ClampProneLadder_Stub()
-	{
-		__asm
-		{
-			// Check the value of BGOmnimovement
-			push edx
-			mov edx, BGOmnimovement
-			test edx, edx
-			jz stockClamp
-			cmp byte ptr[edx + 0x10], 0
-			jz stockClamp
-			pop edx
-
-			// Wide clamp: +/-127
-			cmp eax, 127
-			jle doneWide
-			xor eax, eax
-			test ecx, ecx
-			setle al
-			sub eax, 1
-			and eax, 254
-			add eax, -127
-			mov ecx, eax
-			doneWide :
-			push 0x443421
-				ret
-
-				stockClamp :
-			pop edx
-
-				// Original clamp: +/-90
-				cmp eax, 90
-				jle doneStock
-				xor eax, eax
-				test ecx, ecx
-				setle al
-				sub eax, 1
-				and eax, 180
-				add eax, -90
-				mov ecx, eax
-				doneStock :
-			push 0x443421
-				ret
-		}
-	}
-
-	// Widen the PM_SetMovementDir clamp from +/-90 to +/-127 at the generic branch
-	__declspec(naked) void PlayerMovement::PM_SetMovementDir_ClampGeneric_Stub()
-	{
-		__asm
-		{
-			// Check the value of BGOmnimovement
-			push edx
-			mov edx, BGOmnimovement
-			test edx, edx
-			jz stockClamp
-			cmp byte ptr[edx + 0x10], 0
-			jz stockClamp
-			pop edx
-
-			// Wide clamp: +/-127
-			cmp eax, 127
-			jle doneWide
-			xor eax, eax
-			test ecx, ecx
-			setle al
-			sub eax, 1
-			and eax, 254
-			add eax, -127
-			mov ecx, eax
-			doneWide :
-			push 0x4435C3
-				ret
-
-				stockClamp :
-			pop edx
-
-				// Original clamp: +/-90
-				cmp eax, 90
-				jle doneStock
-				xor eax, eax
-				test ecx, ecx
-				setle al
-				sub eax, 1
-				and eax, 180
-				add eax, -90
-				mov ecx, eax
-				doneStock :
-			push 0x4435C3
-				ret
-		}
-	}
-
-	// Force PM_SetStrafeCondition to "not strafing" while sprinting so the forward-run anim plays
-	__declspec(naked) void PlayerMovement::PM_SetStrafeCondition_Stub()
-	{
-		__asm
-		{
-			// Check the value of BGOmnimovement
-			push eax
-			mov eax, BGOmnimovement
-			test eax, eax
-			jz doStock
-			cmp byte ptr[eax + 0x10], 0
-			jz doStock
-
-			// Only override while PMF_SPRINTING is set
-			mov eax, [esi]
-			test dword ptr[eax + 0xC], 0x4000
-			jz doStock
-			pop eax
-
-			// BG_SetConditionValue(ps->clientNum, 7, 0, 0)
-			mov eax, [esi]
-			push 0
-			push 0
-			push 7
-			push dword ptr[eax + 0x104]
-			mov eax, BG_SetConditionValueAddr
-			call eax
-			add esp, 0x10
-			ret
-
-			doStock :
-			pop eax
-
-				// Original function body
-				sub esp, 0xC
-				movsx eax, byte ptr[esi + 0x1F]
-				push 0x571617
-				ret
-		}
-	}
-
-	// Bypass the specialty_jumpdive perk check at the top of Jump_CheckDive
-	__declspec(naked) void PlayerMovement::Jump_CheckDive_PerkGate_Stub()
-	{
-		__asm
-		{
-			// Check the value of BGDive
-			push eax
-			mov eax, BGDive
-			test eax, eax
-			jz doStock
-			cmp byte ptr[eax + 0x10], 0
-			jz doStock
-			pop eax
-
-			// Skip the perk check
-			push 0x56D7C5
-			ret
-
-			doStock :
-			pop eax
-
-				// Original perk check
-				test dword ptr[esi + 0x428], 0x100000
-				jnz perkPresent
-
-				// Original fail: no perk, return false
-				xor al, al
-				add esp, 0x6C
-				ret
-
-				perkPresent :
-			push 0x56D7C5
-				ret
-		}
-	}
-
-	// Skip the player_backSpeedScale attenuation on diagonal backward sprint
-	__declspec(naked) void PlayerMovement::PM_GetMaxSpeed_BackDiagonal_Stub()
-	{
-		__asm
-		{
-			// Check the value of BGOmnimovement
-			push eax
-			mov eax, BGOmnimovement
-			test eax, eax
-			jz doStock
-			cmp byte ptr[eax + 0x10], 0
-			jz doStock
-
-			// Only skip while sprinting; walking backward keeps the penalty
-			mov eax, [esp + 0x10]    // a3 = isSprinting, shifted by push eax
-			test eax, eax
-			jz doStock
-			pop eax
-
-			// Bypass the attenuation; 0x5738E2 pops the FPU leftovers
-			push 0x5738E2
-			ret
-
-			doStock :
-			pop eax
-
-				// Skip if forwardmove >= 0
-				test al, al
-				jge stockSkip
-
-				// FPU entry: ST0 = 0.5, ST1 = 1.0 (leftovers from the strafe blend
-				// at 0x573881..0x573890). Reproduce: v9 *= (backScale + 1) * 0.5.
-				mov eax, dword ptr ds : [0x7ADC44]
-				fld dword ptr[eax + 0x10]  // push backScale; FPU: backScale, 0.5, 1.0
-				faddp st(2), st             // ST(2) += backScale; FPU: 0.5, 1+backScale
-				fmulp st(1), st             // multiply; FPU: (1+backScale)*0.5
-				fmul dword ptr[esp]        // FPU: v9 * (1+backScale) * 0.5
-				fstp dword ptr[esp]        // store, pop; FPU: empty
-				push 0x5738E6
-				ret
-
-				stockSkip :
-			// Tail-jump to 0x5738E2, which runs "fstp st(1); fstp st" to pop
-			// the two FPU leftovers before falling into loc_5738E6.
-			push 0x5738E2
-				ret
-		}
-	}
-
-	// Skip the player_backSpeedScale attenuation on pure backward sprint
-	__declspec(naked) void PlayerMovement::PM_GetMaxSpeed_BackPure_Stub()
-	{
-		__asm
-		{
-			// Check the value of BGOmnimovement
-			push eax
-			mov eax, BGOmnimovement
-			test eax, eax
-			jz doStock
-			cmp byte ptr[eax + 0x10], 0
-			jz doStock
-
-			// Only skip while sprinting; walking backward keeps the penalty
-			mov eax, [esp + 0x10]
-			test eax, eax
-			jz doStock
-			pop eax
-
-			// Bypass the attenuation
-			push 0x5738E6
-			ret
-
-			doStock :
-			pop eax
-
-				// Skip if forwardmove >= 0
-				test al, al
-				jge stockSkip
-
-				// Original: v9 *= player_backSpeedScale
-				mov edx, dword ptr ds : [0x7ADC44]
-				fld dword ptr[edx + 0x10]
-				fmul dword ptr[esp]
-				fstp dword ptr[esp]
-				push 0x5738E6
-				ret
-
-				stockSkip :
-			push 0x5738E6
-				ret
-		}
-	}
-
-	// Skip the 0.3x backward-dive attenuation so backward dives launch at full perk_diveVelocity
-	__declspec(naked) void PlayerMovement::Jump_CheckDive_BackDiveVelocity_Stub()
-	{
-		__asm
-		{
-			// Check the value of BGOmnimovementDive
-			push eax
-			mov eax, BGOmnimovementDive
-			test eax, eax
-			jz doStock
-			cmp byte ptr[eax + 0x10], 0
-			jz doStock
-			pop eax
-
-			// Bypass the attenuation, keep ST0 unchanged
-			push 0x56D81C
-			ret
-
-			doStock :
-			pop eax
-
-				// Original: fmul 0.3, then round-trip through single precision
-				fmul dword ptr ds : [0x71FE18]
-				sub esp, 4
-				fstp dword ptr[esp]
-				fld dword ptr[esp]
-				add esp, 4
-				push 0x56D81C
-				ret
-		}
-	}
-
-	void PlayerMovement::RegisterMovementDvars()
-	{
-		PlayerDuckedSpeedScale = Game::Dvar_RegisterFloat("player_duckedSpeedScale",
-			0.65f, 0.0f, 5.0f, Game::DVAR_CHEAT,
-			"The scale applied to the player speed when ducking");
-
-		PlayerProneSpeedScale = Game::Dvar_RegisterFloat("player_proneSpeedScale",
-			0.15f, 0.0f, 5.0f, Game::DVAR_CHEAT,
-			"The scale applied to the player speed when crawling");
-
-		// 3arc naming convention
-		CGUfoScaler = Game::Dvar_RegisterFloat("cg_ufo_scaler",
-			6.0f, 0.001f, 1000.0f, Game::DVAR_CHEAT,
-			"The speed at which ufo camera moves");
-
-		CGNoclipScaler = Game::Dvar_RegisterFloat("cg_noclip_scaler",
-			3.0f, 0.001f, 1000.0f, Game::DVAR_CHEAT,
-			"The speed at which noclip camera moves");
-
-		BGDisableLandingSlowdown = Game::Dvar_RegisterBool("bg_disableLandingSlowdown",
-			false, Game::DVAR_CODINFO, "Toggle landing slowdown");
-
-		BGBunnyHopAuto = Game::Dvar_RegisterBool("bg_bunnyHopAuto",
-			false, Game::DVAR_CODINFO, "Constantly jump when holding space");
-
-		BGRocketJump = Game::Dvar_RegisterBool("bg_rocketJump",
-			false, Game::DVAR_CODINFO, "Enable CoD4 rocket jumps");
-
-		BGRocketJumpScale = Game::Dvar_RegisterFloat("bg_rocketJumpScale",
-			64.0f, 1.0f, std::numeric_limits<float>::max(), Game::DVAR_CODINFO,
-			"The scale applied to the pushback force of a rocket");
-
-		BGPlayerEjection = Game::Dvar_RegisterBool("bg_playerEjection",
-			true, Game::DVAR_CODINFO, "Push intersecting players away from each other");
-
-		BGPlayerCollision = Game::Dvar_RegisterBool("bg_playerCollision",
-			true, Game::DVAR_CODINFO, "Push intersecting players away from each other");
-
-		BGClimbAnything = Game::Dvar_RegisterBool("bg_climbAnything",
-			false, Game::DVAR_CODINFO, "Treat any surface as a ladder");
-
-		BGDisableBarrierClips = Game::Dvar_RegisterBool("bg_disableBarrierClips",
-			false, Game::DVAR_CODINFO, "Disable player collision with out of bound barriers");
-
-		BGOmnimovement = Game::Dvar_RegisterBool("bg_omnimovement",
-			true, Game::DVAR_CODINFO,
-			"Toggle omnidirectional sprint (sprint in any direction)");
-
-		BGDive = Game::Dvar_RegisterBool("bg_dive",
-			false, Game::DVAR_CODINFO,
-			"Toggle dive-to-prone (bypasses specialty_jumpdive perk requirement)");
-
-		BGOmnimovementDive = Game::Dvar_RegisterBool("bg_omnimovementDive",
-			false, Game::DVAR_CODINFO,
-			"Disable the backward-dive attenuation (requires bg_dive or specialty_jumpdive perk)");
 	}
 
 	PlayerMovement::PlayerMovement()
 	{
-		AssertOffset(Game::playerState_s, eFlags, 0xB0);
-		AssertOffset(Game::playerState_s, pm_flags, 0xC);
-		AssertOffset(Game::pmove_s, cmd, 0x4);
-		AssertOffset(Game::usercmd_s, forwardmove, 0x1A);
-		AssertOffset(Game::usercmd_s, rightmove, 0x1B);
+		bool isExpected = Utils::Hook::BranchesTo(BG_RegisterDvars_SpectateSpeedScaleCall, Dvar_RegisterFloat_Engine, false)
+			&& Utils::Hook::MatchesBytes(PM_StepSlideMove_JumpedStepTest, jumpedStepTest, sizeof(jumpedStepTest))
+			&& Utils::Hook::MatchesBytes(PM_ProjectVelocity_UpwardTest, upwardTest, sizeof(upwardTest))
+			&& Utils::Hook::BranchesTo(PM_GroundTrace_JumpClearStateCall, Jump_ClearState, false)
+			&& Utils::Hook::BranchesTo(ClientEndFrame_StuckInClientCall, StuckInClient, false)
+			&& Utils::Hook::MatchesBytes(PM_CrashLand_VelocityScale, velocityScaleLoad, sizeof(velocityScaleLoad))
+			&& Utils::Hook::MatchesBytes(Jump_Check_HeldTest, heldTest, sizeof(heldTest))
+			&& Utils::Hook::BranchesTo(FireWeapon_FireRocketCall, G_FireRocket, false)
+			&& Utils::Hook::MatchesBytes(FireWeapon_CalcMuzzlePointsParms, calcMuzzlePointsParms, sizeof(calcMuzzlePointsParms))
+			&& Utils::Hook::BranchesTo(Pmove_PmoveSingleCall, PmoveSingle, false)
+			&& Utils::Hook::BranchesTo(PmoveSingle_CheckLadderMoveCall, PM_CheckLadderMove, false)
+			&& Utils::Hook::MatchesBytes(PM_LadderMove_ClimbRateClamp, climbRateClamp, sizeof(climbRateClamp))
+			&& Utils::Hook::BranchesTo(PM_LadderMove_RightVectorCall, ProjectPointOnPlane, false)
+			&& Utils::Hook::MatchesBytes(PM_UpdateSprint_RepressEndSetup, repressEndSetup, sizeof(repressEndSetup))
+			&& Utils::Hook::MatchesBytes(Jump_Start_DivePerkTest, divePerkTest, sizeof(divePerkTest))
+			&& Utils::Hook::MatchesBytes(Jump_Start_BackDiveScale, backDiveScaleLoad, sizeof(backDiveScaleLoad))
+			&& Utils::Hook::MatchesBytes(CL_KeyMove_BackActiveTest, backActiveTest, sizeof(backActiveTest))
+			&& Utils::Hook::MatchesBytes(PM_WalkMove_SprintTest, sprintTest, sizeof(sprintTest))
+			&& Utils::Hook::MatchesBytes(MaxSpeed_BackDiagonalTest, backDiagonalTest, sizeof(backDiagonalTest))
+			&& Utils::Hook::MatchesBytes(MaxSpeed_BackPureTest, backPureTest, sizeof(backPureTest))
+			&& Utils::Hook::MatchesBytes(PM_SetMovementDir_Clamp, movementDirClamp, sizeof(movementDirClamp))
+			&& Utils::Hook::MatchesBytes(StrafeCondition_Setup, strafeConditionSetup, sizeof(strafeConditionSetup));
 
-		Events::OnDvarInit([]
-			{
-				static const char* bg_bouncesValues[] =
-				{
-					"disabled",
-					"enabled",
-					"double",
-					nullptr,
-				};
-
-				static const char* bg_bouncesAllAnglesValues[] =
-				{
-					"disabled",
-					"simple",
-					"all surfaces",
-					nullptr,
-				};
-
-				BGBounces = Game::Dvar_RegisterEnum("bg_bounces", bg_bouncesValues, DISABLED, Game::DVAR_CODINFO, "Bounce glitch settings");
-				BGBouncesAllAngles = Game::Dvar_RegisterEnum("bg_bouncesAllAngles", bg_bouncesAllAnglesValues, DISABLED, Game::DVAR_CODINFO, "Force bounce from all angles");
-			});
-
-		// Hook Dvar_RegisterFloat. Only thing that's changed is that the 0x80 flag is not used
-		Utils::Hook(0x448990, Dvar_RegisterSpectateSpeedScale, HOOK_CALL).install()->quick();
-
-		// PM_CmdScaleForStance
-		Utils::Hook(0x572D9B, PM_PlayerDuckedSpeedScaleStub, HOOK_JUMP).install()->quick();
-		Utils::Hook(0x572DA5, PM_PlayerProneSpeedScaleStub, HOOK_JUMP).install()->quick();
-
-		// Hook PM_MoveScale so we can add custom speed scale for Ufo and Noclip
-		Utils::Hook(0x56F42C, PM_MoveScale_Noclip, HOOK_JUMP).install()->quick();
-		Utils::Hook(0x56F43F, PM_MoveScale_Ufo, HOOK_JUMP).install()->quick();
-		Utils::Hook(0x56F452, PM_MoveScale_Spectate, HOOK_JUMP).install()->quick();
-
-		// Bounce logic
-		Utils::Hook(0x4B1B2D, PM_StepSlideMoveStub, HOOK_JUMP).install()->quick();
-		Utils::Hook(0x57383E, Jump_ClearState_Hk, HOOK_CALL).install()->quick();
-		Utils::Hook(0x417B66, PM_ProjectVelocityStub, HOOK_JUMP).install()->quick();
-
-		// Rocket jump
-		Utils::Hook(0x4A4F9B, Weapon_RocketLauncher_Fire_Hk, HOOK_CALL).install()->quick(); //  FireWeapon
-
-		// Hook StuckInClient & CM_TransformedCapsuleTrace
-		// so we can prevent intersecting players from being pushed away from each other
-		Utils::Hook(0x5D8153, StuckInClient_Hk, HOOK_CALL).install()->quick();
-		Utils::Hook(0x45A5BF, CM_TransformedCapsuleTrace_Hk, HOOK_CALL).install()->quick(); // SV_ClipMoveToEntity
-		Utils::Hook(0x5A0CAD, CM_TransformedCapsuleTrace_Hk, HOOK_CALL).install()->quick(); // CG_ClipMoveToEntity
-
-		Utils::Hook(0x573F39, PM_PlayerTraceStub, HOOK_CALL).install()->quick();
-		Utils::Hook(0x573E93, PM_PlayerTraceStub, HOOK_CALL).install()->quick();
-
-		Utils::Hook(0x570020, PM_CrashLand_Stub, HOOK_CALL).install()->quick(); // Vec3Scale
-		Utils::Hook(0x4E9889, Jump_Check_Stub, HOOK_JUMP).install()->quick();
-
-		// Disable player collision with out of bound barriers
+		for (const auto gate : PM_UpdateSprint_ForwardGates)
 		{
-			constexpr DWORD PmoveSingleCallSite = 0x4CFF5C;
-			constexpr DWORD CheckLadderMoveCallSite = 0x574AF4;
-
-			if (!pmoveSingleOriginal)
-			{
-				const auto rel = *reinterpret_cast<std::int32_t*>(PmoveSingleCallSite + 1);
-				pmoveSingleOriginal = reinterpret_cast<PMoveSingle_t>(
-					PmoveSingleCallSite + 5 + rel);
-			}
-
-			if (!checkLadderMoveOriginal)
-			{
-				const auto rel = *reinterpret_cast<std::int32_t*>(CheckLadderMoveCallSite + 1);
-				checkLadderMoveOriginal = reinterpret_cast<PM_CheckLadderMove_t>(
-					CheckLadderMoveCallSite + 5 + rel);
-			}
+			isExpected = isExpected && Utils::Hook::MatchesBytes(gate, forwardGate, sizeof(forwardGate));
 		}
 
-		Utils::Hook(0x4CFF5C, PmoveSingle_Stub, HOOK_CALL).install()->quick(); 			// single PmoveSingle call inside Pmove
-		Utils::Hook(0x574AF4, PM_CheckLadderMove_Stub, HOOK_CALL).install()->quick(); 	// single PM_CheckLadderMove call inside PmoveSingle
+		for (const auto call : PM_CheckLadderMove_PlayerTraceCalls)
+		{
+			isExpected = isExpected && Utils::Hook::BranchesTo(call, PM_playerTrace, false);
+		}
 
-		// Omnimovement - allow sprint bit to be set when pressing back
-		Utils::Hook(0x5A605B, CL_KeyMove_SprintBit_Stub, HOOK_JUMP).install()->quick();
+		for (const auto call : CM_TransformedCapsuleTraceCalls)
+		{
+			isExpected = isExpected && Utils::Hook::BranchesTo(call, CM_TransformedCapsuleTrace, false);
+		}
 
-		// Omnimovement - sprint gate widening
-		Utils::Hook(0x56EFBF, PM_SprintStartInterferingButtons_Stub, HOOK_CALL).install()->quick();
-		Utils::Hook(0x56EF29, PM_SprintEndingButtons_Stub, HOOK_CALL).install()->quick();
+		for (const auto& load : { proneScaleLoad, duckedScaleLoad, noclipScaleLoad, ufoScaleLoad })
+		{
+			isExpected = isExpected && Utils::Hook::MatchesBytes(load.instruction, load.bytes.data(), load.bytes.size());
+		}
 
-		// Full-speed lateral sprint
-		Utils::Hook(0x573262, PM_WalkMove_SprintStrafeStub, HOOK_JUMP).install()->quick();
+		if (!isExpected)
+		{
+			Logger::Error("playermovement: pmove does not read as expected, no movement dvars\n");
+			return;
+		}
 
-		// Widen the movementDir clamp for remote anim
-		Utils::Hook(0x443408, PM_SetMovementDir_ClampProneLadder_Stub, HOOK_JUMP).install()->quick();
-		Utils::Hook(0x4435AA, PM_SetMovementDir_ClampGeneric_Stub, HOOK_JUMP).install()->quick();
+		if (!spectateSpeedScaleHook.Initialize(BG_RegisterDvars_SpectateSpeedScaleCall, reinterpret_cast<void*>(Dvar_RegisterSpectateSpeedScale), HOOK_CALL)->Install()->IsInstalled())
+		{
+			Logger::Error("playermovement: could not seat the spectate speed hook, no movement dvars\n");
+			return;
+		}
 
-		// Forward-run anim during sprint
-		Utils::Hook(0x571610, PM_SetStrafeCondition_Stub, HOOK_JUMP).install()->quick();
-
-		// Full-speed backward sprint
-		Utils::Hook(0x573893, PM_GetMaxSpeed_BackDiagonal_Stub, HOOK_JUMP).install()->quick();
-		Utils::Hook(0x5738A9, PM_GetMaxSpeed_BackPure_Stub, HOOK_JUMP).install()->quick();
-
-		// Dive unlock
-		Utils::Hook(0x56D7B3, Jump_CheckDive_PerkGate_Stub, HOOK_JUMP).install()->quick();
-
-		// Full-velocity backward dive
-		Utils::Hook(0x56D80E, Jump_CheckDive_BackDiveVelocity_Stub, HOOK_JUMP).install()->quick();
+		PlayerMovement_StepSlideMoveSlopeTest = Utils::Hook::Rebase(PM_StepSlideMove_SlopeTest);
+		PlayerMovement_StepSlideMoveProject = Utils::Hook::Rebase(PM_StepSlideMove_Project);
+		PlayerMovement_StepSlideMoveRestore = Utils::Hook::Rebase(PM_StepSlideMove_Restore);
+		PlayerMovement_ProjectVelocityScale = Utils::Hook::Rebase(PM_ProjectVelocity_Scale);
+		PlayerMovement_ProjectVelocityDone = Utils::Hook::Rebase(PM_ProjectVelocity_Done);
+		PlayerMovement_CrashLandScaleNext = Utils::Hook::Rebase(PM_CrashLand_VelocityScaleNext);
+		PlayerMovement_CrashLandScaleDone = Utils::Hook::Rebase(PM_CrashLand_VelocityScaleDone);
+		PlayerMovement_JumpCheckHeldBranch = Utils::Hook::Rebase(Jump_Check_HeldBranch);
+		PlayerMovement_JumpCheckJump = Utils::Hook::Rebase(Jump_Check_Jump);
+		PlayerMovement_G_FireRocket = Utils::Hook::Rebase(G_FireRocket);
+		PlayerMovement_SprintRepressEnd = Utils::Hook::Rebase(PM_UpdateSprint_RepressEndCall);
+		PlayerMovement_SprintRepressDone = Utils::Hook::Rebase(PM_UpdateSprint_Return);
+		PlayerMovement_BackDiveScale = Utils::Hook::Rebase(backDiveScale);
+		PlayerMovement_KeyMoveSprintBlock = Utils::Hook::Rebase(CL_KeyMove_SprintBlock);
+		PlayerMovement_KeyMoveSprintDone = Utils::Hook::Rebase(CL_KeyMove_SprintDone);
+		PlayerMovement_WalkMoveSprintScale = Utils::Hook::Rebase(PM_WalkMove_SprintStrafeScale);
+		PlayerMovement_WalkMoveJumpCheck = Utils::Hook::Rebase(PM_WalkMove_JumpCheck);
+		PlayerMovement_player_backSpeedScale = Utils::Hook::Rebase(player_backSpeedScale);
+		PlayerMovement_MaxSpeedBackDiagonal = Utils::Hook::Rebase(MaxSpeed_BackDiagonalScale);
+		PlayerMovement_MaxSpeedBackPure = Utils::Hook::Rebase(MaxSpeed_BackPureScale);
+		PlayerMovement_MaxSpeedDone = Utils::Hook::Rebase(MaxSpeed_Done);
 
 		GSC::Script::AddMethod("IsSprinting", GScr_IsSprinting);
 
-		RegisterMovementDvars();
+		Events::OnDvarInit([]
+		{
+			static const char* bg_bouncesValues[] =
+			{
+				"disabled",
+				"enabled",
+				"double",
+				nullptr,
+			};
+
+			static const char* bg_bouncesAllAnglesValues[] =
+			{
+				"disabled",
+				"simple",
+				"all surfaces",
+				nullptr,
+			};
+
+			PlayerMovement_bg_bounces = Game::Dvar_RegisterEnum("bg_bounces", bg_bouncesValues, DISABLED, Game::DVAR_CODINFO, "Bounce glitch settings");
+			PlayerMovement_bg_bouncesAllAngles = Game::Dvar_RegisterEnum("bg_bouncesAllAngles", bg_bouncesAllAnglesValues, DISABLED, Game::DVAR_CODINFO, "Force bounce from all angles");
+
+			bool isSeated = bounceHooks[0].Initialize(PM_StepSlideMove_JumpedStepTest, StepSlideMoveStub, HOOK_JUMP)->Install()->IsInstalled();
+			isSeated = bounceHooks[1].Initialize(PM_ProjectVelocity_UpwardTest, ProjectVelocityStub, HOOK_JUMP)->Install()->IsInstalled() && isSeated;
+			isSeated = bounceHooks[2].Initialize(PM_GroundTrace_JumpClearStateCall, reinterpret_cast<void*>(Jump_ClearState_Hk), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+
+			if (isSeated)
+			{
+				Utils::Hook::Nop(PM_ProjectVelocity_UpwardTest + 5, sizeof(upwardTest) - 5);
+			}
+			else
+			{
+				for (auto& hook : bounceHooks)
+				{
+					hook.Uninstall();
+				}
+
+				Logger::Error("playermovement: could not seat every bounce hook, bg_bounces does nothing\n");
+			}
+
+			PlayerMovement_bg_disableLandingSlowdown = Game::Dvar_RegisterBool("bg_disableLandingSlowdown", false, Game::DVAR_CODINFO, "Toggle landing slowdown");
+			PlayerMovement_bg_bunnyHopAuto = Game::Dvar_RegisterBool("bg_bunnyHopAuto", false, Game::DVAR_CODINFO, "Constantly jump when holding space");
+			bg_playerEjection = Game::Dvar_RegisterBool("bg_playerEjection", false, Game::DVAR_CODINFO, "Push intersecting players away from each other");
+			bg_playerCollision = Game::Dvar_RegisterBool("bg_playerCollision", false, Game::DVAR_CODINFO, "Push intersecting players away from each other");
+
+			std::size_t gateCount = 0;
+			isSeated = gateHooks[gateCount++].Initialize(ClientEndFrame_StuckInClientCall, reinterpret_cast<void*>(StuckInClient_Hk), HOOK_CALL)->Install()->IsInstalled();
+
+			for (const auto call : CM_TransformedCapsuleTraceCalls)
+			{
+				isSeated = gateHooks[gateCount++].Initialize(call, reinterpret_cast<void*>(CM_TransformedCapsuleTrace_Hk), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+			}
+
+			isSeated = gateHooks[gateCount++].Initialize(PM_CrashLand_VelocityScale, CrashLandScaleStub, HOOK_JUMP)->Install()->IsInstalled() && isSeated;
+			isSeated = gateHooks[gateCount++].Initialize(Jump_Check_HeldTest, JumpCheckStub, HOOK_JUMP)->Install()->IsInstalled() && isSeated;
+
+			assert(gateCount == std::size(gateHooks));
+
+			if (isSeated)
+			{
+				Utils::Hook::Nop(Jump_Check_HeldTest + 5, sizeof(heldTest) - 5);
+			}
+			else
+			{
+				for (auto& hook : gateHooks)
+				{
+					hook.Uninstall();
+				}
+
+				Logger::Error("playermovement: could not seat every collision, landing and jump hook, their dvars do nothing\n");
+			}
+
+			bg_rocketJump = Game::Dvar_RegisterBool("bg_rocketJump", false, Game::DVAR_CODINFO, "Enable CoD4 rocket jumps");
+			bg_rocketJumpScale = Game::Dvar_RegisterFloat("bg_rocketJumpScale", 64.0f, 1.0f, std::numeric_limits<float>::max(), Game::DVAR_CODINFO, "The scale applied to the pushback force of a rocket");
+
+			if (!rocketFireHook.Initialize(FireWeapon_FireRocketCall, RocketFireStub, HOOK_CALL)->Install()->IsInstalled())
+			{
+				Logger::Error("playermovement: could not seat the rocket hook, bg_rocketJump does nothing\n");
+			}
+
+			bg_climbAnything = Game::Dvar_RegisterBool("bg_climbAnything", false, Game::DVAR_CODINFO, "Treat any surface as a ladder");
+			bg_disableBarrierClips = Game::Dvar_RegisterBool("bg_disableBarrierClips", false, Game::DVAR_CODINFO, "Disable player collision with out of bound barriers");
+
+			std::size_t ladderCount = 0;
+			isSeated = true;
+
+			for (const auto call : PM_CheckLadderMove_PlayerTraceCalls)
+			{
+				isSeated = ladderHooks[ladderCount++].Initialize(call, reinterpret_cast<void*>(PM_PlayerTraceStub), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+			}
+
+			isSeated = ladderHooks[ladderCount++].Initialize(Pmove_PmoveSingleCall, reinterpret_cast<void*>(PmoveSingle_Stub), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+			isSeated = ladderHooks[ladderCount++].Initialize(PmoveSingle_CheckLadderMoveCall, reinterpret_cast<void*>(PM_CheckLadderMove_Stub), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+
+			assert(ladderCount == std::size(ladderHooks));
+
+			if (!isSeated)
+			{
+				for (auto& hook : ladderHooks)
+				{
+					hook.Uninstall();
+				}
+
+				Logger::Error("playermovement: could not seat every ladder hook, bg_climbAnything and bg_disableBarrierClips do nothing\n");
+			}
+
+			PlayerMovement_bg_ladderFixedInput = Game::Dvar_RegisterBool("bg_ladderFixedInput", false, Game::DVAR_SYSTEMINFO, "Make ladder climb and strafe independent of view angle");
+
+			isSeated = ladderInputHooks[0].Initialize(PM_LadderMove_ClimbRateClamp, LadderClimbRateStub, HOOK_CALL)->Install()->IsInstalled();
+			isSeated = ladderInputHooks[1].Initialize(PM_LadderMove_RightVectorCall, reinterpret_cast<void*>(PM_LadderMove_RightVector_Hk), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+
+			if (isSeated)
+			{
+				Utils::Hook::Nop(PM_LadderMove_ClimbRateClamp + 5, sizeof(climbRateClamp) - 5);
+			}
+			else
+			{
+				for (auto& hook : ladderInputHooks)
+				{
+					hook.Uninstall();
+				}
+
+				Logger::Error("playermovement: could not seat the ladder input hooks, bg_ladderFixedInput does nothing\n");
+			}
+
+			PlayerMovement_bg_sprintIgnoreRepress = Game::Dvar_RegisterBool("bg_sprintIgnoreRepress", false, Game::DVAR_SYSTEMINFO, "Ignore sprint-key re-presses while already sprinting (matches console behaviour)");
+
+			if (sprintRepressHook.Initialize(PM_UpdateSprint_RepressEndSetup, SprintRepressStub, HOOK_JUMP)->Install()->IsInstalled())
+			{
+				Utils::Hook::Nop(PM_UpdateSprint_RepressEndSetup + 5, sizeof(repressEndSetup) - 5);
+			}
+			else
+			{
+				Logger::Error("playermovement: could not seat the sprint re-press hook, bg_sprintIgnoreRepress does nothing\n");
+			}
+
+			PlayerMovement_bg_dive = Game::Dvar_RegisterBool("bg_dive", false, Game::DVAR_CODINFO, "Toggle dive-to-prone (bypasses specialty_jumpdive perk requirement)");
+			PlayerMovement_bg_omnimovementDive = Game::Dvar_RegisterBool("bg_omnimovementDive", false, Game::DVAR_CODINFO, "Disable the backward-dive attenuation (requires bg_dive or specialty_jumpdive perk)");
+
+			isSeated = diveHooks[0].Initialize(Jump_Start_DivePerkTest, DivePerkTestStub, HOOK_CALL)->Install()->IsInstalled();
+			isSeated = diveHooks[1].Initialize(Jump_Start_BackDiveScale, BackDiveScaleStub, HOOK_CALL)->Install()->IsInstalled() && isSeated;
+
+			if (isSeated)
+			{
+				Utils::Hook::Nop(Jump_Start_DivePerkTest + 5, sizeof(divePerkTest) - 5);
+				Utils::Hook::Nop(Jump_Start_BackDiveScale + 5, sizeof(backDiveScaleLoad) - 5);
+			}
+			else
+			{
+				for (auto& hook : diveHooks)
+				{
+					hook.Uninstall();
+				}
+
+				Logger::Error("playermovement: could not seat the dive hooks, bg_dive and bg_omnimovementDive do nothing\n");
+			}
+
+			PlayerMovement_bg_omnimovement = Game::Dvar_RegisterBool("bg_omnimovement", true, Game::DVAR_CODINFO, "Toggle omnidirectional sprint (sprint in any direction)");
+
+			std::size_t omnimovementCount = 0;
+
+			isSeated = omnimovementHooks[omnimovementCount++].Initialize(CL_KeyMove_BackActiveTest, KeyMoveSprintBitStub, HOOK_JUMP)->Install()->IsInstalled();
+
+			for (const auto gate : PM_UpdateSprint_ForwardGates)
+			{
+				isSeated = omnimovementHooks[omnimovementCount++].Initialize(gate, SprintIntentStub, HOOK_CALL)->Install()->IsInstalled() && isSeated;
+			}
+
+			isSeated = omnimovementHooks[omnimovementCount++].Initialize(PM_WalkMove_SprintTest, WalkMoveSprintStrafeStub, HOOK_JUMP)->Install()->IsInstalled() && isSeated;
+
+			isSeated = omnimovementHooks[omnimovementCount++].Initialize(MaxSpeed_BackDiagonalTest, MaxSpeedBackDiagonalStub, HOOK_JUMP)->Install()->IsInstalled() && isSeated;
+			isSeated = omnimovementHooks[omnimovementCount++].Initialize(MaxSpeed_BackPureTest, MaxSpeedBackPureStub, HOOK_JUMP)->Install()->IsInstalled() && isSeated;
+
+			isSeated = omnimovementHooks[omnimovementCount++].Initialize(PM_SetMovementDir_Clamp, MovementDirClampStub, HOOK_CALL)->Install()->IsInstalled() && isSeated;
+
+			isSeated = omnimovementHooks[omnimovementCount++].Initialize(StrafeCondition_Setup, StrafeConditionStub, HOOK_CALL)->Install()->IsInstalled() && isSeated;
+
+			assert(omnimovementCount == std::size(omnimovementHooks));
+
+			if (isSeated)
+			{
+				Utils::Hook::Nop(CL_KeyMove_BackActiveTest + 5, sizeof(backActiveTest) - 5);
+
+				for (const auto gate : PM_UpdateSprint_ForwardGates)
+				{
+					Utils::Hook::Nop(gate + 5, sizeof(forwardGate) - 5);
+				}
+
+				Utils::Hook::Nop(PM_WalkMove_SprintTest + 5, sizeof(sprintTest) - 5);
+				Utils::Hook::Nop(MaxSpeed_BackDiagonalTest + 5, sizeof(backDiagonalTest) - 5);
+				Utils::Hook::Nop(MaxSpeed_BackPureTest + 5, sizeof(backPureTest) - 5);
+				Utils::Hook::Nop(PM_SetMovementDir_Clamp + 5, sizeof(movementDirClamp) - 5);
+				Utils::Hook::Nop(StrafeCondition_Setup + 5, sizeof(strafeConditionSetup) - 5);
+			}
+			else
+			{
+				for (auto& hook : omnimovementHooks)
+				{
+					hook.Uninstall();
+				}
+
+				Logger::Error("playermovement: could not seat every omnimovement hook, bg_omnimovement does nothing\n");
+			}
+
+			const auto* player_duckedSpeedScale = Game::Dvar_RegisterFloat("player_duckedSpeedScale", 0.65f, 0.0f, 5.0f, Game::DVAR_CHEAT, "The scale applied to the player speed when ducking");
+			const auto* player_proneSpeedScale = Game::Dvar_RegisterFloat("player_proneSpeedScale", 0.15f, 0.0f, 5.0f, Game::DVAR_CHEAT, "The scale applied to the player speed when crawling");
+
+			const auto* cg_ufo_scaler = Game::Dvar_RegisterFloat("cg_ufo_scaler", 6.0f, 0.001f, 1000.0f, Game::DVAR_CHEAT, "The speed at which ufo camera moves");
+			const auto* cg_noclip_scaler = Game::Dvar_RegisterFloat("cg_noclip_scaler", 3.0f, 0.001f, 1000.0f, Game::DVAR_CHEAT, "The speed at which noclip camera moves");
+
+			const std::pair<ScaleLoad, const Game::dvar_t*> scales[] =
+			{
+				{ proneScaleLoad, player_proneSpeedScale },
+				{ duckedScaleLoad, player_duckedSpeedScale },
+				{ noclipScaleLoad, cg_noclip_scaler },
+				{ ufoScaleLoad, cg_ufo_scaler },
+			};
+
+			for (const auto& [load, dvar] : scales)
+			{
+				if (!CanLoadReach(load, dvar))
+				{
+					Logger::Error("playermovement: a speed scale dvar is out of pmove's reach, the scales stay stock\n");
+					return;
+				}
+			}
+
+			for (const auto& [load, dvar] : scales)
+			{
+				PointLoadAt(load, dvar);
+			}
+		});
 	}
 }

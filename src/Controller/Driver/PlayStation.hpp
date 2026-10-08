@@ -1,21 +1,14 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Context.hpp"
-#include "../Device/Id.hpp"
-#include "../Transport/Hid.hpp"
+#include "Controller/Context.hpp"
+#include "Controller/Device/Id.hpp"
+#include "Controller/Transport/Hid.hpp"
 
-namespace Controller
+namespace Controller::Driver
 {
-  namespace driver
-  {
-    bool
-    enable_extended_reports (const context&,
-                             transport::hid_device&,
-                             device_id) noexcept;
+	bool TryEnableExtendedReports(const Context& context, Transport::HidDevice& hid, DeviceId device);
 
-    bool
-    minimal_bluetooth_report (std::span<const std::byte>, connection link) noexcept;
-  }
+	bool IsMinimalBluetoothReport(std::span<const std::byte> report, Connection link) noexcept;
 }

@@ -1,347 +1,397 @@
+#include "STDInclude.hpp"
+
 #include "IGameWorldSp.hpp"
 
 namespace Assets
 {
-	void IGameWorldSp::mark(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
+	static Game::X86::pathnode_tree_t ConvertNodeTree(const Game::pathnode_tree_t& nodeTree)
 	{
-		Game::GameWorldSp* asset = header.gameWorldSp;
+		auto converted = Game::X86::Convert(nodeTree);
+		std::memset(&converted.u, 0, sizeof(converted.u));
 
-		if (asset->path.nodes)
+		if (nodeTree.axis < 0)
 		{
-			for (unsigned int i = 0; i < asset->path.nodeCount; ++i)
-			{
-				Game::pathnode_t* node = &asset->path.nodes[i];
+			converted.u.s.nodeCount = nodeTree.u.s.nodeCount;
+		}
 
-				for (char j = 0; j < 5; ++j)
-				{
-					builder->addScriptString((&node->constant.targetname)[j]);
-				}
-			}
+		return converted;
+	}
+
+	void IGameWorldSp::Mark(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
+	{
+		const auto* const asset = header.gameWorldSp;
+
+		if (!asset->path.nodes)
+		{
+			return;
+		}
+
+		for (unsigned int i = 0; i < asset->path.nodeCount; ++i)
+		{
+			const auto& constant = asset->path.nodes[i].constant;
+
+			builder->AddScriptString(constant.targetname);
+			builder->AddScriptString(constant.script_linkName);
+			builder->AddScriptString(constant.script_noteworthy);
+			builder->AddScriptString(constant.target);
+			builder->AddScriptString(constant.animscript);
 		}
 	}
 
-	void IGameWorldSp::savepathnode_tree_info_t(Game::pathnode_tree_t* nodeTree, Game::pathnode_tree_t* destNodeTree, Components::ZoneBuilder::Zone* builder)
+	void IGameWorldSp::Savepathnode_tree_info_t(const Game::pathnode_tree_t* nodeTree, Game::X86::pathnode_tree_t* destNodeTree, Components::ZoneBuilder::Zone* builder)
 	{
-		AssertSize(Game::pathnode_tree_info_t, 8);
-		Utils::Stream* buffer = builder->getBuffer();
+		AssertSize(Game::X86::pathnode_tree_info_t, 8);
+
+		auto* const buffer = builder->GetBuffer();
 
 		if (nodeTree->axis < 0)
 		{
-			AssertSize(Game::pathnode_tree_nodes_t, 8);
+			AssertSize(Game::X86::pathnode_tree_nodes_t, 8);
 
 			if (nodeTree->u.s.nodes)
 			{
-				buffer->align(Utils::Stream::ALIGN_2);
-				buffer->saveArray(nodeTree->u.s.nodes, nodeTree->u.s.nodeCount);
+				buffer->Align(Utils::Stream::ALIGN_2);
+				buffer->SaveArray(nodeTree->u.s.nodes, nodeTree->u.s.nodeCount);
 				Utils::Stream::ClearPointer(&destNodeTree->u.s.nodes);
 			}
+
+			return;
 		}
-		else
+
+		for (int i = 0; i < 2; ++i)
 		{
-			for (int i = 0; i < 2; ++i)
+			auto* const destChildNodeTreePtr = &destNodeTree->u.child[i];
+			const auto* const childNodeTree = nodeTree->u.child[i];
+
+			if (!childNodeTree)
 			{
-				Game::pathnode_tree_t** destChildNodeTreePtr = &destNodeTree->u.child[i];
-				Game::pathnode_tree_t** childNodeTreePtr = &nodeTree->u.child[i];
-
-				if (*childNodeTreePtr)
-				{
-					if (builder->hasPointer(*childNodeTreePtr))
-					{
-						*destChildNodeTreePtr = builder->getPointer(*childNodeTreePtr);
-					}
-					else
-					{
-						buffer->align(Utils::Stream::ALIGN_4);
-						builder->storePointer(*childNodeTreePtr);
-
-						Game::pathnode_tree_t* destChildNodeTree = buffer->dest<Game::pathnode_tree_t>();
-						buffer->save(*childNodeTreePtr);
-
-						this->savepathnode_tree_info_t(*childNodeTreePtr, destChildNodeTree, builder);
-						Utils::Stream::ClearPointer(destChildNodeTreePtr);
-					}
-				}
+				continue;
 			}
+
+			if (builder->HasPointer(childNodeTree))
+			{
+				*destChildNodeTreePtr = builder->GetPointer(childNodeTree);
+				continue;
+			}
+
+			buffer->Align(Utils::Stream::ALIGN_4);
+			builder->StorePointer(childNodeTree);
+
+			auto* const destChildNodeTree = buffer->Dest<Game::X86::pathnode_tree_t>();
+			const auto converted = ConvertNodeTree(*childNodeTree);
+			buffer->Save(&converted);
+
+			this->Savepathnode_tree_info_t(childNodeTree, destChildNodeTree, builder);
+			Utils::Stream::ClearPointer(destChildNodeTreePtr);
 		}
 	}
 
-	void IGameWorldSp::saveVehicleTrackSegment_ptrArray(Game::VehicleTrackSegment** trackSegmentPtrs, int count, Components::ZoneBuilder::Zone* builder)
+	void IGameWorldSp::SaveVehicleTrackSegment_ptrArray(Game::VehicleTrackSegment* const* trackSegmentPtrs, unsigned int count, Components::ZoneBuilder::Zone* builder)
 	{
-		Utils::Stream* buffer = builder->getBuffer();
-		if (!trackSegmentPtrs) return;
-
-		Game::VehicleTrackSegment** destTrackSegmentPtrs = buffer->dest<Game::VehicleTrackSegment*>();
-		buffer->saveArray(trackSegmentPtrs, count);
-
-		for (int i = 0; i < count; ++i)
+		if (!trackSegmentPtrs)
 		{
-			Game::VehicleTrackSegment** destTrackSegmentPtr = &destTrackSegmentPtrs[i];
-			Game::VehicleTrackSegment** trackSegmentPtr = &trackSegmentPtrs[i];
+			return;
+		}
 
-			if (*trackSegmentPtr)
+		auto* const buffer = builder->GetBuffer();
+
+		auto* const destTrackSegmentPtrs = buffer->Dest<std::uint32_t>();
+		buffer->SaveNull(sizeof(std::uint32_t) * count);
+
+		for (unsigned int i = 0; i < count; ++i)
+		{
+			auto* const destTrackSegmentPtr = &destTrackSegmentPtrs[i];
+			const auto* const trackSegment = trackSegmentPtrs[i];
+
+			if (!trackSegment)
 			{
-				if (builder->hasPointer(*trackSegmentPtr))
-				{
-					*destTrackSegmentPtr = builder->getPointer(*trackSegmentPtr);
-				}
-				else
-				{
-					buffer->align(Utils::Stream::ALIGN_4);
-					builder->storePointer(*trackSegmentPtr);
-
-					Game::VehicleTrackSegment* destTrackSegment = buffer->dest<Game::VehicleTrackSegment>();
-					buffer->save(*trackSegmentPtr);
-
-					this->saveVehicleTrackSegment(*trackSegmentPtr, destTrackSegment, builder);
-
-					Utils::Stream::ClearPointer(destTrackSegmentPtr);
-				}
+				continue;
 			}
+
+			if (builder->HasPointer(trackSegment))
+			{
+				*destTrackSegmentPtr = builder->GetPointer(trackSegment);
+				continue;
+			}
+
+			buffer->Align(Utils::Stream::ALIGN_4);
+			builder->StorePointer(trackSegment);
+
+			auto* const destTrackSegment = buffer->Dest<Game::X86::VehicleTrackSegment>();
+			const auto converted = Game::X86::Convert(*trackSegment);
+			buffer->Save(&converted);
+
+			this->SaveVehicleTrackSegment(trackSegment, destTrackSegment, builder);
+
+			Utils::Stream::ClearPointer(destTrackSegmentPtr);
 		}
 	}
 
-	void IGameWorldSp::saveVehicleTrackSegment(Game::VehicleTrackSegment* trackSegment, Game::VehicleTrackSegment* destTrackSegment, Components::ZoneBuilder::Zone* builder)
+	void IGameWorldSp::SaveVehicleTrackSegment(const Game::VehicleTrackSegment* trackSegment, Game::X86::VehicleTrackSegment* destTrackSegment, Components::ZoneBuilder::Zone* builder)
 	{
-		Utils::Stream* buffer = builder->getBuffer();
+		auto* const buffer = builder->GetBuffer();
 
 		if (trackSegment->targetName)
 		{
-			buffer->saveString(trackSegment->targetName);
+			buffer->SaveString(trackSegment->targetName);
 			Utils::Stream::ClearPointer(&destTrackSegment->targetName);
 		}
 
 		if (trackSegment->sectors)
 		{
-			AssertSize(Game::VehicleTrackSector, 60);
-			buffer->align(Utils::Stream::ALIGN_4);
+			AssertSize(Game::X86::VehicleTrackSector, 60);
+			buffer->Align(Utils::Stream::ALIGN_4);
 
-			Game::VehicleTrackSector* destTrackSectors = buffer->dest<Game::VehicleTrackSector>();
-			buffer->saveArray(trackSegment->sectors, trackSegment->sectorCount);
+			auto* const destTrackSectors = buffer->Dest<Game::X86::VehicleTrackSector>();
 
 			for (unsigned int i = 0; i < trackSegment->sectorCount; ++i)
 			{
-				Game::VehicleTrackSector* destTrackSector = &destTrackSectors[i];
-				Game::VehicleTrackSector* trackSector = &trackSegment->sectors[i];
+				const auto converted = Game::X86::Convert(trackSegment->sectors[i]);
+				buffer->Save(&converted);
+			}
+
+			for (unsigned int i = 0; i < trackSegment->sectorCount; ++i)
+			{
+				const auto* const trackSector = &trackSegment->sectors[i];
 
 				if (trackSector->obstacles)
 				{
-					AssertSize(Game::VehicleTrackObstacle, 12);
-					buffer->align(Utils::Stream::ALIGN_4);
-					buffer->saveArray(trackSector->obstacles, trackSector->obstacleCount);
-					Utils::Stream::ClearPointer(&destTrackSector->obstacles);
+					AssertSize(Game::X86::VehicleTrackObstacle, 12);
+					static_assert(sizeof(Game::VehicleTrackObstacle) == sizeof(Game::X86::VehicleTrackObstacle));
+
+					buffer->Align(Utils::Stream::ALIGN_4);
+					buffer->SaveArray(trackSector->obstacles, trackSector->obstacleCount);
+					Utils::Stream::ClearPointer(&destTrackSectors[i].obstacles);
 				}
 			}
+
+			Utils::Stream::ClearPointer(&destTrackSegment->sectors);
 		}
 
 		if (trackSegment->nextBranches)
 		{
-			buffer->align(Utils::Stream::ALIGN_4);
-			this->saveVehicleTrackSegment_ptrArray(trackSegment->nextBranches, trackSegment->nextBranchesCount, builder);
+			buffer->Align(Utils::Stream::ALIGN_4);
+			this->SaveVehicleTrackSegment_ptrArray(trackSegment->nextBranches, trackSegment->nextBranchesCount, builder);
 			Utils::Stream::ClearPointer(&destTrackSegment->nextBranches);
 		}
 
 		if (trackSegment->prevBranches)
 		{
-			buffer->align(Utils::Stream::ALIGN_4);
-			this->saveVehicleTrackSegment_ptrArray(trackSegment->prevBranches, trackSegment->prevBranchesCount, builder);
+			buffer->Align(Utils::Stream::ALIGN_4);
+			this->SaveVehicleTrackSegment_ptrArray(trackSegment->prevBranches, trackSegment->prevBranchesCount, builder);
 			Utils::Stream::ClearPointer(&destTrackSegment->prevBranches);
 		}
 	}
 
-	void IGameWorldSp::save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
+	void IGameWorldSp::Save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
 	{
-		AssertSize(Game::GameWorldSp, 0x38);
+		AssertSize(Game::X86::GameWorldSp, 0x38);
 
-		Utils::Stream* buffer = builder->getBuffer();
-		auto* asset = header.gameWorldSp;
-		auto* dest = buffer->dest<Game::GameWorldSp>();
-		buffer->save(asset);
+		auto* const buffer = builder->GetBuffer();
+		const auto* const asset = header.gameWorldSp;
+		auto* const dest = buffer->Dest<Game::X86::GameWorldSp>();
 
-		buffer->pushBlock(Game::XFILE_BLOCK_VIRTUAL);
+		const auto world = Game::X86::Convert(*asset);
+		buffer->Save(&world);
+
+		buffer->PushBlock(Game::XFILE_BLOCK_VIRTUAL);
 
 		if (asset->name)
 		{
-			buffer->saveString(builder->getAssetName(this->getType(), asset->name));
+			buffer->SaveString(builder->GetAssetName(this->GetType(), asset->name));
 			Utils::Stream::ClearPointer(&dest->name);
 		}
 
-		// Save_PathData
+		AssertSize(Game::X86::PathData, 40);
+
+		const auto& path = asset->path;
+
+		if (path.nodes)
 		{
-			AssertSize(Game::PathData, 40);
+			AssertSize(Game::X86::pathnode_t, 136);
+			AssertSize(Game::X86::pathnode_constant_t, 64);
 
-			if (asset->path.nodes)
+			buffer->Align(Utils::Stream::ALIGN_4);
+
+			auto* const destNodes = buffer->Dest<Game::X86::pathnode_t>();
+
+			for (unsigned int i = 0; i < path.nodeCount; ++i)
 			{
-				AssertSize(Game::pathnode_t, 136);
-				buffer->align(Utils::Stream::ALIGN_4);
+				const auto converted = Game::X86::Convert(path.nodes[i]);
+				buffer->Save(&converted);
+			}
 
-				Game::pathnode_t* destNodes = buffer->dest<Game::pathnode_t>();
-				buffer->saveArray(asset->path.nodes, asset->path.nodeCount);
+			for (unsigned int i = 0; i < path.nodeCount; ++i)
+			{
+				auto* const destNode = &destNodes[i];
+				const auto* const node = &path.nodes[i];
 
-				for (unsigned int i = 0; i < asset->path.nodeCount; ++i)
+				builder->MapScriptString(destNode->constant.targetname);
+				builder->MapScriptString(destNode->constant.script_linkName);
+				builder->MapScriptString(destNode->constant.script_noteworthy);
+				builder->MapScriptString(destNode->constant.target);
+				builder->MapScriptString(destNode->constant.animscript);
+
+				if (node->constant.Links)
 				{
-					Game::pathnode_t* destNode = &destNodes[i];
-					Game::pathnode_t* node = &asset->path.nodes[i];
+					AssertSize(Game::X86::pathlink_s, 12);
+					static_assert(sizeof(Game::pathlink_s) == sizeof(Game::X86::pathlink_s));
 
-					AssertSize(Game::pathnode_constant_t, 64);
-
-					for (char j = 0; j < 5; ++j)
-					{
-						builder->mapScriptString((&node->constant.targetname)[j]);
-					}
-
-					if (node->constant.Links)
-					{
-						AssertSize(Game::pathlink_s, 12);
-						buffer->align(Utils::Stream::ALIGN_4);
-						buffer->saveArray(node->constant.Links, node->constant.totalLinkCount);
-						Utils::Stream::ClearPointer(&destNode->constant.Links);
-					}
+					buffer->Align(Utils::Stream::ALIGN_4);
+					buffer->SaveArray(node->constant.Links, node->constant.totalLinkCount);
+					Utils::Stream::ClearPointer(&destNode->constant.Links);
 				}
-
-				Utils::Stream::ClearPointer(&dest->path.nodes);
 			}
 
-			buffer->pushBlock(Game::XFILE_BLOCK_RUNTIME);
-
-			if (asset->path.basenodes)
-			{
-				AssertSize(Game::pathbasenode_t, 16);
-
-				buffer->align(Utils::Stream::ALIGN_16);
-				buffer->saveArray(asset->path.basenodes, asset->path.nodeCount);
-				Utils::Stream::ClearPointer(&dest->path.basenodes);
-			}
-
-			buffer->popBlock();
-
-			if (asset->path.chainNodeForNode)
-			{
-				buffer->align(Utils::Stream::ALIGN_2);
-				buffer->saveArray(asset->path.chainNodeForNode, asset->path.nodeCount);
-				Utils::Stream::ClearPointer(&dest->path.chainNodeForNode);
-			}
-
-			if (asset->path.nodeForChainNode)
-			{
-				buffer->align(Utils::Stream::ALIGN_2);
-				buffer->saveArray(asset->path.nodeForChainNode, asset->path.nodeCount);
-				Utils::Stream::ClearPointer(&dest->path.nodeForChainNode);
-			}
-
-			if (asset->path.pathVis)
-			{
-				buffer->saveArray(asset->path.pathVis, asset->path.visBytes);
-				Utils::Stream::ClearPointer(&dest->path.pathVis);
-			}
-
-			if (asset->path.nodeTree)
-			{
-				AssertSize(Game::pathnode_tree_t, 16);
-				buffer->align(Utils::Stream::ALIGN_4);
-
-				Game::pathnode_tree_t* destNodeTrees = buffer->dest<Game::pathnode_tree_t>();
-				buffer->saveArray(asset->path.nodeTree, asset->path.nodeTreeCount);
-
-				for (int i = 0; i < asset->path.nodeTreeCount; ++i)
-				{
-					Game::pathnode_tree_t* destNodeTree = &destNodeTrees[i];
-					Game::pathnode_tree_t* nodeTree = &asset->path.nodeTree[i];
-
-					this->savepathnode_tree_info_t(nodeTree, destNodeTree, builder);
-				}
-
-				Utils::Stream::ClearPointer(&dest->path.nodeTree);
-			}
+			Utils::Stream::ClearPointer(&dest->path.nodes);
 		}
 
-		// Save_VehicleTrack
+		buffer->PushBlock(Game::XFILE_BLOCK_RUNTIME);
+
+		if (path.basenodes)
 		{
-			AssertSize(Game::VehicleTrack, 8);
+			AssertSize(Game::X86::pathbasenode_t, 16);
 
-			if (asset->vehicleTrack.segments)
+			buffer->Align(Utils::Stream::ALIGN_16);
+			buffer->Save(path.basenodes, sizeof(Game::X86::pathbasenode_t), path.nodeCount);
+			Utils::Stream::ClearPointer(&dest->path.basenodes);
+		}
+
+		buffer->PopBlock();
+
+		if (path.chainNodeForNode)
+		{
+			buffer->Align(Utils::Stream::ALIGN_2);
+			buffer->SaveArray(path.chainNodeForNode, path.nodeCount);
+			Utils::Stream::ClearPointer(&dest->path.chainNodeForNode);
+		}
+
+		if (path.nodeForChainNode)
+		{
+			buffer->Align(Utils::Stream::ALIGN_2);
+			buffer->SaveArray(path.nodeForChainNode, path.nodeCount);
+			Utils::Stream::ClearPointer(&dest->path.nodeForChainNode);
+		}
+
+		if (path.pathVis)
+		{
+			buffer->SaveArray(path.pathVis, path.visBytes);
+			Utils::Stream::ClearPointer(&dest->path.pathVis);
+		}
+
+		if (path.nodeTree)
+		{
+			AssertSize(Game::X86::pathnode_tree_t, 16);
+			buffer->Align(Utils::Stream::ALIGN_4);
+
+			auto* const destNodeTrees = buffer->Dest<Game::X86::pathnode_tree_t>();
+
+			for (int i = 0; i < path.nodeTreeCount; ++i)
 			{
-				if (builder->hasPointer(asset->vehicleTrack.segments))
+				const auto converted = ConvertNodeTree(path.nodeTree[i]);
+				buffer->Save(&converted);
+			}
+
+			for (int i = 0; i < path.nodeTreeCount; ++i)
+			{
+				this->Savepathnode_tree_info_t(&path.nodeTree[i], &destNodeTrees[i], builder);
+			}
+
+			Utils::Stream::ClearPointer(&dest->path.nodeTree);
+		}
+
+		AssertSize(Game::X86::VehicleTrack, 8);
+
+		if (asset->vehicleTrack.segments)
+		{
+			if (builder->HasPointer(asset->vehicleTrack.segments))
+			{
+				dest->vehicleTrack.segments = builder->GetPointer(asset->vehicleTrack.segments);
+			}
+			else
+			{
+				AssertSize(Game::X86::VehicleTrackSegment, 44);
+
+				buffer->Align(Utils::Stream::ALIGN_4);
+
+				auto* const destTrackSegments = buffer->Dest<Game::X86::VehicleTrackSegment>();
+
+				for (unsigned int i = 0; i < asset->vehicleTrack.segmentCount; ++i)
 				{
-					dest->vehicleTrack.segments = builder->getPointer(asset->vehicleTrack.segments);
+					builder->StorePointer(&asset->vehicleTrack.segments[i]);
+
+					const auto converted = Game::X86::Convert(asset->vehicleTrack.segments[i]);
+					buffer->Save(&converted);
 				}
-				else
+
+				for (unsigned int i = 0; i < asset->vehicleTrack.segmentCount; ++i)
 				{
-					AssertSize(Game::VehicleTrackSegment, 44);
-
-					buffer->align(Utils::Stream::ALIGN_4);
-					Game::VehicleTrackSegment* destTrackSegments = buffer->dest<Game::VehicleTrackSegment>();
-
-					for (unsigned int i = 0; i < asset->vehicleTrack.segmentCount; ++i)
-					{
-						builder->storePointer(&asset->vehicleTrack.segments[i]);
-						buffer->save(&asset->vehicleTrack.segments[i]);
-					}
-
-					for (unsigned int i = 0; i < asset->vehicleTrack.segmentCount; ++i)
-					{
-						Game::VehicleTrackSegment* destTrackSegment = &destTrackSegments[i];
-						Game::VehicleTrackSegment* trackSegment = &asset->vehicleTrack.segments[i];
-
-						this->saveVehicleTrackSegment(trackSegment, destTrackSegment, builder);
-					}
-
-					Utils::Stream::ClearPointer(&dest->vehicleTrack.segments);
+					this->SaveVehicleTrackSegment(&asset->vehicleTrack.segments[i], &destTrackSegments[i], builder);
 				}
+
+				Utils::Stream::ClearPointer(&dest->vehicleTrack.segments);
 			}
 		}
 
 		if (asset->g_glassData)
 		{
-			// Save_G_GlassData
+			AssertSize(Game::X86::G_GlassData, 128);
+			buffer->Align(Utils::Stream::ALIGN_4);
+
+			const auto* const glassData = asset->g_glassData;
+			auto* const destGlass = buffer->Dest<Game::X86::G_GlassData>();
+
+			const auto storedGlass = Game::X86::Convert(*glassData);
+			buffer->Save(&storedGlass);
+
+			if (glassData->glassPieces)
 			{
-				AssertSize(Game::G_GlassData, 128);
-				buffer->align(Utils::Stream::ALIGN_4);
+				AssertSize(Game::X86::G_GlassPiece, 12);
+				static_assert(sizeof(Game::G_GlassPiece) == sizeof(Game::X86::G_GlassPiece));
 
-				Game::G_GlassData* destGlass = buffer->dest<Game::G_GlassData>();
-				buffer->save(asset->g_glassData);
+				buffer->Align(Utils::Stream::ALIGN_4);
+				buffer->SaveArray(glassData->glassPieces, glassData->pieceCount);
+				Utils::Stream::ClearPointer(&destGlass->glassPieces);
+			}
 
-				if (asset->g_glassData->glassPieces)
+			if (glassData->glassNames)
+			{
+				AssertSize(Game::X86::G_GlassName, 12);
+				buffer->Align(Utils::Stream::ALIGN_4);
+
+				auto* const destGlassNames = buffer->Dest<Game::X86::G_GlassName>();
+
+				for (unsigned int i = 0; i < glassData->glassNameCount; ++i)
 				{
-					AssertSize(Game::G_GlassPiece, 12);
-					buffer->align(Utils::Stream::ALIGN_4);
-					buffer->saveArray(asset->g_glassData->glassPieces, asset->g_glassData->pieceCount);
-					Utils::Stream::ClearPointer(&destGlass->glassPieces);
+					const auto glassName = Game::X86::Convert(glassData->glassNames[i]);
+					buffer->Save(&glassName);
 				}
 
-				if (asset->g_glassData->glassNames)
+				for (unsigned int i = 0; i < glassData->glassNameCount; ++i)
 				{
-					AssertSize(Game::G_GlassName, 12);
-					buffer->align(Utils::Stream::ALIGN_4);
+					auto* const destGlassName = &destGlassNames[i];
+					const auto* const glassName = &glassData->glassNames[i];
 
-					Game::G_GlassName* destGlassNames = buffer->dest<Game::G_GlassName>();
-					buffer->saveArray(asset->g_glassData->glassNames, asset->g_glassData->glassNameCount);
-
-					for (unsigned int i = 0; i < asset->g_glassData->glassNameCount; ++i)
+					if (glassName->nameStr)
 					{
-						Game::G_GlassName* destGlassName = &destGlassNames[i];
-						Game::G_GlassName* glassName = &asset->g_glassData->glassNames[i];
-
-						if (glassName->nameStr)
-						{
-							buffer->saveString(glassName->nameStr);
-							Utils::Stream::ClearPointer(&destGlassName->nameStr);
-						}
-
-						if (glassName->pieceIndices)
-						{
-							buffer->align(Utils::Stream::ALIGN_2);
-							buffer->saveArray(glassName->pieceIndices, glassName->pieceCount);
-							Utils::Stream::ClearPointer(&destGlassName->pieceIndices);
-						}
+						buffer->SaveString(glassName->nameStr);
+						Utils::Stream::ClearPointer(&destGlassName->nameStr);
 					}
 
-					Utils::Stream::ClearPointer(&destGlass->glassNames);
+					if (glassName->pieceIndices)
+					{
+						buffer->Align(Utils::Stream::ALIGN_2);
+						buffer->SaveArray(glassName->pieceIndices, glassName->pieceCount);
+						Utils::Stream::ClearPointer(&destGlassName->pieceIndices);
+					}
 				}
+
+				Utils::Stream::ClearPointer(&destGlass->glassNames);
 			}
 
 			Utils::Stream::ClearPointer(&dest->g_glassData);
 		}
 
-		buffer->popBlock();
+		buffer->PopBlock();
 	}
 }

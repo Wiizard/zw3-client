@@ -1,55 +1,40 @@
-#include "Id.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Device/Id.hpp"
 
 namespace Controller
 {
-  std::ostream&
-  operator<< (std::ostream& os, device_id d)
-  {
-    if (!d)
-      return os << "device(none)";
+	const char* ToString(TransportKind transport) noexcept
+	{
+		switch (transport)
+		{
+		case TransportKind::Unknown:
+			return "unknown";
+		case TransportKind::XInput:
+			return "xinput";
+		case TransportKind::RawInput:
+			return "raw-input";
+		case TransportKind::Hid:
+			return "hid";
+		}
 
-    return os << "device(" << d.value () << ')';
-  }
+		return "unknown";
+	}
 
-  const char*
-  to_string (transport_kind t) noexcept
-  {
-    switch (t)
-    {
-      case transport_kind::unknown:   return "unknown";
-      case transport_kind::xinput:    return "xinput";
-      case transport_kind::raw_input: return "raw-input";
-      case transport_kind::hid:       return "hid";
-    }
+	const char* ToString(Connection link) noexcept
+	{
+		switch (link)
+		{
+		case Connection::Unknown:
+			return "unknown";
+		case Connection::Usb:
+			return "usb";
+		case Connection::Bluetooth:
+			return "bluetooth";
+		case Connection::Virtualized:
+			return "virtualized";
+		}
 
-    return "unknown";
-  }
-
-  std::ostream&
-  operator<< (std::ostream& os, transport_kind t)
-  {
-    return os << to_string (t);
-  }
-
-  const char*
-  to_string (connection c) noexcept
-  {
-    switch (c)
-    {
-      case connection::unknown:     return "unknown";
-      case connection::usb:         return "usb";
-      case connection::bluetooth:   return "bluetooth";
-      case connection::virtualized: return "virtualized";
-    }
-
-    return "unknown";
-  }
-
-  std::ostream&
-  operator<< (std::ostream& os, connection c)
-  {
-    return os << to_string (c);
-  }
+		return "unknown";
+	}
 }

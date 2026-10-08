@@ -1,111 +1,96 @@
-#include "XInputModule.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Transport/XInputModule.hpp"
 
-namespace Controller
+namespace Controller::Transport
 {
-  namespace transport
-  {
-    xinput_module::
-    xinput_module (const context& ctx)
-    {
-      load (ctx);
-    }
+	XInputModule::XInputModule(const Context& context)
+	{
+		this->Load(context);
+	}
 
-    xinput_module::
-    ~xinput_module ()
-    {
-      if (handle_ != nullptr)
-        FreeLibrary (handle_);
-    }
+	void XInputModule::Load(const Context& context)
+	{
+		static constexpr const char* variants[] =
+		{
+			"xinput1_4.dll",
+			"xinput1_3.dll",
+			"xinput9_1_0.dll",
+		};
 
-    void
-    xinput_module::
-    load (const context& ctx)
-    {
-      static constexpr const char* variants[]
-      {
-        "xinput1_4.dll",
-        "xinput1_3.dll",
-        "xinput9_1_0.dll",
-      };
+		for (const auto* name : variants)
+		{
+			const HMODULE loaded = LoadLibraryA(name);
 
-      for (const char* name: variants)
-      {
-        HMODULE h (LoadLibraryA (name));
+			if (loaded == nullptr)
+			{
+				continue;
+			}
 
-        if (h == nullptr)
-          continue;
+			const auto loadedGetState = reinterpret_cast<GetStateFunction>(GetProcAddress(loaded, "XInputGetState"));
+			const auto loadedGetCapabilities = reinterpret_cast<GetCapabilitiesFunction>(GetProcAddress(loaded, "XInputGetCapabilities"));
+			const auto loadedSetState = reinterpret_cast<SetStateFunction>(GetProcAddress(loaded, "XInputSetState"));
 
-        auto get_state (reinterpret_cast<get_state_fn> (
-          GetProcAddress (h, "XInputGetState")));
-        auto get_caps (reinterpret_cast<get_caps_fn> (
-          GetProcAddress (h, "XInputGetCapabilities")));
-        auto set_state (reinterpret_cast<set_state_fn> (
-          GetProcAddress (h, "XInputSetState")));
+			if (loadedGetState == nullptr || loadedGetCapabilities == nullptr || loadedSetState == nullptr)
+			{
+				FreeLibrary(loaded);
+				continue;
+			}
 
-        if (get_state == nullptr || get_caps == nullptr || set_state == nullptr)
-        {
-          FreeLibrary (h);
-          continue;
-        }
+			const auto loadedGetStateEx = reinterpret_cast<GetStateFunction>(GetProcAddress(loaded, MAKEINTRESOURCEA(100)));
 
-        auto get_state_ex (reinterpret_cast<get_state_fn> (
-          GetProcAddress (h, reinterpret_cast<const char*> (100))));
+			this->library = loaded;
+			this->getState = loadedGetState;
+			this->getStateEx = loadedGetStateEx;
+			this->getCapabilities = loadedGetCapabilities;
+			this->setState = loadedSetState;
 
-        handle_ = h;
-        name_ = name;
-        get_state_ = get_state;
-        get_state_ex_ = get_state_ex;
-        get_capabilities_ = get_caps;
-        set_state_ = set_state;
+			const char* guideNote = " (no guide button)";
 
-        ctx.report (severity::info, facility::transport, errc::none,
-                    std::string ("XInput loaded via ") + name +
-                    (get_state_ex != nullptr
-                     ? " (guide button available)"
-                     : " (no guide button)"));
-        return;
-      }
+			if (loadedGetStateEx != nullptr)
+			{
+				guideNote = " (guide button available)";
+			}
 
-      ctx.report (severity::warning, facility::transport, errc::transport_failure,
-                  "no XInput runtime could be loaded; "
-                  "XInput controllers will not be available");
-    }
+			context.Report(Severity::Info, Facility::Transport, ErrorCode::None, std::format("XInput loaded via {}{}", name, guideNote));
+			return;
+		}
 
-    DWORD
-    xinput_module::
-    get_state (DWORD user_index, XINPUT_STATE& out) const noexcept
-    {
-      if (get_state_ex_ != nullptr)
-        return get_state_ex_ (user_index, &out);
+		context.Report(Severity::Warning, Facility::Transport, ErrorCode::TransportFailure, "no XInput runtime could be loaded; XInput controllers will not be available");
+	}
 
-      if (get_state_ != nullptr)
-        return get_state_ (user_index, &out);
+	DWORD XInputModule::GetState(DWORD userIndex, XINPUT_STATE& state) const noexcept
+	{
+		if (this->getStateEx != nullptr)
+		{
+			return this->getStateEx(userIndex, &state);
+		}
 
-      return ERROR_DEVICE_NOT_CONNECTED;
-    }
+		if (this->getState != nullptr)
+		{
+			return this->getState(userIndex, &state);
+		}
 
-    DWORD
-    xinput_module::
-    get_capabilities (DWORD user_index,
-                      DWORD flags,
-                      XINPUT_CAPABILITIES& out) const noexcept
-    {
-      if (get_capabilities_ != nullptr)
-        return get_capabilities_ (user_index, flags, &out);
+		return ERROR_DEVICE_NOT_CONNECTED;
+	}
 
-      return ERROR_DEVICE_NOT_CONNECTED;
-    }
+	DWORD XInputModule::GetCapabilities(DWORD userIndex, DWORD flags, XINPUT_CAPABILITIES& capabilities) const noexcept
+	{
+		if (this->getCapabilities != nullptr)
+		{
+			return this->getCapabilities(userIndex, flags, &capabilities);
+		}
 
-    DWORD
-    xinput_module::
-    set_state (DWORD user_index, XINPUT_VIBRATION& vibration) const noexcept
-    {
-      if (set_state_ != nullptr)
-        return set_state_ (user_index, &vibration);
+		return ERROR_DEVICE_NOT_CONNECTED;
+	}
 
-      return ERROR_DEVICE_NOT_CONNECTED;
-    }
-  }
+	DWORD XInputModule::SetState(DWORD userIndex, XINPUT_VIBRATION& vibration) const noexcept
+	{
+		if (this->setState != nullptr)
+		{
+			return this->setState(userIndex, &vibration);
+		}
+
+		return ERROR_DEVICE_NOT_CONNECTED;
+	}
 }

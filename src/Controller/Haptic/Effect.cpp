@@ -1,157 +1,140 @@
-#include "Effect.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Haptic/Effect.hpp"
 
-#include <cmath>
-#include <algorithm>
-
-namespace Controller
+namespace Controller::Haptic
 {
-  namespace haptic
-  {
-    namespace
-    {
-      envelope
-      struck () noexcept
-      {
-        constexpr envelope::knot knots[]
-        {
-          {0.00f, 0.0f},
-          {0.04f, 1.0f},
-          {0.35f, 0.45f},
-          {1.00f, 0.0f},
-        };
+	static constexpr float bodyOffset = 0.35f;
 
-        return envelope::from (knots);
-      }
+	static Envelope Struck() noexcept
+	{
+		static constexpr Envelope::Knot knots[] =
+		{
+			{ 0.00f, 0.0f },
+			{ 0.04f, 1.0f },
+			{ 0.35f, 0.45f },
+			{ 1.00f, 0.0f },
+		};
 
-      seconds
-      transient_duration (float sharpness) noexcept
-      {
-        return seconds {std::lerp (0.09f, 0.02f, std::clamp (sharpness, 0.0f, 1.0f))};
-      }
+		return Envelope::From(knots);
+	}
 
-      constexpr float body_offset {0.35f};
+	static Seconds TransientDuration(float sharpness) noexcept
+	{
+		return Seconds{ std::lerp(0.09f, 0.02f, std::clamp(sharpness, 0.0f, 1.0f)) };
+	}
 
-      bool
-      in_unit_range (float v) noexcept
-      {
-        return v >= 0.0f && v <= 1.0f;
-      }
-    }
+	static bool IsInUnitRange(float value) noexcept
+	{
+		return value >= 0.0f && value <= 1.0f;
+	}
 
-    const char*
-    to_string (actuator a) noexcept
-    {
-      switch (a)
-      {
-        case actuator::left:  return "left";
-        case actuator::right: return "right";
-        case actuator::both:  return "both";
-      }
+	Envelope Envelope::Level(float amplitude) noexcept
+	{
+		const float level = std::clamp(amplitude, 0.0f, 1.0f);
 
-      return "both";
-    }
+		const Knot levelKnots[] = { { 0.0f, level }, { 1.0f, level } };
+		return From(levelKnots);
+	}
 
-    envelope
-    envelope::
-    level (float amplitude) noexcept
-    {
-      const float a (std::clamp (amplitude, 0.0f, 1.0f));
+	Envelope Envelope::From(std::span<const Knot> source) noexcept
+	{
+		Envelope envelope;
 
-      const knot knots[] {{0.0f, a}, {1.0f, a}};
-      return from (knots);
-    }
+		float lastAt = -1.0f;
 
-    envelope
-    envelope::
-    from (std::span<const knot> ks) noexcept
-    {
-      envelope e;
+		for (const auto& knot : source)
+		{
+			if (envelope.knotCount == maxKnots)
+			{
+				break;
+			}
 
-      float last (-1.0f);
+			if (!IsInUnitRange(knot.at) || !IsInUnitRange(knot.amplitude) || knot.at <= lastAt)
+			{
+				continue;
+			}
 
-      for (const knot& k: ks)
-      {
-        if (e.knots_.size () == max_knots)
-          break;
+			envelope.knots[envelope.knotCount] = knot;
+			++envelope.knotCount;
+			lastAt = knot.at;
+		}
 
-        if (!in_unit_range (k.at) || !in_unit_range (k.amplitude) || k.at <= last)
-          continue;
+		if (envelope.knotCount < 2)
+		{
+			envelope.knotCount = 0;
+		}
 
-        e.knots_.push_back (k);
-        last = k.at;
-      }
+		return envelope;
+	}
 
-      if (e.knots_.size () < 2)
-        e.knots_.clear ();
+	float Envelope::Evaluate(float t) const noexcept
+	{
+		if (this->knotCount == 0)
+		{
+			return 0.0f;
+		}
 
-      return e;
-    }
+		const auto& first = this->knots[0];
+		const auto& last = this->knots[this->knotCount - 1];
 
-    float
-    envelope::
-    evaluate (float t) const noexcept
-    {
-      if (knots_.empty ())
-        return 0.0f;
+		if (t <= first.at)
+		{
+			return first.amplitude;
+		}
 
-      if (t <= knots_.front ().at)
-        return knots_.front ().amplitude;
+		if (t >= last.at)
+		{
+			return last.amplitude;
+		}
 
-      if (t >= knots_.back ().at)
-        return knots_.back ().amplitude;
+		for (std::size_t i = 1; i < this->knotCount; ++i)
+		{
+			if (t > this->knots[i].at)
+			{
+				continue;
+			}
 
-      for (size_t i (1); i != knots_.size (); ++i)
-      {
-        if (t > knots_[i].at)
-          continue;
+			const auto& from = this->knots[i - 1];
+			const auto& to = this->knots[i];
 
-        const knot& a (knots_[i - 1]);
-        const knot& b (knots_[i]);
+			return std::lerp(from.amplitude, to.amplitude, (t - from.at) / (to.at - from.at));
+		}
 
-        return std::lerp (a.amplitude, b.amplitude, (t - a.at) / (b.at - a.at));
-      }
+		return last.amplitude;
+	}
 
-      return knots_.back ().amplitude;
-    }
+	float HertzFor(float sharpness) noexcept
+	{
+		const float t = std::clamp(sharpness, 0.0f, 1.0f);
+		return minHertz * std::pow(maxHertz / minHertz, t);
+	}
 
-    float
-    hertz_for (float sharpness) noexcept
-    {
-      const float t (std::clamp (sharpness, 0.0f, 1.0f));
-      return min_hertz * std::pow (max_hertz / min_hertz, t);
-    }
+	Effect Transient(float intensity, float sharpness) noexcept
+	{
+		const float clampedSharpness = std::clamp(sharpness, 0.0f, 1.0f);
 
-    effect
-    transient (float intensity, float sharpness) noexcept
-    {
-      const float s (std::clamp (sharpness, 0.0f, 1.0f));
+		Effect effect;
+		effect.deep = Struck();
+		effect.crisp = Struck();
+		effect.deepSharpness = std::max(0.0f, clampedSharpness - bodyOffset);
+		effect.crispSharpness = clampedSharpness;
+		effect.intensity = std::clamp(intensity, 0.0f, 1.0f);
+		effect.duration = TransientDuration(clampedSharpness);
+		return effect;
+	}
 
-      effect e;
-      e.deep = struck ();
-      e.crisp = struck ();
-      e.deep_sharpness = std::max (0.0f, s - body_offset);
-      e.crisp_sharpness = s;
-      e.intensity = std::clamp (intensity, 0.0f, 1.0f);
-      e.duration = transient_duration (s);
-      return e;
-    }
+	Effect Continuous(float intensity, float sharpness, Seconds duration) noexcept
+	{
+		const float clampedSharpness = std::clamp(sharpness, 0.0f, 1.0f);
 
-    effect
-    continuous (float intensity, float sharpness, seconds duration) noexcept
-    {
-      const float s (std::clamp (sharpness, 0.0f, 1.0f));
-
-      effect e;
-
-      e.deep = envelope::level (1.0f);
-      e.crisp = envelope::level (1.0f);
-      e.deep_sharpness = std::max (0.0f, s - body_offset);
-      e.crisp_sharpness = s;
-      e.intensity = std::clamp (intensity, 0.0f, 1.0f);
-      e.duration = duration;
-      return e;
-    }
-  }
+		Effect effect;
+		effect.deep = Envelope::Level(1.0f);
+		effect.crisp = Envelope::Level(1.0f);
+		effect.deepSharpness = std::max(0.0f, clampedSharpness - bodyOffset);
+		effect.crispSharpness = clampedSharpness;
+		effect.intensity = std::clamp(intensity, 0.0f, 1.0f);
+		effect.duration = duration;
+		return effect;
+	}
 }

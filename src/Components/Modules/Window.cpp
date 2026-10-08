@@ -1,221 +1,163 @@
+#include "STDInclude.hpp"
 
+#include <hidusage.h>
+
+#include "Window.hpp"
+#include "Events.hpp"
 #include "FastFiles.hpp"
 #include "LobbyScene.hpp"
+#include "Logger.hpp"
 #include "RawMouse.hpp"
 #include "Renderer.hpp"
-#include "Window.hpp"
+#include "Scheduler.hpp"
 
 namespace Components
 {
-	Dvar::Var Window::NoBorder;
-	Dvar::Var Window::NativeCursor;
+	Dvar::Var Window::ui_nativeCursor;
 
-	HWND Window::MainWindow = nullptr;
-	WNDPROC Window::OriginalWindowProc = nullptr;
-	BOOL Window::CursorVisible = TRUE;
-	std::unordered_map<UINT, Utils::Slot<Window::WndProcCallback>> Window::WndMessageCallbacks;
-	Utils::Signal<Window::CreateCallback> Window::CreateSignals;
-	Utils::Signal<Window::DeviceChangeCallback> Window::DeviceChangeSignals;
-	namespace
+	HWND Window::mainWindow = nullptr;
+	WNDPROC Window::originalWindowProc = nullptr;
+	BOOL Window::cursorVisible = TRUE;
+	std::unordered_map<UINT, std::function<Window::WndProcCallback>> Window::wndMessageCallbacks;
+	std::vector<std::function<Window::CreateCallback>> Window::createSignals;
+	std::vector<std::function<Window::DeviceChangeCallback>> Window::deviceChangeSignals;
+
+	constexpr std::uintptr_t R_InitGraphicsApi_CreateWindowCall = 0x140032873;
+	static const std::uint8_t createWindowCall[] = { 0xFF, 0x15, 0xB7, 0xFD, 0x32, 0x00 };
+
+	constexpr std::uintptr_t UI_RefreshViewport_DrawCursorCall = 0x140270E9A;
+	constexpr std::uintptr_t UI_DrawHandlePic = 0x140250F40;
+
+	constexpr std::uintptr_t ShowCursorImport = 0x1403626E8;
+	constexpr WORD windowIconResource = 1;
+
+	constexpr std::uintptr_t MainWndProc = 0x1402AA9A0;
+	static const Utils::Hook::LeaSite wndProcLea = { 0x1402A5E93, { 0x48, 0x8D, 0x05 }, MainWndProc };
+
+	constexpr int displayModeFullscreen = 0;
+	constexpr int displayModeNoBorder = 1;
+	constexpr int displayModeWindowed = 2;
+
+	static Dvar::Var r_fullscreen;
+	static Dvar::Var r_noborder;
+	static bool hasMirroredDisplayMode = false;
+	static bool mirroredFullscreen = false;
+	static bool mirroredNoBorder = false;
+
+	static Utils::Hook createWindowHook;
+	static Utils::Hook drawCursorHook;
+
+	static bool isDragActive = false;
+	static POINT dragOffset{};
+	static DWORD windowThreadId = 0;
+
+	static bool ActivateMainWindow()
 	{
-		bool WindowDragActive = false;
-		POINT WindowDragOffset{};
-		DWORD WindowThreadId = 0;
+		const auto window = Window::GetWindow();
 
-		bool ActivateMainWindow()
+		if (!window || !IsWindow(window))
 		{
-			const auto window = Window::GetWindow();
-			if (!window || !IsWindow(window)) return false;
-
-			ShowWindow(window, SW_SHOWNORMAL);
-
-			const auto foreground = GetForegroundWindow();
-			const auto currentThread = GetCurrentThreadId();
-			const auto foregroundThread = foreground ? GetWindowThreadProcessId(foreground, nullptr) : 0;
-			const bool attached = foregroundThread && foregroundThread != currentThread
-				&& AttachThreadInput(currentThread, foregroundThread, TRUE);
-
-			SetWindowPos(window, HWND_TOP, 0, 0, 0, 0,
-				SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-			BringWindowToTop(window);
-			SetForegroundWindow(window);
-			SetActiveWindow(window);
-			SetFocus(window);
-
-			if (attached) AttachThreadInput(currentThread, foregroundThread, FALSE);
-			return Window::HasFocus();
+			return false;
 		}
 
-		void BeginWindowDrag(HWND window)
-		{
-			RECT rect{};
-			POINT cursor{};
-			if (!GetWindowRect(window, &rect) || !GetCursorPos(&cursor)) return;
+		ShowWindow(window, SW_SHOWNORMAL);
 
-			RawMouse::SuspendMouseInput();
-			WindowDragOffset = { cursor.x - rect.left, cursor.y - rect.top };
-			SetCapture(window);
-			// SetCapture returns the PREVIOUS capture owner, not success/failure.
-			WindowDragActive = GetCapture() == window;
+		const auto foreground = GetForegroundWindow();
+		const auto currentThread = GetCurrentThreadId();
+		DWORD foregroundThread = 0;
+
+		if (foreground)
+		{
+			foregroundThread = GetWindowThreadProcessId(foreground, nullptr);
 		}
 
-		void UpdateWindowDrag(HWND window)
+		const bool isAttached = foregroundThread && foregroundThread != currentThread && AttachThreadInput(currentThread, foregroundThread, TRUE);
+
+		SetWindowPos(window, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+		BringWindowToTop(window);
+		SetForegroundWindow(window);
+		SetActiveWindow(window);
+		SetFocus(window);
+
+		if (isAttached)
 		{
-			if (!WindowDragActive) return;
-
-			POINT cursor{};
-			if (!GetCursorPos(&cursor)) return;
-
-			SetWindowPos(window, nullptr,
-				cursor.x - WindowDragOffset.x,
-				cursor.y - WindowDragOffset.y,
-				0, 0,
-				SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+			AttachThreadInput(currentThread, foregroundThread, FALSE);
 		}
 
-		void EndWindowDrag()
-		{
-			if (!WindowDragActive) return;
-			WindowDragActive = false;
-			if (GetCapture() == Window::GetWindow()) ReleaseCapture();
-		}
+		return Window::HasFocus();
 	}
 
-	bool Window::IsLoadingScreenMovable()
+	static void BeginWindowDrag(HWND window)
 	{
-		const auto* fullscreen = Dvar::Var("r_fullscreen").get<Game::dvar_t*>();
-		return MainWindow && fullscreen && !fullscreen->current.enabled && !IsNoBorder()
-			&& (!FastFiles::MainMenuReady() || !FastFiles::Ready() || Renderer::IsDeviceRecoveryActive());
-	}
+		RECT rect{};
+		POINT cursor{};
 
-	bool Window::IsDragging()
-	{
-		return WindowDragActive;
-	}
+		if (!GetWindowRect(window, &rect) || !GetCursorPos(&cursor))
+		{
+			return;
+		}
 
-	void Window::PumpLoadingEvents()
-	{
-		thread_local std::uint32_t callCounter = 0;
-		if ((++callCounter & 0x1F) != 0 && !WindowDragActive) return;
-
-		// Asset uploads can occupy the window-owning thread for seconds. Only
-		// service mouse/window messages here; never re-enter commands or loading.
-		if (!WindowThreadId || GetCurrentThreadId() != WindowThreadId) return;
-		static bool pumping = false;
-		static ULONGLONG lastPump = 0;
-		const auto now = GetTickCount64();
-		if (pumping || now - lastPump < 8 || (!IsLoadingScreenMovable() && !IsDragging())) return;
-		lastPump = now;
-		pumping = true;
-		const auto guard = gsl::finally([] { pumping = false; });
 		RawMouse::SuspendMouseInput();
-		MSG message{};
-		const auto dispatch = [&](UINT first, UINT last)
-		{
-			for (int count = 0; count < 32 && PeekMessageA(&message, MainWindow, first, last, PM_REMOVE); ++count)
-			{
-				if (message.message == WM_QUIT)
-				{
-					PostQuitMessage(static_cast<int>(message.wParam));
-					break;
-				}
-				DispatchMessageA(&message);
-			}
-		};
-		dispatch(WM_MOUSEFIRST, WM_MOUSELAST);
-		dispatch(WM_NCMOUSEMOVE, WM_NCMBUTTONDBLCLK);
-		dispatch(WM_PAINT, WM_PAINT);
+		dragOffset = { cursor.x - rect.left, cursor.y - rect.top };
+		SetCapture(window);
+
+		isDragActive = GetCapture() == window;
 	}
 
-	LRESULT CALLBACK Window::NativeWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
+	static void UpdateWindowDrag(HWND window)
 	{
-		// A mode change or completed load must also cancel a drag already in progress.
-		if (WindowDragActive && !IsLoadingScreenMovable()) EndWindowDrag();
+		POINT cursor{};
 
-		if (Msg == WM_MOUSEACTIVATE && IsLoadingScreenMovable())
+		if (!isDragActive || !GetCursorPos(&cursor))
 		{
-			return MA_ACTIVATE;
+			return;
 		}
 
-		if (Msg == WM_NCHITTEST && IsLoadingScreenMovable())
+		SetWindowPos(window, nullptr, cursor.x - dragOffset.x, cursor.y - dragOffset.y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+	}
+
+	static void EndWindowDrag()
+	{
+		if (!isDragActive)
 		{
-			const auto hit = DefWindowProcA(hWnd, Msg, wParam, lParam);
-			// Preserve caption buttons, borders and off-window hit tests.
-			return hit == HTCLIENT ? HTCAPTION : hit;
+			return;
 		}
 
-		if ((Msg == WM_LBUTTONDOWN || (Msg == WM_NCLBUTTONDOWN && wParam == HTCAPTION)) && IsLoadingScreenMovable())
-		{
-			BeginWindowDrag(hWnd);
-			return 0;
-		}
+		isDragActive = false;
 
-		if (WindowDragActive && (Msg == WM_MOUSEMOVE || Msg == WM_NCMOUSEMOVE))
+		if (GetCapture() == Window::GetWindow())
 		{
-			UpdateWindowDrag(hWnd);
-			return 0;
+			ReleaseCapture();
 		}
-
-		if (WindowDragActive && (Msg == WM_LBUTTONUP || Msg == WM_NCLBUTTONUP
-			|| Msg == WM_CAPTURECHANGED || Msg == WM_CANCELMODE))
-		{
-			EndWindowDrag();
-			return 0;
-		}
-
-		if (Msg == WM_SETCURSOR && (IsLoadingScreenMovable() || IsDragging()))
-		{
-			SetCursor(LoadCursor(nullptr, IDC_ARROW));
-			return TRUE;
-		}
-
-		if (Msg == WM_CANCELMODE || Msg == WM_KILLFOCUS || Msg == WM_NCDESTROY)
-		{
-			EndWindowDrag();
-		}
-
-		const auto original = OriginalWindowProc;
-		if (Msg == WM_NCDESTROY && hWnd == MainWindow)
-		{
-			MainWindow = nullptr;
-			WindowThreadId = 0;
-			OriginalWindowProc = nullptr;
-		}
-		if (original)
-		{
-			return CallWindowProcA(original, hWnd, Msg, wParam, lParam);
-		}
-
-		return DefWindowProcA(hWnd, Msg, wParam, lParam);
 	}
 
 	int Window::Width()
 	{
-		return Window::Width(Window::MainWindow);
+		return Width(mainWindow);
 	}
 
 	int Window::Height()
 	{
-		return Window::Height(Window::MainWindow);
+		return Height(mainWindow);
 	}
 
 	int Window::Width(HWND window)
 	{
 		RECT rect;
-		Window::Dimension(window, &rect);
+		Dimension(window, &rect);
 		return (rect.right - rect.left);
 	}
 
 	int Window::Height(HWND window)
 	{
 		RECT rect;
-		Window::Dimension(window, &rect);
+		Dimension(window, &rect);
 		return (rect.bottom - rect.top);
 	}
 
 	void Window::Dimension(RECT* rect)
 	{
-		Window::Dimension(Window::MainWindow, rect);
+		Dimension(mainWindow, rect);
 	}
 
 	void Window::Dimension(HWND window, RECT* rect)
@@ -233,72 +175,232 @@ namespace Components
 
 	bool Window::IsCursorWithin(HWND window)
 	{
-		if (!window || !IsWindowVisible(window) || IsIconic(window)) return false;
+		if (!window || !IsWindowVisible(window) || IsIconic(window))
+		{
+			return false;
+		}
+
 		RECT rect{};
 		POINT point{};
-		return GetClientRect(window, &rect) && GetCursorPos(&point)
-			&& ScreenToClient(window, &point) && PtInRect(&rect, point);
+
+		return GetClientRect(window, &rect) && GetCursorPos(&point) && ScreenToClient(window, &point) && PtInRect(&rect, point);
 	}
 
 	HWND Window::GetWindow()
 	{
-		return Window::MainWindow;
+		return mainWindow;
 	}
 
 	bool Window::HasFocus()
 	{
-		return MainWindow && IsWindowVisible(MainWindow) && !IsIconic(MainWindow)
-			&& GetForegroundWindow() == MainWindow;
+		return mainWindow && IsWindowVisible(mainWindow) && !IsIconic(mainWindow) && GetForegroundWindow() == mainWindow;
 	}
 
-	void Window::OnWndMessage(UINT Msg, Utils::Slot<Window::WndProcCallback> callback)
+	void Window::ApplyDisplayModeDvars()
 	{
-		WndMessageCallbacks.emplace(Msg, callback);
-	}
+		auto* const r_displayMode = *Game::r_displayMode;
 
-	void Window::OnDeviceChange(Utils::Slot<Window::DeviceChangeCallback> callback)
-	{
-		DeviceChangeSignals.connect(callback);
-	}
-
-	void Window::OnCreate(Utils::Slot<CreateCallback> callback)
-	{
-		CreateSignals.connect(callback);
-	}
-
-	int Window::IsNoBorder()
-	{
-		return Window::NoBorder.get<bool>();
-	}
-
-	__declspec(naked) void Window::StyleHookStub()
-	{
-		__asm
+		if (!r_displayMode || !r_fullscreen.IsValid() || !r_noborder.IsValid())
 		{
-			call Window::IsNoBorder
-			test al, al
-			jz setBorder
-
-			mov ebp, WS_VISIBLE | WS_POPUP
-			retn
-
-		setBorder:
-			mov ebp, WS_VISIBLE | WS_SYSMENU | WS_CAPTION | WS_MINIMIZEBOX
-			retn
-		}
-	}
-
-	void Window::DrawCursorStub(Game::ScreenPlacement* scrPlace, float x, float y, float w, float h, int horzAlign, int vertAlign, const float* color, Game::Material* material)
-	{
-		if (LobbyScene::IsTransitionActive())
-		{
-			Window::CursorVisible = FALSE;
 			return;
 		}
 
-		if (Window::NativeCursor.get<bool>())
+		const bool isFullscreen = r_fullscreen.Get<bool>();
+		const bool isNoBorder = r_noborder.Get<bool>();
+		const bool hasMenuChanged = hasMirroredDisplayMode && (isFullscreen != mirroredFullscreen || isNoBorder != mirroredNoBorder);
+
+		if (hasMenuChanged)
 		{
-			Window::CursorVisible = TRUE;
+			int displayMode = displayModeWindowed;
+
+			if (isFullscreen)
+			{
+				displayMode = displayModeFullscreen;
+			}
+			else if (isNoBorder)
+			{
+				displayMode = displayModeNoBorder;
+			}
+
+			Game::Dvar_SetInt(r_displayMode, displayMode);
+		}
+
+		const int displayMode = r_displayMode->current.integer;
+
+		mirroredFullscreen = displayMode == displayModeFullscreen;
+		mirroredNoBorder = displayMode == displayModeNoBorder || (displayMode == displayModeFullscreen && isNoBorder);
+		hasMirroredDisplayMode = true;
+
+		r_fullscreen.Set(mirroredFullscreen);
+		r_noborder.Set(mirroredNoBorder);
+	}
+
+	bool Window::IsLoadingScreenMovable()
+	{
+		const auto* const r_displayMode = *Game::r_displayMode;
+
+		if (!mainWindow || !r_displayMode || r_displayMode->current.integer != displayModeWindowed)
+		{
+			return false;
+		}
+
+		return !FastFiles::MainMenuReady() || !FastFiles::Ready() || Renderer::IsDeviceRecoveryActive();
+	}
+
+	bool Window::IsDragging()
+	{
+		return isDragActive;
+	}
+
+	void Window::PumpLoadingEvents()
+	{
+		thread_local std::uint32_t callCount = 0;
+		static bool isPumping = false;
+		static ULONGLONG lastPump = 0;
+
+		if ((++callCount & 0x1F) != 0 && !isDragActive)
+		{
+			return;
+		}
+
+		if (!windowThreadId || GetCurrentThreadId() != windowThreadId)
+		{
+			return;
+		}
+
+		const auto now = GetTickCount64();
+
+		if (isPumping || now - lastPump < 8 || (!IsLoadingScreenMovable() && !IsDragging()))
+		{
+			return;
+		}
+
+		lastPump = now;
+		isPumping = true;
+
+		RawMouse::SuspendMouseInput();
+
+		MSG message{};
+
+		const auto dispatch = [&message](UINT first, UINT last)
+		{
+			for (int count = 0; count < 32 && PeekMessageA(&message, mainWindow, first, last, PM_REMOVE); ++count)
+			{
+				if (message.message == WM_QUIT)
+				{
+					PostQuitMessage(static_cast<int>(message.wParam));
+					break;
+				}
+
+				DispatchMessageA(&message);
+			}
+		};
+
+		dispatch(WM_MOUSEFIRST, WM_MOUSELAST);
+		dispatch(WM_NCMOUSEMOVE, WM_NCMBUTTONDBLCLK);
+		dispatch(WM_PAINT, WM_PAINT);
+
+		isPumping = false;
+	}
+
+	LRESULT CALLBACK Window::NativeWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
+	{
+		if (isDragActive && !IsLoadingScreenMovable())
+		{
+			EndWindowDrag();
+		}
+
+		if (Msg == WM_MOUSEACTIVATE && IsLoadingScreenMovable())
+		{
+			return MA_ACTIVATE;
+		}
+
+		if (Msg == WM_NCHITTEST && IsLoadingScreenMovable())
+		{
+			const auto hit = DefWindowProcA(hWnd, Msg, wParam, lParam);
+
+			if (hit == HTCLIENT)
+			{
+				return HTCAPTION;
+			}
+
+			return hit;
+		}
+
+		const bool isCaptionPress = Msg == WM_NCLBUTTONDOWN && wParam == HTCAPTION;
+
+		if ((Msg == WM_LBUTTONDOWN || isCaptionPress) && IsLoadingScreenMovable())
+		{
+			BeginWindowDrag(hWnd);
+			return 0;
+		}
+
+		if (isDragActive && (Msg == WM_MOUSEMOVE || Msg == WM_NCMOUSEMOVE))
+		{
+			UpdateWindowDrag(hWnd);
+			return 0;
+		}
+
+		if (isDragActive && (Msg == WM_LBUTTONUP || Msg == WM_NCLBUTTONUP || Msg == WM_CAPTURECHANGED || Msg == WM_CANCELMODE))
+		{
+			EndWindowDrag();
+			return 0;
+		}
+
+		if (Msg == WM_SETCURSOR && (IsLoadingScreenMovable() || IsDragging()))
+		{
+			SetCursor(LoadCursor(nullptr, IDC_ARROW));
+			return TRUE;
+		}
+
+		if (Msg == WM_CANCELMODE || Msg == WM_KILLFOCUS || Msg == WM_NCDESTROY)
+		{
+			EndWindowDrag();
+		}
+
+		const auto original = originalWindowProc;
+
+		if (Msg == WM_NCDESTROY && hWnd == mainWindow)
+		{
+			mainWindow = nullptr;
+			windowThreadId = 0;
+			originalWindowProc = nullptr;
+		}
+
+		if (original)
+		{
+			return CallWindowProcA(original, hWnd, Msg, wParam, lParam);
+		}
+
+		return DefWindowProcA(hWnd, Msg, wParam, lParam);
+	}
+
+	void Window::OnWndMessage(UINT Msg, const std::function<WndProcCallback>& callback)
+	{
+		wndMessageCallbacks.emplace(Msg, callback);
+	}
+
+	void Window::OnDeviceChange(const std::function<DeviceChangeCallback>& callback)
+	{
+		deviceChangeSignals.push_back(callback);
+	}
+
+	void Window::OnCreate(const std::function<CreateCallback>& callback)
+	{
+		createSignals.push_back(callback);
+	}
+
+	void Window::DrawCursorStub(const Game::ScreenPlacement* scrPlace, float x, float y, float w, float h, int horzAlign, int vertAlign, const float* color, Game::Material* material)
+	{
+		if (LobbyScene::IsTransitionActive())
+		{
+			cursorVisible = FALSE;
+			return;
+		}
+
+		if (ui_nativeCursor.Get<bool>())
+		{
+			cursorVisible = TRUE;
 		}
 		else
 		{
@@ -310,18 +412,37 @@ namespace Components
 	{
 		if (LobbyScene::IsTransitionActive())
 		{
-			Window::CursorVisible = FALSE;
-			return -1;
+			static int transitionCount = -1;
+
+			if (show)
+			{
+				++transitionCount;
+			}
+			else
+			{
+				--transitionCount;
+			}
+
+			cursorVisible = FALSE;
+			return transitionCount;
 		}
 
-		if (Window::NativeCursor.get<bool>() && Window::HasFocus() && Window::IsCursorWithin(Window::MainWindow))
+		if (ui_nativeCursor.Get<bool>() && HasFocus() && IsCursorWithin(mainWindow))
 		{
 			static int count = 0;
-			(show ? ++count : --count);
+
+			if (show)
+			{
+				++count;
+			}
+			else
+			{
+				--count;
+			}
 
 			if (count >= 0)
 			{
-				Window::CursorVisible = TRUE;
+				cursorVisible = TRUE;
 			}
 
 			return count;
@@ -330,27 +451,56 @@ namespace Components
 		return ShowCursor(show);
 	}
 
+	static void ApplyWindowIcon(HWND window)
+	{
+		HMODULE module = nullptr;
+		const DWORD flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
+
+		if (!GetModuleHandleExW(flags, reinterpret_cast<LPCWSTR>(&ApplyWindowIcon), &module))
+		{
+			return;
+		}
+
+		auto* const bigIcon = static_cast<HICON>(LoadImageW(module, MAKEINTRESOURCEW(windowIconResource), IMAGE_ICON,
+			GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR));
+		auto* const smallIcon = static_cast<HICON>(LoadImageW(module, MAKEINTRESOURCEW(windowIconResource), IMAGE_ICON,
+			GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
+
+		if (bigIcon)
+		{
+			SendMessageW(window, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(bigIcon));
+			SetClassLongPtrW(window, GCLP_HICON, reinterpret_cast<LONG_PTR>(bigIcon));
+		}
+
+		if (smallIcon)
+		{
+			SendMessageW(window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(smallIcon));
+			SetClassLongPtrW(window, GCLP_HICONSM, reinterpret_cast<LONG_PTR>(smallIcon));
+		}
+	}
+
 	HWND WINAPI Window::CreateMainWindow(DWORD dwExStyle, LPCSTR lpClassName, LPCSTR lpWindowName, DWORD dwStyle, int X, int Y, int nWidth, int nHeight, HWND hWndParent, HMENU hMenu, HINSTANCE hInstance, LPVOID lpParam)
 	{
-		Window::MainWindow = CreateWindowExA(dwExStyle, lpClassName, lpWindowName, dwStyle, X, Y, nWidth, nHeight, hWndParent, hMenu, hInstance, lpParam);
-		if (Window::MainWindow)
-		{
-			WindowThreadId = GetCurrentThreadId();
-			WindowDragActive = false;
-			Window::OriginalWindowProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrA(
-				Window::MainWindow, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&Window::NativeWindowProc)));
+		Utils::Hook::Set<void*>(ShowCursorImport, reinterpret_cast<void*>(ShowCursorHook));
 
-			// The launcher can still own the foreground window when the game
-			// creates its HWND.  Activate it here and once again after the first
-			// frame; the deferred retry covers the normal Windows foreground-lock
-			// race without stealing focus later during gameplay.
+		mainWindow = CreateWindowExA(dwExStyle, lpClassName, lpWindowName, dwStyle, X, Y, nWidth, nHeight, hWndParent, hMenu, hInstance, lpParam);
+
+		if (mainWindow)
+		{
+			windowThreadId = GetCurrentThreadId();
+			isDragActive = false;
+			originalWindowProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrA(mainWindow, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&NativeWindowProc)));
+
+			ApplyWindowIcon(mainWindow);
 			ActivateMainWindow();
+
 			const auto activationStart = std::chrono::steady_clock::now();
+
 			Scheduler::Schedule([activationStart]
 			{
-				if (!Window::MainWindow || !IsWindow(Window::MainWindow)
-					|| Window::HasFocus()
-					|| std::chrono::steady_clock::now() - activationStart >= 5s)
+				const bool isDone = !mainWindow || !IsWindow(mainWindow) || HasFocus() || std::chrono::steady_clock::now() - activationStart >= 5s;
+
+				if (isDone)
 				{
 					return true;
 				}
@@ -359,9 +509,13 @@ namespace Components
 				return false;
 			}, Scheduler::Pipeline::MAIN, 100ms);
 		}
-		CreateSignals();
 
-		return Window::MainWindow;
+		for (const auto& callback : createSignals)
+		{
+			callback();
+		}
+
+		return mainWindow;
 	}
 
 	void Window::ApplyCursor()
@@ -372,89 +526,133 @@ namespace Components
 			return;
 		}
 
-		bool isLoading = !FastFiles::Ready() && !IsLoadingScreenMovable() && !IsDragging();
-		SetCursor(LoadCursor(nullptr, isLoading ? IDC_APPSTARTING : IDC_ARROW));
+		const bool isLoading = !FastFiles::Ready() && !IsLoadingScreenMovable() && !IsDragging();
+
+		if (isLoading)
+		{
+			SetCursor(LoadCursor(nullptr, IDC_APPSTARTING));
+		}
+		else
+		{
+			SetCursor(LoadCursor(nullptr, IDC_ARROW));
+		}
 	}
 
-	BOOL WINAPI Window::MessageHandler(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
+	LRESULT CALLBACK Window::MessageHandler(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
 	{
-		if ((Msg == WM_ACTIVATE && (LOWORD(wParam) == WA_INACTIVE || HIWORD(wParam)))
-			|| (Msg == WM_ACTIVATEAPP && !wParam)
-			|| (Msg == WM_SIZE && wParam == SIZE_MINIMIZED))
+		const bool isDeactivated = (Msg == WM_ACTIVATE && (LOWORD(wParam) == WA_INACTIVE || HIWORD(wParam))) || (Msg == WM_ACTIVATEAPP && !wParam);
+		const bool isMinimised = Msg == WM_SIZE && wParam == SIZE_MINIMIZED;
+
+		if (isDeactivated || isMinimised)
 		{
 			RawMouse::SuspendMouseInput();
 		}
 
-		// Handle raw input device change events.
-		//
-		// Note that we delegate handling to DeviceChangeSignals(), which interprets
-		// the event and performs any necessary updates to the gamepad state.
-		//
 		if (Msg == WM_INPUT_DEVICE_CHANGE)
 		{
-			DeviceChangeSignals(wParam, lParam);
+			for (const auto& callback : deviceChangeSignals)
+			{
+				callback(wParam, lParam);
+			}
 		}
 
-		if (const auto cb = WndMessageCallbacks.find(Msg); cb != WndMessageCallbacks.end())
+		if (const auto cb = wndMessageCallbacks.find(Msg); cb != wndMessageCallbacks.end())
 		{
 			return cb->second(lParam, wParam);
 		}
 
-		return Utils::Hook::Call<BOOL(__stdcall)(HWND, UINT, WPARAM, LPARAM)>(0x4731F0)(hWnd, Msg, wParam, lParam);
+		return reinterpret_cast<WNDPROC>(Utils::Hook::Rebase(MainWndProc))(hWnd, Msg, wParam, lParam);
 	}
 
 	void Window::EnableDpiAwareness()
 	{
 		const Utils::Library user32{"user32.dll"};
 
-		user32.invokePascal<void>("SetProcessDpiAwarenessContext", DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+		user32.InvokePascal<BOOL>("SetProcessDpiAwarenessContext", DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 	}
 
 	Window::Window()
 	{
-		// Borderless window
-		Window::NoBorder = Dvar::Register<bool>("r_noborder", true, Game::DVAR_ARCHIVE, "Do not use a border in windowed mode");
-		Window::NativeCursor = Dvar::Register<bool>("ui_nativeCursor", false, Game::DVAR_ARCHIVE, "Display native cursor");
+		const bool isExpected = Utils::Hook::MatchesBytes(R_InitGraphicsApi_CreateWindowCall, createWindowCall, sizeof(createWindowCall))
+			&& Utils::Hook::BranchesTo(UI_RefreshViewport_DrawCursorCall, UI_DrawHandlePic, false)
+			&& Utils::Hook::IsLeaIntact(wndProcLea);
 
-		Utils::Hook(0x507643, Window::StyleHookStub, HOOK_CALL).install()->quick();
+		if (!isExpected)
+		{
+			Logger::Error("window: window creation does not read as expected, no window hooks\n");
+			return;
+		}
 
-		// Main window creation
-		Utils::Hook::Nop(0x5076AA, 1);
-		Utils::Hook(0x5076AB, Window::CreateMainWindow, HOOK_CALL).install()->quick();
+		const auto messageHandler = Utils::Hook::Trampoline(Utils::Hook::Rebase(wndProcLea.address), reinterpret_cast<std::uintptr_t>(MessageHandler));
+		if (!messageHandler || !Utils::Hook::CanLeaReach(wndProcLea, reinterpret_cast<void*>(messageHandler)))
+		{
+			Logger::Error("window: no room for the message handler beside the image, no window hooks\n");
+			return;
+		}
 
-		// Mark the cursor as visible
-		Utils::Hook(0x48E5D3, Window::DrawCursorStub, HOOK_CALL).install()->quick();
+		Utils::Hook::Nop(R_InitGraphicsApi_CreateWindowCall, 1);
+		const bool isSeated = createWindowHook.Initialize(R_InitGraphicsApi_CreateWindowCall + 1, reinterpret_cast<void*>(CreateMainWindow), HOOK_CALL)->Install()->IsInstalled()
 
-		// Draw the cursor if necessary
+			&& drawCursorHook.Initialize(UI_RefreshViewport_DrawCursorCall, reinterpret_cast<void*>(DrawCursorStub), HOOK_CALL)->Install()->IsInstalled();
+
+		if (!isSeated)
+		{
+			createWindowHook.Uninstall();
+			drawCursorHook.Uninstall();
+			Utils::Hook::Set<std::uint8_t>(R_InitGraphicsApi_CreateWindowCall, createWindowCall[0]);
+
+			Logger::Error("window: could not seat the window hooks\n");
+			return;
+		}
+
+		Utils::Hook::PointLeaAt(wndProcLea, reinterpret_cast<void*>(messageHandler));
+
+		Events::OnDvarInit([]
+		{
+			ui_nativeCursor = Dvar::Register("ui_nativeCursor", false, Game::DVAR_ARCHIVE, "Display native cursor");
+			r_fullscreen = Dvar::Register("r_fullscreen", false, Game::DVAR_NONE, "Display game full screen");
+			r_noborder = Dvar::Register("r_noborder", false, Game::DVAR_NONE, "Do not use a border in windowed mode");
+		});
+
 		Scheduler::Loop([]
 		{
-			if (Window::NativeCursor.get<bool>() && Window::HasFocus() && Window::IsCursorWithin(Window::MainWindow))
+			if (ui_nativeCursor.Get<bool>() && HasFocus() && IsCursorWithin(mainWindow))
 			{
 				int value = 0;
-				Window::ApplyCursor();
+				ApplyCursor();
 
-				if (Window::CursorVisible)
+				if (cursorVisible)
 				{
-					while ((value = ShowCursor(TRUE)) < 0) {};
-					while (value > 0) { value = ShowCursor(FALSE); } // Set display counter to 0
+					do
+					{
+						value = ShowCursor(TRUE);
+					}
+					while (value < 0);
+
+					while (value > 0)
+					{
+						value = ShowCursor(FALSE);
+					}
 				}
 				else
 				{
-					while ((value = ShowCursor(FALSE)) >= 0) {};
-					while (value < -1) { value = ShowCursor(TRUE); } // Set display counter to -1
+					do
+					{
+						value = ShowCursor(FALSE);
+					}
+					while (value >= 0);
+
+					while (value < -1)
+					{
+						value = ShowCursor(TRUE);
+					}
 				}
 
-				Window::CursorVisible = FALSE;
+				cursorVisible = FALSE;
 			}
 		}, Scheduler::Pipeline::RENDERER);
 
-		// Don't let the game interact with the native cursor
-		Utils::Hook::Set(0x6D7348, Window::ShowCursorHook);
-
-		// Use custom message handler
-		Utils::Hook::Set(0x64D298, Window::MessageHandler);
-
-		Window::OnWndMessage(WM_SETCURSOR, [](WPARAM lParam, LPARAM wParam)
+		OnWndMessage(WM_SETCURSOR, [](LPARAM lParam, WPARAM wParam) -> LRESULT
 		{
 			if (LobbyScene::IsTransitionActive())
 			{
@@ -468,39 +666,30 @@ namespace Components
 				return TRUE;
 			}
 
-			if (!Window::HasFocus() || !Window::IsCursorWithin(Window::MainWindow))
+			if (!HasFocus() || !IsCursorWithin(mainWindow))
 			{
-				return static_cast<BOOL>(DefWindowProcA(Window::MainWindow, WM_SETCURSOR, wParam, lParam));
+				return DefWindowProcA(mainWindow, WM_SETCURSOR, wParam, lParam);
 			}
-			Window::ApplyCursor();
+
+			ApplyCursor();
 			return TRUE;
 		});
 
-		// Register for raw input device notifications when the window is created.
-		//
-		// This allows the system to notify us when a gamepad is connected or
-		// disconnected, without requiring explicit polling. We request
-		// notifications specifically for gamepad-class HID devices.
-		//
-		Window::OnCreate([]()
+		OnCreate([]
+		{
+			RAWINPUTDEVICE rid{};
+			rid.usUsagePage = HID_USAGE_PAGE_GENERIC;
+			rid.usUsage = HID_USAGE_GENERIC_GAMEPAD;
+			rid.dwFlags = RIDEV_DEVNOTIFY;
+			rid.hwndTarget = mainWindow;
+
+			if (!RegisterRawInputDevices(&rid, 1, sizeof(rid)))
 			{
-				RAWINPUTDEVICE rid{};
-				rid.usUsagePage = HID_USAGE_PAGE_GENERIC;
-				rid.usUsage = HID_USAGE_GENERIC_GAMEPAD;
-				rid.dwFlags = RIDEV_DEVNOTIFY;
-				rid.hwndTarget = Window::MainWindow;
+				rid.usUsage = 0x00;
+				RegisterRawInputDevices(&rid, 1, sizeof(rid));
+			}
+		});
 
-				if (!RegisterRawInputDevices(&rid, 1, sizeof(rid)))
-				{
-					// Some systems may reject usage-specific registration. In that case,
-					// fall back to receiving notifications for all devices within the
-					// generic desktop page. We lose precision but still receive updates.
-					//
-					rid.usUsage = 0x00;
-					RegisterRawInputDevices(&rid, 1, sizeof(rid));
-				}
-			});
-
-		Window::EnableDpiAwareness();
+		EnableDpiAwareness();
 	}
 }

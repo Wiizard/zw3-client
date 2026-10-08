@@ -1,39 +1,39 @@
+#include "STDInclude.hpp"
+
 #include "Int64.hpp"
 #include "Script.hpp"
 
-#define INT64_OPERATION(expr) [](const std::int64_t a, [[maybe_unused]] const std::int64_t b) { return expr; }
-
 namespace Components::GSC
 {
-	std::unordered_map<std::string, Int64::int64_OP> Int64::Operations =
+	std::unordered_map<std::string, Int64::int64_OP> Int64::operations =
 	{
-		{"+",  INT64_OPERATION(a + b)},
-		{"-",  INT64_OPERATION(a - b)},
-		{"*",  INT64_OPERATION(a * b)},
-		{"/",  INT64_OPERATION(a / b)},
-		{"&",  INT64_OPERATION(a & b)},
-		{"^",  INT64_OPERATION(a ^ b)},
-		{"|",  INT64_OPERATION(a | b)},
-		{"~",  INT64_OPERATION(~a)},
-		{"%",  INT64_OPERATION(a % b)},
-		{">>", INT64_OPERATION(a >> b)},
-		{"<<", INT64_OPERATION(a << b)},
-		{"++", INT64_OPERATION(a + 1)},
-		{"--", INT64_OPERATION(a - 1)},
+		{ "+", [](const std::int64_t a, const std::int64_t b) { return a + b; } },
+		{ "-", [](const std::int64_t a, const std::int64_t b) { return a - b; } },
+		{ "*", [](const std::int64_t a, const std::int64_t b) { return a * b; } },
+		{ "/", [](const std::int64_t a, const std::int64_t b) { return a / b; } },
+		{ "&", [](const std::int64_t a, const std::int64_t b) { return a & b; } },
+		{ "^", [](const std::int64_t a, const std::int64_t b) { return a ^ b; } },
+		{ "|", [](const std::int64_t a, const std::int64_t b) { return a | b; } },
+		{ "~", [](const std::int64_t a, [[maybe_unused]] const std::int64_t b) { return ~a; } },
+		{ "%", [](const std::int64_t a, const std::int64_t b) { return a % b; } },
+		{ ">>", [](const std::int64_t a, const std::int64_t b) { return a >> b; } },
+		{ "<<", [](const std::int64_t a, const std::int64_t b) { return a << b; } },
+		{ "++", [](const std::int64_t a, [[maybe_unused]] const std::int64_t b) { return a + 1; } },
+		{ "--", [](const std::int64_t a, [[maybe_unused]] const std::int64_t b) { return a - 1; } },
 	};
 
-	std::unordered_map<std::string, Int64::int64_Comp> Int64::Comparisons
+	std::unordered_map<std::string, Int64::int64_Comp> Int64::comparisons =
 	{
-		{">",  INT64_OPERATION(a > b)},
-		{">=", INT64_OPERATION(a >= b)},
-		{"==", INT64_OPERATION(a == b)},
-		{"<=", INT64_OPERATION(a <= b)},
-		{"<",  INT64_OPERATION(a < b)},
+		{ ">", [](const std::int64_t a, const std::int64_t b) { return a > b; } },
+		{ ">=", [](const std::int64_t a, const std::int64_t b) { return a >= b; } },
+		{ "==", [](const std::int64_t a, const std::int64_t b) { return a == b; } },
+		{ "<=", [](const std::int64_t a, const std::int64_t b) { return a <= b; } },
+		{ "<", [](const std::int64_t a, const std::int64_t b) { return a < b; } },
 	};
 
 	std::int64_t Int64::GetInt64Arg(unsigned int index, bool optional)
 	{
-		if ((optional) && (index >= Game::Scr_GetNumParam()))
+		if (optional && index >= Game::Scr_GetNumParam())
 		{
 			return 0;
 		}
@@ -48,7 +48,7 @@ namespace Components::GSC
 			return std::strtoll(Game::Scr_GetString(index), nullptr, 0);
 		}
 
-		Game::Scr_ParamError(index, Utils::String::VA("cannot cast %s to int64", Game::Scr_GetTypeName(index)));
+		Script::Scr_ParamError(index, Utils::String::VA("cannot cast %s to int64", Game::Scr_GetTypeName(index)));
 		return 0;
 	}
 
@@ -71,23 +71,23 @@ namespace Components::GSC
 			const auto* op = Game::Scr_GetString(1);
 			const auto b = GetInt64Arg(2, true);
 
+			const auto operation = operations.find(op);
+
+			if (operation != operations.end())
 			{
-				if (const auto itr = Operations.find(op); itr != Operations.end())
-				{
-					Game::Scr_AddString(Utils::String::VA("%lld", itr->second(a, b)));
-					return;
-				}
+				Game::Scr_AddString(Utils::String::VA("%lld", operation->second(a, b)));
+				return;
 			}
 
+			const auto comparison = comparisons.find(op);
+
+			if (comparison != comparisons.end())
 			{
-				if (const auto itr = Comparisons.find(op); itr != Comparisons.end())
-				{
-					Game::Scr_AddBool(itr->second(a, b));
-					return;
-				}
+				Game::Scr_AddBool(comparison->second(a, b));
+				return;
 			}
 
-			Game::Scr_ParamError(1, "Invalid int64 operation");
+			Script::Scr_ParamError(1, "Invalid int64 operation");
 		});
 	}
 

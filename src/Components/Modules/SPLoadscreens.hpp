@@ -6,11 +6,12 @@ namespace Components
 	{
 	public:
 		SPLoadscreens();
-		~SPLoadscreens();
-		void preDestroy() override;
 
-		static void SetLoadingMap(const std::string& mapname);
-		static void PreloadMapPreview(const std::string& mapname);
-		static void OnMenuFreed(Game::menuDef_t* menu);
+		static void SetLoadingMap(const std::string& name);
+		static void PreloadMapPreview(const std::string& name);
+
+		static void PatchConnectMenu();
+
+		static void OnMenusFreed();
 	};
 }

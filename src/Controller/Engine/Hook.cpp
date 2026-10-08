@@ -1,588 +1,683 @@
-#include "Hook.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Engine/Hook.hpp"
+#include "Controller/Engine/Bind.hpp"
+#include "Controller/Engine/Dvar.hpp"
+#include "Controller/Engine/Engine.hpp"
+#include "Controller/Engine/NetMove.hpp"
+#include "Controller/Mapping/Glyph.hpp"
+#include "Controller/Mapping/Key.hpp"
+#include "Controller/Runtime.hpp"
 
-#include <cstring>
-#include <exception>
+#include "Components/Modules/Command.hpp"
+#include "Components/Modules/Console.hpp"
+#include "Components/Modules/Logger.hpp"
+#include "Components/Modules/RawMouse.hpp"
 
-#include "../Mapping/Glyph.hpp"
-#include "../Mapping/Key.hpp"
-#include "../Runtime.hpp"
-#include "Bind.hpp"
-#include "Engine.hpp"
-#include "Key.hpp"
-#include "NetMove.hpp"
-#include "View.hpp"
-
-
-#include "../../Components/Modules/Logger.hpp"
-#include "../../Components/Modules/RawMouse.hpp"
-#include "../../Components/Modules/Scheduler.hpp"
-
-namespace Controller
+namespace Controller::Engine
 {
-  namespace engine
-  {
-    bool
-    should_use (const Game::gentity_s* player, unsigned held) noexcept;
-
-    namespace
-    {
-      constexpr auto in_frame_mouse_move_call {0x475E9E};
-
-      constexpr auto command_assignment_address {0x5A7890};
-
-      constexpr auto menu_set_binding_call_1 {0x47D473};
-      constexpr auto menu_set_binding_call_2 {0x47D485};
-      constexpr auto menu_set_binding_call_3 {0x47D49D};
-
-      constexpr auto cl_key_event_call {0x43D179};
-      constexpr auto cl_key_event_address {0x4F6480};
-
-      constexpr auto cl_mouse_event_call {0x64C507};
-      constexpr auto cl_mouse_event_address {0x4D7C50};
-
-      constexpr auto ui_bypass_mouse_call {0x48E527};
-
-      constexpr auto cl_mouse_move_call {0x5A6DAE};
-      constexpr auto cl_remote_control_move_call {0x5A6D4E};
-      constexpr auto cl_location_selection_call {0x5A6D72};
-
-      constexpr auto cl_remote_control_move_address {0x5A6BA0};
-      constexpr auto cl_location_selection_address {0x5A67A0};
-
-      constexpr auto write_delta_movement_patch {0x60E38D};
-      constexpr auto write_delta_movement_return {0x60E40E};
-      constexpr auto write_delta_field_width_1 {0x60E501};
-      constexpr auto write_delta_field_width_2 {0x60E5CD};
-
-      constexpr auto read_delta_movement_patch_1 {0x492127};
-      constexpr auto read_delta_movement_return_1 {0x4921BF};
-      constexpr auto read_delta_movement_patch_2 {0x492009};
-      constexpr auto read_delta_movement_return_2 {0x492085};
-
-      constexpr auto cg_register_dvars_call {0x4059FE};
-      constexpr auto cg_register_dvars_address {0x4F8DC0};
-
-      constexpr auto key_write_bindings_call {0x60B223};
-      constexpr auto key_write_bindings_address {0x4A5A20};
-
-      constexpr auto player_use_entity_patch {0x5FE396};
-
-      constexpr auto aim_accel_enabled_flags {0x43F8E0};
-      constexpr auto aim_accel_enabled_default {0x43F8E2};
-      constexpr auto aim_slowdown_enabled_flags {0x43F945};
-      constexpr auto aim_lockon_enabled_flags {0x43FC76};
-
-      constexpr auto keyname_table_slot_1 {0x4A780A};
-      constexpr auto keyname_table_slot_2 {0x4A7810};
-      constexpr auto keyname_table_slot_3 {0x435C9F};
-      constexpr auto localized_keyname_call {0x435C97};
-
-      runtime* the_runtime {nullptr};
-
-      constexpr size_t controller_key_count {mapping::engine_key_count};
-
-      keyname_t combined_key_names[Game::KEY_NAME_COUNT + controller_key_count + 1] {};
-      keyname_t combined_glyphs_xbox[Game::LOCALIZED_KEY_NAME_COUNT + controller_key_count + 1] {};
-      keyname_t combined_glyphs_playstation[Game::LOCALIZED_KEY_NAME_COUNT + controller_key_count + 1] {};
-
-      bool
-      driving () noexcept
-      {
-        return the_runtime != nullptr && the_runtime->driving ();
-      }
-
-      void
-      in_frame_trampoline () noexcept
-      {
-        Components::RawMouse::IN_MouseMove ();
-
-        try
-        {
-          the_runtime->frame ();
-        }
-        catch (const std::exception& e)
-        {
-          Components::Logger::PrintError (
-            Game::CON_CHANNEL_ERROR,
-            "controller: input frame failed: {}\n",
-            e.what ());
-        }
-        catch (...)
-        {
-          Components::Logger::PrintError (Game::CON_CHANNEL_ERROR,
-                                          "controller: input frame failed\n");
-        }
-      }
-
-      __declspec (naked) void
-      player_use_entity_stub ()
-      {
-        __asm
-        {
-          cmp eax, [ecx + 0x10]
-          jl skip
-
-          push eax
-          pushad
-
-          push eax
-          push edi
-          call should_use
-          add esp, 0x8
-
-          mov [esp + 0x20], eax
-
-          popad
-          pop eax
-
-          test al, al
-          jz skip
-
-          push 0x5FE39B
-          ret
-
-        skip:
-          push 0x5FE3AF
-          ret
-        }
-      }
-
-      int
-      command_assignment (int client,
-                          const char* command,
-                          int (*keys_out)[2]) noexcept
-      {
-        int found[2];
-        const size_t count (bind_bridge::command_keys (
-          client,
-          the_runtime != nullptr && the_runtime->keys ().in_use (),
-          command,
-          found));
-
-        (*keys_out)[0] = found[0];
-        (*keys_out)[1] = found[1];
-
-        return static_cast<int> (count);
-      }
-
-      __declspec (naked) void
-      command_assignment_stub ()
-      {
-        __asm
-        {
-          push eax
-          pushad
-
-          push [esp + 0x20 + 0x4 + 0x8]
-          push [esp + 0x20 + 0x4 + 0x8]
-          push eax
-          call command_assignment
-          add esp, 0xC
-
-          mov [esp + 0x20], eax
-
-          popad
-          pop eax
-          ret
-        }
-      }
-
-      void
-      menu_set_binding (int client, int keynum, const char* binding) noexcept
-      {
-        if (mapping::is_controller_key (keynum))
-        {
-          if (the_runtime != nullptr)
-            the_runtime->binds ().note_manual_rebind ();
-
-          if (binding != nullptr)
-            binding = controller_command_for (binding);
-        }
-
-        Key_SetBinding (client, keynum, binding);
-      }
-
-      void
-      cl_key_event (int client, int key, int down, unsigned time) noexcept
-      {
-        if (the_runtime != nullptr && down != 0 &&
-            !mapping::is_controller_key (key))
-          the_runtime->keys ().note_other_input ();
-
-        Utils::Hook::Call<void (int, int, int, unsigned)> (
-          cl_key_event_address) (client, key, down, time);
-      }
-
-      int
-      cl_mouse_event (int x, int y, int dx, int dy) noexcept
-      {
-        note_mouse_move (dx, dy);
-
-        return Utils::Hook::Call<int (int, int, int, int)> (
-          cl_mouse_event_address) (x, y, dx, dy);
-      }
-
-      bool
-      ui_bypass_mouse_input () noexcept
-      {
-        static Game::dvar_t* bypass {nullptr};
-
-        if (bypass == nullptr)
-          bypass = Dvar_FindVar ("cl_bypassMouseInput");
-
-        return read (bypass, false) ||
-          (the_runtime != nullptr && the_runtime->keys ().in_use ());
-      }
-
-      void
-      cl_mouse_move (int client, usercmd_s* cmd, float frame_time) noexcept
-      {
-        if (driving ())
-          the_runtime->view ().apply_move (client, *cmd, frame_time);
-        else
-          Game::CL_MouseMove (client, cmd, frame_time);
-      }
-
-      __declspec (naked) void
-      cl_mouse_move_stub ()
-      {
-        __asm
-        {
-          pushad
-
-          push [esp + 0x20 + 0x4]
-          push ebx
-          push eax
-          call cl_mouse_move
-          add esp, 0xC
-
-          popad
-          ret
-        }
-      }
-
-      void
-      cl_remote_control_move (int client, usercmd_s* cmd) noexcept
-      {
-        if (driving ())
-          the_runtime->view ().apply_remote_move (client, *cmd);
-      }
-
-      __declspec (naked) void
-      cl_remote_control_move_stub ()
-      {
-        __asm
-        {
-          push edi
-          push eax
-
-          call cl_remote_control_move_address
-          call cl_remote_control_move
-
-          add esp, 0x8
-          ret
-        }
-      }
-
-      bool
-      cl_location_selection (int client, usercmd_s*) noexcept
-      {
-        if (driving ())
-          the_runtime->view ().apply_location_selection (client);
-
-        return true;
-      }
-
-      __declspec (naked) void
-      cl_location_selection_stub ()
-      {
-        __asm
-        {
-          push esi
-          push eax
-
-          call cl_location_selection_address
-
-          test al, al
-          jz done
-
-          call cl_location_selection
-
-        done:
-          add esp, 0x8
-          ret
-        }
-      }
-
-      __declspec (naked) void
-      write_delta_movement_stub ()
-      {
-        __asm
-        {
-          add esp, 0xC
-
-          mov dl, byte ptr [edi + 0x1A]
-          mov dh, byte ptr [edi + 0x1B]
-          mov [esp + 0x30], dx
-
-          mov dl, byte ptr [ebp + 0x1A]
-          mov dh, byte ptr [ebp + 0x1B]
-          mov [esp + 0x2C], dx
-
-          push 0x60E40E
-          retn
-        }
-      }
-
-      void
-      read_delta_movement (Game::msg_t* msg,
-                           int key,
-                           usercmd_s* from,
-                           usercmd_s* to) noexcept
-      {
-        move_delta d {from->forwardmove, from->rightmove};
-
-        if (Game::MSG_ReadBit (msg))
-          d = unpack_move (static_cast<uint16_t> (Game::MSG_ReadBits (msg, 16)),
-                           key);
-
-        to->forwardmove = d.forward;
-        to->rightmove = d.right;
-      }
-
-      __declspec (naked) void
-      read_delta_movement_stub_1 ()
-      {
-        __asm
-        {
-          push ebx
-          push ebp
-          push edi
-          push esi
-          call read_delta_movement
-          add esp, 0x10
-
-          push 0x4921BF
-          ret
-        }
-      }
-
-      __declspec (naked) void
-      read_delta_movement_stub_2 ()
-      {
-        __asm
-        {
-          push ebx
-          push ebp
-          push edi
-          push esi
-          call read_delta_movement
-          add esp, 0x10
-
-          push 3
-          push esi
-          push 0x492085
-          ret
-        }
-      }
-
-      keyname_t*
-      localized_key_names () noexcept
-      {
-        static Game::dvar_t* style {nullptr};
-
-        if (style == nullptr)
-          style = Dvar_FindVar ("gpad_style");
-
-        std::optional<mapping::glyph_family> chosen;
-
-        switch (read (style, 0))
-        {
-          case 1: chosen = mapping::glyph_family::playstation; break;
-          case 2: chosen = mapping::glyph_family::xbox; break;
-          default: break;
-        }
-
-        const Controller::family device (
-          the_runtime != nullptr && the_runtime->active () != no_device
-          ? the_runtime->latest ().family
-          : Controller::family::unknown);
-
-        return mapping::glyph_family_for (device, chosen) ==
-               mapping::glyph_family::playstation
-          ? combined_glyphs_playstation
-          : combined_glyphs_xbox;
-      }
-
-      __declspec (naked) void
-      localized_key_names_stub ()
-      {
-        __asm
-        {
-          push eax
-          pushad
-
-          call localized_key_names
-          mov [esp + 0x20], eax
-
-          popad
-          pop eax
-
-          test edi, edi
-          ret
-        }
-      }
-
-      void
-      key_write_bindings (int client, int file) noexcept
-      {
-        Utils::Hook::Call<void (int, int)> (key_write_bindings_address) (client,
-                                                                         file);
-
-        const PlayerKeyState& ks (playerKeys[client]);
-
-        for (const mapping::engine_key k : mapping::keys ())
-        {
-          const int keynum (static_cast<int> (k));
-
-          if (keynum <= Game::K_LAST_KEY)
-            continue;
-
-          const char* const binding (ks.keys[keynum].binding);
-
-          if (binding == nullptr || binding[0] == '\0')
-            continue;
-
-          Game::FS_Printf (file,
-                           "bind %s \"%s\"\n",
-                           mapping::key_name (k),
-                           binding);
-        }
-      }
-
-      void
-      cg_register_dvars ()
-      {
-        Utils::Hook::Call<void ()> (cg_register_dvars_address) ();
-
-        register_dvars ();
-      }
-
-      void
-      build_key_name_tables ()
-      {
-        std::memcpy (combined_key_names,
-                     Game::keyNames,
-                     sizeof (keyname_t) * Game::KEY_NAME_COUNT);
-        std::memcpy (combined_glyphs_xbox,
-                     Game::localizedKeyNames,
-                     sizeof (keyname_t) * Game::LOCALIZED_KEY_NAME_COUNT);
-        std::memcpy (combined_glyphs_playstation,
-                     Game::localizedKeyNames,
-                     sizeof (keyname_t) * Game::LOCALIZED_KEY_NAME_COUNT);
-
-        size_t names (Game::KEY_NAME_COUNT);
-        size_t glyphs (Game::LOCALIZED_KEY_NAME_COUNT);
-
-        for (const mapping::engine_key k : mapping::keys ())
-        {
-          const int keynum (static_cast<int> (k));
-
-          const char* const name (mapping::key_name (k));
-
-          combined_key_names[names++] = {name, keynum};
-
-          const char* const xbox (
-            mapping::glyph_for (k, mapping::glyph_family::xbox));
-
-          const char* const playstation (
-            mapping::glyph_for (k, mapping::glyph_family::playstation));
-
-          combined_glyphs_xbox[glyphs] = {xbox != nullptr ? xbox : name, keynum};
-          combined_glyphs_playstation[glyphs] =
-            {playstation != nullptr ? playstation : name, keynum};
-          ++glyphs;
-        }
-
-        combined_key_names[names] = {nullptr, 0};
-        combined_glyphs_xbox[glyphs] = {nullptr, 0};
-        combined_glyphs_playstation[glyphs] = {nullptr, 0};
-
-        Utils::Hook::Set<keyname_t*> (keyname_table_slot_1, combined_key_names);
-        Utils::Hook::Set<keyname_t*> (keyname_table_slot_2, combined_key_names);
-        Utils::Hook::Set<keyname_t*> (keyname_table_slot_3, combined_key_names);
-        Utils::Hook (localized_keyname_call, localized_key_names_stub, HOOK_CALL).install ()->quick ();
-      }
-    }
-
-    void
-    note_mouse_move (int dx, int dy) noexcept
-    {
-      if (the_runtime != nullptr && (dx != 0 || dy != 0))
-        the_runtime->keys ().note_other_input ();
-    }
-
-    bool
-    should_use (const Game::gentity_s* player, unsigned held) noexcept
-    {
-      if ((player->client->buttons & Game::CMD_BUTTON_USE_RELOAD) == 0)
-        return true;
-
-      const int hold (read (registered_dvars ().use_hold_time, 250));
-
-      return hold <= 0 || held >= static_cast<unsigned> (hold);
-    }
-
-    void
-		install_protocol ()
-    {
-      Utils::Hook (write_delta_movement_patch, write_delta_movement_stub, HOOK_JUMP).install ()->quick ();
-      Utils::Hook::Set<BYTE> (write_delta_field_width_1, 16);
-      Utils::Hook::Set<BYTE> (write_delta_field_width_2, 16);
-      Utils::Hook (read_delta_movement_patch_1, read_delta_movement_stub_1, HOOK_JUMP).install ()->quick ();
-      Utils::Hook (read_delta_movement_patch_2, read_delta_movement_stub_2, HOOK_JUMP).install ()->quick ();
-      Utils::Hook (cg_register_dvars_call, cg_register_dvars, HOOK_CALL).install ()->quick ();
-      Utils::Hook (key_write_bindings_call, key_write_bindings, HOOK_CALL).install ()->quick ();
-      Utils::Hook (player_use_entity_patch, player_use_entity_stub, HOOK_JUMP).install ()->quick ();
-    }
-
-    void
-		install (runtime& rt)
-    {
-      the_runtime = &rt;
-
-      const context ctx (rt.make_context ());
-
-      install_protocol ();
-
-      build_key_name_tables ();
-
-      Utils::Hook::Set<BYTE> (aim_accel_enabled_flags, Game::DVAR_ARCHIVE);
-      Utils::Hook::Set<BYTE> (aim_accel_enabled_default, 1);
-      Utils::Hook::Set<BYTE> (aim_slowdown_enabled_flags, Game::DVAR_ARCHIVE);
-      Utils::Hook::Set<BYTE> (aim_lockon_enabled_flags, Game::DVAR_ARCHIVE);
-
-      Utils::Hook (command_assignment_address, command_assignment_stub, HOOK_JUMP).install ()->quick ();
-      Utils::Hook (menu_set_binding_call_1, menu_set_binding, HOOK_CALL).install ()->quick ();
-      Utils::Hook (menu_set_binding_call_2, menu_set_binding, HOOK_CALL).install ()->quick ();
-      Utils::Hook (menu_set_binding_call_3, menu_set_binding, HOOK_CALL).install ()->quick ();
-      Utils::Hook (in_frame_mouse_move_call, in_frame_trampoline, HOOK_CALL).install ()->quick ();
-      Utils::Hook (cl_key_event_call, cl_key_event, HOOK_CALL).install ()->quick ();
-      Utils::Hook (cl_mouse_event_call, cl_mouse_event, HOOK_CALL).install ()->quick ();
-      Utils::Hook (ui_bypass_mouse_call, ui_bypass_mouse_input, HOOK_CALL).install ()->quick ();
-      Utils::Hook (cl_mouse_move_call, cl_mouse_move_stub, HOOK_CALL).install ()->quick ();
-      Utils::Hook (cl_remote_control_move_call, cl_remote_control_move_stub, HOOK_CALL).install ()->quick ();
-      Utils::Hook (cl_location_selection_call, cl_location_selection_stub, HOOK_CALL).install ()->quick ();
-
-      runtime* const r (&rt);
-
-      Components::Scheduler::Once ([r] { r->engine_ready (); },
-        Components::Scheduler::Pipeline::MAIN);
-
-      ctx.report (severity::info, facility::engine, errc::none,
-        "controller engine hooks installed");
-    }
-  }
+	static Runtime* installedRuntime = nullptr;
+
+	static bool IsDriving() noexcept
+	{
+		return installedRuntime != nullptr && installedRuntime->IsDriving();
+	}
+
+	static bool ShouldUse(const Game::gentity_s* player, unsigned int heldMs) noexcept
+	{
+		if ((player->client->buttons & Game::CMD_BUTTON_USE_RELOAD) == 0)
+		{
+			return true;
+		}
+
+		const int holdMs = Read(RegisteredDvars().useHoldTime, 250);
+
+		return holdMs <= 0 || heldMs >= static_cast<unsigned int>(holdMs);
+	}
+
+	static Game::keyname_t* combinedLocalizedKeyNames = nullptr;
+	static std::optional<Mapping::GlyphFamily> appliedGlyphs;
+
+	static void ApplyGlyphStyle()
+	{
+		if (combinedLocalizedKeyNames == nullptr || installedRuntime == nullptr)
+		{
+			return;
+		}
+
+		const int style = Read(RegisteredDvars().style, 0);
+
+		std::optional<Mapping::GlyphFamily> chosen;
+
+		if (style == 1)
+		{
+			chosen = Mapping::GlyphFamily::PlayStation;
+		}
+		else if (style == 2)
+		{
+			chosen = Mapping::GlyphFamily::Xbox;
+		}
+
+		Family device = Family::Unknown;
+
+		if (installedRuntime->Active() != noDevice)
+		{
+			device = installedRuntime->Latest().family;
+		}
+
+		const Mapping::GlyphFamily family = Mapping::GlyphFamilyFor(device, chosen);
+
+		if (appliedGlyphs == family)
+		{
+			return;
+		}
+
+		std::size_t index = Game::LOCALIZED_KEY_NAME_COUNT;
+
+		for (const auto key : Mapping::Keys())
+		{
+			const char* glyph = Mapping::GlyphFor(key, family);
+
+			if (glyph == nullptr)
+			{
+				glyph = Mapping::KeyName(key);
+			}
+
+			combinedLocalizedKeyNames[index].name = glyph;
+			++index;
+		}
+
+		appliedGlyphs = family;
+	}
+
+	extern "C"
+	{
+		void MSG_WriteDeltaUsercmdKeyStub();
+		void MSG_ReadDeltaUsercmdKeyStub();
+		void MSG_ReadDeltaUsercmdKeyStub2();
+		void INFrameMouseMoveStub();
+
+		std::uintptr_t MSG_WriteDeltaUsercmdKey_Resume = 0;
+		std::uintptr_t MSG_ReadDeltaUsercmdKey_Resume = 0;
+		std::uintptr_t MSG_ReadDeltaUsercmdKey_Resume2 = 0;
+		std::uintptr_t Gamepad_INFrameReturn = 0;
+
+		void Gamepad_ApplyMovement(Game::msg_t* msg, int key, Game::usercmd_s* from, Game::usercmd_s* to)
+		{
+			MoveDelta delta{ from->forwardmove, from->rightmove };
+
+			if (Game::MSG_ReadBit(msg))
+			{
+				delta = UnpackMove(static_cast<std::uint16_t>(Game::MSG_ReadBits(msg, 16)), key);
+			}
+
+			to->forwardmove = delta.forward;
+			to->rightmove = delta.right;
+		}
+
+		void Gamepad_IN_Frame()
+		{
+			Components::RawMouse::IN_MouseMove();
+
+			if (installedRuntime == nullptr)
+			{
+				return;
+			}
+
+			ApplyGlyphStyle();
+
+			if (!Game::s_wmv->mouseActive)
+			{
+				return;
+			}
+
+			try
+			{
+				installedRuntime->Frame();
+			}
+			catch (const std::exception& exception)
+			{
+				Components::Logger::Error("controller: input frame failed: {}\n", exception.what());
+			}
+		}
+	}
+
+	static constexpr std::uintptr_t MSG_WriteDeltaUsercmdKey_MoveFlags = 0x140206042;
+	static constexpr std::uintptr_t MSG_WriteDeltaUsercmdKey_MoveResume = 0x1402060B1;
+	static constexpr std::uintptr_t MSG_WriteDeltaUsercmdKey_PartialBits = 0x1402061AC;
+	static constexpr std::uintptr_t MSG_WriteDeltaUsercmdKey_FullBits = 0x140206262;
+	static constexpr std::uintptr_t MSG_ReadDeltaUsercmdKey_PartialMove = 0x14020556A;
+	static constexpr std::uintptr_t MSG_ReadDeltaUsercmdKey_PartialResume = 0x1402055ED;
+	static constexpr std::uintptr_t MSG_ReadDeltaUsercmdKey_FullMove = 0x14020566E;
+	static constexpr std::uintptr_t MSG_ReadDeltaUsercmdKey_FullResume = 0x1402056F1;
+
+	static const std::uint8_t writeMoveFlags[] = { 0x0F, 0xBE, 0x4E, 0x1A, 0x45, 0x33, 0xE4, 0x0F, 0xBE, 0x46, 0x1B, 0x4C, 0x89, 0x7C, 0x24, 0x50, 0x41, 0x8D, 0x5C, 0x24, 0x02 };
+	static const std::uint8_t writeMoveResume[] = { 0x8B, 0x4D, 0x04 };
+	static const std::uint8_t writePartialBits[] = { 0xC7, 0x44, 0x24, 0x20, 0x04, 0x00, 0x00, 0x00 };
+	static const std::uint8_t writeFullBits[] = { 0x41, 0xB8, 0x04, 0x00, 0x00, 0x00 };
+	static const std::uint8_t readMove[] = { 0x41, 0x0F, 0xBE, 0x56, 0x1A, 0x41, 0x0F, 0xBE, 0x4E, 0x1B, 0x83, 0xFA, 0x0A, 0x7F, 0x0D, 0x33 };
+	static const std::uint8_t readPartialResume[] = { 0xBA, 0x03, 0x00, 0x00, 0x00 };
+	static const std::uint8_t readFullResume[] = { 0x33, 0x2F, 0x48, 0x8B, 0xCE };
+
+	static constexpr std::uintptr_t CL_InitOnceForAllClients_CG_RegisterDvarsCall = 0x1400FBC3F;
+	static constexpr std::uintptr_t CG_RegisterDvars = 0x1400D7540;
+
+	static constexpr std::uintptr_t Player_UpdateActivate_Player_UseEntityCall = 0x14018BE7A;
+	static constexpr std::uintptr_t Player_UseEntity = 0x14018C420;
+	static constexpr std::uintptr_t level_time = 0x1418673E8;
+
+	static constexpr std::uintptr_t Item_Bind_HandleKey_Key_SetBindingCalls[] = { 0x14025ED06, 0x14025ED14, 0x14025ED31 };
+	static constexpr std::uintptr_t Key_SetBinding = 0x1400EF980;
+
+	static constexpr std::uintptr_t UI_RefreshViewport_Dvar_GetBoolCall = 0x140270DE6;
+	static constexpr std::uintptr_t Dvar_GetBool = 0x1402851A0;
+
+	static constexpr std::uintptr_t Key_GetCommandAssignment_Jump = 0x1400EF683;
+	static constexpr std::uintptr_t Key_GetCommandAssignmentInternal = 0x1400EF690;
+
+	static constexpr std::uintptr_t GetKeyBindingLocalizedString_CL_GetKeyBindingCall = 0x14025EA7E;
+	static constexpr std::uintptr_t CL_GetKeyBinding = 0x1400EE690;
+	static constexpr std::uintptr_t Key_IsCommandBoundCall = 0x1400DD712;
+	static constexpr std::uintptr_t Key_IsCommandBound = 0x1400EF750;
+	static constexpr std::uintptr_t Key_KeynumToStringBuf = 0x140101F90;
+
+	static constexpr auto CRITSECT_KEY_BINDINGS = static_cast<Game::CriticalSection>(13);
+	static constexpr int keyNameSize = 128;
+
+	static constexpr std::uintptr_t Key_Bind_f_Key_GetBindingForCmdCall = 0x1400EF4C7;
+	static constexpr std::uintptr_t Key_GetBindingForCmd = 0x1400EF620;
+
+	static constexpr std::uintptr_t IN_Frame_MouseMove = 0x1402A2C28;
+	static constexpr std::uintptr_t IN_Frame_Return = 0x1402A2D71;
+	static const std::uint8_t mouseMoveStart[] = { 0xFF, 0x15, 0xCA, 0xFA, 0x0B, 0x00 };
+
+	static constexpr std::uintptr_t keynames = 0x140420090;
+	static constexpr std::uintptr_t keynames_localized = 0x140420690;
+
+	static const Utils::Hook::LeaSite keyNameLeas[] =
+	{
+		{ 0x1400EF8AE, Utils::Hook::leaRcx, keynames },
+		{ 0x1400EFB85, { 0x48, 0x8D, 0x1D }, keynames },
+		{ 0x1400EFD21, { 0x4C, 0x8D, 0x25 }, keynames },
+	};
+
+	static const Utils::Hook::LeaSite localizedKeyNameLea = { 0x1400EF8B5, { 0x48, 0x8D, 0x05 }, keynames_localized };
+
+	static constexpr std::uintptr_t CL_CreateCmd_CL_RemoteControlMoveCall = 0x1400F7B95;
+	static constexpr std::uintptr_t CL_RemoteControlMove = 0x1400F73A0;
+	static constexpr std::uintptr_t CL_CreateCmd_CG_HandleLocationSelectionInputCall = 0x1400F7BB2;
+	static constexpr std::uintptr_t CG_HandleLocationSelectionInput = 0x1400F7D00;
+	static constexpr std::uintptr_t CL_CreateCmd_CL_MouseMoveCall = 0x1400F7BE4;
+	static constexpr std::uintptr_t CL_MouseMove = 0x1400F70F0;
+
+	static Utils::Hook moveHooks[3];
+	static Utils::Hook registerDvarsHook;
+	static Utils::Hook useEntityHook;
+
+	static Utils::Hook inFrameHook;
+	static Utils::Hook cursorHook;
+	static Utils::Hook assignmentHook;
+	static Utils::Hook keyBindingHook;
+	static Utils::Hook commandBoundHook;
+	static Utils::Hook setBindingHooks[std::size(Item_Bind_HandleKey_Key_SetBindingCalls)];
+
+	static Utils::Hook bindCommandHook;
+
+	static Utils::Hook remoteControlHook;
+	static Utils::Hook locationSelectionHook;
+	static Utils::Hook mouseMoveHook;
+
+	static void CG_RegisterDvars_Hk()
+	{
+		reinterpret_cast<void(*)()>(Utils::Hook::Rebase(CG_RegisterDvars))();
+		RegisterDvars();
+	}
+
+	static void Player_UseEntity_Hk(Game::gentity_s* playerEnt, Game::gentity_s* useEnt)
+	{
+		const int heldMs = Utils::Hook::Get<int>(level_time) - playerEnt->client->useHoldTime;
+
+		if (!ShouldUse(playerEnt, static_cast<unsigned int>(heldMs)))
+		{
+			return;
+		}
+
+		reinterpret_cast<void(*)(Game::gentity_s*, Game::gentity_s*)>(Utils::Hook::Rebase(Player_UseEntity))(playerEnt, useEnt);
+	}
+
+	static void Key_SetBinding_Hk(int localClientNum, int keyNum, int binding)
+	{
+		int bound = binding;
+
+		if (Mapping::IsControllerKey(keyNum))
+		{
+			if (installedRuntime != nullptr)
+			{
+				installedRuntime->Binds().NoteManualRebind();
+			}
+
+			if (bound != 0)
+			{
+				bound = ControllerBindingFor(bound);
+			}
+		}
+
+		Game::Key_SetBinding(localClientNum, keyNum, bound);
+	}
+
+	static std::size_t ShownCommandKeys(int localClientNum, const char* cmd, int (&keys)[2])
+	{
+		const bool isControllerInUse = installedRuntime != nullptr && installedRuntime->Keys().IsInUse();
+
+		return BindBridge::CommandKeys(localClientNum, isControllerInUse, cmd, keys);
+	}
+
+	static int Key_GetCommandAssignmentInternal_Hk(int localClientNum, const char* cmd, int* keys)
+	{
+		int found[2];
+		const std::size_t count = ShownCommandKeys(localClientNum, cmd, found);
+
+		keys[0] = found[0];
+		keys[1] = found[1];
+
+		return static_cast<int>(count);
+	}
+
+	static int CL_GetKeyBinding_Hk(int localClientNum, const char* cmd, char* keyNames)
+	{
+		const auto keynumToString = reinterpret_cast<char*(*)(int, char*, int)>(Utils::Hook::Rebase(Key_KeynumToStringBuf));
+
+		Game::Sys_EnterCriticalSection(CRITSECT_KEY_BINDINGS);
+
+		keyNames[keyNameSize] = '\0';
+
+		int keys[2];
+		const std::size_t count = ShownCommandKeys(localClientNum, cmd, keys);
+
+		if (count == 0)
+		{
+			strcpy_s(keyNames, keyNameSize, "KEY_UNBOUND");
+		}
+		else
+		{
+			keynumToString(keys[0], keyNames, keyNameSize);
+
+			if (count == 2)
+			{
+				keynumToString(keys[1], keyNames + keyNameSize, keyNameSize);
+			}
+		}
+
+		Game::Sys_LeaveCriticalSection(CRITSECT_KEY_BINDINGS);
+
+		return static_cast<int>(count);
+	}
+
+	static int Key_IsCommandBound_Hk(int localClientNum, const char* cmd)
+	{
+		Game::Sys_EnterCriticalSection(CRITSECT_KEY_BINDINGS);
+
+		int keys[2];
+		const std::size_t count = ShownCommandKeys(localClientNum, cmd, keys);
+
+		Game::Sys_LeaveCriticalSection(CRITSECT_KEY_BINDINGS);
+
+		if (count == 0)
+		{
+			return 0;
+		}
+
+		return 1;
+	}
+
+	static int Key_Bind_f_Key_GetBindingForCmd_Hk(const char* command)
+	{
+		const Components::Command::ClientParams params;
+
+		return BindingForBindCommand(Game::Key_StringToKeynum(params.Get(1)), command);
+	}
+
+	static bool UI_RefreshViewport_Hk(const char* dvarName)
+	{
+		if (Game::Dvar_GetBool(dvarName))
+		{
+			return true;
+		}
+
+		return installedRuntime != nullptr && installedRuntime->Keys().IsInUse();
+	}
+
+	static void CL_MouseMove_Hk(int localClientNum, Game::usercmd_s* cmd, float frameTime)
+	{
+		if (IsDriving())
+		{
+			installedRuntime->View().ApplyMove(localClientNum, *cmd, frameTime);
+			return;
+		}
+
+		reinterpret_cast<void(*)(int, Game::usercmd_s*, float)>(Utils::Hook::Rebase(CL_MouseMove))(localClientNum, cmd, frameTime);
+	}
+
+	static void CL_RemoteControlMove_Hk(int localClientNum, Game::usercmd_s* cmd)
+	{
+		reinterpret_cast<void(*)(int, Game::usercmd_s*)>(Utils::Hook::Rebase(CL_RemoteControlMove))(localClientNum, cmd);
+
+		if (IsDriving())
+		{
+			installedRuntime->View().ApplyRemoteMove(localClientNum, *cmd);
+		}
+	}
+
+	static bool CG_HandleLocationSelectionInput_Hk(int localClientNum, Game::usercmd_s* cmd)
+	{
+		const bool isSelecting = reinterpret_cast<bool(*)(int, Game::usercmd_s*)>(Utils::Hook::Rebase(CG_HandleLocationSelectionInput))(localClientNum, cmd);
+
+		if (isSelecting && IsDriving())
+		{
+			installedRuntime->View().ApplyLocationSelection(localClientNum);
+		}
+
+		return isSelecting;
+	}
+
+	static void PatchUsercmdMovement()
+	{
+		const bool isExpected = Utils::Hook::MatchesBytes(MSG_WriteDeltaUsercmdKey_MoveFlags, writeMoveFlags, sizeof(writeMoveFlags))
+			&& Utils::Hook::MatchesBytes(MSG_WriteDeltaUsercmdKey_MoveResume, writeMoveResume, sizeof(writeMoveResume))
+			&& Utils::Hook::MatchesBytes(MSG_WriteDeltaUsercmdKey_PartialBits, writePartialBits, sizeof(writePartialBits))
+			&& Utils::Hook::MatchesBytes(MSG_WriteDeltaUsercmdKey_FullBits, writeFullBits, sizeof(writeFullBits))
+			&& Utils::Hook::MatchesBytes(MSG_ReadDeltaUsercmdKey_PartialMove, readMove, sizeof(readMove))
+			&& Utils::Hook::MatchesBytes(MSG_ReadDeltaUsercmdKey_PartialResume, readPartialResume, sizeof(readPartialResume))
+			&& Utils::Hook::MatchesBytes(MSG_ReadDeltaUsercmdKey_FullMove, readMove, sizeof(readMove))
+			&& Utils::Hook::MatchesBytes(MSG_ReadDeltaUsercmdKey_FullResume, readFullResume, sizeof(readFullResume));
+
+		if (!isExpected)
+		{
+			Components::Logger::Error("controller: the usercmd move code does not read as expected, left alone, so an IW4x server will misread our movement\n");
+			return;
+		}
+
+		MSG_WriteDeltaUsercmdKey_Resume = Utils::Hook::Rebase(MSG_WriteDeltaUsercmdKey_MoveResume);
+		MSG_ReadDeltaUsercmdKey_Resume = Utils::Hook::Rebase(MSG_ReadDeltaUsercmdKey_FullResume);
+		MSG_ReadDeltaUsercmdKey_Resume2 = Utils::Hook::Rebase(MSG_ReadDeltaUsercmdKey_PartialResume);
+
+		const std::uintptr_t sites[] =
+		{
+			MSG_WriteDeltaUsercmdKey_MoveFlags,
+			MSG_ReadDeltaUsercmdKey_FullMove,
+			MSG_ReadDeltaUsercmdKey_PartialMove,
+		};
+
+		void* const stubs[] =
+		{
+			reinterpret_cast<void*>(MSG_WriteDeltaUsercmdKeyStub),
+			reinterpret_cast<void*>(MSG_ReadDeltaUsercmdKeyStub),
+			reinterpret_cast<void*>(MSG_ReadDeltaUsercmdKeyStub2),
+		};
+
+		bool isSeated = true;
+
+		for (std::size_t i = 0; i < std::size(sites); ++i)
+		{
+			isSeated = moveHooks[i].Initialize(sites[i], stubs[i], HOOK_JUMP)->Install()->IsInstalled() && isSeated;
+		}
+
+		if (!isSeated)
+		{
+			for (auto& hook : moveHooks)
+			{
+				hook.Uninstall();
+			}
+
+			Components::Logger::Error("controller: could not seat the usercmd move stubs, so an IW4x server will misread our movement\n");
+			return;
+		}
+
+		for (auto& hook : moveHooks)
+		{
+			hook.Quick();
+		}
+
+		Utils::Hook::Set<std::int32_t>(MSG_WriteDeltaUsercmdKey_PartialBits + 4, 16);
+		Utils::Hook::Set<std::int32_t>(MSG_WriteDeltaUsercmdKey_FullBits + 2, 16);
+	}
+
+	static void HookRegisterDvars()
+	{
+		if (!Utils::Hook::BranchesTo(CL_InitOnceForAllClients_CG_RegisterDvarsCall, CG_RegisterDvars, false))
+		{
+			Components::Logger::Error("controller: CL_InitOnceForAllClients does not call CG_RegisterDvars where expected, no controller dvars\n");
+			return;
+		}
+
+		if (!registerDvarsHook.Initialize(CL_InitOnceForAllClients_CG_RegisterDvarsCall, reinterpret_cast<void*>(CG_RegisterDvars_Hk), HOOK_CALL)->Install()->IsInstalled())
+		{
+			Components::Logger::Error("controller: could not seat the dvar registration hook, no controller dvars\n");
+		}
+	}
+
+	static void HookUseEntity()
+	{
+		if (!Utils::Hook::BranchesTo(Player_UpdateActivate_Player_UseEntityCall, Player_UseEntity, false))
+		{
+			Components::Logger::Error("controller: Player_UpdateActivate does not call Player_UseEntity where expected, no use hold for game pads\n");
+			return;
+		}
+
+		if (!useEntityHook.Initialize(Player_UpdateActivate_Player_UseEntityCall, reinterpret_cast<void*>(Player_UseEntity_Hk), HOOK_CALL)->Install()->IsInstalled())
+		{
+			Components::Logger::Error("controller: could not seat the use hold hook, no use hold for game pads\n");
+		}
+	}
+
+	static void HookBindCommand()
+	{
+		if (!Utils::Hook::BranchesTo(Key_Bind_f_Key_GetBindingForCmdCall, Key_GetBindingForCmd, false))
+		{
+			Components::Logger::Error("controller: Key_Bind_f does not call Key_GetBindingForCmd where expected, old controller binds are not migrated\n");
+			return;
+		}
+
+		if (!bindCommandHook.Initialize(Key_Bind_f_Key_GetBindingForCmdCall, reinterpret_cast<void*>(Key_Bind_f_Key_GetBindingForCmd_Hk), HOOK_CALL)->Install()->IsInstalled())
+		{
+			Components::Logger::Error("controller: could not seat the bind command hook, old controller binds are not migrated\n");
+		}
+	}
+
+	static bool TryBuildKeyNameTables()
+	{
+		constexpr std::size_t tableCount = Game::KEY_NAME_COUNT + Mapping::engineKeyCount + 1;
+		constexpr std::size_t tableSize = tableCount * sizeof(Game::keyname_t);
+
+		static_assert(Game::KEY_NAME_COUNT == Game::LOCALIZED_KEY_NAME_COUNT, "both key name tables are extended the same way");
+
+		auto* const names = static_cast<Game::keyname_t*>(Utils::Hook::AllocateDataNear(keynames, tableSize));
+		auto* const localized = static_cast<Game::keyname_t*>(Utils::Hook::AllocateDataNear(keynames_localized, tableSize));
+
+		if (names == nullptr || localized == nullptr)
+		{
+			return false;
+		}
+
+		std::memcpy(names, reinterpret_cast<const void*>(Utils::Hook::Rebase(keynames)), Game::KEY_NAME_COUNT * sizeof(Game::keyname_t));
+		std::memcpy(localized, reinterpret_cast<const void*>(Utils::Hook::Rebase(keynames_localized)), Game::LOCALIZED_KEY_NAME_COUNT * sizeof(Game::keyname_t));
+
+		std::size_t index = Game::KEY_NAME_COUNT;
+
+		for (const auto key : Mapping::Keys())
+		{
+			const char* glyph = Mapping::GlyphFor(key, Mapping::GlyphFamily::Xbox);
+
+			if (glyph == nullptr)
+			{
+				glyph = Mapping::KeyName(key);
+			}
+
+			names[index] = Game::keyname_t{ Mapping::KeyName(key), static_cast<int>(key) };
+			localized[index] = Game::keyname_t{ glyph, static_cast<int>(key) };
+			++index;
+		}
+
+		names[index] = Game::keyname_t{ nullptr, 0 };
+		localized[index] = Game::keyname_t{ nullptr, 0 };
+
+		for (const auto& lea : keyNameLeas)
+		{
+			if (!Utils::Hook::CanLeaReach(lea, names))
+			{
+				return false;
+			}
+		}
+
+		if (!Utils::Hook::CanLeaReach(localizedKeyNameLea, localized))
+		{
+			return false;
+		}
+
+		for (const auto& lea : keyNameLeas)
+		{
+			Utils::Hook::PointLeaAt(lea, names);
+		}
+
+		Utils::Hook::PointLeaAt(localizedKeyNameLea, localized);
+
+		combinedLocalizedKeyNames = localized;
+		appliedGlyphs = Mapping::GlyphFamily::Xbox;
+		return true;
+	}
+
+	static void UninstallInput()
+	{
+		inFrameHook.Uninstall();
+		cursorHook.Uninstall();
+		assignmentHook.Uninstall();
+		keyBindingHook.Uninstall();
+		commandBoundHook.Uninstall();
+
+		for (auto& hook : setBindingHooks)
+		{
+			hook.Uninstall();
+		}
+	}
+
+	static bool TryInstallInput()
+	{
+		bool isExpected = Utils::Hook::BranchesTo(UI_RefreshViewport_Dvar_GetBoolCall, Dvar_GetBool, false)
+			&& Utils::Hook::BranchesTo(Key_GetCommandAssignment_Jump, Key_GetCommandAssignmentInternal, true)
+			&& Utils::Hook::BranchesTo(GetKeyBindingLocalizedString_CL_GetKeyBindingCall, CL_GetKeyBinding, false)
+			&& Utils::Hook::BranchesTo(Key_IsCommandBoundCall, Key_IsCommandBound, false)
+			&& Utils::Hook::MatchesBytes(IN_Frame_MouseMove, mouseMoveStart, sizeof(mouseMoveStart))
+			&& Utils::Hook::IsLeaIntact(localizedKeyNameLea);
+
+		for (const auto call : Item_Bind_HandleKey_Key_SetBindingCalls)
+		{
+			isExpected = isExpected && Utils::Hook::BranchesTo(call, Key_SetBinding, false);
+		}
+
+		for (const auto& lea : keyNameLeas)
+		{
+			isExpected = isExpected && Utils::Hook::IsLeaIntact(lea);
+		}
+
+		if (!isExpected)
+		{
+			Components::Logger::Error("controller: the key and input code does not read as expected, no controller support\n");
+			return false;
+		}
+
+		Gamepad_INFrameReturn = Utils::Hook::Rebase(IN_Frame_Return);
+
+		bool isSeated = inFrameHook.Initialize(IN_Frame_MouseMove, reinterpret_cast<void*>(INFrameMouseMoveStub), HOOK_CALL)->Install()->IsInstalled()
+			&& cursorHook.Initialize(UI_RefreshViewport_Dvar_GetBoolCall, reinterpret_cast<void*>(UI_RefreshViewport_Hk), HOOK_CALL)->Install()->IsInstalled()
+			&& assignmentHook.Initialize(Key_GetCommandAssignment_Jump, reinterpret_cast<void*>(Key_GetCommandAssignmentInternal_Hk), HOOK_JUMP)->Install()->IsInstalled()
+			&& keyBindingHook.Initialize(GetKeyBindingLocalizedString_CL_GetKeyBindingCall, reinterpret_cast<void*>(CL_GetKeyBinding_Hk), HOOK_CALL)->Install()->IsInstalled()
+			&& commandBoundHook.Initialize(Key_IsCommandBoundCall, reinterpret_cast<void*>(Key_IsCommandBound_Hk), HOOK_CALL)->Install()->IsInstalled();
+
+		for (std::size_t i = 0; i < std::size(Item_Bind_HandleKey_Key_SetBindingCalls); ++i)
+		{
+			isSeated = isSeated && setBindingHooks[i].Initialize(Item_Bind_HandleKey_Key_SetBindingCalls[i], reinterpret_cast<void*>(Key_SetBinding_Hk), HOOK_CALL)->Install()->IsInstalled();
+		}
+
+		if (!isSeated || !TryBuildKeyNameTables())
+		{
+			UninstallInput();
+
+			Components::Logger::Error("controller: could not seat every input hook or place the key names, no controller support\n");
+			return false;
+		}
+
+		Utils::Hook::Nop(IN_Frame_MouseMove + 5, sizeof(mouseMoveStart) - 5);
+		return true;
+	}
+
+	static void TryInstallMovement()
+	{
+		const bool isExpected = Utils::Hook::BranchesTo(CL_CreateCmd_CL_RemoteControlMoveCall, CL_RemoteControlMove, false)
+			&& Utils::Hook::BranchesTo(CL_CreateCmd_CG_HandleLocationSelectionInputCall, CG_HandleLocationSelectionInput, false)
+			&& Utils::Hook::BranchesTo(CL_CreateCmd_CL_MouseMoveCall, CL_MouseMove, false);
+
+		if (!isExpected)
+		{
+			Components::Logger::Error("controller: the movement code does not read as expected, no stick movement or aim assist\n");
+			return;
+		}
+
+		const bool isSeated = remoteControlHook.Initialize(CL_CreateCmd_CL_RemoteControlMoveCall, reinterpret_cast<void*>(CL_RemoteControlMove_Hk), HOOK_CALL)->Install()->IsInstalled()
+			&& locationSelectionHook.Initialize(CL_CreateCmd_CG_HandleLocationSelectionInputCall, reinterpret_cast<void*>(CG_HandleLocationSelectionInput_Hk), HOOK_CALL)->Install()->IsInstalled()
+			&& mouseMoveHook.Initialize(CL_CreateCmd_CL_MouseMoveCall, reinterpret_cast<void*>(CL_MouseMove_Hk), HOOK_CALL)->Install()->IsInstalled();
+
+		if (!isSeated)
+		{
+			remoteControlHook.Uninstall();
+			locationSelectionHook.Uninstall();
+			mouseMoveHook.Uninstall();
+
+			Components::Logger::Error("controller: could not seat every movement hook, no stick movement or aim assist\n");
+		}
+	}
+
+	void InstallProtocol()
+	{
+		PatchUsercmdMovement();
+		HookRegisterDvars();
+		HookUseEntity();
+	}
+
+	bool TryInstall()
+	{
+		InstallProtocol();
+
+		if (!TryInstallInput())
+		{
+			return false;
+		}
+
+		TryInstallMovement();
+		HookBindCommand();
+
+		Components::Console::OnKey([](int key, int down)
+		{
+			if (installedRuntime != nullptr && down != 0 && !Mapping::IsControllerKey(key))
+			{
+				installedRuntime->Keys().NoteOtherInput();
+			}
+
+			return false;
+		});
+
+		return true;
+	}
+
+	void Attach(Runtime* runtime) noexcept
+	{
+		installedRuntime = runtime;
+	}
+
+	void NoteMouseMove(int dx, int dy)
+	{
+		if (installedRuntime != nullptr && (dx != 0 || dy != 0))
+		{
+			installedRuntime->Keys().NoteOtherInput();
+		}
+	}
 }

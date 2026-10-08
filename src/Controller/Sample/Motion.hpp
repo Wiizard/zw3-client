@@ -1,30 +1,30 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
 namespace Controller
 {
-  struct sensor_vec3
-  {
-    float x {0.0f};
-    float y {0.0f};
-    float z {0.0f};
-  };
+	struct SensorVector
+	{
+		float x = 0.0f;
+		float y = 0.0f;
+		float z = 0.0f;
+	};
 
-  struct gyro_sample
-  {
-    sensor_vec3 angular_velocity {};
-  };
+	struct GyroSample
+	{
+		SensorVector angularVelocity{};
+	};
 
-  struct accel_sample
-  {
-    sensor_vec3 acceleration {};
-  };
+	struct AccelSample
+	{
+		SensorVector acceleration{};
+	};
 
-  struct motion_sample
-  {
-    gyro_sample gyro {};
-    accel_sample accel {};
-    std::optional<uint32_t> device_timestamp;
-  };
+	struct MotionSample
+	{
+		GyroSample gyro{};
+		AccelSample accel{};
+		std::optional<std::uint32_t> deviceTimestamp;
+	};
 }

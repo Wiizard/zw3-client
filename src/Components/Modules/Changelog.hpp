@@ -10,8 +10,8 @@ namespace Components
 		static void SetChangelog(const std::string& changelog);
 
 	private:
-		static std::mutex Mutex;
-		static std::vector<std::string> Lines;
+		static std::mutex mutex;
+		static std::vector<std::string> lines;
 
 		static unsigned int GetChangelogCount();
 		static const char* GetChangelogText(unsigned int item, int column);

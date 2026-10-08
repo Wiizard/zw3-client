@@ -1,248 +1,338 @@
-#include "Bind.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Engine/Bind.hpp"
+#include "Controller/Engine/Engine.hpp"
+#include "Controller/Mapping/Binding.hpp"
 
-#include <cstring>
-
-#include "Key.hpp"
-#include "../Mapping/Binding.hpp"
-
-namespace Controller
+namespace Controller::Engine
 {
-  namespace engine
-  {
-    using mapping::engine_key;
+	using Mapping::EngineKey;
 
-    namespace
-    {
-      constexpr char custom_layout[] {"custom"};
-    }
+	static constexpr char customLayout[] = "custom";
 
-    const char*
-    controller_command_for (const char* command) noexcept
-    {
-      if (command == nullptr)
-        return nullptr;
+	static constexpr int keyStateCount = 256;
 
-      if (std::strcmp (command, "+activate") == 0 ||
-          std::strcmp (command, "+reload") == 0)
-        return "+usereload";
+	struct CommandSwap
+	{
+		const char* from;
+		const char* to;
+	};
 
-      if (std::strcmp (command, "+melee_breath") == 0)
-        return "+holdbreath";
+	static constexpr CommandSwap controllerCommands[] =
+	{
+		{ "+activate", "+usereload" },
+		{ "+reload", "+usereload" },
+	};
 
-      if (std::strcmp (command, "togglescores") == 0)
-        return "+scores";
+	static constexpr CommandSwap retiredCommands[] =
+	{
+		{ "+melee_breath", "+holdbreath" },
+		{ "togglescores", "+scores" },
+	};
 
-      return command;
-    }
+	static std::string NameForBinding(int binding)
+	{
+		constexpr auto lastAction = static_cast<int>(Mapping::Action::ActionSlot4);
 
-    bind_bridge::
-    bind_bridge (const context& ctx, const dvars& d)
-      : ctx_ (ctx), dvars_ (d)
-    {
-    }
+		for (int action = 1; action <= lastAction; ++action)
+		{
+			const char* command = Mapping::CommandFor(static_cast<Mapping::Action>(action));
 
-    void
-    bind_bridge::
-    apply_layout (std::string_view name)
-    {
-      mapping::binding_table t;
-      mapping::apply_button_layout (t, name);
+			if (Game::Key_GetBindingForCmd(command) == binding)
+			{
+				return command;
+			}
+		}
 
-      size_t bound (0);
-      size_t unknown (0);
+		return std::format("#{}", binding);
+	}
 
-      t.for_each ([&bound, &unknown] (engine_key k, const std::string& command)
-      {
-        if (command.empty ())
-        {
-          ++unknown;
-          return;
-        }
+	const char* ControllerCommandFor(const char* command) noexcept
+	{
+		if (command == nullptr)
+		{
+			return nullptr;
+		}
 
-        Key_SetBinding (local_client, static_cast<int> (k), command.c_str ());
-        ++bound;
-      });
+		for (const auto& swap : controllerCommands)
+		{
+			if (std::strcmp(command, swap.from) == 0)
+			{
+				return swap.to;
+			}
+		}
 
-      ctx_.report (unknown == 0 ? severity::info : severity::warning,
-                   facility::mapping,
-                   unknown == 0 ? errc::none : errc::binding_invalid,
-                   "applied controller layout '" + std::string (name) + "': " +
-                   std::to_string (bound) + " keys bound, " +
-                   std::to_string (unknown) + " commands unknown to the engine");
-    }
+		for (const auto& swap : retiredCommands)
+		{
+			if (std::strcmp(command, swap.from) == 0)
+			{
+				return swap.to;
+			}
+		}
 
-    void
-    bind_bridge::
-    apply_configured_layout ()
-    {
-      install_configured_layout (false);
-    }
+		return command;
+	}
 
-    void
-    bind_bridge::
-    apply_startup_layout ()
-    {
-      install_configured_layout (true);
-    }
+	int BindingForBindCommand(int key, const char* command)
+	{
+		const int binding = Game::Key_GetBindingForCmd(command);
 
-    void
-    bind_bridge::
-    install_configured_layout (bool keep_config_bindings)
-    {
-      const char* const name (read (dvars_.buttons_config, "buttons_default"));
+		if (binding != 0 || !Mapping::IsControllerKey(key))
+		{
+			return binding;
+		}
 
-      applied_ = name;
+		for (const auto& swap : retiredCommands)
+		{
+			if (_stricmp(command, swap.from) == 0)
+			{
+				return Game::Key_GetBindingForCmd(swap.to);
+			}
+		}
 
-      migrate_controller_commands ();
+		return 0;
+	}
 
-      if (std::strcmp (name, custom_layout) == 0)
-        return;
+	int ControllerBindingFor(int binding)
+	{
+		if (binding == 0)
+		{
+			return 0;
+		}
 
-      if (keep_config_bindings && bindings_customized ())
-      {
-        ctx_.report (severity::info, facility::mapping, errc::none,
-                     "kept the controller bindings loaded from the config; "
-                     "layout '" + std::string (name) + "' left unapplied");
-        return;
-      }
+		for (const auto& swap : controllerCommands)
+		{
+			const int from = Game::Key_GetBindingForCmd(swap.from);
 
-      apply_layout (name);
-    }
+			if (from == 0 || from != binding)
+			{
+				continue;
+			}
 
-    bool
-    bind_bridge::
-    bindings_customized () const
-    {
-      mapping::binding_table t;
+			const int to = Game::Key_GetBindingForCmd(swap.to);
 
-      const PlayerKeyState& ks (playerKeys[local_client]);
+			if (to == 0)
+			{
+				return binding;
+			}
 
-      for (const engine_key k: mapping::keys ())
-      {
-        const char* const command (ks.keys[static_cast<int> (k)].binding);
+			return to;
+		}
 
-        if (command != nullptr && command[0] != '\0')
-          t.bind (k, command);
-      }
+		return binding;
+	}
 
-      // An empty table means we haven't got any controller bindings to
-      // compare against the predefined layouts. This normally happens
-      // for a fresh profile before the default bindings have been
-      // applied.
-      //
-      // Note that treating such a table as failing to match a layout
-      // would make the profile appear customized and, as a result,
-      // leave it without the default controller bindings. So handle
-      // this case explicitly.
-      //
-      if (t.size () == 0)
-        return false;
+	BindBridge::BindBridge(const Context& context, const Dvars& dvars)
+		: context(context),
+		dvars(dvars)
+	{
+	}
 
-      return !mapping::matches_button_layout (t);
-    }
+	void BindBridge::ApplyLayout(std::string_view name)
+	{
+		Mapping::BindingTable table;
+		Mapping::ApplyButtonLayout(table, name);
 
-    void
-    bind_bridge::
-    poll_configured_layout ()
-    {
-      const char* const name (read (dvars_.buttons_config, "buttons_default"));
+		std::size_t bound = 0;
+		std::size_t unknown = 0;
 
-      if (applied_ == name)
-        return;
+		table.ForEach([&bound, &unknown](EngineKey key, const std::string& command)
+		{
+			const int binding = Game::Key_GetBindingForCmd(command.c_str());
 
-      apply_configured_layout ();
-    }
+			if (binding == 0)
+			{
+				++unknown;
+				return;
+			}
 
-    void
-    bind_bridge::
-    migrate_controller_commands ()
-    {
-      const PlayerKeyState& ks (playerKeys[local_client]);
+			Game::Key_SetBinding(localClient, static_cast<int>(key), binding);
+			++bound;
+		});
 
-      size_t migrated (0);
+		const std::string message = std::format("applied controller layout '{}': {} keys bound, {} commands unknown to the engine", name, bound, unknown);
 
-      for (int key (0); key != 256; ++key)
-      {
-        if (!mapping::is_controller_key (key))
-          continue;
+		if (unknown == 0)
+		{
+			this->context.Report(Severity::Info, Facility::Mapping, ErrorCode::None, message);
+		}
+		else
+		{
+			this->context.Report(Severity::Warning, Facility::Mapping, ErrorCode::BindingInvalid, message);
+		}
+	}
 
-        const char* const command (ks.keys[key].binding);
+	void BindBridge::ApplyConfiguredLayout()
+	{
+		this->InstallConfiguredLayout(false);
+	}
 
-        if (command == nullptr)
-          continue;
+	void BindBridge::ApplyStartupLayout()
+	{
+		this->InstallConfiguredLayout(true);
+	}
 
-        const char* const wanted (controller_command_for (command));
+	void BindBridge::InstallConfiguredLayout(bool shouldKeepConfigBindings)
+	{
+		const std::string name = Read(this->dvars.buttonsConfig, "buttons_default");
 
-        if (wanted == command)
-          continue;
+		this->applied = name;
 
-        Key_SetBinding (local_client, key, wanted);
-        ++migrated;
-      }
+		this->MigrateControllerCommands();
 
-      if (migrated != 0)
-        ctx_.report (severity::info, facility::mapping, errc::none,
-                     "migrated " + std::to_string (migrated) +
-                     " controller key(s) to the merged controller command");
-    }
+		if (name == customLayout)
+		{
+			return;
+		}
 
-    void
-    bind_bridge::
-    reapply_layout ()
-    {
-      applied_.clear ();
+		if (shouldKeepConfigBindings && this->AreBindingsCustomized())
+		{
+			this->context.Report(Severity::Info, Facility::Mapping, ErrorCode::None,
+				std::format("kept the controller bindings loaded from the config; layout '{}' left unapplied", name));
+			return;
+		}
 
-      apply_configured_layout ();
-    }
+		this->ApplyLayout(name);
+	}
 
-    void
-    bind_bridge::
-    note_manual_rebind () noexcept
-    {
-      if (dvars_.buttons_config == nullptr)
-        return;
+	bool BindBridge::AreBindingsCustomized() const
+	{
+		Mapping::BindingTable table;
 
-      Dvar_SetString (dvars_.buttons_config, custom_layout);
-    }
+		const auto& keyState = Game::playerKeys[localClient];
 
-    size_t
-    bind_bridge::
-    command_keys (int client,
-                  bool controller_in_use,
-                  const char* command,
-                  int (&keys_out)[2]) noexcept
-    {
-      keys_out[0] = -1;
-      keys_out[1] = -1;
+		for (const auto key : Mapping::Keys())
+		{
+			const int binding = keyState.keys[static_cast<int>(key)].binding;
 
-      if (command == nullptr)
-        return 0;
+			if (binding != 0)
+			{
+				table.Bind(key, NameForBinding(binding));
+			}
+		}
 
-      const char* const lookup (controller_in_use ? controller_command_for (command)
-                                                  : command);
+		if (table.Size() == 0)
+		{
+			return false;
+		}
 
-      size_t count (0);
-      const PlayerKeyState& ks (playerKeys[client]);
+		return !Mapping::MatchesButtonLayout(table);
+	}
 
-      for (int key (0); key != 256; ++key)
-      {
-        if (mapping::is_controller_key (key) != controller_in_use)
-          continue;
+	void BindBridge::PollConfiguredLayout()
+	{
+		const char* name = Read(this->dvars.buttonsConfig, "buttons_default");
 
-        const char* const bound (ks.keys[key].binding);
+		if (this->applied == name)
+		{
+			return;
+		}
 
-        if (bound == nullptr || std::strcmp (bound, lookup) != 0)
-          continue;
+		this->ApplyConfiguredLayout();
+	}
 
-        keys_out[count++] = key;
+	void BindBridge::MigrateControllerCommands()
+	{
+		const auto& keyState = Game::playerKeys[localClient];
 
-        if (count == 2)
-          break;
-      }
+		std::size_t migrated = 0;
 
-      return count;
-    }
-  }
+		for (int key = 0; key != keyStateCount; ++key)
+		{
+			if (!Mapping::IsControllerKey(key))
+			{
+				continue;
+			}
+
+			const int binding = keyState.keys[key].binding;
+
+			if (binding == 0)
+			{
+				continue;
+			}
+
+			const int wanted = ControllerBindingFor(binding);
+
+			if (wanted == binding)
+			{
+				continue;
+			}
+
+			Game::Key_SetBinding(localClient, key, wanted);
+			++migrated;
+		}
+
+		if (migrated != 0)
+		{
+			this->context.Report(Severity::Info, Facility::Mapping, ErrorCode::None, std::format("migrated {} controller key(s) to the merged controller command", migrated));
+		}
+	}
+
+	void BindBridge::ReapplyLayout()
+	{
+		this->applied.clear();
+
+		this->ApplyConfiguredLayout();
+	}
+
+	void BindBridge::NoteManualRebind()
+	{
+		if (this->dvars.buttonsConfig == nullptr)
+		{
+			return;
+		}
+
+		Game::Dvar_SetString(this->dvars.buttonsConfig, customLayout);
+	}
+
+	std::size_t BindBridge::CommandKeys(int client, bool isControllerInUse, const char* command, int (&keys)[2])
+	{
+		keys[0] = -1;
+		keys[1] = -1;
+
+		if (command == nullptr)
+		{
+			return 0;
+		}
+
+		const char* lookup = command;
+
+		if (isControllerInUse)
+		{
+			lookup = ControllerCommandFor(command);
+		}
+
+		const int binding = Game::Key_GetBindingForCmd(lookup);
+
+		if (binding == 0)
+		{
+			return 0;
+		}
+
+		std::size_t count = 0;
+		const auto& keyState = Game::playerKeys[client];
+
+		for (int key = 0; key != keyStateCount; ++key)
+		{
+			if (Mapping::IsControllerKey(key) != isControllerInUse)
+			{
+				continue;
+			}
+
+			if (keyState.keys[key].binding != binding)
+			{
+				continue;
+			}
+
+			keys[count] = key;
+			++count;
+
+			if (count == 2)
+			{
+				break;
+			}
+		}
+
+		return count;
+	}
 }

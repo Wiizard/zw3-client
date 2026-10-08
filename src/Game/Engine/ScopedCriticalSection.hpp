@@ -13,19 +13,24 @@ namespace Game::Engine
 	class ScopedCriticalSection
 	{
 	public:
-		ScopedCriticalSection(CriticalSection s, ScopedCriticalSectionType type);
+		ScopedCriticalSection(CriticalSection section, ScopedCriticalSectionType type);
 		~ScopedCriticalSection();
 
-		void enterCritSect();
-		void leaveCritSect();
-		[[nodiscard]] bool tryEnterCritSect();
+		ScopedCriticalSection(ScopedCriticalSection&&) = delete;
+		ScopedCriticalSection(const ScopedCriticalSection&) = delete;
+		ScopedCriticalSection& operator=(ScopedCriticalSection&&) = delete;
+		ScopedCriticalSection& operator=(const ScopedCriticalSection&) = delete;
 
-		[[nodiscard]] bool hasOwnership() const;
-		[[nodiscard]] bool isScopedRelease() const;
+		void EnterCritSect();
+		void LeaveCritSect();
+		[[nodiscard]] bool TryEnterCritSect();
+
+		[[nodiscard]] bool HasOwnership() const;
+		[[nodiscard]] bool IsScopedRelease() const;
 
 	private:
-		CriticalSection s_;
-		bool hasOwnership_;
-		bool isScopedRelease_;
+		CriticalSection section;
+		bool hasOwnership;
+		bool isScopedRelease;
 	};
 }

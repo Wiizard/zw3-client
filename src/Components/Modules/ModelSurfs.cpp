@@ -1,60 +1,589 @@
+#include "STDInclude.hpp"
+
+#include <shared_mutex>
+
 #include "ModelSurfs.hpp"
+#include "Dedicated.hpp"
+#include "FileSystem.hpp"
+#include "Logger.hpp"
+#include "Renderer.hpp"
 
 namespace Components
 {
-	std::unordered_map<void*, IUnknown*> ModelSurfs::BufferMap;
-	std::unordered_map<std::string, Game::CModelAllocData*> ModelSurfs::AllocMap;
+	constexpr unsigned char cloneZoneHandle = 0xFF;
 
-	IUnknown* ModelSurfs::GetBuffer(void* buffer)
+	constexpr std::uintptr_t DB_GetIndexBufferAndBase = 0x14012DCF0;
+	constexpr std::uintptr_t DB_GetVertexBufferAndOffset = 0x14012DEC0;
+	constexpr std::uintptr_t DB_GetIndexBuffer = 0x14012DCD0;
+	constexpr std::uintptr_t DB_GetBaseIndex = 0x14012DCB0;
+
+	constexpr std::uintptr_t Load_XModelAsset_SurfsFixupCall = 0x140131B74;
+	constexpr std::uintptr_t DB_XModelSurfsFixup = 0x140130120;
+	constexpr std::uintptr_t DB_ReleaseXAssetHandler = 0x140422180;
+
+	constexpr int modelFileVersion = 1;
+	constexpr std::uint32_t modelSurfsSize = 36;
+	constexpr std::uint32_t surfaceSize = 84;
+	constexpr std::uint32_t vertListSize = 12;
+	constexpr std::uint32_t collisionTreeSize = 40;
+
+	constexpr std::uintptr_t indexBufferAndBaseCalls[] = { 0x140075167, 0x140076838, 0x14007ABE5 };
+	constexpr std::uintptr_t vertexBufferAndOffsetCalls[] = { 0x140076874, 0x14007AC2E, 0x14007B944, 0x14007BE55, 0x14007C31D };
+	constexpr std::uintptr_t indexBufferCalls[] = { 0x14007B912, 0x14007BE19, 0x14007C2E1 };
+	constexpr std::uintptr_t baseIndexCalls[] = { 0x14007BB8B, 0x14007C09F, 0x14007C572 };
+
+	constexpr std::size_t hookCount = std::size(indexBufferAndBaseCalls) + std::size(vertexBufferAndOffsetCalls)
+		+ std::size(indexBufferCalls) + std::size(baseIndexCalls);
+
+	using DB_GetIndexBufferAndBase_t = void(*)(unsigned char zoneHandle, void* indices, IDirect3DIndexBuffer9** indexBuffer, int* baseIndex);
+	using DB_GetVertexBufferAndOffset_t = void(*)(unsigned char zoneHandle, void* verts, IDirect3DVertexBuffer9** vertexBuffer, int* vertexOffset);
+	using DB_GetIndexBuffer_t = IDirect3DIndexBuffer9*(*)(unsigned char zoneHandle, void* indices);
+	using DB_GetBaseIndex_t = int(*)(unsigned char zoneHandle, void* indices);
+	using DB_XModelSurfsFixup_t = void(*)(Game::XModel* model, void* userData);
+	using DB_ReleaseXAssetHandler_t = void(*)(Game::XModelSurfs* modelSurfs);
+
+	struct LoadedSurfs
 	{
-		return ModelSurfs::BufferMap[buffer];
-	}
+		Utils::Memory::Allocator allocator;
+		Game::XModelSurfs* surfs = nullptr;
+	};
 
-	void ModelSurfs::SetBuffer(char /*streamHandle*/, void* buffer, IUnknown** bufferOut, int* offsetOut)
+	struct ModelFile
 	{
-		*offsetOut = 0;
-		*bufferOut = ModelSurfs::BufferMap[buffer];
-	}
+		std::uint8_t* sections[Game::SECTION_FIXUP];
+		std::uint32_t sizes[Game::SECTION_FIXUP];
+		std::unordered_map<std::uint32_t, std::pair<std::uint32_t, std::uint32_t>> pointers;
+	};
 
-	void ModelSurfs::CreateBuffers(Game::XModelSurfs* surfs)
+	static DB_GetIndexBufferAndBase_t getIndexBufferAndBase = nullptr;
+	static DB_GetVertexBufferAndOffset_t getVertexBufferAndOffset = nullptr;
+	static DB_GetIndexBuffer_t getIndexBuffer = nullptr;
+	static DB_GetBaseIndex_t getBaseIndex = nullptr;
+	static DB_XModelSurfsFixup_t xmodelSurfsFixup = nullptr;
+
+	static Utils::Hook hooks[hookCount];
+	static Utils::Hook surfsFixupHook;
+	static bool isInstalled = false;
+
+	static std::shared_mutex bufferMutex;
+	static std::unordered_map<const void*, IUnknown*> buffers;
+
+	static std::vector<Game::XModelSurfs*> clones;
+	static Utils::Memory::Allocator cloneAllocator;
+
+	static std::mutex loadedMutex;
+	static std::unordered_map<const Game::XSurface*, std::unique_ptr<LoadedSurfs>> loaded;
+
+	static IUnknown* FindBuffer(const void* data)
 	{
-		for (int i = 0; i < surfs->numsurfs; ++i)
-		{
-			Game::XSurface* surface = &surfs->surfs[i];
-			if (surface->deformed)
-			{
-				continue;
-			}
+		std::shared_lock lock(bufferMutex);
 
-			if (surface->zoneHandle == -1)
-			{
-				IDirect3DVertexBuffer9* vertexBuffer = nullptr;
-				IDirect3DIndexBuffer9* indexBuffer = nullptr;
+		const auto buffer = buffers.find(data);
 
-				Game::Load_VertexBuffer(surface->verts0, &vertexBuffer, surface->vertCount * 32);
-				Game::Load_IndexBuffer(surface->triIndices, &indexBuffer, surface->triCount * 3);
-
-				if (vertexBuffer) ModelSurfs::BufferMap[surface->verts0] = vertexBuffer;
-				if (indexBuffer) ModelSurfs::BufferMap[surface->triIndices] = indexBuffer;
-			}
-		}
-	}
-
-	Game::XModelSurfs* ModelSurfs::CloneAndScaleSurfaces(const Game::XModelSurfs* source, const std::string& name, const float scale)
-	{
-		if (!source || !source->surfs || source->numsurfs <= 0)
+		if (buffer == buffers.end())
 		{
 			return nullptr;
 		}
 
-		auto* allocator = Utils::Memory::GetAllocator();
-		auto* clone = allocator->allocate<Game::XModelSurfs>();
+		return buffer->second;
+	}
+
+	static void CreateBuffers(const Game::XModelSurfs* surfs)
+	{
+		for (int i = 0; i < surfs->numsurfs; ++i)
+		{
+			const Game::XSurface* surface = &surfs->surfs[i];
+
+			if (surface->zoneHandle != cloneZoneHandle)
+			{
+				continue;
+			}
+
+			IDirect3DVertexBuffer9* vertexBuffer = nullptr;
+			IDirect3DIndexBuffer9* indexBuffer = nullptr;
+
+			Game::Load_VertexBuffer(&vertexBuffer, surface->verts0, surface->vertCount * static_cast<int>(sizeof(Game::GfxPackedVertex)));
+			Game::Load_IndexBuffer(surface->triIndices, &indexBuffer, surface->triCount * 3);
+
+			std::unique_lock lock(bufferMutex);
+
+			if (vertexBuffer)
+			{
+				buffers[surface->verts0] = vertexBuffer;
+			}
+
+			if (indexBuffer)
+			{
+				buffers[surface->triIndices] = indexBuffer;
+			}
+		}
+	}
+
+	static void ReleaseBuffer(const void* data)
+	{
+		const auto buffer = buffers.find(data);
+
+		if (buffer == buffers.end())
+		{
+			return;
+		}
+
+		buffer->second->Release();
+		buffers.erase(buffer);
+	}
+
+	static void ReleaseBuffers(const Game::XModelSurfs* surfs)
+	{
+		std::unique_lock lock(bufferMutex);
+
+		for (int i = 0; i < surfs->numsurfs; ++i)
+		{
+			const Game::XSurface* surface = &surfs->surfs[i];
+
+			if (surface->zoneHandle != cloneZoneHandle)
+			{
+				continue;
+			}
+
+			ReleaseBuffer(surface->verts0);
+			ReleaseBuffer(surface->triIndices);
+		}
+	}
+
+	static void BeginRecover()
+	{
+		std::unique_lock lock(bufferMutex);
+
+		for (const auto& entry : buffers)
+		{
+			entry.second->Release();
+		}
+
+		buffers.clear();
+	}
+
+	static void EndRecover()
+	{
+		if (!*Game::dx_device)
+		{
+			return;
+		}
+
+		for (const auto* clone : clones)
+		{
+			CreateBuffers(clone);
+		}
+
+		std::lock_guard lock(loadedMutex);
+
+		for (const auto& entry : loaded)
+		{
+			CreateBuffers(entry.second->surfs);
+		}
+	}
+
+	static void DB_GetIndexBufferAndBase_Hook(unsigned char zoneHandle, void* indices, IDirect3DIndexBuffer9** indexBuffer, int* baseIndex)
+	{
+		if (zoneHandle != cloneZoneHandle)
+		{
+			getIndexBufferAndBase(zoneHandle, indices, indexBuffer, baseIndex);
+			return;
+		}
+
+		*indexBuffer = static_cast<IDirect3DIndexBuffer9*>(FindBuffer(indices));
+		*baseIndex = 0;
+	}
+
+	static void DB_GetVertexBufferAndOffset_Hook(unsigned char zoneHandle, void* verts, IDirect3DVertexBuffer9** vertexBuffer, int* vertexOffset)
+	{
+		if (zoneHandle != cloneZoneHandle)
+		{
+			getVertexBufferAndOffset(zoneHandle, verts, vertexBuffer, vertexOffset);
+			return;
+		}
+
+		*vertexBuffer = static_cast<IDirect3DVertexBuffer9*>(FindBuffer(verts));
+		*vertexOffset = 0;
+	}
+
+	static IDirect3DIndexBuffer9* DB_GetIndexBuffer_Hook(unsigned char zoneHandle, void* indices)
+	{
+		if (zoneHandle != cloneZoneHandle)
+		{
+			return getIndexBuffer(zoneHandle, indices);
+		}
+
+		return static_cast<IDirect3DIndexBuffer9*>(FindBuffer(indices));
+	}
+
+	static int DB_GetBaseIndex_Hook(unsigned char zoneHandle, void* indices)
+	{
+		if (zoneHandle != cloneZoneHandle)
+		{
+			return getBaseIndex(zoneHandle, indices);
+		}
+
+		return 0;
+	}
+
+	template <typename T>
+	static T ReadField(const std::uint8_t* data, const std::uint32_t offset)
+	{
+		T value;
+		std::memcpy(&value, data + offset, sizeof(T));
+		return value;
+	}
+
+	template <typename T>
+	static bool TryResolve(const ModelFile& model, const std::uint8_t* field, const std::uint32_t section, const std::uint64_t length, T** pointer)
+	{
+		*pointer = nullptr;
+
+		const auto at = static_cast<std::uint32_t>(field - model.sections[Game::SECTION_MAIN]);
+		const auto fixup = model.pointers.find(at);
+
+		if (fixup == model.pointers.end())
+		{
+			return true;
+		}
+
+		const auto [target, offset] = fixup->second;
+
+		if (target != section || offset + length > model.sizes[section])
+		{
+			return false;
+		}
+
+		*pointer = reinterpret_cast<T*>(model.sections[section] + offset);
+		return true;
+	}
+
+	static bool TryLoadXModelSurfaces(const std::string& name, LoadedSurfs& record)
+	{
+		const FileSystem::FileReader reader(std::format("models/{}", name));
+
+		if (!reader.Exists())
+		{
+			return false;
+		}
+
+		const std::string file = reader.GetBuffer();
+
+		if (file.size() < sizeof(Game::CModelHeader))
+		{
+			return false;
+		}
+
+		Game::CModelHeader header;
+		std::memcpy(&header, file.data(), sizeof(header));
+
+		if (header.version != modelFileVersion)
+		{
+			return false;
+		}
+
+		for (const auto& section : header.sectionHeader)
+		{
+			if (section.size < 0 || section.offset < 0 || static_cast<std::uint64_t>(section.offset) + section.size > file.size())
+			{
+				return false;
+			}
+		}
+
+		const auto& fixupSection = header.sectionHeader[Game::SECTION_FIXUP];
+		const auto* const fixups = reinterpret_cast<const std::uint8_t*>(file.data()) + fixupSection.offset;
+		const auto fixupCount = static_cast<std::uint64_t>(fixupSection.size) / sizeof(std::uint32_t);
+
+		auto& allocator = record.allocator;
+		ModelFile model{};
+
+		for (int i = Game::SECTION_MAIN; i < Game::SECTION_FIXUP; ++i)
+		{
+			const auto& section = header.sectionHeader[i];
+
+			if (section.fixupStart < 0 || section.fixupCount < 0 || static_cast<std::uint64_t>(section.fixupStart) + section.fixupCount > fixupCount)
+			{
+				return false;
+			}
+
+			if (i != Game::SECTION_MAIN && section.fixupCount)
+			{
+				return false;
+			}
+
+			model.sizes[i] = static_cast<std::uint32_t>(section.size);
+			model.sections[i] = allocator.AllocateArray<std::uint8_t>(section.size);
+			std::memcpy(model.sections[i], file.data() + section.offset, section.size);
+		}
+
+		const auto& mainSection = header.sectionHeader[Game::SECTION_MAIN];
+		const auto* const main = model.sections[Game::SECTION_MAIN];
+
+		for (int i = mainSection.fixupStart; i < mainSection.fixupStart + mainSection.fixupCount; ++i)
+		{
+			const auto fixup = ReadField<std::uint32_t>(fixups, static_cast<std::uint32_t>(i * sizeof(std::uint32_t)));
+			const std::uint32_t at = fixup >> 3;
+			const std::uint32_t target = fixup & 3;
+
+			if (target == Game::SECTION_FIXUP || at + sizeof(std::uint32_t) > model.sizes[Game::SECTION_MAIN])
+			{
+				return false;
+			}
+
+			model.pointers[at] = { target, ReadField<std::uint32_t>(main, at) };
+		}
+
+		if (model.sizes[Game::SECTION_MAIN] < modelSurfsSize)
+		{
+			return false;
+		}
+
+		auto* const surfs = allocator.Allocate<Game::XModelSurfs>();
+		surfs->name = allocator.DuplicateString(name);
+		surfs->numsurfs = ReadField<unsigned short>(main, 8);
+		std::memcpy(surfs->partBits, main + 12, sizeof(surfs->partBits));
+
+		const std::uint8_t* records = nullptr;
+
+		if (!surfs->numsurfs || !TryResolve(model, main + 4, Game::SECTION_MAIN, static_cast<std::uint64_t>(surfaceSize) * surfs->numsurfs, &records) || !records)
+		{
+			return false;
+		}
+
+		surfs->surfs = allocator.AllocateArray<Game::XSurface>(surfs->numsurfs);
+
+		for (int i = 0; i < surfs->numsurfs; ++i)
+		{
+			const auto* const source = records + surfaceSize * i;
+			auto& surface = surfs->surfs[i];
+
+			surface.tileMode = source[0];
+			surface.deformed = source[1] != 0;
+			surface.vertCount = ReadField<unsigned short>(source, 2);
+			surface.triCount = ReadField<unsigned short>(source, 4);
+			surface.zoneHandle = cloneZoneHandle;
+			surface.baseTriIndex = ReadField<unsigned short>(source, 8);
+			surface.baseVertIndex = ReadField<unsigned short>(source, 12);
+			std::memcpy(surface.vertInfo.vertCount, source + 20, sizeof(surface.vertInfo.vertCount));
+			surface.vertListCount = ReadField<unsigned int>(source, 40);
+			std::memcpy(surface.partBits, source + 52, sizeof(surface.partBits));
+
+			const auto& vertCounts = surface.vertInfo.vertCount;
+			const std::int64_t blendCount = vertCounts[0] + 3 * vertCounts[1] + 5 * vertCounts[2] + 7 * vertCounts[3];
+
+			if (!surface.vertCount || !surface.triCount || blendCount < 0)
+			{
+				return false;
+			}
+
+			const bool areArraysValid = TryResolve(model, source + 16, Game::SECTION_INDEX, surface.triCount * 3ull * sizeof(unsigned short), &surface.triIndices)
+				&& TryResolve(model, source + 28, Game::SECTION_MAIN, blendCount * sizeof(unsigned short), &surface.vertInfo.vertsBlend)
+				&& TryResolve(model, source + 32, Game::SECTION_VERTEX, surface.vertCount * sizeof(Game::GfxPackedVertex), &surface.verts0);
+
+			if (!areArraysValid || !surface.triIndices || !surface.verts0)
+			{
+				return false;
+			}
+
+			const std::uint8_t* lists = nullptr;
+
+			if (!TryResolve(model, source + 44, Game::SECTION_MAIN, static_cast<std::uint64_t>(vertListSize) * surface.vertListCount, &lists))
+			{
+				return false;
+			}
+
+			if (!lists)
+			{
+				surface.vertListCount = 0;
+				continue;
+			}
+
+			surface.vertList = allocator.AllocateArray<Game::XRigidVertList>(surface.vertListCount);
+
+			for (unsigned int j = 0; j < surface.vertListCount; ++j)
+			{
+				const auto* const list = lists + vertListSize * j;
+				auto& vertList = surface.vertList[j];
+
+				vertList.boneOffset = ReadField<unsigned short>(list, 0);
+				vertList.vertCount = ReadField<unsigned short>(list, 2);
+				vertList.triOffset = ReadField<unsigned short>(list, 4);
+				vertList.triCount = ReadField<unsigned short>(list, 6);
+
+				const std::uint8_t* tree = nullptr;
+
+				if (!TryResolve(model, list + 8, Game::SECTION_MAIN, collisionTreeSize, &tree))
+				{
+					return false;
+				}
+
+				if (!tree)
+				{
+					continue;
+				}
+
+				auto* const collisionTree = allocator.Allocate<Game::XSurfaceCollisionTree>();
+				std::memcpy(collisionTree->trans, tree, sizeof(collisionTree->trans));
+				std::memcpy(collisionTree->scale, tree + 12, sizeof(collisionTree->scale));
+				collisionTree->nodeCount = ReadField<unsigned int>(tree, 24);
+				collisionTree->leafCount = ReadField<unsigned int>(tree, 32);
+
+				const bool isTreeValid = TryResolve(model, tree + 28, Game::SECTION_MAIN, collisionTree->nodeCount * sizeof(Game::XSurfaceCollisionNode), &collisionTree->nodes)
+					&& TryResolve(model, tree + 36, Game::SECTION_MAIN, collisionTree->leafCount * sizeof(Game::XSurfaceCollisionLeaf), &collisionTree->leafs);
+
+				if (!isTreeValid)
+				{
+					return false;
+				}
+
+				vertList.collisionTree = collisionTree;
+			}
+		}
+
+		record.surfs = surfs;
+		return true;
+	}
+
+	static void BuildEmptySurfaces(const std::string& name, LoadedSurfs& record)
+	{
+		auto& allocator = record.allocator;
+
+		auto* const indices = allocator.AllocateArray<unsigned short>(3);
+		indices[1] = 1;
+		indices[2] = 2;
+
+		auto* const vertList = allocator.Allocate<Game::XRigidVertList>();
+		vertList->vertCount = 3;
+		vertList->triCount = 1;
+
+		auto* const surface = allocator.Allocate<Game::XSurface>();
+		surface->vertCount = 3;
+		surface->triCount = 1;
+		surface->zoneHandle = cloneZoneHandle;
+		surface->triIndices = indices;
+		surface->verts0 = allocator.AllocateArray<Game::GfxPackedVertex>(3);
+		surface->vertListCount = 1;
+		surface->vertList = vertList;
+
+		auto* const surfs = allocator.Allocate<Game::XModelSurfs>();
+		surfs->name = allocator.DuplicateString(name);
+		surfs->surfs = surface;
+		surfs->numsurfs = 1;
+
+		record.surfs = surfs;
+	}
+
+	static const Game::XModelSurfs* RegisterLoaded(std::unique_ptr<LoadedSurfs> record)
+	{
+		CreateBuffers(record->surfs);
+
+		const auto* const surfs = record->surfs;
+
+		std::lock_guard lock(loadedMutex);
+		loaded[surfs->surfs] = std::move(record);
+
+		return surfs;
+	}
+
+	static const Game::XModelSurfs* LoadXModelSurfs(const std::string& name)
+	{
+		auto record = std::make_unique<LoadedSurfs>();
+
+		if (!TryLoadXModelSurfaces(name, *record))
+		{
+			Logger::Error("modelsurfs: models/{} could not be read, its model is drawn empty\n", name);
+
+			record = std::make_unique<LoadedSurfs>();
+			BuildEmptySurfaces(name, *record);
+		}
+
+		return RegisterLoaded(std::move(record));
+	}
+
+	static void DB_XModelSurfsFixup_Hk(Game::XModel* model, void* userData)
+	{
+		for (int lod = 0; lod < model->numLods; ++lod)
+		{
+			auto* const modelSurfs = model->lodInfo[lod].modelSurfs;
+
+			if (!modelSurfs || modelSurfs->surfs)
+			{
+				continue;
+			}
+
+			const auto* const loadedSurfs = LoadXModelSurfs(modelSurfs->name);
+
+			modelSurfs->surfs = loadedSurfs->surfs;
+			modelSurfs->numsurfs = loadedSurfs->numsurfs;
+			std::memcpy(modelSurfs->partBits, loadedSurfs->partBits, sizeof(modelSurfs->partBits));
+		}
+
+		xmodelSurfsFixup(model, userData);
+	}
+
+	static void ReleaseModelSurf(Game::XModelSurfs* modelSurfs)
+	{
+		std::unique_ptr<LoadedSurfs> record;
+
+		{
+			std::lock_guard lock(loadedMutex);
+
+			const auto entry = loaded.find(modelSurfs->surfs);
+
+			if (entry == loaded.end())
+			{
+				return;
+			}
+
+			record = std::move(entry->second);
+			loaded.erase(entry);
+		}
+
+		ReleaseBuffers(record->surfs);
+	}
+
+	bool ModelSurfs::IsInstalled()
+	{
+		return isInstalled;
+	}
+
+	bool ModelSurfs::TryLoadMissing(Game::XModelSurfs* modelSurfs, const char* name)
+	{
+		if (!isInstalled)
+		{
+			return false;
+		}
+
+		auto record = std::make_unique<LoadedSurfs>();
+
+		if (!TryLoadXModelSurfaces(name, *record))
+		{
+			return false;
+		}
+
+		const auto* const loadedSurfs = RegisterLoaded(std::move(record));
+
+		modelSurfs->surfs = loadedSurfs->surfs;
+		modelSurfs->numsurfs = loadedSurfs->numsurfs;
+		std::memcpy(modelSurfs->partBits, loadedSurfs->partBits, sizeof(modelSurfs->partBits));
+
+		return true;
+	}
+
+	Game::XModelSurfs* ModelSurfs::CloneAndScaleSurfaces(const Game::XModelSurfs* source, const std::string& name, const float scale)
+	{
+		if (!isInstalled || !source || !source->surfs || source->numsurfs <= 0)
+		{
+			return nullptr;
+		}
+
+		auto* clone = cloneAllocator.Allocate<Game::XModelSurfs>();
 		std::memcpy(clone, source, sizeof(Game::XModelSurfs));
-		clone->name = allocator->duplicateString(name);
-		clone->surfs = allocator->allocateArray<Game::XSurface>(source->numsurfs);
+		clone->name = cloneAllocator.DuplicateString(name);
+		clone->surfs = cloneAllocator.AllocateArray<Game::XSurface>(source->numsurfs);
 		std::memcpy(clone->surfs, source->surfs, sizeof(Game::XSurface) * source->numsurfs);
 
-		for (auto surfaceIndex = 0; surfaceIndex < source->numsurfs; ++surfaceIndex)
+		for (int surfaceIndex = 0; surfaceIndex < source->numsurfs; ++surfaceIndex)
 		{
 			const auto& sourceSurface = source->surfs[surfaceIndex];
 			auto& cloneSurface = clone->surfs[surfaceIndex];
@@ -63,7 +592,7 @@ namespace Components
 			{
 				const auto vertexBufferSize = sourceSurface.vertCount * sizeof(Game::GfxPackedVertex);
 				cloneSurface.verts0 = static_cast<Game::GfxPackedVertex*>(Utils::Memory::AllocateAlign(vertexBufferSize, 16));
-				allocator->reference(cloneSurface.verts0, Utils::Memory::FreeAlign);
+				cloneAllocator.Reference(cloneSurface.verts0, static_cast<void(*)(void*)>(Utils::Memory::FreeAlign));
 			}
 
 			if (sourceSurface.deformed)
@@ -71,18 +600,21 @@ namespace Components
 				continue;
 			}
 
-			cloneSurface.zoneHandle = -1;
+			cloneSurface.zoneHandle = cloneZoneHandle;
 
 			if (sourceSurface.triIndices && sourceSurface.triCount > 0)
 			{
 				const auto indexCount = sourceSurface.triCount * 3;
-				cloneSurface.triIndices = allocator->allocateArray<unsigned short>(indexCount);
+				cloneSurface.triIndices = cloneAllocator.AllocateArray<unsigned short>(indexCount);
 				std::memcpy(cloneSurface.triIndices, sourceSurface.triIndices, sizeof(unsigned short) * indexCount);
 			}
 		}
 
+		clones.push_back(clone);
+
 		UpdateScaledSurfaces(clone, source, scale);
 		CreateBuffers(clone);
+
 		return clone;
 	}
 
@@ -94,7 +626,8 @@ namespace Components
 		}
 
 		const auto surfaceCount = std::min(target->numsurfs, source->numsurfs);
-		for (auto surfaceIndex = 0; surfaceIndex < surfaceCount; ++surfaceIndex)
+
+		for (int surfaceIndex = 0; surfaceIndex < surfaceCount; ++surfaceIndex)
 		{
 			const auto& sourceSurface = source->surfs[surfaceIndex];
 			auto& targetSurface = target->surfs[surfaceIndex];
@@ -104,7 +637,7 @@ namespace Components
 				continue;
 			}
 
-			for (auto vertexIndex = 0; vertexIndex < sourceSurface.vertCount; ++vertexIndex)
+			for (int vertexIndex = 0; vertexIndex < sourceSurface.vertCount; ++vertexIndex)
 			{
 				targetSurface.verts0[vertexIndex] = sourceSurface.verts0[vertexIndex];
 				targetSurface.verts0[vertexIndex].xyz[0] *= scale;
@@ -117,342 +650,131 @@ namespace Components
 				continue;
 			}
 
-			if (const auto buffer = BufferMap.find(targetSurface.verts0); buffer != BufferMap.end() && buffer->second)
+			auto* const vertexBuffer = static_cast<IDirect3DVertexBuffer9*>(FindBuffer(targetSurface.verts0));
+
+			if (!vertexBuffer)
 			{
-				auto* vertexBuffer = static_cast<IDirect3DVertexBuffer9*>(buffer->second);
-				void* lockedBuffer = nullptr;
-				const auto bufferSize = sourceSurface.vertCount * sizeof(Game::GfxPackedVertex);
-				if (SUCCEEDED(vertexBuffer->Lock(0, bufferSize, &lockedBuffer, 0)) && lockedBuffer)
-				{
-					std::memcpy(lockedBuffer, targetSurface.verts0, bufferSize);
-					vertexBuffer->Unlock();
-				}
+				continue;
+			}
+
+			void* lockedBuffer = nullptr;
+			const auto bufferSize = static_cast<UINT>(sourceSurface.vertCount * sizeof(Game::GfxPackedVertex));
+
+			if (SUCCEEDED(vertexBuffer->Lock(0, bufferSize, &lockedBuffer, 0)) && lockedBuffer)
+			{
+				std::memcpy(lockedBuffer, targetSurface.verts0, bufferSize);
+				vertexBuffer->Unlock();
 			}
 		}
 	}
 
-	Game::XModelSurfs* ModelSurfs::LoadXModelSurfaces(const std::string& name)
+	void ModelSurfs::FreeClones()
 	{
-		Utils::Memory::Allocator allocator;
-		const auto path = std::format("models/{}", name);
-		FileSystem::FileReader model(path);
-
-		if (!model.exists())
+		for (const auto* clone : clones)
 		{
-#ifdef DEBUG
-			if (Flags::HasFlag("dump"))
-			{
-				FILE* fp = nullptr;
-				if (!fopen_s(&fp, "dump.cfg", "a") && fp)
-				{
-					fprintf(fp, "dumpraw %s\n", model.getName().data());
-					fclose(fp);
-				}
-
-				return nullptr;
-			}
-#endif
-
-			if (ZoneBuilder::IsEnabled())
-			{
-				Logger::Print("Loading model surface {} at path \"{}\" failed!", name, path);
-			}
-			else
-			{
-				Logger::Error(Game::ERR_FATAL, "Loading model {} failed!", name);
-			}
-
-			return nullptr;
+			ReleaseBuffers(clone);
 		}
 
-		Game::CModelHeader header;
-		if (!model.read(&header, sizeof(header)))
-		{
-			Logger::Error(Game::ERR_FATAL, "Reading header for model {} failed!", name);
-		}
-
-		if (header.version != 1)
-		{
-			Logger::Error(Game::ERR_FATAL, "Model {} has an invalid version {} (should be 1)!", name, header.version);
-		}
-
-		// Allocate section buffers
-		header.sectionHeader[Game::SECTION_MAIN].buffer = Utils::Memory::Allocate(header.sectionHeader[Game::SECTION_MAIN].size);
-		header.sectionHeader[Game::SECTION_INDEX].buffer = Utils::Memory::AllocateAlign(header.sectionHeader[Game::SECTION_INDEX].size, 16);
-		header.sectionHeader[Game::SECTION_VERTEX].buffer = Utils::Memory::AllocateAlign(header.sectionHeader[Game::SECTION_VERTEX].size, 16);
-		header.sectionHeader[Game::SECTION_FIXUP].buffer = allocator.allocateArray<char>(header.sectionHeader[Game::SECTION_FIXUP].size);
-
-		// Load section data
-		for (int i = 0; i < ARRAYSIZE(header.sectionHeader); ++i)
-		{
-			model.seek(header.sectionHeader[i].offset, Game::FS_SEEK_SET);
-			if (!model.read(header.sectionHeader[i].buffer, header.sectionHeader[i].size))
-			{
-				Logger::Error(Game::ERR_FATAL, "Reading section {} for model {} failed!", i, name);
-			}
-		}
-
-		// Fixup sections
-		unsigned int* fixups = reinterpret_cast<unsigned int*>(header.sectionHeader[Game::SECTION_FIXUP].buffer);
-		for (int i = 0; i < 3; ++i)
-		{
-			Game::CModelSectionHeader* section = &header.sectionHeader[i];
-			for (int j = section->fixupStart; j < section->fixupStart + section->fixupCount; ++j)
-			{
-				unsigned int fixup = fixups[j];
-				*reinterpret_cast<DWORD*>(reinterpret_cast<char*>(section->buffer) + (fixup >> 3)) += reinterpret_cast<DWORD>(header.sectionHeader[fixup & 3].buffer);
-			}
-		}
-
-		// Store allocation data (not sure if this is correct)
-		Game::CModelAllocData* allocationData = Utils::Memory::AllocateArray<Game::CModelAllocData>();
-		allocationData->mainArray = header.sectionHeader[Game::SECTION_MAIN].buffer;
-		allocationData->indexBuffer = header.sectionHeader[Game::SECTION_INDEX].buffer;
-		allocationData->vertexBuffer = header.sectionHeader[Game::SECTION_VERTEX].buffer;
-
-		AssertSize(Game::XSurface, 64);
-		Game::XModelSurfs* modelSurfs = reinterpret_cast<Game::XModelSurfs*>(allocationData->mainArray);
-		Game::XSurface* tempSurfaces = allocator.allocateArray<Game::XSurface>(modelSurfs->numsurfs);
-		char* surfaceData = reinterpret_cast<char*>(modelSurfs->surfs);
-
-		if (ModelSurfs::AllocMap.contains(modelSurfs->name))
-		{
-			Game::CModelAllocData* allocData = ModelSurfs::AllocMap[modelSurfs->name];
-
-			if (allocData)
-			{
-				Utils::Memory::FreeAlign(allocData->indexBuffer);
-				Utils::Memory::FreeAlign(allocData->vertexBuffer);
-				Utils::Memory::Free(allocData->mainArray);
-				Utils::Memory::Free(allocData);
-			}
-		}
-
-		ModelSurfs::AllocMap[modelSurfs->name] = allocationData;
-		*reinterpret_cast<void**>(reinterpret_cast<char*>(allocationData->mainArray) + 44) = allocationData;
-
-		for (int i = 0; i < modelSurfs->numsurfs; ++i)
-		{
-			char* source = &surfaceData[i * 84];
-
-			std::memcpy(&tempSurfaces[i], source, 12);
-			std::memcpy(&tempSurfaces[i].triIndices, source + 16, 20);
-			std::memcpy(&tempSurfaces[i].baseVertIndex, source + 12, 2);
-			std::memcpy(&tempSurfaces[i].vertListCount, source + 40, 8);
-			std::memcpy(&tempSurfaces[i].partBits, source + 52, 24);
-			tempSurfaces[i].zoneHandle = -1; // Fake handle for buffer interception
-		}
-
-		std::memcpy(surfaceData, tempSurfaces, 64 * modelSurfs->numsurfs);
-
-		ModelSurfs::CreateBuffers(modelSurfs);
-
-		return modelSurfs;
-	}
-
-	bool ModelSurfs::LoadSurfaces(Game::XModel* model)
-	{
-		if (!model) return false;
-
-		bool changed = false;
-		short surfCount = 0;
-
-		for (char i = 0; i < model->numLods; ++i)
-		{
-			Game::XModelSurfs* surfs = model->lodInfo[i].modelSurfs;
-
-			if (!surfs->surfs)
-			{
-				AssertOffset(Game::XModelLodInfo, partBits, 12);
-				Game::XModelSurfs* newSurfs = ModelSurfs::LoadXModelSurfaces(surfs->name);
-				if (!newSurfs) continue;
-
-				surfs->surfs = newSurfs->surfs;
-				surfs->numsurfs = newSurfs->numsurfs;
-
-				model->lodInfo[i].surfs = newSurfs->surfs;
-				std::memcpy(&model->lodInfo[i].partBits, &newSurfs->partBits, 24);
-
-				short numSurfs = static_cast<short>(newSurfs->numsurfs);
-				model->lodInfo[i].numsurfs = numSurfs;
-				model->lodInfo[i].surfIndex = surfCount;
-				surfCount += numSurfs;
-
-				changed = true;
-			}
-		}
-
-		return changed;
-	}
-
-	void ModelSurfs::ReleaseModelSurf(Game::XAssetHeader header)
-	{
-		bool hasCustomSurface = false;
-		for (int i = 0; i < header.modelSurfs->numsurfs && header.modelSurfs->surfs; ++i)
-		{
-			Game::XSurface* surface = &header.modelSurfs->surfs[i];
-
-			if (surface->zoneHandle == -1)
-			{
-				hasCustomSurface = true;
-
-				if (!ModelSurfs::BufferMap.empty())
-				{
-					auto buffer = ModelSurfs::BufferMap.find(surface->triIndices);
-					if (buffer != ModelSurfs::BufferMap.end())
-					{
-						if (buffer->second) buffer->second->Release();
-						ModelSurfs::BufferMap.erase(buffer);
-					}
-
-					buffer = ModelSurfs::BufferMap.find(surface->verts0);
-					if (buffer != ModelSurfs::BufferMap.end())
-					{
-						if (buffer->second) buffer->second->Release();
-						ModelSurfs::BufferMap.erase(buffer);
-					}
-				}
-			}
-		}
-
-		if (hasCustomSurface && !ModelSurfs::AllocMap.empty())
-		{
-			const auto allocData = ModelSurfs::AllocMap.find(header.modelSurfs->name);
-			if (allocData != ModelSurfs::AllocMap.end())
-			{
-				Utils::Memory::FreeAlign(allocData->second->indexBuffer);
-				Utils::Memory::FreeAlign(allocData->second->vertexBuffer);
-				Utils::Memory::Free(allocData->second->mainArray);
-				Utils::Memory::Free(allocData->second);
-
-				ModelSurfs::AllocMap.erase(allocData);
-			}
-		}
-	}
-
-	void ModelSurfs::BeginRecover()
-	{
-		for (auto& buffer : ModelSurfs::BufferMap)
-		{
-			buffer.second->Release();
-		}
-
-		ModelSurfs::BufferMap.clear();
-	}
-
-	void ModelSurfs::EndRecover()
-	{
-		Game::DB_EnumXAssets_Internal(Game::XAssetType::ASSET_TYPE_XMODEL_SURFS, [](Game::XAssetHeader header, void* /*userdata*/)
-		{
-			ModelSurfs::CreateBuffers(header.modelSurfs);
-		}, nullptr, false);
-	}
-
-	void ModelSurfs::XModelSurfsFixup(Game::XModel* model)
-	{
-		if (!ModelSurfs::LoadSurfaces(model))
-		{
-			Game::DB_XModelSurfsFixup(model);
-		}
-	}
-
-	__declspec(naked) void ModelSurfs::GetIndexBufferStub()
-	{
-		__asm
-		{
-			mov eax, [esp + 4h]
-			cmp al, 0FFh
-
-			jne returnSafe
-
-			jmp ModelSurfs::SetBuffer
-
-		returnSafe:
-			movzx eax, [esp + 4h]
-			mov edx, 4B4DE5h
-			jmp edx
-		}
-	}
-
-	__declspec(naked) void ModelSurfs::GetIndexBufferStub2()
-	{
-		__asm
-		{
-			mov eax, [esp + 4h]
-			cmp al, 0FFh
-
-			jne returnSafe
-
-			mov eax, [edi + 0Ch]
-			push eax
-			call ModelSurfs::GetBuffer
-			add esp, 4h
-			retn
-
-		returnSafe:
-			mov eax, 4FDC20h
-			jmp eax
-		}
-	}
-
-	__declspec(naked) void ModelSurfs::GetIndexBaseStub()
-	{
-		__asm
-		{
-			mov eax, [esp + 4h]
-			cmp al, 0FFh
-
-			jne returnSafe
-
-			xor eax, eax
-			retn
-
-		returnSafe:
-			mov eax, 48C5F0h
-			jmp eax
-		}
-	}
-
-	__declspec(naked) void ModelSurfs::GetVertexBufferStub()
-	{
-		__asm
-		{
-			mov eax, [esp + 4h]
-			cmp al, 0FFh
-
-			jne returnSafe
-
-			jmp ModelSurfs::SetBuffer
-
-		returnSafe:
-			movzx eax, [esp + 4h]
-			mov edx, 5BC055h
-			jmp edx
-		}
+		clones.clear();
+		cloneAllocator.Clear();
 	}
 
 	ModelSurfs::ModelSurfs()
 	{
-		ModelSurfs::BufferMap.clear();
+		if (Dedicated::IsEnabled())
+		{
+			return;
+		}
 
-		// Install release handler
-		Game::DB_ReleaseXAssetHandlers[Game::XAssetType::ASSET_TYPE_XMODEL_SURFS] = ModelSurfs::ReleaseModelSurf;
+		struct HookSite
+		{
+			std::uintptr_t site;
+			std::uintptr_t callee;
+			void* replacement;
+		};
 
-		// Install device recovery handlers
-		Renderer::OnDeviceRecoveryBegin(ModelSurfs::BeginRecover);
-		Renderer::OnDeviceRecoveryEnd(ModelSurfs::EndRecover);
+		std::vector<HookSite> sites;
 
-		// Install hooks
-		Utils::Hook(0x47A6BD, ModelSurfs::XModelSurfsFixup, HOOK_CALL).install()->quick();
-		Utils::Hook(0x558F12, ModelSurfs::GetIndexBaseStub, HOOK_CALL).install()->quick();
-		Utils::Hook(0x4B4DE0, ModelSurfs::GetIndexBufferStub, HOOK_JUMP).install()->quick();
-		Utils::Hook(0x558E70, ModelSurfs::GetIndexBufferStub2, HOOK_CALL).install()->quick();
-		Utils::Hook(0x5BC050, ModelSurfs::GetVertexBufferStub, HOOK_JUMP).install()->quick();
-	}
+		for (const auto site : indexBufferAndBaseCalls)
+		{
+			sites.push_back({ site, DB_GetIndexBufferAndBase, reinterpret_cast<void*>(DB_GetIndexBufferAndBase_Hook) });
+		}
 
-	ModelSurfs::~ModelSurfs()
-	{
-		assert(ModelSurfs::BufferMap.empty());
-		assert(ModelSurfs::AllocMap.empty());
+		for (const auto site : vertexBufferAndOffsetCalls)
+		{
+			sites.push_back({ site, DB_GetVertexBufferAndOffset, reinterpret_cast<void*>(DB_GetVertexBufferAndOffset_Hook) });
+		}
+
+		for (const auto site : indexBufferCalls)
+		{
+			sites.push_back({ site, DB_GetIndexBuffer, reinterpret_cast<void*>(DB_GetIndexBuffer_Hook) });
+		}
+
+		for (const auto site : baseIndexCalls)
+		{
+			sites.push_back({ site, DB_GetBaseIndex, reinterpret_cast<void*>(DB_GetBaseIndex_Hook) });
+		}
+
+		for (const auto& hookSite : sites)
+		{
+			if (!Utils::Hook::BranchesTo(hookSite.site, hookSite.callee, false))
+			{
+				Logger::Error("modelsurfs: 0x{:X} no longer calls 0x{:X}, models cannot be resized\n", hookSite.site, hookSite.callee);
+				return;
+			}
+		}
+
+		if (!Utils::Hook::BranchesTo(Load_XModelAsset_SurfsFixupCall, DB_XModelSurfsFixup, false))
+		{
+			Logger::Error("modelsurfs: 0x{:X} no longer calls DB_XModelSurfsFixup, iw4x model surfaces cannot load\n", Load_XModelAsset_SurfsFixupCall);
+			return;
+		}
+
+		auto* const releaseHandlers = reinterpret_cast<DB_ReleaseXAssetHandler_t*>(Utils::Hook::Rebase(DB_ReleaseXAssetHandler));
+
+		if (releaseHandlers[Game::ASSET_TYPE_XMODEL_SURFS])
+		{
+			Logger::Error("modelsurfs: the xmodelsurfs release handler is already taken, iw4x model surfaces cannot load\n");
+			return;
+		}
+
+		getIndexBufferAndBase = reinterpret_cast<DB_GetIndexBufferAndBase_t>(Utils::Hook::Rebase(DB_GetIndexBufferAndBase));
+		getVertexBufferAndOffset = reinterpret_cast<DB_GetVertexBufferAndOffset_t>(Utils::Hook::Rebase(DB_GetVertexBufferAndOffset));
+		getIndexBuffer = reinterpret_cast<DB_GetIndexBuffer_t>(Utils::Hook::Rebase(DB_GetIndexBuffer));
+		getBaseIndex = reinterpret_cast<DB_GetBaseIndex_t>(Utils::Hook::Rebase(DB_GetBaseIndex));
+		xmodelSurfsFixup = reinterpret_cast<DB_XModelSurfsFixup_t>(Utils::Hook::Rebase(DB_XModelSurfsFixup));
+
+		bool isSeated = surfsFixupHook.Initialize(Load_XModelAsset_SurfsFixupCall, reinterpret_cast<void*>(DB_XModelSurfsFixup_Hk), HOOK_CALL)->Install()->IsInstalled();
+
+		for (std::size_t i = 0; i < hookCount; ++i)
+		{
+			isSeated = hooks[i].Initialize(sites[i].site, sites[i].replacement, HOOK_CALL)->Install()->IsInstalled() && isSeated;
+		}
+
+		if (!isSeated)
+		{
+			for (auto& hook : hooks)
+			{
+				hook.Uninstall();
+			}
+
+			surfsFixupHook.Uninstall();
+
+			Logger::Error("modelsurfs: could not seat every zone buffer hook, models cannot be resized\n");
+			return;
+		}
+
+		for (auto& hook : hooks)
+		{
+			hook.Quick();
+		}
+
+		surfsFixupHook.Quick();
+		releaseHandlers[Game::ASSET_TYPE_XMODEL_SURFS] = ReleaseModelSurf;
+
+		isInstalled = true;
+
+		Renderer::OnDeviceRecoveryBegin(BeginRecover);
+		Renderer::OnDeviceRecoveryEnd(EndRecover);
 	}
 }

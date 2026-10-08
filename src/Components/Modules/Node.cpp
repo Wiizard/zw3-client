@@ -1,36 +1,49 @@
+#include "STDInclude.hpp"
+
 #include <Utils/Compression.hpp>
-#include <Utils/InfoString.hpp>
 
 #include <proto/node.pb.h>
 
 #include "Node.hpp"
+#include "Command.hpp"
+#include "Dedicated.hpp"
+#include "Events.hpp"
+#include "FileSystem.hpp"
+#include "Logger.hpp"
+#include "Scheduler.hpp"
+#include "ServerInfo.hpp"
 #include "ServerList.hpp"
 #include "Session.hpp"
+#include "ZoneBuilder.hpp"
 
 namespace Components
 {
-	std::recursive_mutex Node::Mutex;
-	std::vector<Node::Entry> Node::Nodes;
+	constexpr int halfLife = 3 * 60 * 1000;
+	constexpr std::size_t maxNodesToSend = 64;
+	constexpr auto sendRate = 500ms;
 
-	bool Node::WasIngame = false;
+	std::recursive_mutex Node::mutex;
+	std::vector<Node::Entry> Node::nodes;
 
-	const Game::dvar_t* Node::net_natFix;
+	bool Node::wasIngame = false;
 
-	bool Node::Entry::isValid() const
+	Dvar::Var Node::net_natFix;
+
+	bool Node::Entry::IsValid() const
 	{
-		return (this->lastResponse.has_value() && !this->lastResponse->elapsed(NODE_HALFLIFE * 2));
+		return this->lastResponse.has_value() && !this->lastResponse->Elapsed(halfLife * 2);
 	}
 
-	bool Node::Entry::isDead() const
+	bool Node::Entry::IsDead() const
 	{
 		if (!this->lastResponse.has_value())
 		{
-			if (this->lastRequest.has_value() && this->lastRequest->elapsed(NODE_HALFLIFE))
+			if (this->lastRequest.has_value() && this->lastRequest->Elapsed(halfLife))
 			{
 				return true;
 			}
 		}
-		else if (this->lastResponse->elapsed(NODE_HALFLIFE * 2) && this->lastRequest.has_value() && this->lastRequest->after(*this->lastResponse))
+		else if (this->lastResponse->Elapsed(halfLife * 2) && this->lastRequest.has_value() && this->lastRequest->After(*this->lastResponse))
 		{
 			return true;
 		}
@@ -38,24 +51,25 @@ namespace Components
 		return false;
 	}
 
-	bool Node::Entry::requiresRequest() const
+	bool Node::Entry::RequiresRequest() const
 	{
-		return (!this->isDead() && (!this->lastRequest.has_value() || this->lastRequest->elapsed(NODE_HALFLIFE)));
+		return !this->IsDead() && (!this->lastRequest.has_value() || this->lastRequest->Elapsed(halfLife));
 	}
 
-	void Node::Entry::sendRequest()
+	void Node::Entry::SendRequest()
 	{
-		if (!this->lastRequest.has_value()) this->lastRequest.emplace(Utils::Time::Point());
-		this->lastRequest->update();
+		if (!this->lastRequest.has_value())
+		{
+			this->lastRequest.emplace();
+		}
+
+		this->lastRequest->Update();
 
 		Session::Send(this->address, "nodeListRequest");
 		SendList(this->address);
-#ifdef NODE_SYSTEM_DEBUG
-		Logger::Debug("Sent request to {}", this->address.getString());
-#endif
 	}
 
-	void Node::Entry::reset()
+	void Node::Entry::Reset()
 	{
 		this->lastRequest.reset();
 	}
@@ -65,14 +79,19 @@ namespace Components
 		Proto::Node::List list;
 
 		FileSystem::File defaultNodes("nodes_default.dat");
-		if (!defaultNodes.exists() || !list.ParseFromString(Utils::Compression::ZLib::Decompress(defaultNodes.getBuffer()))) return;
+
+		if (!defaultNodes.Exists() || !list.ParseFromString(Utils::Compression::ZLib::Decompress(defaultNodes.GetBuffer())))
+		{
+			return;
+		}
 
 		for (auto i = 0; i < list.nodes_size(); ++i)
 		{
-			const auto& addr = list.nodes(i);
-			if (addr.size() == sizeof(sockaddr))
+			const auto& node = list.nodes(i);
+
+			if (node.size() == sizeof(sockaddr))
 			{
-				Add(reinterpret_cast<sockaddr*>(const_cast<char*>(addr.data())));
+				Add(Network::Address(reinterpret_cast<const sockaddr*>(node.data())));
 			}
 		}
 	}
@@ -80,42 +99,45 @@ namespace Components
 	void Node::LoadNodes()
 	{
 		std::string data;
+
 		if (!Utils::IO::ReadFile("players/nodes.json", &data) || data.empty())
 		{
 			return;
 		}
 
-		nlohmann::json nodes;
+		nlohmann::json json;
+
 		try
 		{
-			nodes = nlohmann::json::parse(data);
+			json = nlohmann::json::parse(data);
 		}
 		catch (const std::exception& ex)
 		{
-			Logger::PrintError(Game::CON_CHANNEL_ERROR, "JSON Parse Error: {}\n", ex.what());
+			Logger::Error("JSON Parse Error: {}\n", ex.what());
 			return;
 		}
 
-		if (!nodes.contains("nodes"))
+		if (!json.contains("nodes"))
 		{
-			Logger::PrintError(Game::CON_CHANNEL_ERROR, "nodes.json contains invalid data\n");
+			Logger::Error("nodes.json contains invalid data\n");
 			return;
 		}
 
-		const auto& list = nodes["nodes"];
+		const auto& list = json["nodes"];
+
 		if (!list.is_array())
 		{
 			return;
 		}
 
-		const nlohmann::json::array_t arr = list;
-		Logger::Print("Parsing {} nodes from nodes.json\n", arr.size());
+		const nlohmann::json::array_t entries = list;
+		Logger::Print("Parsing {} nodes from nodes.json\n", entries.size());
 
-		for (const auto& entry : arr)
+		for (const auto& entry : entries)
 		{
 			if (entry.is_string())
 			{
-				Network::Address address(entry.get<std::string>());
+				const Network::Address address(entry.get<std::string>());
 				Add(address);
 			}
 		}
@@ -123,29 +145,36 @@ namespace Components
 
 	void Node::StoreNodes(bool force)
 	{
-		if (Dedicated::IsEnabled() && Dedicated::SVLanOnly.get<bool>()) return;
+		if (Dedicated::IsEnabled() && Dedicated::sv_lanOnly.Get<bool>())
+		{
+			return;
+		}
 
-		std::vector<std::string> nodes;
+		std::vector<std::string> addresses;
 
 		static Utils::Time::Interval interval;
-		if (!force && !interval.elapsed(1min)) return;
-		interval.update();
 
-		Mutex.lock();
-
-		for (auto& node : Nodes)
+		if (!force && !interval.Elapsed(1min))
 		{
-			if (node.isValid() || force)
+			return;
+		}
+
+		interval.Update();
+
+		{
+			std::lock_guard _(mutex);
+
+			for (const auto& node : nodes)
 			{
-				const auto address = node.address.getString();
-				nodes.emplace_back(address);
+				if (node.IsValid() || force)
+				{
+					addresses.emplace_back(node.address.GetString());
+				}
 			}
 		}
 
-		Mutex.unlock();
-
 		nlohmann::json out;
-		out["nodes"] = nodes;
+		out["nodes"] = addresses;
 
 		Utils::IO::WriteFile("players/nodes.json", out.dump());
 	}
@@ -153,78 +182,98 @@ namespace Components
 	void Node::Add(const Network::Address& address)
 	{
 #ifndef DEBUG
-		if (address.isLocal() || address.isSelf()) return;
+		if (address.IsLocal() || address.IsSelf())
+		{
+			return;
+		}
 #endif
 
-		if (!address.isValid()) return;
-
-		std::lock_guard _(Mutex);
-		for (auto& session : Nodes)
+		if (!address.IsValid())
 		{
-			if (session.address == address) return;
+			return;
+		}
+
+		std::lock_guard _(mutex);
+
+		for (const auto& node : nodes)
+		{
+			if (node.address == address)
+			{
+				return;
+			}
 		}
 
 		Entry node;
 		node.address = address;
 
-		Nodes.push_back(node);
+		nodes.push_back(node);
 	}
 
 	std::vector<Node::Entry> Node::GetNodes()
 	{
-		std::lock_guard _(Mutex);
+		std::lock_guard _(mutex);
 
-		return Nodes;
+		return nodes;
 	}
 
 	void Node::RunFrame()
 	{
-		if (Dedicated::IsEnabled() && Dedicated::SVLanOnly.get<bool>()) return;
+		if (Dedicated::IsEnabled() && Dedicated::sv_lanOnly.Get<bool>())
+		{
+			return;
+		}
 
 		if (!Dedicated::IsEnabled())
 		{
-			if (ServerList::UseMasterServer) return; // don't run node frame if master server is active
+			if (ServerList::useMasterServer)
+			{
+				return;
+			}
 
 			if (Game::CL_GetLocalClientConnectionState(0) != Game::CA_DISCONNECTED)
 			{
-				WasIngame = true;
-				return; // don't run while in-game because it can still cause lag spikes on lower end PCs
+				wasIngame = true;
+				return;
 			}
 		}
 
-		if (WasIngame) // our last frame we were in-game and now we aren't so touch all nodes
+		if (wasIngame)
 		{
-			for (auto& entry : Nodes)
+			for (auto& entry : nodes)
 			{
-				// clearing the last request and response times makes the
-				// dispatcher think its a new node and will force a refresh
 				entry.lastRequest.reset();
 				entry.lastResponse.reset();
 			}
 
-			WasIngame = false;
+			wasIngame = false;
 		}
 
 		static Utils::Time::Interval frameLimit;
-		const auto interval = 1000 / ServerList::NETServerFrames.get<int>();
-		if (!frameLimit.elapsed(std::chrono::milliseconds(interval))) return;
-		frameLimit.update();
+		const auto interval = 1000 / std::max(1, ServerList::netServerFrames.Get<int>());
 
-		std::lock_guard _(Mutex);
-
-		int sentRequests = 0;
-		for (auto i = Nodes.begin(); i != Nodes.end();)
+		if (!frameLimit.Elapsed(std::chrono::milliseconds(interval)))
 		{
-			if (i->isDead())
+			return;
+		}
+
+		frameLimit.Update();
+
+		std::lock_guard _(mutex);
+
+		auto sentRequests = 0;
+
+		for (auto i = nodes.begin(); i != nodes.end();)
+		{
+			if (i->IsDead())
 			{
-				i = Nodes.erase(i);
+				i = nodes.erase(i);
 				continue;
 			}
 
-			if (sentRequests < ServerList::NETServerQueryLimit.get<int>() && i->requiresRequest())
+			if (sentRequests < ServerList::netServerQueryLimit.Get<int>() && i->RequiresRequest())
 			{
 				++sentRequests;
-				i->sendRequest();
+				i->SendRequest();
 			}
 
 			++i;
@@ -233,58 +282,54 @@ namespace Components
 
 	void Node::Synchronize()
 	{
-		std::lock_guard _(Mutex);
-		for (auto& node : Nodes)
+		std::lock_guard _(mutex);
+
+		for (auto& node : nodes)
 		{
-			{
-				node.reset();
-			}
+			node.Reset();
 		}
 	}
 
 	void Node::HandleResponse(const Network::Address& address, const std::string& data)
 	{
 		Proto::Node::List list;
-		if (!list.ParseFromString(data)) return;
 
-#ifdef NODE_SYSTEM_DEBUG
-		Logger::Debug("Received response from {}", address.getString());
-#endif
-
-		std::lock_guard _(Mutex);
-
-		for (int i = 0; i < list.nodes_size(); ++i)
+		if (!list.ParseFromString(data))
 		{
-			const std::string& addr = list.nodes(i);
+			return;
+		}
 
-			if (addr.size() == sizeof(sockaddr))
+		std::lock_guard _(mutex);
+
+		for (auto i = 0; i < list.nodes_size(); ++i)
+		{
+			const auto& node = list.nodes(i);
+
+			if (node.size() == sizeof(sockaddr))
 			{
-				Add(reinterpret_cast<sockaddr*>(const_cast<char*>(addr.data())));
+				Add(Network::Address(reinterpret_cast<const sockaddr*>(node.data())));
 			}
 		}
 
-		if (list.isnode() && (!list.port() || list.port() == address.getPort()))
+		if (list.isnode() && (!list.port() || list.port() == address.GetPort()))
 		{
-			if (!Dedicated::IsEnabled() && ServerList::IsOnlineList() && !ServerList::UseMasterServer && list.protocol() == PROTOCOL)
+			const auto protocol = static_cast<std::uint64_t>(ServerInfo::GetProtocol());
+
+			if (!Dedicated::IsEnabled() && ServerList::IsOnlineList() && !ServerList::useMasterServer && list.protocol() == protocol)
 			{
-#ifdef NODE_SYSTEM_DEBUG
-				Logger::Debug("Inserting {} into the serverlist", address.getString());
-#endif
 				ServerList::InsertRequest(address);
 			}
-			else
-			{
-#ifdef NODE_SYSTEM_DEBUG
-				Logger::Debug("Dropping serverlist insertion for {}", address.getString());
-#endif
-			}
 
-			for (auto& node : Nodes)
+			for (auto& node : nodes)
 			{
 				if (address == node.address)
 				{
-					if (!node.lastResponse.has_value()) node.lastResponse.emplace(Utils::Time::Point());
-					node.lastResponse->update();
+					if (!node.lastResponse.has_value())
+					{
+						node.lastResponse.emplace();
+					}
+
+					node.lastResponse->Update();
 
 					node.data.protocol = list.protocol();
 					return;
@@ -294,97 +339,99 @@ namespace Components
 			Entry entry;
 			entry.address = address;
 			entry.data.protocol = list.protocol();
-			entry.lastResponse.emplace(Utils::Time::Point());
+			entry.lastResponse.emplace();
 
-			Nodes.push_back(entry);
+			nodes.push_back(entry);
 		}
 	}
 
 	void Node::SendList(const Network::Address& address)
 	{
-		std::lock_guard _(Mutex);
+		std::lock_guard _(mutex);
 
-		// need to keep the message size below 1404 bytes else recipient will just drop it
-		std::vector<std::string> nodeListReponseMessages;
+		std::vector<std::string> nodeListResponseMessages;
 
-		for (std::size_t curNode = 0; curNode < Nodes.size();)
+		for (std::size_t currentNode = 0; currentNode < nodes.size();)
 		{
 			Proto::Node::List list;
 			list.set_isnode(Dedicated::IsEnabled());
-			list.set_protocol(PROTOCOL);
+			list.set_protocol(static_cast<std::uint64_t>(ServerInfo::GetProtocol()));
 			list.set_port(GetPort());
 
-			for (std::size_t i = 0; i < NODE_MAX_NODES_TO_SEND;)
+			for (std::size_t i = 0; i < maxNodesToSend;)
 			{
-				if (curNode >= Nodes.size())
+				if (currentNode >= nodes.size())
 				{
 					break;
 				}
 
-				auto& node = Nodes.at(curNode++);
+				const auto& node = nodes.at(currentNode++);
 
-				if (node.isValid())
+				if (node.IsValid())
 				{
-					auto* str = list.add_nodes();
+					auto* entry = list.add_nodes();
 
-					sockaddr addr = node.address.getSockAddr();
-					str->append(reinterpret_cast<char*>(&addr), sizeof(addr));
+					const auto sockAddr = node.address.GetSockAddr();
+					entry->append(reinterpret_cast<const char*>(&sockAddr), sizeof(sockAddr));
 
-					i++;
+					++i;
 				}
 			}
 
-			nodeListReponseMessages.push_back(list.SerializeAsString());
+			nodeListResponseMessages.push_back(list.SerializeAsString());
 		}
 
 		auto i = 0;
-		for (const auto& nodeListData : nodeListReponseMessages)
+
+		for (const auto& nodeListData : nodeListResponseMessages)
 		{
 			Scheduler::Once([=]
-				{
-#ifdef NODE_SYSTEM_DEBUG
-					Logger::Debug("Sending {} nodeListResponse length to {}\n", nodeListData.length(), address.getCString());
-#endif
-					Session::Send(address, "nodeListResponse", nodeListData);
-				}, Scheduler::Pipeline::MAIN, NODE_SEND_RATE * i++);
+			{
+				Session::Send(address, "nodeListResponse", nodeListData);
+			}, Scheduler::Pipeline::MAIN, sendRate * i++);
 		}
 	}
 
 	std::uint16_t Node::GetPort()
 	{
-		if (net_natFix->current.enabled) return 0;
+		if (net_natFix.Get<bool>())
+		{
+			return 0;
+		}
+
 		return Network::GetPort();
 	}
 
 	void Node::Migrate()
 	{
 		Proto::Node::List list;
-		std::string nodes;
+		std::string data;
 
-		if (!Utils::IO::ReadFile("players/nodes.dat", &nodes) || nodes.empty())
+		if (!Utils::IO::ReadFile("players/nodes.dat", &data) || data.empty())
 		{
 			return;
 		}
 
-		if (!list.ParseFromString(Utils::Compression::ZLib::Decompress(nodes)))
+		if (!list.ParseFromString(Utils::Compression::ZLib::Decompress(data)))
 		{
 			return;
 		}
 
-		std::vector<std::string> data;
+		std::vector<std::string> addresses;
+
 		for (auto i = 0; i < list.nodes_size(); ++i)
 		{
-			const std::string& addr = list.nodes(i);
+			const auto& node = list.nodes(i);
 
-			if (addr.size() == sizeof(sockaddr))
+			if (node.size() == sizeof(sockaddr))
 			{
-				Network::Address address(reinterpret_cast<sockaddr*>(const_cast<char*>(addr.data())));
-				data.emplace_back(address.getString());
+				const Network::Address address(reinterpret_cast<const sockaddr*>(node.data()));
+				addresses.emplace_back(address.GetString());
 			}
 		}
 
 		nlohmann::json out;
-		out["nodes"] = data;
+		out["nodes"] = addresses;
 
 		if (!Utils::IO::FileExists("players/nodes.json"))
 		{
@@ -401,55 +448,50 @@ namespace Components
 			return;
 		}
 
-		net_natFix = Game::Dvar_RegisterBool("net_natFix", false, 0, "Fix node registration for certain firewalls/routers");
+		Events::OnDvarInit([]
+		{
+			net_natFix = Dvar::Register("net_natFix", false, Game::DVAR_NONE, "Fix node registration for certain firewalls/routers");
+		});
 
 		Scheduler::Loop([]
-			{
-				StoreNodes(false);
-			}, Scheduler::Pipeline::ASYNC, 5min);
+		{
+			StoreNodes(false);
+		}, Scheduler::Pipeline::ASYNC, 5min);
 
 		Scheduler::Loop(RunFrame, Scheduler::Pipeline::MAIN);
 
-		/*Scheduler::OnGameInitialized([]
+		Command::Add("listNodes", []([[maybe_unused]] const Command::Params* params)
+		{
+			Logger::Print("Nodes: {}\n", nodes.size());
+
+			std::lock_guard _(mutex);
+
+			for (const auto& node : nodes)
 			{
+				std::string_view validity = "Invalid";
 
-				Session::Handle("nodeListResponse", HandleResponse);
-				Session::Handle("nodeListRequest", [](const Network::Address& address, [[maybe_unused]] const std::string& data)
-					{
-						SendList(address);
-					});
-
-				Migrate();
-				LoadNodePreset();
-				LoadNodes();
-			}, Scheduler::Pipeline::MAIN);*/
-
-		Command::Add("listNodes", [](const Command::Params*)
-			{
-				Logger::Print("Nodes: {}\n", Nodes.size());
-
-				std::lock_guard _(Mutex);
-				for (const auto& node : Nodes)
+				if (node.IsValid())
 				{
-					Logger::Print("{}\t({})\n", node.address.getString(), node.isValid() ? "Valid" : "Invalid");
+					validity = "Valid";
 				}
-			});
+
+				Logger::Print("{}\t({})\n", node.address.GetString(), validity);
+			}
+		});
 
 		Command::Add("addNode", [](const Command::Params* params)
+		{
+			if (params->Size() < 2)
 			{
-				if (params->size() < 2) return;
-				auto address = Network::Address{ params->get(1) };
-				if (address.isValid())
-				{
-					Add(address);
-				}
-			});
-	}
+				return;
+			}
 
-	void Node::preDestroy()
-	{
-		std::lock_guard _(Mutex);
-		StoreNodes(true);
-		Nodes.clear();
+			const Network::Address address{ std::string(params->Get(1)) };
+
+			if (address.IsValid())
+			{
+				Add(address);
+			}
+		});
 	}
 }

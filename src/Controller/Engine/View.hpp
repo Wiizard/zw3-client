@@ -1,63 +1,45 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Context.hpp"
-#include "Dvar.hpp"
-#include "../Aim/Assist.hpp"
-#include "../Aim/Calibration.hpp"
-#include "../Mapping/StickLayout.hpp"
-#include "../Sample/Sample.hpp"
+#include "Controller/Context.hpp"
+#include "Controller/Aim/Assist.hpp"
+#include "Controller/Aim/Calibration.hpp"
+#include "Controller/Engine/Dvar.hpp"
+#include "Controller/Mapping/StickLayout.hpp"
+#include "Controller/Sample/Sample.hpp"
 
-namespace Controller
+namespace Controller::Engine
 {
-  namespace engine
-  {
-    class view_driver
-    {
-    public:
-      view_driver (const context&, const dvars&);
+	class ViewDriver
+	{
+	public:
+		ViewDriver(const Context& context, const Dvars& dvars);
 
-      void
-      observe (const canonical_sample&) noexcept;
+		void Observe(const CanonicalSample& sample);
+		void Idle() noexcept;
 
-      void
-      idle () noexcept;
+		void ApplyMove(int client, Game::usercmd_s& cmd, float frameTime);
+		void ApplyRemoteMove(int client, Game::usercmd_s& cmd);
+		void ApplyLocationSelection(int client);
 
-      void
-      apply_move (int client, usercmd_s& cmd, float frame_time) noexcept;
+	private:
+		bool TryEnsureProcessor();
+		bool IsViewActive(int client) const;
+		void ApplyLockOn(const Game::AimInput& input, Aim::AimFrameOutput& output);
 
-      void
-      apply_remote_move (int client, usercmd_s& cmd) noexcept;
+		const Context& context;
+		const Dvars& dvars;
 
-      void
-      apply_location_selection (int client) noexcept;
+		Mapping::ResolvedAxes axes{};
 
-    private:
-      bool
-      ensure_processor ();
+		std::optional<Aim::AimCalibration> calibration;
+		std::optional<Aim::AimProcessor> processor;
 
-      bool
-      view_active (int client) const noexcept;
+		std::size_t tuningSignature = 0;
+		bool hasSignature = false;
+		bool hasReportedInvalid = false;
 
-      void
-      apply_lock_on (int client,
-                     const AimInput&,
-                     aim::aim_frame_output&) noexcept;
-
-      const context& ctx_;
-      const dvars& dvars_;
-
-      mapping::resolved_axes axes_ {};
-
-      std::optional<aim::aim_calibration> calibration_;
-      std::optional<aim::aim_processor> processor_;
-
-      size_t tuning_signature_ {0};
-      bool have_signature_ {false};
-      bool reported_invalid_ {false};
-
-      dvar_t* cursor_speed_ {nullptr};
-    };
-  }
+		Game::dvar_t* cursorSpeed = nullptr;
+	};
 }

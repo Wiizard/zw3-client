@@ -1,13 +1,14 @@
+#include "STDInclude.hpp"
 
-namespace Scripting
+namespace Game::Scripting
 {
 	Function::Function(const char* pos)
-		: pos_(pos)
+		: pos(pos)
 	{
 	}
 
-	const char* Function::getPos() const
+	const char* Function::GetPos() const
 	{
-		return this->pos_;
+		return this->pos;
 	}
 }

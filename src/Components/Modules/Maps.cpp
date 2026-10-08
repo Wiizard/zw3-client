@@ -1,94 +1,110 @@
+#include "STDInclude.hpp"
 
+#include "Maps.hpp"
 #include "ArenaLength.hpp"
+#include "AssetHandler.hpp"
+#include "Command.hpp"
+#include "Dedicated.hpp"
 #include "Dvar.hpp"
 #include "FastFiles.hpp"
+#include "FileSystem.hpp"
 #include "Localization.hpp"
-#include "MemoryGuard.hpp"
+#include "Logger.hpp"
 #include "RawFiles.hpp"
-#include "StartupMessages.hpp"
+#include "Scheduler.hpp"
 #include "SPLoadscreens.hpp"
+#include "StartupMessages.hpp"
 #include "Theatre.hpp"
-#include <Utils/MapPreview.hpp>
+#include "UIScript.hpp"
+#include "Zones.hpp"
+
+#include "GSC/Script.hpp"
+
+#include "Utils/MapPreview.hpp"
 
 namespace Components
 {
-	namespace
+	constexpr std::uintptr_t DB_SyncXAssets = 0x14012F990;
+	constexpr std::uintptr_t SND_StopSounds = 0x14024A2E0;
+	constexpr std::uintptr_t Sys_WaitForStream = 0x14020B260;
+	constexpr auto streamCriticalSection = static_cast<Game::CriticalSection>(6);
+
+	constexpr std::uintptr_t fsh = 0x146644BA0;
+	constexpr int fileHandleCount = 64;
+	constexpr std::size_t fileHandleSize = 0x130;
+	constexpr std::size_t fileHandleFileSize = 0x14;
+	constexpr std::size_t fileHandleIwd = 0x20;
+
+	Maps::UserMapContainer Maps::userMap;
+
+	struct UserMapFileStamp
 	{
-		constexpr std::size_t USERMAP_HASH_BUFFER_SIZE = 1024 * 1024;
+		std::uintmax_t size{};
+		std::filesystem::file_time_type modified{};
 
-		struct UserMapFileStamp
+		bool operator==(const UserMapFileStamp&) const = default;
+	};
+
+	struct UserMapFileHash
+	{
+		UserMapFileStamp stamp;
+		std::string hash;
+	};
+
+	static std::unordered_map<std::string, UserMapFileHash> userMapHashCache;
+
+	static std::optional<UserMapFileStamp> TryGetUserMapFileStamp(const std::filesystem::path& path)
+	{
+		std::error_code error;
+
+		const auto size = std::filesystem::file_size(path, error);
+
+		if (error)
 		{
-			std::uintmax_t size{};
-			std::filesystem::file_time_type modified{};
-
-			bool operator==(const UserMapFileStamp&) const = default;
-		};
-
-		struct UserMapFileHash
-		{
-			UserMapFileStamp stamp;
-			std::string hash;
-		};
-
-		std::mutex UserMapHashMutex;
-		std::unordered_map<std::string, UserMapFileHash> UserMapHashCache;
-
-		std::optional<UserMapFileStamp> GetUserMapFileStamp(const std::filesystem::path& path)
-		{
-			std::error_code error;
-			const auto size = std::filesystem::file_size(path, error);
-			if (error)
-			{
-				return std::nullopt;
-			}
-
-			const auto modified = std::filesystem::last_write_time(path, error);
-			if (error)
-			{
-				return std::nullopt;
-			}
-
-			return UserMapFileStamp{ size, modified };
+			return std::nullopt;
 		}
 
-		std::string HashUserMapFile(const std::filesystem::path& path)
+		const auto modified = std::filesystem::last_write_time(path, error);
+
+		if (error)
 		{
-			hash_state state{};
-			sha256_init(&state);
-
-			const auto file = CreateFileW(path.c_str(), GENERIC_READ,
-				FILE_SHARE_READ, nullptr,
-				OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
-			if (file != INVALID_HANDLE_VALUE)
-			{
-				std::vector<unsigned char> buffer(USERMAP_HASH_BUFFER_SIZE);
-				DWORD bytesRead = 0;
-				while (ReadFile(file, buffer.data(), static_cast<DWORD>(buffer.size()), &bytesRead, nullptr) && bytesRead > 0)
-				{
-					sha256_process(&state, buffer.data(), bytesRead);
-				}
-
-				CloseHandle(file);
-			}
-
-			std::array<unsigned char, 32> digest{};
-			sha256_done(&state, digest.data());
-			return { reinterpret_cast<const char*>(digest.data()), digest.size() };
+			return std::nullopt;
 		}
+
+		return UserMapFileStamp{ size, modified };
 	}
 
-	Maps::UserMapContainer Maps::UserMap;
-	std::string Maps::CurrentMainZone;
-	std::vector<std::pair<std::string, std::string>> Maps::DependencyList;
-	std::vector<std::string> Maps::CurrentDependencies;
-	std::vector<std::string> Maps::FoundCustomMaps;
+	static std::string HashUserMapFile(const std::filesystem::path& path)
+	{
+		hash_state state{};
+		sha256_init(&state);
 
-	Dvar::Var Maps::RListSModels;
+		const auto file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
 
-	bool Maps::SPMap;
-	std::vector<Maps::DLC> Maps::DlcPacks;
+		if (file != INVALID_HANDLE_VALUE)
+		{
+			std::vector<unsigned char> buffer(1024 * 1024);
+			DWORD bytesRead = 0;
 
-	const char* Maps::UserMapFiles[4] =
+			while (ReadFile(file, buffer.data(), static_cast<DWORD>(buffer.size()), &bytesRead, nullptr) && bytesRead > 0)
+			{
+				sha256_process(&state, buffer.data(), bytesRead);
+			}
+
+			CloseHandle(file);
+		}
+
+		std::array<unsigned char, 32> digest{};
+		sha256_done(&state, digest.data());
+
+		return { reinterpret_cast<const char*>(digest.data()), digest.size() };
+	}
+	std::vector<Maps::DLC> Maps::dlcPacks;
+	std::string Maps::currentMainZone;
+	std::vector<std::string> Maps::currentDependencies;
+	std::vector<std::string> Maps::foundCustomMaps;
+
+	const char* Maps::userMapFiles[4] =
 	{
 		".ff",
 		"_load.ff",
@@ -96,32 +112,106 @@ namespace Components
 		".arena",
 	};
 
-	Maps::UserMapContainer* Maps::GetUserMap()
+	constexpr std::uintptr_t DB_LoadLevelXAssets_MapZoneCall = 0x14012EC0A;
+	constexpr std::uintptr_t DB_LoadXAssets = 0x14012EC40;
+
+	constexpr std::uintptr_t Com_GetBspFilename_SprintfJump = 0x14027483D;
+	constexpr std::uintptr_t Com_sprintf = 0x14028BEB0;
+
+	constexpr std::uintptr_t G_SpawnEntitiesFromString_IsDynClassnameCall = 0x1401A9294;
+	constexpr std::uintptr_t IsDynClassname = 0x14028CBF0;
+
+	constexpr std::uintptr_t updateArenas = 0x1465D284C;
+
+	constexpr std::uintptr_t loadscreenZoneCalls[] = { 0x1400FE325, 0x1400FA08D, 0x1400FA379, 0x1400FDF43, 0x14023B318 };
+
+	constexpr std::uintptr_t Com_AssetLoadUI_FreeLevelCall = 0x1401F36AA;
+
+	constexpr std::uintptr_t UI_LoadArenas_ReadRawFileCall = 0x14026B4E6;
+	constexpr std::uintptr_t DB_ReadRawFile = 0x14012F370;
+
+	constexpr std::uintptr_t G_SpawnTurret = 0x14018F750;
+	constexpr std::uintptr_t G_SpawnTurretCalls[] = { 0x14017A02E, 0x14018FD5F };
+
+	constexpr std::uintptr_t SV_SetTriggerModel_BoundsCall = 0x140233AC4;
+	constexpr std::uintptr_t CM_TriggerModelBounds = 0x1401E85C0;
+	constexpr std::uintptr_t cm_mapEnts = 0x141BD32B0;
+
+	constexpr std::uintptr_t G_InitGame_InitGlassCall = 0x14019D085;
+	constexpr std::uintptr_t G_InitGlass = 0x140169720;
+	constexpr std::uintptr_t G_InitGlass_GlassSource = 0x141780CD8;
+	constexpr std::size_t gameWorldMpName = 8;
+	constexpr std::size_t gameWorldSpGlassData = 104;
+	static std::atomic<bool> isSPMap;
+
+	constexpr std::uintptr_t staticModelSortJnz = 0x14005383A;
+	static const std::uint8_t sortCountJnz[] = { 0x75, 0x07 };
+
+	constexpr std::uintptr_t PMem_Init_SizeArg = 0x14028AB46;
+	constexpr std::uintptr_t PMem_Init_SizeStore = 0x14028AB91;
+	static const std::uint8_t sizeArg[] = { 0xBA, 0x00, 0x00, 0xC0, 0x12 };
+	static const std::uint8_t sizeStore[] = { 0xC7, 0x05, 0xE9, 0xD1, 0x47, 0x06, 0x00, 0x00, 0xC0, 0x12 };
+	constexpr std::uint32_t hunkSize = 0x40000000;
+
+	static Utils::Hook hooks[3 + std::size(loadscreenZoneCalls) + 2 + std::size(G_SpawnTurretCalls) + 2];
+
+	constexpr std::uintptr_t CL_ConnectionlessPacket_NewMapBody = 0x1400F9FCF;
+	static const std::uint8_t newMapBody[] = { 0x33, 0xC9, 0xC6, 0x05, 0xD0, 0x41, 0x5D, 0x00, 0x01 };
+	constexpr std::uintptr_t CL_ConnectionlessPacket_NewMapBodyNext = 0x1400F9FD8;
+	constexpr std::uintptr_t CL_ConnectionlessPacket_ReturnTrue = 0x1400F9713;
+	constexpr std::uintptr_t newMapFlag = 0x1406CE1A8;
+
+	static Utils::Hook newMapHook;
+
+	constexpr std::uintptr_t SV_SpawnServer_LoadingNewMapCall = 0x14023B3E0;
+
+	static Utils::Hook loadNewMapHook;
+
+	extern "C"
 	{
-		return &Maps::UserMap;
+		void LoadingNewMapStub();
+
+		std::uintptr_t Maps_NewMapFlag = 0;
+		std::uintptr_t Maps_NewMapBodyNext = 0;
+		std::uintptr_t Maps_NewMapReturnTrue = 0;
+
+		int Maps_TriggerReconnectForMap(Game::msg_t* msg, const char* mapname)
+		{
+			return Maps::TriggerReconnectForMap(msg, mapname);
+		}
 	}
 
-	unsigned int Maps::UserMapContainer::getHash()
+	static Game::newMapArena_t* GetArenas()
 	{
-		if (!this->hashComputed && this->isValid())
+		return ArenaLength::newArenas;
+	}
+
+	Maps::UserMapContainer* Maps::GetUserMap()
+	{
+		return &userMap;
+	}
+
+	unsigned int Maps::UserMapContainer::GetHash()
+	{
+		if (!this->isHashComputed && this->IsValid())
 		{
 			this->hash = Maps::GetUsermapHash(this->mapname);
-			this->hashComputed = true;
+			this->isHashComputed = true;
 		}
 
 		return this->hash;
 	}
 
-	void Maps::UserMapContainer::loadIwd()
+	void Maps::UserMapContainer::LoadIwd()
 	{
-		if (this->isValid() && !this->searchPath.iwd)
+		if (this->IsValid() && !this->searchPath.iwd)
 		{
 			auto iwdName = std::format("{}.iwd", this->mapname);
 			auto path = std::format("{}\\usermaps\\{}\\{}", (*Game::fs_basepath)->current.string, this->mapname, iwdName);
 
 			if (Utils::IO::FileExists(path))
 			{
-				this->searchPath.iwd = Game::FS_IsShippedIWD(path.data(), iwdName.data());
+				this->searchPath.iwd = Game::FS_LoadZipFile(path.data(), iwdName.data());
 
 				if (this->searchPath.iwd)
 				{
@@ -137,31 +227,61 @@ namespace Components
 		}
 	}
 
-	void Maps::UserMapContainer::reloadIwd()
+	void Maps::UserMapContainer::ReloadIwd()
 	{
-		if (this->isValid() && this->wasFreed)
+		if (this->IsValid() && this->wasFreed)
 		{
 			this->wasFreed = false;
 			this->searchPath.iwd = nullptr;
-			this->loadIwd();
+			this->LoadIwd();
 		}
 	}
 
-	void Maps::UserMapContainer::handlePackfile(void* packfile)
+	void Maps::UserMapContainer::HandlePackfile(void* packfile)
 	{
-		if (this->isValid() && this->searchPath.iwd == packfile)
+		if (this->IsValid() && this->searchPath.iwd == packfile)
 		{
 			this->wasFreed = true;
 		}
 	}
 
-	void Maps::UserMapContainer::freeIwd()
+	static void DetachFileHandles(const Game::iwd_t* iwd)
 	{
-		if (this->isValid() && this->searchPath.iwd && !this->wasFreed)
+		reinterpret_cast<void(*)()>(Utils::Hook::Rebase(DB_SyncXAssets))();
+		reinterpret_cast<void(*)(char)>(Utils::Hook::Rebase(SND_StopSounds))(8);
+		reinterpret_cast<unsigned long(*)(int)>(Utils::Hook::Rebase(Sys_WaitForStream))(0);
+
+		Game::Sys_EnterCriticalSection(streamCriticalSection);
+
+		for (int handle = 1; handle < fileHandleCount; ++handle)
+		{
+			auto* const entry = reinterpret_cast<std::uint8_t*>(Utils::Hook::Rebase(fsh)) + handle * fileHandleSize;
+			auto* const handleIwd = reinterpret_cast<const Game::iwd_t**>(entry + fileHandleIwd);
+
+			if (*handleIwd != iwd)
+			{
+				continue;
+			}
+
+			if (*reinterpret_cast<const int*>(entry + fileHandleFileSize))
+			{
+				Game::FS_FCloseFile(handle);
+			}
+			else
+			{
+				*handleIwd = nullptr;
+			}
+		}
+
+		Game::Sys_LeaveCriticalSection(streamCriticalSection);
+	}
+
+	void Maps::UserMapContainer::FreeIwd()
+	{
+		if (this->IsValid() && this->searchPath.iwd && !this->wasFreed)
 		{
 			this->wasFreed = true;
 
-			// Unchain our searchpath
 			for (auto** pathPtr = Game::fs_searchpaths; *pathPtr; pathPtr = &(*pathPtr)->next)
 			{
 				if (*pathPtr == &this->searchPath)
@@ -171,11 +291,12 @@ namespace Components
 				}
 			}
 
+			DetachFileHandles(this->searchPath.iwd);
+
 			Game::unzClose(this->searchPath.iwd->handle);
 
-			// Use game's free function
-			Utils::Hook::Call<void(void*)>(0x6B5CF2)(this->searchPath.iwd->buildBuffer);
-			Utils::Hook::Call<void(void*)>(0x6B5CF2)(this->searchPath.iwd);
+			Game::Z_FreeInternal(this->searchPath.iwd->buildBuffer);
+			Game::Z_FreeInternal(this->searchPath.iwd);
 
 			ZeroMemory(&this->searchPath, sizeof(this->searchPath));
 		}
@@ -183,22 +304,26 @@ namespace Components
 
 	const char* Maps::LoadArenaFileStub(const char* name, char* buffer, int size)
 	{
-		std::string  data;
+		std::string data;
 
-		if (Maps::UserMap.isValid())
+		if (userMap.IsValid())
 		{
-			const auto mapname = Maps::UserMap.getName();
+			const auto mapname = userMap.GetName();
 			const auto arena = GetArenaPath(mapname);
 
 			if (Utils::IO::FileExists(arena))
 			{
-				// Replace all arenas with just this one
 				data = Utils::IO::ReadFile(arena);
 			}
 		}
 		else
 		{
-			data = RawFiles::ReadRawFile(name, buffer, size);
+			const auto* raw = RawFiles::ReadRawFile(name, buffer, size);
+
+			if (raw)
+			{
+				data = raw;
+			}
 		}
 
 		strncpy_s(buffer, size, data.data(), _TRUNCATE);
@@ -209,31 +334,22 @@ namespace Components
 	{
 		Game::DB_LoadXAssets(zoneInfo, zoneCount, sync);
 
-		if (Maps::UserMap.isValid())
+		if (userMap.IsValid())
 		{
-			Maps::UserMap.freeIwd();
-			Maps::UserMap.clear();
+			userMap.FreeIwd();
+			userMap.Clear();
 		}
-
-		// Safe housekeeping between maps: defragment the CRT heap and trim
-		// the working set. Does NOT unload any zone (zw3.ff, iw4x_*, localized
-		// etc. are untouched) — just compacts already-freed memory so the next
-		// map has larger contiguous VA blocks to work with.
-		MemoryGuard::OnMapUnloaded();
 	}
 
 	void Maps::LoadMapZones(Game::XZoneInfo* zoneInfo, unsigned int zoneCount, int sync)
 	{
-		if (!zoneInfo) return;
-
-		Maps::SPMap = false;
-		Maps::CurrentMainZone = zoneInfo->name;
-		Maps::CurrentDependencies.clear();
+		isSPMap = false;
+		currentMainZone = zoneInfo->name;
+		currentDependencies.clear();
 
 		auto dependencies = GetDependenciesForMap(zoneInfo->name);
 
-		std::vector<Game::XZoneInfo> data;
-		Utils::Merge(&data, zoneInfo, zoneCount);
+		std::vector<Game::XZoneInfo> data(zoneInfo, zoneInfo + zoneCount);
 		Utils::Memory::Allocator allocator;
 
 		if (dependencies.requiresTeamZones)
@@ -244,100 +360,92 @@ namespace Components
 			team.allocFlags = zoneInfo->allocFlags;
 			team.freeFlags = zoneInfo->freeFlags;
 
-			team.name = allocator.duplicateString(std::format("iw4x_team_{}", teams.first));
+			team.name = allocator.DuplicateString(std::format("iw4x_team_{}", teams.first));
 			data.push_back(team);
 
-			team.name = allocator.duplicateString(std::format("iw4x_team_{}", teams.second));
+			team.name = allocator.DuplicateString(std::format("iw4x_team_{}", teams.second));
 			data.push_back(team);
 		}
 
-		Utils::Merge(&Maps::CurrentDependencies, dependencies.requiredMaps.data(), dependencies.requiredMaps.size());
-		for (unsigned int i = 0; i < Maps::CurrentDependencies.size(); ++i)
+		currentDependencies.insert(currentDependencies.end(), dependencies.requiredMaps.begin(), dependencies.requiredMaps.end());
+
+		for (const auto& dependency : currentDependencies)
 		{
 			Game::XZoneInfo info;
 
-			info.name = (&Maps::CurrentDependencies[i])->data();
+			info.name = dependency.data();
 			info.allocFlags = zoneInfo->allocFlags;
 			info.freeFlags = zoneInfo->freeFlags;
 
 			data.push_back(info);
 		}
 
-		// Load patch files
-		auto patchZone = std::format("patch_{}", zoneInfo->name);
+		const auto patchZone = std::format("patch_{}", zoneInfo->name);
+
 		if (FastFiles::Exists(patchZone))
 		{
 			data.push_back({ patchZone.data(), zoneInfo->allocFlags, zoneInfo->freeFlags });
 		}
 
-		FastFiles::LoadLocalizeZones(data.data(), data.size(), sync);
+		FastFiles::LoadLocalizeZones(data.data(), static_cast<unsigned int>(data.size()), sync);
 	}
 
-	void Maps::OverrideMapEnts(Game::MapEnts* ents)
+	constexpr std::uint32_t iw4xFirstVersion = 316;
+	constexpr std::uint32_t iw4xBrokenMenusVersion = 359;
+
+	void Maps::LoadAssetRestrict(unsigned int type, void* asset, const std::string& name, bool* restrict)
 	{
-		auto callback = [](Game::XAssetHeader header, void* ents)
-			{
-				Game::MapEnts* mapEnts = reinterpret_cast<Game::MapEnts*>(ents);
-				Game::clipMap_t* clipMap = header.clipMap;
+		bool isDependencyWorldAsset = false;
 
-				if (clipMap && mapEnts && !_stricmp(mapEnts->name, clipMap->name))
-				{
-					clipMap->mapEnts = mapEnts;
-					//*Game::marMapEntsPtr = mapEnts;
-					//Game::G_SpawnEntitiesFromString();
-				}
-			};
-
-		// Internal doesn't lock the thread, as locking is impossible, due to executing this in the thread that holds the current lock
-		Game::DB_EnumXAssets_Internal(Game::XAssetType::ASSET_TYPE_CLIPMAP_MP, callback, ents, true);
-		Game::DB_EnumXAssets_Internal(Game::XAssetType::ASSET_TYPE_CLIPMAP_SP, callback, ents, true);
-	}
-
-	void Maps::LoadAssetRestrict(Game::XAssetType type, Game::XAssetHeader asset, const std::string_view name, bool* restrict)
-	{
-		bool dependencyWorldAsset = false;
 		switch (type)
 		{
-		case Game::XAssetType::ASSET_TYPE_CLIPMAP_MP:
-		case Game::XAssetType::ASSET_TYPE_CLIPMAP_SP:
-		case Game::XAssetType::ASSET_TYPE_GAMEWORLD_SP:
-		case Game::XAssetType::ASSET_TYPE_GAMEWORLD_MP:
-		case Game::XAssetType::ASSET_TYPE_GFXWORLD:
-		case Game::XAssetType::ASSET_TYPE_MAP_ENTS:
-		case Game::XAssetType::ASSET_TYPE_COMWORLD:
-		case Game::XAssetType::ASSET_TYPE_FXWORLD:
-			dependencyWorldAsset = true;
+		case Game::ASSET_TYPE_CLIPMAP_MP:
+		case Game::ASSET_TYPE_CLIPMAP_SP:
+		case Game::ASSET_TYPE_GAMEWORLD_SP:
+		case Game::ASSET_TYPE_GAMEWORLD_MP:
+		case Game::ASSET_TYPE_GFXWORLD:
+		case Game::ASSET_TYPE_MAP_ENTS:
+		case Game::ASSET_TYPE_COMWORLD:
+		case Game::ASSET_TYPE_FXWORLD:
+			isDependencyWorldAsset = true;
+			break;
+		default:
 			break;
 		}
 
-		// Dependency zones may contribute shared assets, but never their own world.
-		// Gate this lookup by type because this hook runs for every asset in a map.
-		if (dependencyWorldAsset && !Maps::CurrentDependencies.empty())
+		if (isDependencyWorldAsset && !currentDependencies.empty())
 		{
 			const auto currentZone = FastFiles::Current();
-			if (std::find(Maps::CurrentDependencies.begin(), Maps::CurrentDependencies.end(), currentZone) != Maps::CurrentDependencies.end()) // Shipment is a special case
+
+			if (std::find(currentDependencies.begin(), currentDependencies.end(), currentZone) != currentDependencies.end())
 			{
 				*restrict = true;
 				return;
 			}
 		}
 
-		if (type == Game::XAssetType::ASSET_TYPE_ADDON_MAP_ENTS)
+		if (type == Game::ASSET_TYPE_ADDON_MAP_ENTS)
 		{
 			*restrict = true;
 			return;
 		}
 
-		if (type == Game::XAssetType::ASSET_TYPE_WEAPON)
+		if (type == Game::ASSET_TYPE_WEAPON)
 		{
-			if ((name.find("_mp") == std::string_view::npos && name != "none" && name != "destructible_car") || Zones::Version() >= VERSION_ALPHA2)
+			if ((!std::strstr(name.data(), "_mp") && name != "none" && name != "destructible_car") || Zones::Version() >= iw4xFirstVersion)
 			{
 				*restrict = true;
 				return;
 			}
 		}
 
-		if (type == Game::XAssetType::ASSET_TYPE_STRINGTABLE)
+		if ((type == Game::ASSET_TYPE_MENU || type == Game::ASSET_TYPE_MENULIST) && Zones::Version() >= iw4xBrokenMenusVersion)
+		{
+			*restrict = true;
+			return;
+		}
+
+		if (type == Game::ASSET_TYPE_STRINGTABLE)
 		{
 			if (FastFiles::Current() == "mp_cross_fire")
 			{
@@ -346,77 +454,50 @@ namespace Components
 			}
 		}
 
-		if (type == Game::XAssetType::ASSET_TYPE_MAP_ENTS)
+		if (type == Game::ASSET_TYPE_MAP_ENTS)
 		{
-			if (Flags::HasFlag("dump"))
+			std::string entitiesFilename = name;
+
+			if (entitiesFilename.starts_with("maps/mp/maps/mp") && entitiesFilename.ends_with(".d3dbsp.d3dbsp"))
 			{
-				Utils::IO::WriteFile(Utils::String::VA("raw/%s.ents", name.data()), asset.mapEnts->entityString, true);
+				const auto prefixLength = "maps/mp/"s.size();
+				const auto suffixLength = ".d3dbsp"s.size();
+				entitiesFilename = entitiesFilename.substr(prefixLength, entitiesFilename.size() - prefixLength - suffixLength);
 			}
 
 			static std::string mapEntities;
-			FileSystem::File ents(std::string(name).append(".ents"), Game::FS_THREAD_DATABASE);
-			if (ents.exists())
+			FileSystem::File ents(entitiesFilename + ".ents", Game::FS_THREAD_DATABASE);
+
+			if (ents.Exists())
 			{
-				mapEntities = ents.getBuffer();
-				asset.mapEnts->entityString = mapEntities.data();
-				asset.mapEnts->numEntityChars = mapEntities.size() + 1;
+				auto* mapEnts = static_cast<Game::MapEnts*>(asset);
+
+				mapEntities = ents.GetBuffer();
+				mapEnts->entityString = mapEntities.data();
+				mapEnts->numEntityChars = static_cast<int>(mapEntities.size()) + 1;
 			}
 		}
-
-		// This is broken
-		if ((type == Game::XAssetType::ASSET_TYPE_MENU || type == Game::XAssetType::ASSET_TYPE_MENULIST) && Zones::Version() >= 359)
-		{
-			*restrict = true;
-			return;
-		}
 	}
 
-	Game::G_GlassData* Maps::GetWorldData()
+	void Maps::GetBSPName(char* buffer, size_t size, const char* format, const char* mapname)
 	{
-		Logger::Print("Waiting for database...\n");
-		while (!Game::Sys_IsDatabaseReady())
+		if (!Utils::String::StartsWith(mapname, "mp_") && !Utils::String::StartsWith(mapname, "zm_") && !IsUserMap(mapname))
 		{
-			std::this_thread::yield();
-			if (Game::Sys_IsDatabaseReady()) break;
-			std::this_thread::sleep_for(1ms);
+			format = "maps/%s.d3dbsp";
 		}
 
-		if (!Game::DB_XAssetPool[Game::XAssetType::ASSET_TYPE_GAMEWORLD_MP].gameWorldMp || !Game::DB_XAssetPool[Game::XAssetType::ASSET_TYPE_GAMEWORLD_MP].gameWorldMp->name ||
-			!Game::DB_XAssetPool[Game::XAssetType::ASSET_TYPE_GAMEWORLD_MP].gameWorldMp->g_glassData || Maps::SPMap)
-		{
-			return Game::DB_XAssetPool[Game::XAssetType::ASSET_TYPE_GAMEWORLD_SP].gameWorldSp->g_glassData;
-		}
-
-		return Game::DB_XAssetPool[Game::XAssetType::ASSET_TYPE_GAMEWORLD_MP].gameWorldMp->g_glassData;
+		_snprintf_s(buffer, size, _TRUNCATE, format, mapname);
 	}
 
-	__declspec(naked) void Maps::GetWorldDataStub()
+	void Maps::LoadNewMapCommand(char* buffer, int size, const char*, const char* mapname, const char* gametype)
 	{
-		__asm
-		{
-			push eax
-			pushad
-
-			call Maps::GetWorldData
-
-			mov[esp + 20h], eax
-			popad
-			pop eax
-
-			retn
-		}
+		const auto hash = GetUsermapHash(mapname);
+		_snprintf_s(buffer, static_cast<std::size_t>(size), _TRUNCATE, "loadingnewmap\n%s\n%s\n%d", mapname, gametype, static_cast<int>(hash));
 	}
 
-	void Maps::LoadRawSun()
+	int Maps::IgnoreEntityStub(const char* entity)
 	{
-		Game::R_FlushSun();
-
-		Game::GfxWorld* world = *reinterpret_cast<Game::GfxWorld**>(0x66DEE94);
-
-		if (FileSystem::File(std::format("sun/{}.sun", Maps::CurrentMainZone)))
-		{
-			Game::R_LoadSunThroughDvars(Maps::CurrentMainZone.data(), &world->sun);
-		}
+		return (Utils::String::StartsWith(entity, "dyn_") || Utils::String::StartsWith(entity, "node_") || Utils::String::StartsWith(entity, "actor_"));
 	}
 
 	void Maps::ForceRefreshArenas()
@@ -431,41 +512,17 @@ namespace Components
 		{
 			if (*Game::g_quitRequested)
 			{
-				// No need to refresh if we're exiting the game
 				return;
 			}
 
-			Game::sharedUiInfo_t* uiInfo = reinterpret_cast<Game::sharedUiInfo_t*>(0x62E4B78);
-			uiInfo->updateArenas = 1;
+			Utils::Hook::Set<int>(updateArenas, 1);
 			Game::UI_UpdateArenas();
 		}
 		else
 		{
-			// Dangerous!!
 			assert(false && "Arenas refreshed from wrong thread??");
 			Logger::Print("Tried to refresh arenas from a thread that is NOT the main thread!! This could have lead to a crash. Please report this bug and how you got it!");
 		}
-	}
-
-	// TODO : Remove hook entirely?
-	void Maps::GetBSPName(char* buffer, size_t size, const char* format, const char* mapname)
-	{
-		if (!Utils::String::StartsWith(mapname, "mp_") && !Utils::String::StartsWith(mapname, "zm_") && !Maps::IsUserMap(mapname))
-		{
-			format = "maps/%s.d3dbsp";
-		}
-
-		_snprintf_s(buffer, size, _TRUNCATE, format, mapname);
-	}
-
-	void Maps::HandleAsSPMap()
-	{
-		Maps::SPMap = true;
-	}
-
-	int Maps::IgnoreEntityStub(const char* entity)
-	{
-		return (Utils::String::StartsWith(entity, "dyn_") || Utils::String::StartsWith(entity, "node_") || Utils::String::StartsWith(entity, "actor_"));
 	}
 
 	std::unordered_map<std::string, std::string> Maps::ParseCustomMapArena(const std::string& singleMapArena)
@@ -475,167 +532,143 @@ namespace Components
 
 		std::smatch m;
 
-		std::string::const_iterator search_start(singleMapArena.cbegin());
+		std::string::const_iterator searchStart(singleMapArena.cbegin());
 
-		while (std::regex_search(search_start, singleMapArena.cend(), m, regex))
+		while (std::regex_search(searchStart, singleMapArena.cend(), m, regex))
 		{
 			if (m.size() > 2)
 			{
 				arena.emplace(m[1].str(), m[2].str());
-				search_start = m.suffix().first;
+				searchStart = m.suffix().first;
 			}
 		}
 
 		return arena;
 	}
 
-	Maps::MapDependencies Maps::GetDependenciesForMap(const std::string& map)
+	constexpr std::size_t maxMapIdLength = 64;
+
+	static bool IsPlainMapId(const std::string& mapName)
 	{
-		std::string teamAxis = "opforce_composite";
-		std::string teamAllies = "us_army";
-
-		Maps::MapDependencies dependencies;
-
-		// True by default - cause some maps won't have an arenafile entry
-		dependencies.requiresTeamZones = true;
-
-		for (int i = 0; i < *Game::arenaCount; ++i)
+		if (mapName.empty() || mapName.size() > maxMapIdLength)
 		{
-			Game::newMapArena_t* arena = &ArenaLength::NewArenas[i];
-			if (arena->mapName == map)
-			{
-				// If it's in the arena file, surely it's a vanilla map that doesn't need teams...
-				dependencies.requiresTeamZones = false;
-
-				for (std::size_t j = 0; j < std::extent_v<decltype(Game::newMapArena_t::keys)>; ++j)
-				{
-					const auto* key = arena->keys[j];
-					const auto* value = arena->values[j];
-					if (key == "dependency"s)
-					{
-						dependencies.requiredMaps = Utils::String::Split(arena->values[j], ' ');
-					}
-					else if (key == "allieschar"s)
-					{
-						teamAllies = value;
-					}
-					else if (key == "axischar"s)
-					{
-						teamAxis = value;
-					}
-					else if (key == "useteamzones"s)
-					{
-						// ... unless it specifies so!  This allows loading of CODO/COD4 zones that might not have the correct teams
-						dependencies.requiresTeamZones = Utils::String::ToLower(value) == "true"s;
-					}
-				}
-
-				break;
-			}
+			return false;
 		}
 
-		dependencies.requiredTeams = std::make_pair(teamAllies, teamAxis);
-
-		return dependencies;
+		return mapName.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") == std::string::npos;
 	}
 
 	void Maps::SynchronizeMapDvars(const std::string& rawMapName)
 	{
-		if (rawMapName.empty() || rawMapName == "none" || rawMapName == "None") return;
-
-		const auto normalizedMap = Utils::MapPreview::Normalize(rawMapName);
-		const auto* localized = Localization::LocalizeMapName(normalizedMap.c_str());
-		std::string displayName = localized && localized[0] ? localized : normalizedMap;
-		if (displayName.empty() || displayName == normalizedMap)
+		if (!IsPlainMapId(rawMapName) || rawMapName == "none" || rawMapName == "None")
 		{
-			const auto* rawLocalized = Localization::LocalizeMapName(rawMapName.c_str());
-			if (rawLocalized && rawLocalized[0]) displayName = rawLocalized;
+			return;
 		}
 
-		if (auto* value = Game::Dvar_FindVar("ui_mapname")) Game::Dvar_SetString(value, rawMapName.c_str());
-		if (auto* value = Game::Dvar_FindVar("party_mapname")) Game::Dvar_SetString(value, displayName.c_str());
-		if (auto* value = Game::Dvar_FindVar("zw3_pref_ui_mapname")) Game::Dvar_SetString(value, rawMapName.c_str());
-		if (auto* value = Game::Dvar_FindVar("zw3_leaderboard_map")) Game::Dvar_SetString(value, rawMapName.c_str());
-		if (auto* value = Game::Dvar_FindVar("zw3_leaderboard_mapname_display")) Game::Dvar_SetString(value, displayName.c_str());
-		if (auto* value = Game::Dvar_FindVar("uiDisplayMapName")) Game::Dvar_SetString(value, displayName.c_str());
+		const std::string normalizedMap = Utils::MapPreview::Normalize(rawMapName);
+		const char* const localizedName = Localization::LocalizeMapName(normalizedMap.data());
+		std::string displayName = normalizedMap;
+
+		if (localizedName[0])
+		{
+			displayName = localizedName;
+		}
+
+		if (displayName == normalizedMap)
+		{
+			const char* const rawLocalizedName = Localization::LocalizeMapName(rawMapName.data());
+
+			if (rawLocalizedName[0])
+			{
+				displayName = rawLocalizedName;
+			}
+		}
+
+		Dvar::Var("ui_mapname").Set(rawMapName);
+		Dvar::Var("party_mapname").Set(displayName);
+		Dvar::Var("zw3_leaderboard_map").Set(rawMapName);
+		Dvar::Var("zw3_leaderboard_mapname_display").Set(displayName);
+		Dvar::Var("uiDisplayMapName").Set(displayName);
 	}
 
 	void Maps::PrepareUsermap(const char* mapname)
 	{
 		if (!mapname || !*mapname)
-			return;
-
-		Maps::SynchronizeMapDvars(mapname);
-
-		SPLoadscreens::SetLoadingMap(mapname);
-
-		// Handle the redundant call scenario first.
-		//
-		// It appears that this function is called a second time during fastfile
-		// loading. If we are already holding a valid IWD for this map, we must
-		// return immediately. Proceeding would cause us to free the IWD we just
-		// loaded.
-		//
-		if (Maps::UserMap.isValid() && Maps::UserMap.getName() == mapname)
-			return;
-
-		// If we are here, we are either starting up or switching contexts. In
-		// either case, we need to tear down any previous state before loading the
-		// new one.
-		//
-		if (Maps::UserMap.isValid())
 		{
-			Maps::UserMap.freeIwd();
-			Maps::UserMap.clear();
+			return;
 		}
 
-		// Now set up the new map.
-		//
-		if (Maps::IsUserMap(mapname))
+		SynchronizeMapDvars(mapname);
+		SPLoadscreens::SetLoadingMap(mapname);
+
+		if (userMap.IsValid() && userMap.GetName() == mapname)
 		{
-			Maps::UserMap = Maps::UserMapContainer(mapname);
-			Maps::UserMap.loadIwd();
-			// The preview may exist only in this newly mounted archive.
+			return;
+		}
+
+		if (userMap.IsValid())
+		{
+			userMap.FreeIwd();
+			userMap.Clear();
+		}
+
+		if (IsUserMap(mapname))
+		{
+			userMap = UserMapContainer(mapname);
+			userMap.LoadIwd();
+
 			SPLoadscreens::SetLoadingMap(mapname);
 		}
 		else
 		{
-			// If the mapname isn't valid, we leave the state cleared.
-			//
-			Maps::UserMap.clear();
+			userMap.Clear();
 		}
+	}
+
+	void Maps::LoadLoadscreenZone_Stub(Game::XZoneInfo* zoneInfo, unsigned int zoneCount, int sync)
+	{
+		std::string mapname = zoneInfo->name;
+		mapname.resize(mapname.size() - "_load"s.size());
+
+		PrepareUsermap(mapname.data());
+
+		Game::DB_LoadXAssets(zoneInfo, zoneCount, sync);
 	}
 
 	unsigned int Maps::GetUsermapHash(const std::string& map)
 	{
-		const std::filesystem::path mapDirectory = std::filesystem::path("usermaps") / map;
+		const auto mapDirectory = std::filesystem::path("usermaps") / map;
+
 		if (Utils::IO::DirectoryExists(mapDirectory))
 		{
 			std::string hash;
-			hash.reserve(ARRAYSIZE(Maps::UserMapFiles) * 32);
-			std::lock_guard lock(UserMapHashMutex);
+			hash.reserve(std::size(userMapFiles) * 32);
 
-			for (std::size_t i = 0; i < ARRAYSIZE(Maps::UserMapFiles); ++i)
+			for (std::size_t i = 0; i < std::size(userMapFiles); ++i)
 			{
-				const auto filePath = mapDirectory / std::format("{}{}", map, Maps::UserMapFiles[i]);
-				if (Utils::IO::FileExists(filePath.string()))
+				const auto filePath = mapDirectory / std::format("{}{}", map, userMapFiles[i]);
+
+				if (!Utils::IO::FileExists(filePath.string()))
 				{
-					const auto stamp = GetUserMapFileStamp(filePath);
-					const auto cacheKey = Utils::String::ToLower(filePath.lexically_normal().generic_string());
-					const auto cached = UserMapHashCache.find(cacheKey);
+					continue;
+				}
 
-					if (stamp && cached != UserMapHashCache.end() && cached->second.stamp == *stamp)
-					{
-						hash.append(cached->second.hash);
-						continue;
-					}
+				const auto stamp = TryGetUserMapFileStamp(filePath);
+				const auto cacheKey = Utils::String::ToLower(filePath.lexically_normal().generic_string());
+				const auto cached = userMapHashCache.find(cacheKey);
 
-					auto fileHash = HashUserMapFile(filePath);
-					hash.append(fileHash);
-					if (stamp)
-					{
-						UserMapHashCache.insert_or_assign(cacheKey, UserMapFileHash{ *stamp, std::move(fileHash) });
-					}
+				if (stamp && cached != userMapHashCache.end() && cached->second.stamp == *stamp)
+				{
+					hash.append(cached->second.hash);
+					continue;
+				}
+
+				auto fileHash = HashUserMapFile(filePath);
+				hash.append(fileHash);
+
+				if (stamp)
+				{
+					userMapHashCache.insert_or_assign(cacheKey, UserMapFileHash{ *stamp, std::move(fileHash) });
 				}
 			}
 
@@ -645,10 +678,43 @@ namespace Components
 		return 0;
 	}
 
-	void Maps::LoadNewMapCommand(char* buffer, size_t size, const char* /*format*/, const char* mapname, const char* gametype)
+	bool Maps::IsUserMap(const std::string& mapname)
 	{
-		unsigned int hash = Maps::GetUsermapHash(mapname);
-		_snprintf_s(buffer, size, _TRUNCATE, "loadingnewmap\n%s\n%s\n%d", mapname, gametype, hash);
+		return Utils::IO::DirectoryExists(std::format("usermaps/{}", mapname)) && Utils::IO::FileExists(std::format("usermaps/{}/{}.ff", mapname, mapname));
+	}
+
+	bool Maps::CheckMapInstalled(const std::string& mapname, bool error, bool dlcIsTrue)
+	{
+		if (FastFiles::Exists(mapname))
+		{
+			return true;
+		}
+
+		for (const auto& pack : dlcPacks)
+		{
+			for (const auto& map : pack.maps)
+			{
+				if (map != mapname)
+				{
+					continue;
+				}
+
+				if (error)
+				{
+					Game::Com_Error(Game::ERR_DISCONNECT, "%s", Utils::String::Format("Missing DLC pack {} ({}) containing map {} ({}).\nPlease download it to play this map.",
+						pack.name, pack.index, Localization::LocalizeMapName(mapname.data()), mapname));
+				}
+
+				return dlcIsTrue;
+			}
+		}
+
+		if (error)
+		{
+			Game::Com_Error(Game::ERR_DISCONNECT, "%s", Utils::String::Format("Missing map file {}.\nYou may have a damaged installation or are attempting to load a non-existent map.", mapname));
+		}
+
+		return false;
 	}
 
 	int Maps::TriggerReconnectForMap(Game::msg_t* msg, const char* mapname)
@@ -656,13 +722,12 @@ namespace Components
 		Theatre::StopRecording();
 
 		char hashBuf[100] = { 0 };
-		unsigned int hash = atoi(Game::MSG_ReadStringLine(msg, hashBuf, sizeof(hashBuf)));
+		const auto hash = static_cast<unsigned int>(std::atoi(Game::MSG_ReadStringLine(msg, hashBuf, sizeof(hashBuf))));
 
-		if (!Maps::CheckMapInstalled(mapname, false, true) || hash && hash != Maps::GetUsermapHash(mapname))
+		if (!CheckMapInstalled(mapname, false, true) || (hash && hash != GetUsermapHash(mapname)))
 		{
-			// Reconnecting forces the client to download the new map
 			Command::Execute("disconnect", false);
-			Command::Execute("awaitDatabase", false); // Wait for the database to load
+			Command::Execute("awaitDatabase", false);
 			Command::Execute("wait 100", false);
 			Command::Execute("openmenu popup_reconnectingtoparty", false);
 			Command::Execute("delayReconnect", false);
@@ -672,132 +737,9 @@ namespace Components
 		return false;
 	}
 
-	__declspec(naked) void Maps::RotateCheckStub()
-	{
-		__asm
-		{
-			push eax
-			pushad
-
-			push[esp + 28h]
-			push ebp
-			call Maps::TriggerReconnectForMap
-			add esp, 8h
-
-			mov[esp + 20h], eax
-
-			popad
-			pop eax
-
-			test eax, eax
-			jnz skipRotation
-
-			push 487C50h // Rotate map
-
-			skipRotation :
-			retn
-		}
-	}
-
-	__declspec(naked) void Maps::SpawnServerStub()
-	{
-		__asm
-		{
-			pushad
-
-			push[esp + 24h]
-			call Maps::PrepareUsermap
-			pop eax
-
-			popad
-
-			push 4A7120h // SV_SpawnServer
-			retn
-		}
-	}
-
-	__declspec(naked) void Maps::LoadMapLoadscreenStub()
-	{
-		__asm
-		{
-			pushad
-
-			push[esp + 24h]
-			call Maps::PrepareUsermap
-			pop eax
-
-			popad
-
-			push 4D8030h // LoadMapLoadscreen
-			retn
-		}
-	}
-
-	void Maps::AddDlc(Maps::DLC dlc)
-	{
-		for (auto& pack : Maps::DlcPacks)
-		{
-			if (pack.index == dlc.index)
-			{
-				pack.maps = dlc.maps;
-				Maps::UpdateDlcStatus();
-				return;
-			}
-		}
-
-		Dvar::Register<bool>(Utils::String::VA("isDlcInstalled_%d", dlc.index), false, Game::DVAR_EXTERNAL | Game::DVAR_INIT, "");
-
-		Maps::DlcPacks.push_back(dlc);
-		Maps::UpdateDlcStatus();
-	}
-
-	void Maps::UpdateDlcStatus()
-	{
-		bool hasAllDlcs = true;
-		std::vector<bool> hasDlc;
-		for (auto& pack : Maps::DlcPacks)
-		{
-			bool hasAllMaps = true;
-			for (auto map : pack.maps)
-			{
-				if (!FastFiles::Exists(map))
-				{
-					hasAllMaps = false;
-					hasAllDlcs = false;
-					break;
-				}
-			}
-
-			hasDlc.push_back(hasAllMaps);
-			Dvar::Var(Utils::String::VA("isDlcInstalled_%d", pack.index)).set(hasAllMaps ? true : false);
-		}
-
-		// Must have all of dlc 3 to 5 or it causes issues
-		static bool sentMessage = false;
-		if (hasDlc.size() >= 5 && (hasDlc[2] || hasDlc[3] || hasDlc[4]) && (!hasDlc[2] || !hasDlc[3] || !hasDlc[4]) && !sentMessage)
-		{
-			StartupMessages::AddMessage("Warning:\n You only have some of DLCs 3-5 which are all required to be installed to work. There may be issues with those maps.");
-			sentMessage = true;
-		}
-
-		Dvar::Var("isDlcInstalled_All").set(hasAllDlcs ? true : false);
-	}
-
-	bool Maps::IsCustomMap()
-	{
-		Game::GfxWorld*& gameWorld = *reinterpret_cast<Game::GfxWorld**>(0x66DEE94);
-		if (gameWorld) return (gameWorld->checksum & 0xFFFF0000) == 0xC0D40000;
-		return false;
-	}
-
-	bool Maps::IsUserMap(const std::string& mapname)
-	{
-		return Utils::IO::DirectoryExists(std::format("usermaps/{}", mapname)) && Utils::IO::FileExists(std::format("usermaps/{}/{}.ff", mapname, mapname));
-	}
-
 	void Maps::ScanCustomMaps()
 	{
-		FoundCustomMaps.clear();
+		foundCustomMaps.clear();
 		Logger::Print("Looking for custom maps...\n");
 
 		std::filesystem::path basePath = (*Game::fs_basepath)->current.string;
@@ -816,9 +758,10 @@ namespace Components
 			{
 				const auto zoneName = entry.path().filename().string();
 				const auto mapPath = std::format("{}\\{}.ff", entry.path().string(), zoneName);
+
 				if (Utils::IO::FileExists(mapPath))
 				{
-					FoundCustomMaps.push_back(zoneName);
+					foundCustomMaps.push_back(zoneName);
 					Logger::Print("Discovered custom map {}\n", zoneName);
 				}
 			}
@@ -832,167 +775,364 @@ namespace Components
 
 	const std::vector<std::string>& Maps::GetCustomMaps()
 	{
-		return FoundCustomMaps;
+		return foundCustomMaps;
 	}
 
-	Game::XAssetEntry* Maps::GetAssetEntryPool()
+	std::vector<Maps::DLC> Maps::StockDlcs()
 	{
-		return *reinterpret_cast<Game::XAssetEntry**>(0x48E6F4);
-	}
-
-	// dlcIsTrue serves as a check if the map is a custom map and if it's missing
-	bool Maps::CheckMapInstalled(const std::string& mapname, bool error, bool dlcIsTrue)
-	{
-		if (FastFiles::Exists(mapname)) return true;
-
-		for (auto& pack : Maps::DlcPacks)
+		return
 		{
-			for (auto map : pack.maps)
-			{
-				if (map == mapname)
-				{
-					if (error)
-					{
-						Logger::Error(Game::ERR_DISCONNECT, "Missing DLC pack {} ({}) containing map {} ({}).\nPlease download it to play this map.",
-							pack.name, pack.index, Localization::LocalizeMapName(mapname.data()), mapname);
-					}
+			{ 1, "Stimulus Pack", {"mp_complex", "mp_compact", "mp_storm", "mp_overgrown", "mp_crash"} },
+			{ 2, "Resurgence Pack", {"mp_abandon", "mp_vacant", "mp_trailerpark", "mp_strike", "mp_fuel2"} },
+			{ 3, "IW4x Classics", {"mp_nuked", "mp_cross_fire", "mp_cargoship", "mp_bloc", "mp_killhouse", "mp_bog_sh", "mp_cargoship_sh", "mp_shipment", "mp_shipment_long", "mp_rust_long", "mp_firingrange", "mp_bloc_sh", "mp_crash_tropical", "mp_estate_tropical", "mp_fav_tropical", "mp_storm_spring"} },
+			{ 4, "Call Of Duty 4 Pack", {"mp_farm", "mp_backlot", "mp_pipeline", "mp_countdown", "mp_crash_snow", "mp_carentan", "mp_broadcast", "mp_showdown", "mp_convoy", "mp_citystreets"} },
+			{ 5, "Modern Warfare 3 Pack", {"mp_dome", "mp_hardhat", "mp_paris", "mp_seatown", "mp_bravo", "mp_underground", "mp_plaza2", "mp_village", "mp_alpha"} },
+		};
+	}
 
-					return dlcIsTrue;
+	bool Maps::IsDlcInstalled(int index)
+	{
+		for (const auto& pack : StockDlcs())
+		{
+			if (pack.index != index)
+			{
+				continue;
+			}
+
+			for (const auto& map : pack.maps)
+			{
+				if (!FastFiles::Exists(map))
+				{
+					return false;
 				}
 			}
-		}
 
-		if (error)
-		{
-			Logger::Error(Game::ERR_DISCONNECT,
-				"Missing map file {}.\nYou may have a damaged installation or are attempting to load a non-existent map.", mapname);
+			return true;
 		}
 
 		return false;
 	}
 
-	void Maps::HideModel()
+	void Maps::AddDlc(DLC dlc)
 	{
-		Game::GfxWorld*& gameWorld = *reinterpret_cast<Game::GfxWorld**>(0x66DEE94);
-		if (!gameWorld) return;
-
-		std::string model = Dvar::Var("r_hideModel").get<std::string>();
-		if (model.empty()) return;
-
-		for (unsigned int i = 0; i < gameWorld->dpvs.smodelCount; ++i)
+		for (auto& pack : dlcPacks)
 		{
-			if (model == "all"s || gameWorld->dpvs.smodelDrawInsts[i].model->name == model)
+			if (pack.index == dlc.index)
 			{
-				gameWorld->dpvs.smodelVisData[0][i] = 0;
-				gameWorld->dpvs.smodelVisData[1][i] = 0;
-				gameWorld->dpvs.smodelVisData[2][i] = 0;
+				pack.maps = dlc.maps;
+				UpdateDlcStatus();
+				return;
 			}
 		}
+
+		Dvar::Register(Utils::String::VA("isDlcInstalled_%d", dlc.index), false, Game::DVAR_EXTERNAL | Game::DVAR_INIT, "");
+
+		dlcPacks.push_back(dlc);
+		UpdateDlcStatus();
 	}
 
-	__declspec(naked) void Maps::HideModelStub()
+	void Maps::UpdateDlcStatus()
 	{
-		__asm
+		bool hasAllDlcs = true;
+		std::vector<bool> hasDlc;
+
+		for (auto& pack : dlcPacks)
 		{
-			pushad
-			call Maps::HideModel
-			popad
+			bool hasAllMaps = true;
 
-			push 541E40h
-			retn
+			for (const auto& map : pack.maps)
+			{
+				if (!FastFiles::Exists(map))
+				{
+					hasAllMaps = false;
+					hasAllDlcs = false;
+					break;
+				}
+			}
+
+			hasDlc.push_back(hasAllMaps);
+			Dvar::Var(Utils::String::VA("isDlcInstalled_%d", pack.index)).Set(hasAllMaps);
 		}
+
+		static bool didWarnPartialDlc = false;
+
+		if (hasDlc.size() >= 5 && !didWarnPartialDlc)
+		{
+			const bool hasAnyOfThreeToFive = hasDlc[2] || hasDlc[3] || hasDlc[4];
+			const bool hasAllOfThreeToFive = hasDlc[2] && hasDlc[3] && hasDlc[4];
+
+			if (hasAnyOfThreeToFive && !hasAllOfThreeToFive)
+			{
+				StartupMessages::AddMessage("Warning:\n You only have some of DLCs 3-5 which are all required to be installed to work. There may be issues with those maps.");
+				didWarnPartialDlc = true;
+			}
+		}
+
+		Dvar::Var("isDlcInstalled_All").Set(hasAllDlcs);
 	}
 
-	void Maps::G_SpawnTurretHook(Game::gentity_s* ent, int unk, int unk2)
+	void Maps::G_SpawnTurretHook(Game::gentity_s* ent, const char* weaponInfoName, int scriptSpawned)
 	{
-		if (Maps::CurrentMainZone == "mp_backlot_sh"s || Maps::CurrentMainZone == "mp_con_spring"s ||
-			Maps::CurrentMainZone == "mp_mogadishu_sh"s || Maps::CurrentMainZone == "mp_nightshift_sh"s)
+		if (currentMainZone == "mp_backlot_sh"s || currentMainZone == "mp_con_spring"s ||
+			currentMainZone == "mp_mogadishu_sh"s || currentMainZone == "mp_nightshift_sh"s)
 		{
 			return;
 		}
 
-		Utils::Hook::Call<void(Game::gentity_s*, int, int)>(0x408910)(ent, unk, unk2);
+		reinterpret_cast<void(*)(Game::gentity_s*, const char*, int)>(Utils::Hook::Rebase(G_SpawnTurret))(ent, weaponInfoName, scriptSpawned);
 	}
 
-	bool Maps::SV_SetTriggerModelHook(Game::gentity_s* ent) {
+	void Maps::HandleAsSPMap()
+	{
+		isSPMap = true;
+	}
 
-		// Use me for debugging
-		//std::string classname = Game::SL_ConvertToString(ent->script_classname);
-		//std::string targetname = Game::SL_ConvertToString(ent->targetname);
+	void Maps::G_InitGlass_Hk()
+	{
+		const auto glassInit = reinterpret_cast<void(*)()>(Utils::Hook::Rebase(G_InitGlass));
+		auto* const glassSource = reinterpret_cast<void**>(Utils::Hook::Rebase(G_InitGlass_GlassSource));
+		const auto* const mpName = *reinterpret_cast<const char**>(Utils::Hook::Rebase(G_InitGlass_GlassSource - gameWorldMpName));
+		auto* const spWorld = static_cast<std::uint8_t*>(Game::DB_XAssetPool[Game::ASSET_TYPE_GAMEWORLD_SP]);
+		const bool usesSpWorld = isSPMap || !mpName || !*glassSource;
 
-		return Utils::Hook::Call<bool(Game::gentity_s*)>(0x5050C0)(ent);
+		if (!usesSpWorld || !spWorld)
+		{
+			glassInit();
+			return;
+		}
+
+		void* const saved = *glassSource;
+		*glassSource = *reinterpret_cast<void**>(spWorld + gameWorldSpGlassData);
+		glassInit();
+		*glassSource = saved;
 	}
 
 	unsigned short Maps::CM_TriggerModelBounds_Hk(unsigned int triggerIndex, Game::Bounds* bounds)
 	{
-
-		auto* ents = *reinterpret_cast<Game::MapEnts**>(0x1AA651C);  // Use me for debugging
+		auto* ents = Utils::Hook::Get<Game::MapEnts*>(cm_mapEnts);
 
 		if (ents)
 		{
 			if (triggerIndex >= ents->trigger.count)
 			{
-				Logger::Error(Game::errorParm_t::ERR_DROP, "Invalid trigger index ({}) in entities exceeds the maximum trigger count ({}) defined in the clipmap. Check your map ents, or your clipmap!", triggerIndex, ents->trigger.count);
-				return 0;
+				Logger::Fatal("Invalid trigger index ({}) in entities exceeds the maximum trigger count ({}) defined in the clipmap. Check your map ents, or your clipmap!", triggerIndex, ents->trigger.count);
 			}
-			else
-			{
-				return Utils::Hook::Call<unsigned short(int, Game::Bounds*)>(0x4416C0)(triggerIndex, bounds);
-			}
+
+			return reinterpret_cast<unsigned short(*)(unsigned int, Game::Bounds*)>(Utils::Hook::Rebase(CM_TriggerModelBounds))(triggerIndex, bounds);
 		}
 
 		return 0;
 	}
 
+	Maps::MapDependencies Maps::GetDependenciesForMap(const std::string& map)
+	{
+		std::string teamAxis = "opforce_composite";
+		std::string teamAllies = "us_army";
+
+		Maps::MapDependencies dependencies;
+
+		dependencies.requiresTeamZones = true;
+
+		const auto* arenas = GetArenas();
+
+		for (int i = 0; arenas && i < *Game::arenaCount; ++i)
+		{
+			const Game::newMapArena_t* arena = &arenas[i];
+
+			if (arena->mapName == map)
+			{
+				dependencies.requiresTeamZones = false;
+
+				for (std::size_t j = 0; j < std::extent_v<decltype(Game::newMapArena_t::keys)>; ++j)
+				{
+					const auto* key = arena->keys[j];
+					const auto* value = arena->values[j];
+
+					if (key == "dependency"s)
+					{
+						dependencies.requiredMaps = Utils::String::Split(arena->values[j], ' ');
+					}
+					else if (key == "allieschar"s)
+					{
+						teamAllies = value;
+					}
+					else if (key == "axischar"s)
+					{
+						teamAxis = value;
+					}
+					else if (key == "useteamzones"s)
+					{
+						dependencies.requiresTeamZones = Utils::String::ToLower(value) == "true"s;
+					}
+				}
+
+				break;
+			}
+		}
+
+		dependencies.requiredTeams = std::make_pair(teamAllies, teamAxis);
+
+		return dependencies;
+	}
+
+	void Maps::GSCr_GetMapArenaInfo()
+	{
+		if (Game::Scr_GetNumParam() != 2)
+		{
+			GSC::Script::Scr_Error("GetMapArenaInfo: Needs a map name and a field name!");
+			return;
+		}
+
+		const auto* mapName = Game::SL_ConvertToString(Game::Scr_GetConstString(0));
+		const auto* fieldName = Game::SL_ConvertToString(Game::Scr_GetConstString(1));
+
+		Game::UI_UpdateArenas();
+
+		const auto* arenas = GetArenas();
+
+		for (int i = 0; arenas && i < *Game::arenaCount; ++i)
+		{
+			const Game::newMapArena_t* arena = &arenas[i];
+
+			if (std::strcmp(arena->mapName, mapName) == 0)
+			{
+				for (std::size_t j = 0; j < std::extent_v<decltype(Game::newMapArena_t::keys)>; ++j)
+				{
+					const auto* key = arena->keys[j];
+					const auto* value = arena->values[j];
+
+					if (std::strcmp(key, fieldName) == 0)
+					{
+						Game::Scr_AddString(value);
+						return;
+					}
+				}
+
+				GSC::Script::Scr_Error(Utils::String::VA("Could not find field %s in arena entry for map %s!\n", fieldName, mapName));
+				return;
+			}
+		}
+
+		GSC::Script::Scr_Error(Utils::String::VA("Map %s has no arena entry!\n", mapName));
+	}
+
+	void Maps::GSCr_GetMapList()
+	{
+		Game::Scr_MakeArray();
+
+		Game::UI_UpdateArenas();
+
+		const auto* arenas = GetArenas();
+
+		for (int i = 0; arenas && i < *Game::arenaCount; ++i)
+		{
+			const Game::newMapArena_t* arena = &arenas[i];
+			Game::Scr_AddString(arena->mapName);
+			Game::Scr_AddArray();
+		}
+	}
+
 	Maps::Maps()
 	{
-		Scheduler::Once([]
+		struct HookSite
+		{
+			std::uintptr_t site;
+			std::uintptr_t target;
+			void* stub;
+			bool isJump;
+		};
+
+		const HookSite sites[] =
+		{
+			{ DB_LoadLevelXAssets_MapZoneCall, DB_LoadXAssets, reinterpret_cast<void*>(LoadMapZones), HOOK_CALL },
+			{ Com_GetBspFilename_SprintfJump, Com_sprintf, reinterpret_cast<void*>(GetBSPName), HOOK_JUMP },
+			{ G_SpawnEntitiesFromString_IsDynClassnameCall, IsDynClassname, reinterpret_cast<void*>(IgnoreEntityStub), HOOK_CALL },
+			{ loadscreenZoneCalls[0], DB_LoadXAssets, reinterpret_cast<void*>(LoadLoadscreenZone_Stub), HOOK_CALL },
+			{ loadscreenZoneCalls[1], DB_LoadXAssets, reinterpret_cast<void*>(LoadLoadscreenZone_Stub), HOOK_CALL },
+			{ loadscreenZoneCalls[2], DB_LoadXAssets, reinterpret_cast<void*>(LoadLoadscreenZone_Stub), HOOK_CALL },
+			{ loadscreenZoneCalls[3], DB_LoadXAssets, reinterpret_cast<void*>(LoadLoadscreenZone_Stub), HOOK_CALL },
+			{ loadscreenZoneCalls[4], DB_LoadXAssets, reinterpret_cast<void*>(LoadLoadscreenZone_Stub), HOOK_CALL },
+			{ Com_AssetLoadUI_FreeLevelCall, DB_LoadXAssets, reinterpret_cast<void*>(UnloadMapZones), HOOK_CALL },
+			{ UI_LoadArenas_ReadRawFileCall, DB_ReadRawFile, reinterpret_cast<void*>(LoadArenaFileStub), HOOK_CALL },
+			{ G_SpawnTurretCalls[0], G_SpawnTurret, reinterpret_cast<void*>(G_SpawnTurretHook), HOOK_CALL },
+			{ G_SpawnTurretCalls[1], G_SpawnTurret, reinterpret_cast<void*>(G_SpawnTurretHook), HOOK_CALL },
+			{ SV_SetTriggerModel_BoundsCall, CM_TriggerModelBounds, reinterpret_cast<void*>(CM_TriggerModelBounds_Hk), HOOK_CALL },
+			{ G_InitGame_InitGlassCall, G_InitGlass, reinterpret_cast<void*>(G_InitGlass_Hk), HOOK_CALL },
+		};
+
+		static_assert(std::size(sites) == std::size(hooks));
+
+		for (const auto& hookSite : sites)
+		{
+			if (!Utils::Hook::BranchesTo(hookSite.site, hookSite.target, hookSite.isJump))
 			{
-				Dvar::Register<bool>("isDlcInstalled_All", false, Game::DVAR_EXTERNAL | Game::DVAR_INIT, "");
-				Maps::RListSModels = Dvar::Register<bool>("r_listSModels", false, Game::DVAR_NONE, "Display a list of visible SModels");
+				Logger::Error("maps: 0x{:X} no longer reaches 0x{:X}, maps load as the engine loads them\n", hookSite.site, hookSite.target);
+				return;
+			}
+		}
 
-				Maps::AddDlc({ 1, "Stimulus Pack", {"mp_complex", "mp_compact", "mp_storm", "mp_overgrown", "mp_crash"} });
-				Maps::AddDlc({ 2, "Resurgence Pack", {"mp_abandon", "mp_vacant", "mp_trailerpark", "mp_strike", "mp_fuel2"} });
-				Maps::AddDlc({ 3, "IW4x Classics", {"mp_nuked", "mp_cross_fire", "mp_cargoship", "mp_bloc", "mp_killhouse", "mp_bog_sh", "mp_cargoship_sh", "mp_shipment", "mp_shipment_long", "mp_rust_long", "mp_firingrange", "mp_bloc_sh", "mp_crash_tropical", "mp_estate_tropical", "mp_fav_tropical", "mp_storm_spring"} });
-				Maps::AddDlc({ 4, "Call Of Duty 4 Pack", {"mp_farm", "mp_backlot", "mp_pipeline", "mp_countdown", "mp_crash_snow", "mp_carentan", "mp_broadcast", "mp_showdown", "mp_convoy", "mp_citystreets"} });
-				Maps::AddDlc({ 5, "Modern Warfare 3 Pack", {"mp_dome", "mp_hardhat", "mp_paris", "mp_seatown", "mp_bravo", "mp_underground", "mp_plaza2", "mp_village", "mp_alpha"} });
+		bool isSeated = true;
 
-				Maps::UpdateDlcStatus();
+		for (std::size_t i = 0; i < std::size(sites); ++i)
+		{
+			isSeated = hooks[i].Initialize(sites[i].site, sites[i].stub, sites[i].isJump)->Install()->IsInstalled() && isSeated;
+		}
 
-				UIScript::Add("downloadDLC", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
-					{
-						const auto dlc = token.get<int>();
+		if (!isSeated)
+		{
+			for (auto& hook : hooks)
+			{
+				hook.Uninstall();
+			}
 
-						Game::ShowMessageBox(Utils::String::VA("DLC %d does not exist!", dlc), "ERROR");
-					});
-			}, Scheduler::Pipeline::MAIN);
+			Logger::Error("maps: could not seat every hook, maps load as the engine loads them\n");
+			return;
+		}
 
-		// disable turrets on CoD:OL 448+ maps for now
-		Utils::Hook(0x5EE577, Maps::G_SpawnTurretHook, HOOK_CALL).install()->quick();
-		Utils::Hook(0x44A4D5, Maps::G_SpawnTurretHook, HOOK_CALL).install()->quick();
+		for (auto& hook : hooks)
+		{
+			hook.Quick();
+		}
 
-		// Catch trigger errors before they're critical
-		Utils::Hook(0x5050D4, Maps::CM_TriggerModelBounds_Hk, HOOK_CALL).install()->quick();
+		Command::Add("delayReconnect", []
+		{
+			Scheduler::Once([]
+			{
+				Command::Execute("closemenu popup_reconnectingtoparty", false);
+				Command::Execute("reconnect", false);
+			}, Scheduler::Pipeline::CLIENT, 10s);
+		});
 
-#ifdef DEBUG
-		// Check trigger models
-		Utils::Hook(0x5FC0F1, Maps::SV_SetTriggerModelHook, HOOK_CALL).install()->quick();
-		Utils::Hook(0x5FC2671, Maps::SV_SetTriggerModelHook, HOOK_CALL).install()->quick();
-#endif
+		Maps_NewMapFlag = Utils::Hook::Rebase(newMapFlag);
+		Maps_NewMapBodyNext = Utils::Hook::Rebase(CL_ConnectionlessPacket_NewMapBodyNext);
+		Maps_NewMapReturnTrue = Utils::Hook::Rebase(CL_ConnectionlessPacket_ReturnTrue);
 
-		//
+		if (!Utils::Hook::MatchesBytes(CL_ConnectionlessPacket_NewMapBody, newMapBody, sizeof(newMapBody))
+			|| !newMapHook.Initialize(CL_ConnectionlessPacket_NewMapBody, LoadingNewMapStub, HOOK_CALL)->Install()->IsInstalled())
+		{
+			newMapHook.Uninstall();
+			Logger::Error("maps: loadingnewmap does not read as expected, a missing usermap is not fetched on rotation\n");
+		}
+		else
+		{
+			Utils::Hook::Nop(CL_ConnectionlessPacket_NewMapBody + 5, sizeof(newMapBody) - 5);
+		}
 
-//#define SORT_SMODELS
-#if !defined(DEBUG) || !defined(SORT_SMODELS)
-		// Don't sort static models
-		Utils::Hook::Nop(0x53D815, 2);
-#endif
+		if (Dedicated::IsEnabled())
+		{
+			if (!Utils::Hook::BranchesTo(SV_SpawnServer_LoadingNewMapCall, Com_sprintf, HOOK_CALL)
+				|| !loadNewMapHook.Initialize(SV_SpawnServer_LoadingNewMapCall, reinterpret_cast<void*>(LoadNewMapCommand), HOOK_CALL)->Install()->IsInstalled())
+			{
+				loadNewMapHook.Uninstall();
+				Logger::Error("maps: SV_SpawnServer's loadingnewmap does not read as expected, clients are not sent the usermap hash\n");
+			}
+			else
+			{
+				loadNewMapHook.Quick();
+			}
+		}
 
-		// Don't draw smodels
-		//Utils::Hook::Set<BYTE>(0x541E40, 0xC3);
-
-		// Restrict asset loading
-		constexpr Game::XAssetType restrictedAssetTypes[] =
+		constexpr Game::XAssetType restrictedTypes[] =
 		{
 			Game::ASSET_TYPE_CLIPMAP_MP,
 			Game::ASSET_TYPE_CLIPMAP_SP,
@@ -1008,105 +1148,52 @@ namespace Components
 			Game::ASSET_TYPE_MENU,
 			Game::ASSET_TYPE_MENULIST,
 		};
-		for (const auto type : restrictedAssetTypes)
+
+		for (const auto type : restrictedTypes)
 		{
-			AssetHandler::OnLoad(type, Maps::LoadAssetRestrict);
+			AssetHandler::OnLoad(type, LoadAssetRestrict);
 		}
 
-		// hunk size (was 300 MiB)
-		Utils::Hook::Set<DWORD>(0x64A029, 0x24000000); // 576 MiB
-		Utils::Hook::Set<DWORD>(0x64A057, 0x24000000);
+		GSC::Script::AddFunction("GetMapList", GSCr_GetMapList);
+		GSC::Script::AddFunction("GetMapArenaInfo", GSCr_GetMapArenaInfo);
 
-		// Intercept BSP name resolving
-		Utils::Hook(0x4C5979, Maps::GetBSPName, HOOK_CALL).install()->quick();
+		if (Utils::Hook::MatchesBytes(staticModelSortJnz, sortCountJnz, sizeof(sortCountJnz)))
+		{
+			Utils::Hook::Nop(staticModelSortJnz, sizeof(sortCountJnz));
+		}
+		else
+		{
+			Logger::Error("maps: the static model sort does not read as expected, static models stay sorted\n");
+		}
 
-		// Intercept map zone loading/unloading
-		Utils::Hook(0x42C2AF, Maps::LoadMapZones, HOOK_CALL).install()->quick();
-		Utils::Hook(0x60B477, Maps::UnloadMapZones, HOOK_CALL).install()->quick();
+		if (Utils::Hook::MatchesBytes(PMem_Init_SizeArg, sizeArg, sizeof(sizeArg))
+			&& Utils::Hook::MatchesBytes(PMem_Init_SizeStore, sizeStore, sizeof(sizeStore)))
+		{
+			Utils::Hook::Set<std::uint32_t>(PMem_Init_SizeArg + 1, hunkSize);
+			Utils::Hook::Set<std::uint32_t>(PMem_Init_SizeStore + 6, hunkSize);
+		}
+		else
+		{
+			Logger::Error("maps: PMem_Init does not read as expected, the hunk stays 300 MiB\n");
+		}
 
-		// Ignore SP entities
-		Utils::Hook(0x444810, Maps::IgnoreEntityStub, HOOK_JUMP).install()->quick();
+		Scheduler::Once([]
+		{
+			Dvar::Register("isDlcInstalled_All", false, Game::DVAR_EXTERNAL | Game::DVAR_INIT, "");
 
-		// WorldData pointer replacement
-		Utils::Hook(0x4D90B6, Maps::GetWorldDataStub, HOOK_CALL).install()->quick();
-
-		// Allow loading raw suns
-		Utils::Hook(0x51B46A, Maps::LoadRawSun, HOOK_CALL).install()->quick();
-
-		// Intercept map loading for usermap initialization
-		Utils::Hook(0x6245E3, Maps::SpawnServerStub, HOOK_CALL).install()->quick();
-		Utils::Hook(0x62493E, Maps::SpawnServerStub, HOOK_CALL).install()->quick();
-		Utils::Hook(0x42CF58, Maps::LoadMapLoadscreenStub, HOOK_CALL).install()->quick();
-		Utils::Hook(0x487CDD, Maps::LoadMapLoadscreenStub, HOOK_CALL).install()->quick();
-		Utils::Hook(0x4CA3E9, Maps::LoadMapLoadscreenStub, HOOK_CALL).install()->quick();
-		Utils::Hook(0x5A9D51, Maps::LoadMapLoadscreenStub, HOOK_CALL).install()->quick();
-		Utils::Hook(0x5B34DD, Maps::LoadMapLoadscreenStub, HOOK_CALL).install()->quick();
-
-		Command::Add("delayReconnect", []()
+			for (const auto& dlc : StockDlcs())
 			{
-				Scheduler::Once([]
-					{
-						Command::Execute("closemenu popup_reconnectingtoparty", false);
-						Command::Execute("reconnect", false);
-					}, Scheduler::Pipeline::CLIENT, 10s);
+				AddDlc(dlc);
+			}
+
+			UpdateDlcStatus();
+
+			UIScript::Add("downloadDLC", [](const UIScript::Token& token)
+			{
+				const auto dlc = token.Get<int>();
+
+				Game::ShowMessageBox(Utils::String::VA("DLC %d does not exist!", dlc), "ERROR");
 			});
-
-		if (Dedicated::IsEnabled())
-		{
-			Utils::Hook(0x4A7251, Maps::LoadNewMapCommand, HOOK_CALL).install()->quick();
-		}
-
-		// Download the map before a map rotation if necessary
-		// Conflicts with Theater's SV map rotation check, but this one is safer!
-		Utils::Hook(0x5AA91C, Maps::RotateCheckStub, HOOK_CALL).install()->quick();
-
-		// Load usermap arena file
-		Utils::Hook(0x630A88, Maps::LoadArenaFileStub, HOOK_CALL).install()->quick();
-
-		// Allow hiding specific smodels
-		Utils::Hook(0x50E67C, Maps::HideModelStub, HOOK_CALL).install()->quick();
-
-		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled())
-		{
-			return;
-		}
-
-		// Client only
-		Scheduler::Loop([]
-			{
-				auto*& gameWorld = *reinterpret_cast<Game::GfxWorld**>(0x66DEE94);
-				if (!Game::CL_IsCgameInitialized() || !gameWorld || !Maps::RListSModels.get<bool>()) return;
-
-				std::map<std::string, int> models;
-				for (unsigned int i = 0; i < gameWorld->dpvs.smodelCount; ++i)
-				{
-					if (gameWorld->dpvs.smodelVisData[0][i])
-					{
-						std::string name = gameWorld->dpvs.smodelDrawInsts[i].model->name;
-
-						if (!models.contains(name)) models[name] = 1;
-						else models[name]++;
-					}
-				}
-
-				Game::Font_s* font = Game::R_RegisterFont("fonts/smallFont", 0);
-				auto height = Game::R_TextHeight(font);
-				auto scale = 0.75f;
-				float color[4] = { 0.0f, 1.0f, 0.0f, 1.0f };
-
-				unsigned int i = 0;
-				for (auto& model : models)
-				{
-					Game::R_AddCmdDrawText(Utils::String::VA("%d %s", model.second, model.first.data()), std::numeric_limits<int>::max(), font, 15.0f, (height * scale + 1) * (i++ + 1) + 15.0f, scale, scale, 0.0f, color, Game::ITEM_TEXTSTYLE_NORMAL);
-				}
-			}, Scheduler::Pipeline::RENDERER);
-	}
-
-	Maps::~Maps()
-	{
-		Maps::DlcPacks.clear();
-		Maps::DependencyList.clear();
-		Maps::CurrentMainZone.clear();
-		Maps::CurrentDependencies.clear();
+		}, Scheduler::Pipeline::MAIN);
 	}
 }

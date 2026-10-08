@@ -9,37 +9,34 @@ namespace Components
 		virtual ~Component() = default;
 
 #if defined(DEBUG)
-		virtual std::string getName()
+		virtual std::string GetName()
 		{
 			std::string name = typeid(*this).name();
-			Utils::String::Replace(name, "class Components::", "");
-			return name;
-		};
-#endif
+			const auto prefix = "class Components::"s;
+			const auto at = name.find(prefix);
 
-		// It's illegal to spawn threads in DLLMain, and apparently it causes problems if they are destroyed there as well.
-		// This method is called before DLLMain (if possible) and should to destroy threads.
-		// It's not 100% guaranteed that it's called outside DLLMain, as it depends on the game, but it's 100% guaranteed, that it is called at all.
-		virtual void preDestroy() {}
+			if (at != std::string::npos)
+			{
+				name.erase(at, prefix.length());
+			}
+
+			return name;
+		}
+#endif
 	};
 
 	class Loader
 	{
 	public:
 		static void Initialize();
-		static void Uninitialize();
-		static void PreDestroy();
-		static void PreDestroyNoPostGame();
 		static void Register(Component* component);
 
 		static bool IsPregame();
-		static bool IsPostgame();
-		static bool IsUninitializing();
 
 		template <typename T>
 		static T* GetInstance()
 		{
-			for (auto& component : Components)
+			for (auto& component : components)
 			{
 				if (typeid(*component) == typeid(T))
 				{
@@ -51,35 +48,7 @@ namespace Components
 		}
 
 	private:
-		static bool Pregame;
-		static bool Postgame;
-		static bool Uninitializing;
-		static std::vector<Component*> Components;
+		static bool pregame;
+		static std::vector<Component*> components;
 	};
 }
-
-// Priority
-#include "Modules/Command.hpp"
-#include "Modules/Dvar.hpp"
-#include "Modules/Flags.hpp"
-#include "Modules/Network.hpp"
-#include "Modules/Logger.hpp"
-#include "Modules/Singleton.hpp"
-#include "Modules/UIScript.hpp"
-#include "Modules/ZoneBuilder.hpp"
-#include "Modules/ZoneConvert.hpp"
-
-#include "Modules/AssetHandler.hpp"
-#include "Modules/Dedicated.hpp"
-#include "Modules/FileSystem.hpp"
-#include "Modules/Localization.hpp"
-#include "Modules/Maps.hpp"
-#include "Modules/Menus.hpp"
-#include "Modules/Renderer.hpp"
-#include "Modules/Scheduler.hpp"
-#include "Modules/Zones.hpp"
-#include "Modules/Rumble.hpp"
-
-#include "Modules/GSC/GSC.hpp"
-
-#include "Modules/Debug/Debugger.hpp"

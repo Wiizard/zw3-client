@@ -7,13 +7,9 @@ namespace Components
 	public:
 		ArenaLength();
 
-		static Game::newMapArena_t NewArenas[];
-		static char* NewArenaInfos[];
+		static constexpr int newArenaCount = 128;
 
-	private:
-		static void ArenaMapOffsetHook1();
-		static void ArenaMapOffsetHook2();
-		static void ArenaMapOffsetHook3();
-		static void ArenaMapOffsetHook4();
+		static Game::newMapArena_t* newArenas;
+		static char** newArenaInfos;
 	};
 }

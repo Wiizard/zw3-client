@@ -11,12 +11,11 @@ namespace Components
 		static bool Used();
 
 	private:
-		static bool Evaluated;
-		static std::string ConnectString;
+		static bool isEvaluated;
+		static std::string connectString;
 
 		static void EvaluateProtocol();
 		static bool InstallProtocol();
-
 		static void Invocation();
 	};
 }

@@ -5,13 +5,13 @@ namespace Utils
 	class Cache
 	{
 	public:
-		static const char* Urls[];
+		static const char* urls[];
 
 		static std::string GetUrl(const std::string& url, const std::string& path);
 		static std::string GetFile(const std::string& path, int timeout = 5000, const std::string& useragent = "Call of Duty: Zombie Warfare 3");
 
 	private:
-		static std::mutex CacheMutex;
-		static std::string ValidUrl;
+		static std::mutex cacheMutex;
+		static std::string validUrl;
 	};
 }

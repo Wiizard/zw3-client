@@ -1,59 +1,55 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Context.hpp"
-#include "../Device/Id.hpp"
-#include "Hid.hpp"
+#include "Controller/Context.hpp"
+#include "Controller/Device/Id.hpp"
+#include "Controller/Transport/Hid.hpp"
 
-namespace Controller
+namespace Controller::Transport
 {
-  namespace transport
-  {
-    class report_stream
-    {
-    public:
-      using producer =
-        std::function<std::optional<size_t> (std::span<std::byte>)>;
+	class ReportStream
+	{
+	public:
+		using Producer = std::function<std::optional<std::size_t>(std::span<std::byte>)>;
 
-      report_stream (const context&,
-                     device_id,
-                     hid_device&,
-                     std::chrono::nanoseconds period,
-                     size_t capacity,
-                     producer);
+		struct Cadence
+		{
+			std::chrono::nanoseconds period;
+			std::size_t capacity;
+		};
 
-      report_stream (const report_stream&) = delete;
-      report_stream& operator= (const report_stream&) = delete;
+		ReportStream(const Context& context, DeviceId device, HidDevice& hid, Cadence cadence, Producer produce);
 
-      bool
-      running () const noexcept {return running_.load (std::memory_order_acquire);}
+		ReportStream(const ReportStream&) = delete;
+		ReportStream& operator=(const ReportStream&) = delete;
 
-      bool
-      failed () const noexcept {return failed_.load (std::memory_order_acquire);}
+		bool IsRunning() const noexcept
+		{
+			return this->isRunning.load(std::memory_order_acquire);
+		}
 
-      std::string
-      status () const;
+		bool HasFailed() const noexcept
+		{
+			return this->hasFailed.load(std::memory_order_acquire);
+		}
 
-    private:
-      void
-      run (std::stop_token, context, device_id) noexcept;
+		std::string Status() const;
 
-      void
-      note (std::string) const;
+	private:
+		void Run(const std::stop_token& stop, const Context& context, DeviceId device);
+		void Note(std::string text) const;
 
-      hid_device& hid_;
-      producer produce_;
-      std::chrono::nanoseconds period_;
-      size_t capacity_;
+		HidDevice& hid;
+		Producer produce;
+		Cadence cadence;
 
-      std::atomic<bool> running_ {false};
-      std::atomic<bool> failed_ {false};
+		std::atomic<bool> isRunning{ false };
+		std::atomic<bool> hasFailed{ false };
 
-      mutable std::mutex status_mutex_;
-      mutable std::string status_ {"not started"};
+		mutable std::mutex statusMutex;
+		mutable std::string status = "not started";
 
-      std::jthread thread_;
-    };
-  }
+		std::jthread thread;
+	};
 }

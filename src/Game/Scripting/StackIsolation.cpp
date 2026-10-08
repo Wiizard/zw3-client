@@ -1,25 +1,27 @@
+#include "STDInclude.hpp"
 
-namespace Scripting
+namespace Game::Scripting
 {
 	StackIsolation::StackIsolation()
 	{
-		this->inParamCount_ = Game::scrVmPub->inparamcount;
-		this->outParamCount_ = Game::scrVmPub->outparamcount;
-		this->top_ = Game::scrVmPub->top;
-		this->maxStack_ = Game::scrVmPub->maxStack;
+		this->inParamCount = *scrVmPub_inparamcount;
+		this->outParamCount = *scrVmPub_outparamcount;
+		this->top = *scrVmPub_top;
+		this->maxStack = *scrVmPub_maxstack;
 
-		Game::scrVmPub->top = this->stack_;
-		Game::scrVmPub->maxStack = &this->stack_[ARRAYSIZE(this->stack_) - 1];
-		Game::scrVmPub->inparamcount = 0;
-		Game::scrVmPub->outparamcount = 0;
+		*scrVmPub_top = this->stack;
+		*scrVmPub_maxstack = &this->stack[std::size(this->stack) - 1];
+		*scrVmPub_inparamcount = 0;
+		*scrVmPub_outparamcount = 0;
 	}
 
 	StackIsolation::~StackIsolation()
 	{
-		Game::Scr_ClearOutParams();
-		Game::scrVmPub->inparamcount = this->inParamCount_;
-		Game::scrVmPub->outparamcount = this->outParamCount_;
-		Game::scrVmPub->top = this->top_;
-		Game::scrVmPub->maxStack = this->maxStack_;
+		Scr_ClearOutParams();
+
+		*scrVmPub_inparamcount = this->inParamCount;
+		*scrVmPub_outparamcount = this->outParamCount;
+		*scrVmPub_top = this->top;
+		*scrVmPub_maxstack = this->maxStack;
 	}
 }

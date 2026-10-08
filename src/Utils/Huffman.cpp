@@ -1,3 +1,5 @@
+#include "STDInclude.hpp"
+
 #include "HuffmanTree.hpp"
 
 namespace Utils::Huffman
@@ -11,22 +13,26 @@ namespace Utils::Huffman
 		for (int inputByteCount = 0; inputByteCount < inputSize && outputBitCount < outputSize * 8; ++inputByteCount)
 		{
 			const auto byte = input[inputByteCount];
-			const auto nodeCount = compressionData[byte].nodeData.front(); // get bit count
+			const auto nodeCount = compressionData[byte].nodeData.front();
 
 			for (unsigned int nodeIndex = 1; nodeIndex <= nodeCount; ++nodeIndex)
 			{
-				if ((outputBitCount & 7) == 0) // beginning of a new byte
+				const auto bit = static_cast<unsigned char>(
+					compressionData[byte].nodeData[nodeIndex] << (outputBitCount & 7));
+
+				if ((outputBitCount & 7) == 0)
 				{
-					output[outputBitCount / 8] = static_cast<unsigned char>(compressionData[byte].nodeData[nodeIndex] << (outputBitCount & 7));
+					output[outputBitCount / 8] = bit;
 				}
 				else
 				{
-					output[outputBitCount / 8] |= static_cast<unsigned char>(compressionData[byte].nodeData[nodeIndex] << (outputBitCount & 7));
+					output[outputBitCount / 8] |= bit;
 				}
 
-				if (++outputBitCount >= outputSize * 8)
+				++outputBitCount;
+
+				if (outputBitCount >= outputSize * 8)
 				{
-					// some symbols take more than 8 bits to (de)compress, so the check in the outer loop isn't adequate to prevent OOB in the inner loop
 					break;
 				}
 			}
@@ -41,18 +47,20 @@ namespace Utils::Huffman
 
 		for (int inputBitCount = 0; inputBitCount < inputSize * 8 && outputByteCount < outputSize; ++outputByteCount)
 		{
-			[[maybe_unused]] const auto orgInputBitCount = inputBitCount;
 			auto nodeIndex = decompressionData.size() - 1;
 
 			do
 			{
-				const bool rightNode = (input[inputBitCount / 8] >> (inputBitCount & 7)) & 1;
-				nodeIndex = (rightNode) ? decompressionData[nodeIndex % 256].right : decompressionData[nodeIndex % 256].left;
+				const bool isRightNode = ((input[inputBitCount / 8] >> (inputBitCount & 7)) & 1) != 0;
 
-				assert((inputBitCount + 1 - orgInputBitCount < 12 && "No symbol should take more than 11 bits to decompress!"));
-				if (++inputBitCount >= inputSize * 8)
+				nodeIndex = isRightNode
+					? decompressionData[nodeIndex % 256].right
+					: decompressionData[nodeIndex % 256].left;
+
+				++inputBitCount;
+
+				if (inputBitCount >= inputSize * 8)
 				{
-					// some symbols take more than 8 bits to (de)compress, so the check in the outer loop isn't adequate to prevent OOB in the inner loop
 					break;
 				}
 			}

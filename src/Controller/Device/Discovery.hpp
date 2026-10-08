@@ -1,55 +1,46 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Clock.hpp"
-#include "../Context.hpp"
-#include "Registry.hpp"
-#include "../Transport/XInputModule.hpp"
-#include "../Transport/DeviceNotify.hpp"
+#include "Controller/Clock.hpp"
+#include "Controller/Context.hpp"
+#include "Controller/Device/Registry.hpp"
+#include "Controller/Transport/DeviceNotify.hpp"
+#include "Controller/Transport/XInputModule.hpp"
 
 namespace Controller
 {
-  class discovery
-  {
-  public:
-    discovery (const context&, registry&, const transport::xinput_module&);
+	class Discovery
+	{
+	public:
+		Discovery(const Context& context, Registry& registry, const Transport::XInputModule& xinput);
 
-    discovery (const discovery&) = delete;
-    discovery& operator= (const discovery&) = delete;
+		Discovery(const Discovery&) = delete;
+		Discovery& operator=(const Discovery&) = delete;
 
-    void
-    scan ();
+		void Scan();
 
-  private:
-    void
-    scan_now ();
+	private:
+		void ScanNow();
+		void Run(const std::stop_token& stop);
 
-    void
-    run (std::stop_token) noexcept;
+		void ScanXInput(std::vector<TransportBinding>& seen);
+		void ScanHid(std::vector<TransportBinding>& seen);
+		void RetireUnseen(const std::vector<TransportBinding>& seen);
 
-    void
-    scan_xinput (std::vector<transport_binding>& seen);
+		const Context& context;
+		Registry& registry;
+		const Transport::XInputModule& xinput;
 
-    void
-    scan_hid (std::vector<transport_binding>& seen);
+		Transport::DeviceNotifier notifier;
 
-    void
-    retire_unseen (const std::vector<transport_binding>& seen);
+		bool hasScanned = false;
+		Timestamp lastScan{};
 
-    const context& ctx_;
-    registry& registry_;
-    const transport::xinput_module& xinput_;
+		std::vector<std::wstring> unbound;
 
-    transport::device_notifier notifier_;
+		std::atomic<bool> isPending{ false };
 
-    bool scanned_ {false};
-    timestamp last_scan_ {};
-
-    std::vector<std::wstring> unbound_ {};
-
-    std::atomic<bool> pending_ {false};
-
-    std::jthread thread_;
-  };
+		std::jthread thread;
+	};
 }

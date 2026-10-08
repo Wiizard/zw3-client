@@ -1,197 +1,147 @@
-#include <Components/Modules/Party.hpp>
+#include "STDInclude.hpp"
 
-STEAM_IGNORE_WARNINGS_START
+#include "Steam/Steam.hpp"
+#include "SteamMatchmaking.hpp"
+#include "SteamUser.hpp"
+
+#include "Components/Modules/Party.hpp"
 
 namespace Steam
 {
-	int Matchmaking::GetFavoriteGameCount()
+	void* const Matchmaking::vtable[] =
 	{
-		return 0;
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(CreateLobby),
+		reinterpret_cast<void*>(JoinLobby),
+		reinterpret_cast<void*>(LeaveLobby),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(GetNumLobbyMembers),
+		reinterpret_cast<void*>(GetLobbyMemberByIndex),
+		reinterpret_cast<void*>(GetLobbyData),
+		reinterpret_cast<void*>(SetLobbyData),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(SetLobbyGameServer),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(SetLobbyMemberLimit),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(SetLobbyType),
+		reinterpret_cast<void*>(UnusedSlot),
+		reinterpret_cast<void*>(GetLobbyOwner),
+		reinterpret_cast<void*>(SetLobbyOwner),
+	};
+
+	Interface Matchmaking::object = { Matchmaking::vtable };
+
+	Interface* Matchmaking::Get()
+	{
+		static_assert(std::size(vtable) == 37);
+		return &object;
 	}
 
-	bool Matchmaking::GetFavoriteGame(int iGame, unsigned int *pnAppID, unsigned int *pnIP, unsigned short *pnConnPort, unsigned short *pnQueryPort, unsigned int *punFlags, unsigned int *pRTime32LastPlayedOnServer)
+	std::uint64_t Matchmaking::CreateLobby(Interface* self, [[maybe_unused]] int lobbyType, [[maybe_unused]] int maxMembers)
 	{
-		return false;
+		const std::uint64_t call = Callbacks::RegisterCall();
+
+		SteamID lobby;
+		lobby.accountID = 1337132;
+		lobby.universe = 1;
+		lobby.accountType = 8;
+		lobby.accountInstance = 0x40000;
+
+		auto* const created = ::Utils::Memory::Allocate<LobbyCreated>();
+		created->m_eResult = 1;
+		created->m_ulSteamIDLobby = lobby;
+
+		Callbacks::ReturnCall(created, sizeof(LobbyCreated), LobbyCreated::CallbackID, call);
+
+		JoinLobby(self, lobby);
+
+		return call;
 	}
 
-	int Matchmaking::AddFavoriteGame(unsigned int nAppID, unsigned int nIP, unsigned short nConnPort, unsigned short nQueryPort, unsigned int unFlags, unsigned int rTime32LastPlayedOnServer)
+	std::uint64_t Matchmaking::JoinLobby([[maybe_unused]] Interface* self, SteamID lobby)
 	{
-		return 0;
+		const std::uint64_t call = Callbacks::RegisterCall();
+
+		auto* const entered = ::Utils::Memory::Allocate<LobbyEnter>();
+		entered->m_bLocked = false;
+		entered->m_EChatRoomEnterResponse = 1;
+		entered->m_rgfChatPermissions = 0xFFFFFFFF;
+		entered->m_ulSteamIDLobby = lobby;
+
+		Callbacks::ReturnCall(entered, sizeof(LobbyEnter), LobbyEnter::CallbackID, call);
+
+		return call;
 	}
 
-	bool Matchmaking::RemoveFavoriteGame(unsigned int nAppID, unsigned int nIP, unsigned short nConnPort, unsigned short nQueryPort, unsigned int unFlags)
+	void Matchmaking::LeaveLobby([[maybe_unused]] Interface* self, SteamID lobby)
 	{
-		return false;
+		Components::Party::RemoveLobby(lobby);
 	}
 
-	unsigned __int64 Matchmaking::RequestLobbyList()
-	{
-		return 0;
-	}
-
-	void Matchmaking::AddRequestLobbyListStringFilter(const char *pchKeyToMatch, const char *pchValueToMatch, int eComparisonType)
-	{
-	}
-
-	void Matchmaking::AddRequestLobbyListNumericalFilter(const char *pchKeyToMatch, int nValueToMatch, int eComparisonType)
-	{
-	}
-
-	void Matchmaking::AddRequestLobbyListNearValueFilter(const char *pchKeyToMatch, int nValueToBeCloseTo)
-	{
-	}
-
-	void Matchmaking::AddRequestLobbyListFilterSlotsAvailable(int nSlotsAvailable)
-	{
-	}
-
-	SteamID Matchmaking::GetLobbyByIndex(int iLobby)
-	{
-		return SteamID();
-	}
-
-	unsigned __int64 Matchmaking::CreateLobby(int eLobbyType, int cMaxMembers)
-	{
-		uint64_t result = Callbacks::RegisterCall();
-		LobbyCreated* retvals = ::Utils::Memory::Allocate<LobbyCreated>();
-		SteamID id;
-
-		id.accountID = 1337132;
-		id.universe = 1;
-		id.accountType = 8;
-		id.accountInstance = 0x40000;
-
-		retvals->m_eResult = 1;
-		retvals->m_ulSteamIDLobby = id;
-
-		Callbacks::ReturnCall(retvals, sizeof(LobbyCreated), LobbyCreated::CallbackID, result);
-
-		Matchmaking::JoinLobby(id);
-
-		return result;
-	}
-
-	unsigned __int64 Matchmaking::JoinLobby(SteamID steamIDLobby)
-	{
-		uint64_t result = Callbacks::RegisterCall();
-		LobbyEnter* retvals = ::Utils::Memory::Allocate<LobbyEnter>();
-		retvals->m_bLocked = false;
-		retvals->m_EChatRoomEnterResponse = 1;
-		retvals->m_rgfChatPermissions = 0xFFFFFFFF;
-		retvals->m_ulSteamIDLobby = steamIDLobby;
-
-		Callbacks::ReturnCall(retvals, sizeof(LobbyEnter), LobbyEnter::CallbackID, result);
-
-		return result;
-	}
-
-	void Matchmaking::LeaveLobby(SteamID steamIDLobby)
-	{
-		Components::Party::RemoveLobby(steamIDLobby);
-	}
-
-	bool Matchmaking::InviteUserToLobby(SteamID steamIDLobby, SteamID steamIDInvitee)
-	{
-		return true;
-	}
-
-	int Matchmaking::GetNumLobbyMembers(SteamID steamIDLobby)
+	int Matchmaking::GetNumLobbyMembers([[maybe_unused]] Interface* self, [[maybe_unused]] SteamID lobby)
 	{
 		return 1;
 	}
 
-	SteamID Matchmaking::GetLobbyMemberByIndex(SteamID steamIDLobby, int iMember)
+	SteamID* Matchmaking::GetLobbyMemberByIndex([[maybe_unused]] Interface* self, SteamID* result, [[maybe_unused]] SteamID lobby, [[maybe_unused]] int member)
 	{
-		return SteamUser()->GetSteamID();
+		*result = User::LocalId();
+		return result;
 	}
 
-	const char *Matchmaking::GetLobbyData(SteamID steamIDLobby, const char *pchKey)
+	const char* Matchmaking::GetLobbyData([[maybe_unused]] Interface* self, SteamID lobby, const char* key)
 	{
-		return Components::Party::GetLobbyInfo(steamIDLobby, pchKey);
+		return Components::Party::GetLobbyInfo(lobby, key);
 	}
 
-	bool Matchmaking::SetLobbyData(SteamID steamIDLobby, const char *pchKey, const char *pchValue)
-	{
-		return true;
-	}
-
-	int Matchmaking::GetLobbyDataCount(SteamID steamIDLobby)
-	{
-		return 0;
-	}
-
-	bool Matchmaking::GetLobbyDataByIndex(SteamID steamIDLobby, int iLobbyData, char *pchKey, int cchKeyBufferSize, char *pchValue, int cchValueBufferSize)
-	{
-		return false;
-	}
-
-	bool Matchmaking::DeleteLobbyData(SteamID steamIDLobby, const char *pchKey)
-	{
-		return false;
-	}
-
-	const char *Matchmaking::GetLobbyMemberData(SteamID steamIDLobby, SteamID steamIDUser, const char *pchKey)
-	{
-		return "";
-	}
-
-	void Matchmaking::SetLobbyMemberData(SteamID steamIDLobby, const char *pchKey, const char *pchValue)
-	{
-	}
-
-	bool Matchmaking::SendLobbyChatMsg(SteamID steamIDLobby, const void *pvMsgBody, int cubMsgBody)
+	bool Matchmaking::SetLobbyData([[maybe_unused]] Interface* self, [[maybe_unused]] SteamID lobby, [[maybe_unused]] const char* key, [[maybe_unused]] const char* value)
 	{
 		return true;
 	}
 
-	int Matchmaking::GetLobbyChatEntry(SteamID steamIDLobby, int iChatID, SteamID *pSteamIDUser, void *pvData, int cubData, int *peChatEntryType)
-	{
-		return 0;
-	}
-
-	bool Matchmaking::RequestLobbyData(SteamID steamIDLobby)
-	{
-		return false;
-	}
-
-	void Matchmaking::SetLobbyGameServer(SteamID steamIDLobby, unsigned int unGameServerIP, unsigned short unGameServerPort, SteamID steamIDGameServer)
+	void Matchmaking::SetLobbyGameServer([[maybe_unused]] Interface* self, [[maybe_unused]] SteamID lobby, [[maybe_unused]] unsigned int serverIp,
+		[[maybe_unused]] unsigned short serverPort, [[maybe_unused]] SteamID server)
 	{
 	}
 
-	bool Matchmaking::GetLobbyGameServer(SteamID steamIDLobby, unsigned int *punGameServerIP, unsigned short *punGameServerPort, SteamID *psteamIDGameServer)
-	{
-		return false;
-	}
-
-	bool Matchmaking::SetLobbyMemberLimit(SteamID steamIDLobby, int cMaxMembers)
+	bool Matchmaking::SetLobbyMemberLimit([[maybe_unused]] Interface* self, [[maybe_unused]] SteamID lobby, [[maybe_unused]] int maxMembers)
 	{
 		return true;
 	}
 
-	int Matchmaking::GetLobbyMemberLimit(SteamID steamIDLobby)
-	{
-		return 0;
-	}
-
-	bool Matchmaking::SetLobbyType(SteamID steamIDLobby, int eLobbyType)
+	bool Matchmaking::SetLobbyType([[maybe_unused]] Interface* self, [[maybe_unused]] SteamID lobby, [[maybe_unused]] int lobbyType)
 	{
 		return true;
 	}
 
-	bool Matchmaking::SetLobbyJoinable(SteamID steamIDLobby, bool bLobbyJoinable)
+	SteamID* Matchmaking::GetLobbyOwner([[maybe_unused]] Interface* self, SteamID* result, [[maybe_unused]] SteamID lobby)
 	{
-		return true;
+		*result = User::LocalId();
+		return result;
 	}
 
-	SteamID Matchmaking::GetLobbyOwner(SteamID steamIDLobby)
-	{
-		return SteamUser()->GetSteamID();
-	}
-
-	bool Matchmaking::SetLobbyOwner(SteamID steamIDLobby, SteamID steamIDNewOwner)
+	bool Matchmaking::SetLobbyOwner([[maybe_unused]] Interface* self, [[maybe_unused]] SteamID lobby, [[maybe_unused]] SteamID newOwner)
 	{
 		return true;
 	}
 }
-
-STEAM_IGNORE_WARNINGS_END

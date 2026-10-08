@@ -1,80 +1,66 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "Effect.hpp"
+#include "Controller/Haptic/Effect.hpp"
 
-namespace Controller
+namespace Controller::Haptic
 {
-  namespace haptic
-  {
-    class mixer
-    {
-    public:
-      static constexpr size_t voices {12};
+	class Mixer
+	{
+	public:
+		static constexpr std::size_t voiceCount = 12;
 
-      mixer () = default;
+		Mixer() = default;
 
-      mixer (const mixer&) = delete;
-      mixer& operator= (const mixer&) = delete;
+		Mixer(const Mixer&) = delete;
+		Mixer& operator=(const Mixer&) = delete;
 
-      bool
-      play (const effect&) noexcept;
+		bool TryPlay(const Effect& effect) noexcept;
+		void Stop(std::uint32_t tag) noexcept;
+		void SetRumble(float lowFrequency, float highFrequency) noexcept;
 
-      void
-      stop (uint32_t tag) noexcept;
+		void Render(std::span<Frame> out, std::uint32_t rate) noexcept;
 
-      void
-      stop_all () noexcept;
+		std::uint64_t Dropped() const noexcept
+		{
+			return this->dropped.load(std::memory_order_relaxed);
+		}
 
-      void
-      set_rumble (float low_frequency, float high_frequency) noexcept;
+	private:
+		enum class VoiceState : std::uint8_t
+		{
+			Free,
+			Filling,
+			Ready,
+			Playing,
+		};
 
-      void
-      render (std::span<frame>, uint32_t rate) noexcept;
+		struct Voice
+		{
+			std::atomic<VoiceState> phase{ VoiceState::Free };
+			std::atomic<bool> isStopping{ false };
 
-      uint64_t
-      dropped () const noexcept {return dropped_.load (std::memory_order_relaxed);}
+			Effect effect{};
 
-    private:
-      enum class state : uint8_t
-      {
-        free,
-        filling,
-        ready,
-        playing,
-      };
+			float elapsed = 0.0f;
+			float deepPhase = 0.0f;
+			float crispPhase = 0.0f;
+		};
 
-      struct voice
-      {
-        std::atomic<state> phase {state::free};
+		static bool RenderVoice(Voice& voice, std::span<Frame> out, float step) noexcept;
+		void RenderRumble(std::span<Frame> out, float step, float scale) noexcept;
 
-        std::atomic<bool> stopping {false};
+		std::array<Voice, voiceCount> voices{};
 
-        effect what {};
+		std::atomic<float> rumbleLow{ 0.0f };
+		std::atomic<float> rumbleHigh{ 0.0f };
 
-        float elapsed {0.0f};
-        float deep_phase {0.0f};
-        float crisp_phase {0.0f};
-      };
+		float rumbleLowLevel = 0.0f;
+		float rumbleHighLevel = 0.0f;
+		float rumbleLowPhase = 0.0f;
+		float rumbleHighPhase = 0.0f;
 
-      bool
-      render_voice (voice&, std::span<frame>, float step) noexcept;
-
-      void
-      render_rumble (std::span<frame>, float step, float scale) noexcept;
-
-      std::array<voice, voices> voices_ {};
-
-      std::atomic<float> rumble_low_ {0.0f};
-      std::atomic<float> rumble_high_ {0.0f};
-
-      float rumble_low_level_ {0.0f};
-      float rumble_high_level_ {0.0f};
-      float rumble_low_phase_ {0.0f};
-      float rumble_high_phase_ {0.0f};
-
-      std::atomic<uint64_t> dropped_ {0};
-    };
-  }
+		std::atomic<std::uint64_t> dropped{ 0 };
+	};
 }

@@ -6,151 +6,59 @@ namespace Components
 	{
 	public:
 		Logger();
-		~Logger();
 
-		static bool IsConsoleReady();
-
-		static void Print_Stub(int channel, const char* message, ...);
-
-		static void PipeOutput(void(*callback)(const std::string&));
-
-		static void PrintInternal(Game::conChannel_t channel, const std::string_view& fmt, std::format_args&& args);
-		static void ErrorInternal(Game::errorParm_t error, const std::string_view& fmt, std::format_args&& args);
-		static void PrintErrorInternal(Game::conChannel_t channel, const std::string_view& fmt, std::format_args&& args);
-		static void WarningInternal(Game::conChannel_t channel, const std::string_view& fmt, std::format_args&& args);
-		static void PrintFail2BanInternal(const std::string_view& fmt, std::format_args&& args);
-		static void DebugInternal(const std::string_view& fmt, std::format_args&& args, const std::source_location& loc);
-
-		static void Print(const std::string_view& fmt)
+		static void Print(std::string_view format, auto&&... args)
 		{
-			PrintInternal(Game::CON_CHANNEL_DONT_FILTER, fmt, std::make_format_args());
+			Write(Utils::String::Format(format, std::forward<decltype(args)>(args)...));
 		}
 
-		static void Print(Game::conChannel_t channel, const std::string_view& fmt)
+		static void Debug([[maybe_unused]] std::string_view format, [[maybe_unused]] auto&&... args)
 		{
-			PrintInternal(channel, fmt, std::make_format_args());
-		}
-
-		template <typename... Args>
-		static void Print(const std::string_view& fmt, Args&&... args)
-		{
-			(Utils::String::SanitizeFormatArgs(args), ...);
-			PrintInternal(Game::CON_CHANNEL_DONT_FILTER, fmt, std::make_format_args(args...));
-		}
-
-		template <typename... Args>
-		static void Print(Game::conChannel_t channel, const std::string_view& fmt, Args&&... args)
-		{
-			(Utils::String::SanitizeFormatArgs(args), ...);
-			PrintInternal(channel, fmt, std::make_format_args(args...));
-		}
-
-		static void Error(Game::errorParm_t error, const std::string_view& fmt)
-		{
-			ErrorInternal(error, fmt, std::make_format_args());
-		}
-
-		template <typename... Args>
-		static void Error(Game::errorParm_t error, const std::string_view& fmt, Args&&... args)
-		{
-			(Utils::String::SanitizeFormatArgs(args), ...);
-			ErrorInternal(error, fmt, std::make_format_args(args...));
-		}
-
-		static void Warning(Game::conChannel_t channel, const std::string_view& fmt)
-		{
-			WarningInternal(channel, fmt, std::make_format_args());
-		}
-
-		template <typename... Args>
-		static void Warning(Game::conChannel_t channel, const std::string_view& fmt, Args&&... args)
-		{
-			(Utils::String::SanitizeFormatArgs(args), ...);
-			WarningInternal(channel, fmt, std::make_format_args(args...));
-		}
-
-		static void PrintError(Game::conChannel_t channel, const std::string_view& fmt)
-		{
-			PrintErrorInternal(channel, fmt, std::make_format_args());
-		}
-
-		template <typename... Args>
-		static void PrintError(Game::conChannel_t channel, const std::string_view& fmt, Args&&... args)
-		{
-			(Utils::String::SanitizeFormatArgs(args), ...);
-			PrintErrorInternal(channel, fmt, std::make_format_args(args...));
-		}
-
-		static void PrintFail2Ban(const std::string_view& fmt)
-		{
-			PrintFail2BanInternal(fmt, std::make_format_args());
-		}
-
-		template <typename... Args>
-		static void PrintFail2Ban(const std::string_view& fmt, Args&&... args)
-		{
-			(Utils::String::SanitizeFormatArgs(args), ...);
-			PrintFail2BanInternal(fmt, std::make_format_args(args...));
-		}
-
-		struct FormatWithLocation
-		{
-			std::string_view format;
-			std::source_location location;
-
-			FormatWithLocation(const std::string_view& fmt, std::source_location loc = std::source_location::current())
-				: format(fmt)
-				, location(std::move(loc))
-			{
-			}
-
-			FormatWithLocation(const char* fmt, std::source_location loc = std::source_location::current())
-				: format(fmt)
-				, location(std::move(loc))
-			{
-			}
-		};
-
-		template <typename... Args>
-		static void Debug([[maybe_unused]] const FormatWithLocation& f, [[maybe_unused]] const Args&... args)
-		{
-#ifdef _DEBUG
-			(Utils::String::SanitizeFormatArgs(args), ...);
-			DebugInternal(f.format, std::make_format_args(args...), f.location);
+#if defined(DEBUG)
+			Write(Utils::String::Format(format, std::forward<decltype(args)>(args)...), "^5debug");
 #endif
 		}
 
-	private:
-		static std::mutex MessageMutex;
-		static std::vector<std::string> MessageQueue;
+		static void Warning(std::string_view format, auto&&... args)
+		{
+			Write(Utils::String::Format(format, std::forward<decltype(args)>(args)...), "^3warning");
+		}
 
-		static std::recursive_mutex LoggingMutex;
-		static std::vector<Network::Address> LoggingAddresses[2];
+		static void Error(std::string_view format, auto&&... args)
+		{
+			Write(Utils::String::Format(format, std::forward<decltype(args)>(args)...), "^1error");
+		}
 
-		static Dvar::Var IW4x_one_log;
-		static Dvar::Var IW4x_fail2ban_location;
+		[[noreturn]] static void Fatal(std::string_view format, auto&&... args)
+		{
+			const auto* const message = Utils::String::Format(format, std::forward<decltype(args)>(args)...);
+			Write(message, "^1fatal");
+			Game::Com_Error(1, "%s", message);
+			std::terminate();
+		}
 
-		static void(*PipeCallback)(const std::string&);
+		static void PrintFail2Ban(std::string_view format, auto&&... args)
+		{
+			WriteFail2Ban(Utils::String::Format(format, std::forward<decltype(args)>(args)...));
+		}
 
-		static void MessagePrint(int channel, const std::string& msg);
+		static void SetLogFile(const std::string& file);
 
-		static void Frame();
-
-		static void G_LogPrintf_Hk(const char* fmt, ...);
-		static void PrintMessage_Stub();
-		static void PrintMessagePipe(const char* data);
-		static void EnqueueMessage(const std::string& message);
-
-		static void BuildOSPath_Stub();
-		static void RedirectOSPath(const char* file, char* folder);
+		static void PipeOutput(void(*callback)(const std::string&));
 
 		static void NetworkLog(const char* data, bool gLog);
 
-		static void LSP_LogString_Stub(int localControllerIndex, const char* string);
-		static void LSP_LogStringAboutUser_Stub(int localControllerIndex, std::uint64_t xuid, const char* string);
+	private:
+		static std::string logFile;
+		static std::mutex writeMutex;
+		static void(*pipeCallback)(const std::string&);
+		static Game::dvar_t* iw4x_fail2ban_location;
 
+		static void Write(const char* message, const char* prefix = nullptr);
+		static void WriteFail2Ban(std::string message);
+
+		static void FlushNetworkQueue();
+		static void G_LogPrintf_Hk(const char* fmt, ...);
 		static void AddServerCommands();
-
-		static void Com_OpenLogFile_Stub();
 	};
 }

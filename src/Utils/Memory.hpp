@@ -10,182 +10,156 @@ namespace Utils
 		public:
 			typedef void(*FreeCallback)(void*);
 
-			Allocator()
-			{
-				this->pool.clear();
-				this->refMemory.clear();
-			}
+			Allocator() = default;
+
 			~Allocator()
 			{
-				this->clear();
+				this->Clear();
 			}
 
-			// Opt in for workloads with many individual frees (e.g. UI parsing).
-			// Other allocators retain their existing compact vector bookkeeping.
-			void enableIndexedTracking()
-			{
-				std::lock_guard _(this->mutex);
-				this->indexedPool.insert(this->pool.begin(), this->pool.end());
-				this->pool.clear();
-				this->indexedTracking = true;
-			}
-
-			void clear()
+			void Clear()
 			{
 				std::lock_guard _(this->mutex);
 
-				for (auto i = this->refMemory.begin(); i != this->refMemory.end(); ++i)
+				for (const auto& [memory, callback] : this->referenced)
 				{
-					if (i->first && i->second)
+					if (memory && callback)
 					{
-						i->second(i->first);
+						callback(memory);
 					}
 				}
 
-				this->refMemory.clear();
+				this->referenced.clear();
 
-				for (const auto& data : this->pool)
+				for (auto* const data : this->pool)
 				{
-					Free(data);
+					Memory::Free(data);
 				}
 
 				this->pool.clear();
-				for (const auto& data : this->indexedPool)
-				{
-					Free(data);
-				}
-				this->indexedPool.clear();
 			}
 
-			void free(void* data)
+			void Free(void* data)
 			{
 				std::lock_guard _(this->mutex);
 
-				auto i = this->refMemory.find(data);
-				if (i != this->refMemory.end())
+				const auto reference = this->referenced.find(data);
+
+				if (reference != this->referenced.end())
 				{
-					i->second(i->first);
-					this->refMemory.erase(i);
+					reference->second(reference->first);
+					this->referenced.erase(reference);
 				}
 
-				if (this->indexedTracking)
-				{
-					if (this->indexedPool.erase(data))
-					{
-						Free(data);
-					}
-					return;
-				}
+				const auto pooled = std::find(this->pool.begin(), this->pool.end(), data);
 
-				auto j = std::find(this->pool.begin(), this->pool.end(), data);
-				if (j != this->pool.end())
+				if (pooled != this->pool.end())
 				{
-					Free(data);
-					this->pool.erase(j);
+					Memory::Free(data);
+					this->pool.erase(pooled);
 				}
 			}
 
-			void free(const void* data)
+			void Free(const void* data)
 			{
-				this->free(const_cast<void*>(data));
+				this->Free(const_cast<void*>(data));
 			}
 
-			void reference(void* memory, FreeCallback callback)
+			void Reference(void* memory, FreeCallback callback)
 			{
 				std::lock_guard _(this->mutex);
 
-				this->refMemory[memory] = callback;
+				this->referenced[memory] = callback;
 			}
 
-			void* allocate(std::size_t length)
+			void* Allocate(std::size_t length)
 			{
 				std::lock_guard _(this->mutex);
 
-				void* data = Allocate(length);
-				this->track(data);
+				void* const data = Memory::Allocate(length);
+				this->pool.push_back(data);
+
 				return data;
 			}
 
-			template <typename T> T* allocate()
+			template <typename T>
+			T* Allocate()
 			{
-				return this->allocateArray<T>(1);
+				return this->AllocateArray<T>(1);
 			}
 
-			template <typename T> T* allocateArray(std::size_t count = 1)
+			template <typename T>
+			T* AllocateArray(std::size_t count = 1)
 			{
-				return static_cast<T*>(this->allocate(count * sizeof(T)));
+				return static_cast<T*>(this->Allocate(count * sizeof(T)));
 			}
 
-			bool empty() const
+			bool IsEmpty() const
 			{
-				return (this->pool.empty() && this->indexedPool.empty() && this->refMemory.empty());
+				return this->pool.empty() && this->referenced.empty();
 			}
 
-			char* duplicateString(const std::string& string)
+			char* DuplicateString(const std::string& string)
 			{
 				std::lock_guard _(this->mutex);
 
-				char* data = DuplicateString(string);
-				this->track(data);
+				char* const data = Memory::DuplicateString(string);
+				this->pool.push_back(data);
+
 				return data;
 			}
 
-			bool isPointerMapped(void* ptr) const
+			bool IsPointerMapped(void* pointer) const
 			{
-				return this->ptrMap.contains(ptr);
+				return this->pointerMap.contains(pointer);
 			}
 
-			template <typename T> T* getPointer(void* oldPtr)
+			template <typename T>
+			T* GetPointer(void* oldPointer)
 			{
-				if (this->isPointerMapped(oldPtr))
+				const auto mapped = this->pointerMap.find(oldPointer);
+
+				if (mapped == this->pointerMap.end())
 				{
-					return static_cast<T*>(this->ptrMap[oldPtr]);
+					return nullptr;
 				}
 
-				return nullptr;
+				return static_cast<T*>(mapped->second);
 			}
 
-			void mapPointer(void* oldPtr, void* newPtr)
+			void MapPointer(void* oldPointer, void* newPointer)
 			{
-				this->ptrMap[oldPtr] = newPtr;
+				this->pointerMap[oldPointer] = newPointer;
 			}
 
 		private:
-			void track(void* data)
-			{
-				if (this->indexedTracking)
-				{
-					this->indexedPool.insert(data);
-				}
-				else
-				{
-					this->pool.push_back(data);
-				}
-			}
-
 			std::mutex mutex;
 			std::vector<void*> pool;
-			std::unordered_set<void*> indexedPool;
-			bool indexedTracking = false;
-			std::unordered_map<void*, void*> ptrMap;
-			std::unordered_map<void*, FreeCallback> refMemory;
+			std::unordered_map<void*, void*> pointerMap;
+			std::unordered_map<void*, FreeCallback> referenced;
 		};
 
 		static void* AllocateAlign(std::size_t length, std::size_t alignment);
 		static void* Allocate(std::size_t length);
-		template <typename T> static T* Allocate()
+
+		template <typename T>
+		static T* Allocate()
 		{
 			return AllocateArray<T>(1);
 		}
-		template <typename T> static T* AllocateArray(std::size_t count = 1)
+
+		template <typename T>
+		static T* AllocateArray(std::size_t count = 1)
 		{
 			return static_cast<T*>(Allocate(count * sizeof(T)));
 		}
 
-		template <typename T> static T* Duplicate(T* original)
+		template <typename T>
+		static T* Duplicate(T* original)
 		{
-			T* data = Memory::Allocate<T>();
+			T* const data = Allocate<T>();
 			std::memcpy(data, original, sizeof(T));
+
 			return data;
 		}
 
@@ -197,14 +171,14 @@ namespace Utils
 		static void FreeAlign(void* data);
 		static void FreeAlign(const void* data);
 
-		static bool IsSet(void* mem, char chr, std::size_t length);
+		static bool IsSet(void* memory, char value, std::size_t length);
 
-		static bool IsBadReadPtr(const void* ptr);
-		static bool IsBadCodePtr(const void* ptr);
+		static bool IsBadReadPtr(const void* pointer);
+		static bool IsBadCodePtr(const void* pointer);
 
 		static Allocator* GetAllocator();
 
 	private:
-		static Allocator MemAllocator;
+		static Allocator allocator;
 	};
 }

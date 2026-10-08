@@ -1,17 +1,16 @@
+#include "STDInclude.hpp"
+
 #include "Debug.hpp"
 #include "Events.hpp"
-#include "TextRenderer.hpp"
-
-#include "Game/Engine/ScopedCriticalSection.hpp"
+#include "Logger.hpp"
+#include "Scheduler.hpp"
 
 namespace Components
 {
-	const Game::dvar_t* Debug::DebugOverlay;
-	const Game::dvar_t* Debug::BugName;
+	const Game::dvar_t* Debug::debugOverlay = nullptr;
+	const Game::dvar_t* Debug::bug_name = nullptr;
 
-	const Game::dvar_t* Debug::PlayerDebugHealth;
-
-	const char* Debug::PMFlagsValues[] =
+	static const char* const pmFlagNames[] =
 	{
 		"PMF_PRONE",
 		"PMF_DUCKED",
@@ -38,7 +37,7 @@ namespace Components
 		"PMF_DIVING",
 	};
 
-	const char* Debug::POFlagsValues[] =
+	static const char* const poFlagNames[] =
 	{
 		"POF_INVULNERABLE",
 		"POF_REMOTE_EYES",
@@ -60,14 +59,14 @@ namespace Components
 		"POF_ADS_THIRD_PERSON_TOGGLE",
 	};
 
-	const char* Debug::PLFlagsValues[] =
+	static const char* const plFlagNames[] =
 	{
 		"PLF_ANGLES_LOCKED",
 		"PLF_USES_OFFSET",
 		"PLF_WEAPONVIEW_ONLY",
 	};
 
-	const char* Debug::PEFlagsValues[] =
+	static const char* const eFlagNames[] =
 	{
 		"EF_NONSOLID_BMODEL",
 		"EF_TELEPORT_BIT",
@@ -95,173 +94,160 @@ namespace Components
 		"EF_SOFT",
 	};
 
-	const char Debug::StrButtons[] =
+	static const char buttonGlyphs[] =
 	{
 		'\x01', '\x02', '\x03', '\x04', '\x05', '\x06', '\x0E', '\x0F', '\x10',
 		'\x11', '\x12', '\x13', '\x14', '\x15', '\x16', '\x17', '\0'
 	};
 
-	const char Debug::StrTemplate[] = "%s: %s All those moments will be lost in time, like tears in rain.";
+	static const char fontTestTemplate[] = "%s: %s All those moments will be lost in time, like tears in rain.";
+	static const int fontTestFonts[] = { 1, 2, 3, 5, 6 };
 
-	std::string Debug::BuildPMFlagsString(const Game::playerState_s* ps)
+	constexpr float flagsTitleScale = 0.5f;
+	constexpr float flagsScale = 0.201f;
+	constexpr float flagsY = 20.0f;
+	constexpr float fontTestX = -25.0f;
+	constexpr float fontTestScale = 0.4f;
+
+	constexpr float white[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+
+	constexpr int playerstateFlagsPage = 2;
+	constexpr int fontTestPage = 5;
+
+	constexpr std::uintptr_t cgArray = 0x1404769A0;
+
+	constexpr std::uintptr_t cgMedia = 0x14046B390;
+
+	constexpr std::uintptr_t fullScreenUiFlag = 0x140C5CEA8;
+	constexpr std::uintptr_t clsState = 0x1406CECF8;
+	constexpr int connectionActive = 9;
+	constexpr std::uintptr_t cg_drawMaterial = 0x1406BCE80;
+
+	constexpr std::uintptr_t player_debugHealthFlags = 0x14008BF8C;
+	constexpr std::uintptr_t player_debugHealth = 0x140440E70;
+
+	static const std::uint8_t player_debugHealthFlagsMov[] = { 0x41, 0xB8, 0x8C, 0x00, 0x00, 0x00 };
+
+	static const Utils::Hook::LeaSite Com_Assert_fLea = { 0x1401F582C, Utils::Hook::leaRdx, 0x140080E50 };
+
+	std::string Debug::BuildFlagsString(int flags, std::span<const char* const> names)
 	{
 		std::string result;
 
-		for (size_t i = 0; i < ARRAYSIZE(PMFlagsValues); ++i)
+		for (std::size_t i = 0; i < names.size(); ++i)
 		{
-			result.append(Utils::String::VA("^%c%s\n", ((ps->pm_flags & (1 << i)) == 0) ? '7' : '2', PMFlagsValues[i]));
+			char color = '7';
+
+			if (flags & (1 << i))
+			{
+				color = '2';
+			}
+
+			result.append(Utils::String::VA("^%c%s\n", color, names[i]));
 		}
 
 		return result;
 	}
 
-	std::string Debug::BuildPOFlagsString(const Game::playerState_s* ps)
+	void Debug::CG_Debug_DrawPSFlags(int localClientNum)
 	{
-		std::string result;
+		constexpr int maxChars = 4096;
 
-		for (size_t i = 0; i < ARRAYSIZE(POFlagsValues); ++i)
+		const auto* const ps = reinterpret_cast<const Game::playerState_s*>(Utils::Hook::Rebase(cgArray));
+		const auto* const placement = Game::ScrPlace_GetActivePlacement(localClientNum);
+
+		auto* const font = Game::UI_GetFontHandle(placement, 6, flagsScale);
+		auto* const titleFont = Game::UI_GetFontHandle(placement, 6, flagsTitleScale);
+
+		Game::UI_DrawText(placement, "Client View of Flags", maxChars, titleFont, -60.0f, 0.0f, 1, 1, flagsTitleScale, white, 1);
+
+		const auto pmFlags = BuildFlagsString(ps->pm_flags, pmFlagNames);
+		Game::UI_DrawText(placement, pmFlags.data(), maxChars, font, 30.0f, flagsY, 1, 1, flagsScale, white, 3);
+
+		const auto poFlags = BuildFlagsString(ps->otherFlags, poFlagNames);
+		Game::UI_DrawText(placement, poFlags.data(), maxChars, font, 350.0f, flagsY, 1, 1, flagsScale, white, 3);
+
+		const auto plFlags = BuildFlagsString(ps->linkFlags, plFlagNames);
+		Game::UI_DrawText(placement, plFlags.data(), maxChars, font, 350.0f, 250.0f, 1, 1, flagsScale, white, 3);
+
+		const auto eFlags = BuildFlagsString(ps->eFlags, eFlagNames);
+		Game::UI_DrawText(placement, eFlags.data(), maxChars, font, 525.0f, flagsY, 1, 1, flagsScale, white, 3);
+	}
+
+	void Debug::CG_DrawDebugPlayerHealth(int localClientNum)
+	{
+		constexpr float black[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+		constexpr float green[] = { 0.0f, 1.0f, 0.0f, 1.0f };
+
+		const auto* const ps = reinterpret_cast<const Game::playerState_s*>(Utils::Hook::Rebase(cgArray));
+
+		float healthFraction = 0.0f;
+
+		if (ps->stats[0] && ps->stats[2])
 		{
-			result.append(Utils::String::VA("^%c%s\n", ((ps->otherFlags & (1 << i)) == 0) ? '7' : '2', POFlagsValues[i]));
+			const float health = static_cast<float>(ps->stats[0]) / static_cast<float>(ps->stats[2]);
+			healthFraction = std::clamp(health, 0.0f, 1.0f);
 		}
 
-		return result;
+		const auto* const placement = Game::ScrPlace_GetActivePlacement(localClientNum);
+		auto* const whiteMaterial = Utils::Hook::Get<Game::Material*>(cgMedia);
+
+		Game::CL_DrawStretchPic(placement, 10.0f, 10.0f, 100.0f, 10.0f, 1, 1, 0.0f, 0.0f, 1.0f, 1.0f, black, whiteMaterial);
+		Game::CL_DrawStretchPic(placement, 10.0f, 10.0f, 100.0f * healthFraction, 10.0f, 1, 1, 0.0f, 0.0f, healthFraction, 1.0f, green, whiteMaterial);
 	}
 
-	std::string Debug::BuildPLFlagsString(const Game::playerState_s* ps)
+	void Debug::CG_Debug_DrawFontTest(int localClientNum)
 	{
-		std::string result;
+		const auto* const placement = Game::ScrPlace_GetActivePlacement(localClientNum);
 
-		for (size_t i = 0; i < ARRAYSIZE(PLFlagsValues); ++i)
+		float y = 10.0f;
+
+		for (const int fontEnum : fontTestFonts)
 		{
-			result.append(Utils::String::VA("^%c%s\n", ((ps->linkFlags & (1 << i)) == 0) ? '7' : '2', PLFlagsValues[i]));
+			auto* const font = Game::UI_GetFontHandle(placement, fontEnum, fontTestScale);
+
+			char line[0x200]{};
+			sprintf_s(line, fontTestTemplate, font->fontName, buttonGlyphs);
+			Game::UI_FilterStringForButtonAnimation(line, sizeof(line));
+
+			Game::UI_DrawText(placement, line, std::numeric_limits<int>::max(), font, fontTestX, y, 1, 1, fontTestScale, white, 3);
+			y += 25.0f;
 		}
-
-		return result;
 	}
 
-	std::string Debug::BuildPEFlagsString(const Game::playerState_s* ps)
+	void Debug::CG_DrawDebugOverlays_Hk()
 	{
-		std::string result;
+		constexpr int localClientNum = 0;
 
-		for (size_t i = 0; i < ARRAYSIZE(PEFlagsValues); ++i)
-		{
-			result.append(Utils::String::VA("^%c%s\n", ((ps->eFlags & (1 << i)) == 0) ? '7' : '2', PEFlagsValues[i]));
-		}
-
-		return result;
-	}
-
-	void Debug::CG_Debug_DrawPSFlags(const int localClientNum)
-	{
-		const auto* cgameGlob = Game::cgArray;
-		auto* const scrPlace = Game::ScrPlace_GetActivePlacement(localClientNum);
-
-		constexpr auto maxChars = 4096;
-
-		auto* const font1 = Game::UI_GetFontHandle(scrPlace, 6, MY_SCALE_2);
-		auto* const font2 = Game::UI_GetFontHandle(scrPlace, 6, MY_SCALE2);
-
-		Game::UI_DrawText(scrPlace, "Client View of Flags", maxChars, font2, -60.0f, 0, 1, 1,
-			MY_SCALE2, TextRenderer::WHITE_COLOR, 1);
-
-		const auto pmf = BuildPMFlagsString(&cgameGlob->predictedPlayerState);
-		Game::UI_DrawText(scrPlace, pmf.data(), maxChars, font1, 30.0f, MY_Y, 1, 1, MY_SCALE_2, TextRenderer::WHITE_COLOR, 3);
-
-		const auto pof = BuildPOFlagsString(&cgameGlob->predictedPlayerState);
-		Game::UI_DrawText(scrPlace, pof.data(), maxChars, font1, 350.0f, MY_Y, 1, 1, MY_SCALE_2, TextRenderer::WHITE_COLOR, 3);
-
-		const auto plf = BuildPLFlagsString(&cgameGlob->predictedPlayerState);
-		Game::UI_DrawText(scrPlace, plf.data(), maxChars, font1, 350.0f, 250.0f, 1, 1, MY_SCALE_2, TextRenderer::WHITE_COLOR, 3);
-
-		const auto pef = BuildPEFlagsString(&cgameGlob->predictedPlayerState);
-		Game::UI_DrawText(scrPlace, pef.data(), maxChars, font1, 525.0f, MY_Y, 1, 1, MY_SCALE_2, TextRenderer::WHITE_COLOR, 3);
-	}
-
-	void Debug::CG_DrawDebugPlayerHealth(const int localClientNum)
-	{
-		float healtha;
-		constexpr float color1[] = {0.0f, 0.0f, 0.0f, 1.0f};
-		constexpr float color2[] = {0.0f, 1.0f, 0.0f, 1.0f};
-
-		assert(PlayerDebugHealth->current.enabled);
-		const auto* cgameGlob = Game::cgArray;
-
-		if (cgameGlob->predictedPlayerState.stats[0] && cgameGlob->predictedPlayerState.stats[2])
-		{
-			const auto health = static_cast<float>(cgameGlob->predictedPlayerState.stats[0]) / static_cast<float>(cgameGlob->predictedPlayerState.stats[2]);
-
-			const auto stats = ((health - 1.0f) < 0.0f)
-				? static_cast<float>(cgameGlob->predictedPlayerState.stats[0]) / static_cast<float>(cgameGlob->predictedPlayerState.stats[2])
-				: 1.0f;
-
-			healtha = ((0.0f - health) < 0.0f)
-				? stats
-				: 0.0f;
-		}
-		else
-		{
-			healtha = 0.0f;
-		}
-
-		auto* const scrPlace = Game::ScrPlace_GetActivePlacement(localClientNum);
-		Game::CL_DrawStretchPic(scrPlace, 10.0f, 10.0f, 100.0f, 10.0f, 1, 1, 0.0f, 0.0f, 1.0f, 1.0f, color1, Game::cgMedia->whiteMaterial);
-		Game::CL_DrawStretchPic(scrPlace, 10.0f, 10.0f, 100.0f * healtha, 10.0f, 1, 1, 0.0f, 0.0f, healtha, 1.0f, color2, Game::cgMedia->whiteMaterial);
-	}
-
-	void Debug::CG_Debug_DrawFontTest(const int localClientNum)
-	{
-		char strFinal[0x200]{};
-
-		auto* const scrPlace = Game::ScrPlace_GetActivePlacement(localClientNum);
-
-		auto* const font1 = Game::UI_GetFontHandle(scrPlace, 1, 0.4f);
-		auto* const font2 = Game::UI_GetFontHandle(scrPlace, 2, 0.4f);
-		auto* const font3 = Game::UI_GetFontHandle(scrPlace, 3, 0.4f);
-		auto* const font5 = Game::UI_GetFontHandle(scrPlace, 5, 0.4f);
-		auto* const font6 = Game::UI_GetFontHandle(scrPlace, 6, 0.4f);
-
-		sprintf_s(strFinal, StrTemplate, font1->fontName, StrButtons);
-		Game::UI_FilterStringForButtonAnimation(strFinal, sizeof(strFinal));
-		Game::UI_DrawText(scrPlace, strFinal, std::numeric_limits<int>::max(), font1, MY_X, 10.0f, 1, 1, 0.4f, TextRenderer::WHITE_COLOR, 3);
-
-		sprintf_s(strFinal, StrTemplate, font2->fontName, StrButtons);
-		Game::UI_FilterStringForButtonAnimation(strFinal, sizeof(strFinal));
-		Game::UI_DrawText(scrPlace, strFinal, std::numeric_limits<int>::max(), font2, MY_X, 35.0f, 1, 1, 0.4f, TextRenderer::WHITE_COLOR, 3);
-
-		sprintf_s(strFinal, StrTemplate, font3->fontName, StrButtons);
-		Game::UI_FilterStringForButtonAnimation(strFinal, sizeof(strFinal));
-		Game::UI_DrawText(scrPlace, strFinal, std::numeric_limits<int>::max(), font3, MY_X, 60.0f, 1, 1, 0.4f, TextRenderer::WHITE_COLOR, 3);
-
-		sprintf_s(strFinal, StrTemplate, font5->fontName, StrButtons);
-		Game::UI_FilterStringForButtonAnimation(strFinal, sizeof(strFinal));
-		Game::UI_DrawText(scrPlace, strFinal, std::numeric_limits<int>::max(), font5, MY_X, 85.0f, 1, 1, 0.4f, TextRenderer::WHITE_COLOR, 3);
-
-		sprintf_s(strFinal, StrTemplate, font6->fontName, StrButtons);
-		Game::UI_FilterStringForButtonAnimation(strFinal, sizeof(strFinal));
-		Game::UI_DrawText(scrPlace, strFinal, std::numeric_limits<int>::max(), font6, MY_X, 110.0f, 1, 1, 0.4f, TextRenderer::WHITE_COLOR, 3);
-	}
-
-	void Debug::CG_DrawDebugOverlays_Hk(const int localClientNum)
-	{
-		assert(DebugOverlay);
-		if (!DebugOverlay)
+		if (!Utils::Hook::Get<int>(fullScreenUiFlag) || Utils::Hook::Get<int>(clsState) != connectionActive)
 		{
 			return;
 		}
 
-		switch (DebugOverlay->current.integer)
+		const auto* const drawMaterial = Utils::Hook::Get<const Game::dvar_t*>(cg_drawMaterial);
+
+		if (!drawMaterial || drawMaterial->current.integer)
 		{
-		case 2:
-			CG_Debug_DrawPSFlags(localClientNum);
-			break;
-		case 5:
-			CG_Debug_DrawFontTest(localClientNum);
-			break;
-		default:
-			break;
+			return;
 		}
 
-		if (PlayerDebugHealth->current.enabled)
+		if (!debugOverlay)
+		{
+			return;
+		}
+
+		if (debugOverlay->current.integer == playerstateFlagsPage)
+		{
+			CG_Debug_DrawPSFlags(localClientNum);
+		}
+		else if (debugOverlay->current.integer == fontTestPage)
+		{
+			CG_Debug_DrawFontTest(localClientNum);
+		}
+
+		const auto* const debugHealth = Utils::Hook::Get<const Game::dvar_t*>(player_debugHealth);
+
+		if (debugHealth && debugHealth->current.enabled)
 		{
 			CG_DrawDebugPlayerHealth(localClientNum);
 		}
@@ -269,76 +255,12 @@ namespace Components
 
 	void Debug::Com_Assert_f()
 	{
-		assert(0 && "a");
-	}
-
-	void Debug::Com_Bug_f(const Command::Params* params)
-	{
-		char newFileName[MAX_PATH]{};
-		char to_ospath[MAX_OSPATH]{};
-		char from_ospath[MAX_OSPATH]{};
-		const char* bug;
-
-		if (!*Game::logfile)
-		{
-			Logger::PrintError(Game::CON_CHANNEL_ERROR, "CopyFile failed: logfile wasn't opened\n");
-		}
-
-		if (params->size() == 2)
-		{
-			bug = params->get(1);
-		}
-		else
-		{
-			assert(BugName);
-			bug = BugName->current.string;
-		}
-
-		sprintf_s(newFileName, "%s_%s.log", bug, Game::Live_GetLocalClientName(0));
-
-		Game::Engine::ScopedCriticalSection _(Game::CRITSECT_CONSOLE, Game::Engine::SCOPED_CRITSECT_NORMAL);
-
-		if (*Game::logfile)
-		{
-			Game::FS_FCloseFile(*Game::logfile);
-			*Game::logfile = 0;
-		}
-
-		Game::FS_BuildOSPath(Game::Sys_DefaultInstallPath(), "", "logs/console_mp.log", from_ospath);
-		Game::FS_BuildOSPath(Game::Sys_DefaultInstallPath(), "", newFileName, to_ospath);
-		const auto result = CopyFileA(from_ospath, to_ospath, 0);
-		Game::Com_OpenLogFile();
-
-		if (!result)
-		{
-			Logger::PrintError(Game::CON_CHANNEL_ERROR, "CopyFile failed({}) {} {}\n", GetLastError(), "console_mp.log", newFileName);
-		}
-	}
-
-	void Debug::Com_BugNameInc_f()
-	{
-		char buf[512]{};
-
-		if (std::strlen(BugName->current.string) < 4)
-		{
-			Game::Dvar_SetString(BugName, "bug0");
-			return;
-		}
-
-		if (std::strncmp(BugName->current.string, "bug", 3) != 0)
-		{
-			Game::Dvar_SetString(BugName, "bug0");
-			return;
-		}
-
-		const auto n = std::strtol(BugName->current.string + 3, nullptr, 10);
-		sprintf_s(buf, "bug%d", n + 1);
-		Game::Dvar_SetString(BugName, buf);
+		assert(false && "a");
 	}
 
 	void Debug::CL_InitDebugDvars()
 	{
-		static const char* debugOverlayNames_0[] =
+		static const char* debugOverlayNames[] =
 		{
 			"Off",
 			"ViewmodelInfo",
@@ -349,30 +271,33 @@ namespace Components
 			nullptr,
 		};
 
-		DebugOverlay = Game::Dvar_RegisterEnum("debugOverlay", debugOverlayNames_0, 0, Game::DVAR_NONE, "Toggles the display of various debug info.");
-		BugName = Game::Dvar_RegisterString("bug_name", "bug0", Game::DVAR_NONE, "Name appended to the copied console log");
-	}
-
-	const Game::dvar_t* Debug::Dvar_Register_PlayerDebugHealth(const char* name, bool value, [[maybe_unused]] std::uint16_t flags, const char* description)
-	{
-		PlayerDebugHealth = Game::Dvar_RegisterBool(name, value, Game::DVAR_NONE, description);
-		return PlayerDebugHealth;
+		debugOverlay = Game::Dvar_RegisterEnum("debugOverlay", debugOverlayNames, 0, Game::DVAR_NONE, "Toggles the display of various debug info.");
+		bug_name = Game::Dvar_RegisterString("bug_name", "bug0", Game::DVAR_NONE, "Name appended to the copied console log");
 	}
 
 	Debug::Debug()
 	{
+		const bool isExpected = Utils::Hook::IsLeaIntact(Com_Assert_fLea)
+			&& Utils::Hook::MatchesBytes(player_debugHealthFlags, player_debugHealthFlagsMov, sizeof(player_debugHealthFlagsMov));
+
+		if (!isExpected)
+		{
+			Logger::Error("debug: Com_Init or BG_RegisterDvars does not read as expected, no debug overlays\n");
+			return;
+		}
+
+		const auto assertHandler = Utils::Hook::Trampoline(Utils::Hook::Rebase(Com_Assert_fLea.address), reinterpret_cast<std::uintptr_t>(Com_Assert_f));
+
+		if (!assertHandler || !Utils::Hook::CanLeaReach(Com_Assert_fLea, reinterpret_cast<void*>(assertHandler)))
+		{
+			Logger::Error("debug: no room for assert's handler beside the image, no debug overlays\n");
+			return;
+		}
+
+		Utils::Hook::PointLeaAt(Com_Assert_fLea, reinterpret_cast<void*>(assertHandler));
+		Utils::Hook::Set<std::uint32_t>(player_debugHealthFlags + 2, Game::DVAR_NONE);
+
 		Events::OnDvarInit(CL_InitDebugDvars);
-
-		// Hook end of CG_DrawDebugOverlays (This is to ensure some checks are done before our hook is executed).
-		Utils::Hook(0x49CB0A, CG_DrawDebugOverlays_Hk, HOOK_JUMP).install()->quick();
-
-		Utils::Hook::Set<void(*)()>(0x60BCEA, Com_Assert_f);
-
-		Utils::Hook(0x4487F7, Dvar_Register_PlayerDebugHealth, HOOK_CALL).install()->quick();
-
-#ifdef _DEBUG
-		Command::Add("bug", Com_Bug_f);
-		Command::Add("bug_name_inc", Com_BugNameInc_f);
-#endif
+		Scheduler::Loop(CG_DrawDebugOverlays_Hk, Scheduler::Pipeline::RENDERER);
 	}
 }

@@ -1,41 +1,46 @@
-#include "Integrator.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Aim/Integrator.hpp"
 
-#include <algorithm>
-
-namespace Controller
+namespace Controller::Aim
 {
-  namespace aim
-  {
-    degrees
-    turn_integrator::
-    advance (deg_per_s target, const limits& lim, seconds dt) noexcept
-    {
-      const float dtc (dt.count ());
+	Degrees TurnIntegrator::Advance(DegreesPerSecond target, const Limits& limits, Seconds deltaTime) noexcept
+	{
+		const float seconds = deltaTime.count();
 
-      if (dtc <= 0.0f)
-        return degrees {0.0f};
+		if (seconds <= 0.0f)
+		{
+			return Degrees{ 0.0f };
+		}
 
-      const float tgt (target.value);
-      float cur (current_.value);
+		const float targetRate = target.value;
+		float rate = this->current.value;
 
-      if (cur < tgt)
-      {
-        const float step (lim.accel.value <= 0.0f ? (tgt - cur)
-                                                  : lim.accel.value * dtc);
-        cur = std::min (cur + step, tgt);
-      }
-      else if (cur > tgt)
-      {
-        const float step (lim.decel.value <= 0.0f ? (cur - tgt)
-                                                  : lim.decel.value * dtc);
-        cur = std::max (cur - step, tgt);
-      }
+		if (rate < targetRate)
+		{
+			float step = targetRate - rate;
 
-      current_ = deg_per_s {cur};
+			if (limits.accel.value > 0.0f)
+			{
+				step = limits.accel.value * seconds;
+			}
 
-      return degrees {cur * dtc};
-    }
-  }
+			rate = std::min(rate + step, targetRate);
+		}
+		else if (rate > targetRate)
+		{
+			float step = rate - targetRate;
+
+			if (limits.decel.value > 0.0f)
+			{
+				step = limits.decel.value * seconds;
+			}
+
+			rate = std::max(rate - step, targetRate);
+		}
+
+		this->current = DegreesPerSecond{ rate };
+
+		return Degrees{ rate * seconds };
+	}
 }

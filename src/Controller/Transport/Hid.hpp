@@ -1,68 +1,45 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Context.hpp"
-#include "../Device/Id.hpp"
-#include "../Device/Identity.hpp"
+#include "Controller/Context.hpp"
+#include "Controller/Device/Id.hpp"
+#include "Controller/Device/Identity.hpp"
 
-namespace Controller
+namespace Controller::Transport
 {
-  namespace transport
-  {
-    struct hid_attributes
-    {
-      vendor_id vendor;
-      product_id product;
-      std::optional<uint16_t> version;
-    };
+	struct HidAttributes
+	{
+		VendorId vendor;
+		ProductId product;
+		std::optional<std::uint16_t> version;
+	};
 
-    class hid_device
-    {
-    public:
-      virtual
-      ~hid_device () = default;
+	class HidDevice
+	{
+	public:
+		virtual ~HidDevice() = default;
 
-      virtual connection
-      link () const noexcept = 0;
+		virtual Connection Link() const noexcept = 0;
+		virtual const std::wstring& Path() const noexcept = 0;
+		virtual std::size_t FeatureReportLength() const noexcept = 0;
 
-      virtual hid_attributes
-      attributes () const noexcept = 0;
+		virtual std::optional<std::size_t> TryRead(std::span<std::byte> buffer) noexcept = 0;
+		virtual std::optional<std::size_t> TryWrite(std::span<const std::byte> buffer) noexcept = 0;
+		virtual bool TryGetFeature(std::span<std::byte> buffer) noexcept = 0;
+	};
 
-      virtual const std::wstring&
-      path () const noexcept = 0;
+	struct HidEnumerationEntry
+	{
+		std::wstring path;
+		HidAttributes attributes;
+		Connection link = Connection::Unknown;
+		std::size_t inputReportLength = 0;
+	};
 
-      virtual size_t
-      feature_report_length () const noexcept = 0;
+	Connection ClassifyLink(std::size_t inputReportLength) noexcept;
 
-      virtual std::optional<size_t>
-      read (std::span<std::byte> buf) noexcept = 0;
+	std::vector<HidEnumerationEntry> Enumerate(const Context& context);
 
-      virtual std::optional<size_t>
-      write (std::span<const std::byte> buf) noexcept = 0;
-
-      virtual bool
-      get_feature (std::span<std::byte> buf) noexcept = 0;
-
-      virtual bool
-      set_feature (std::span<const std::byte> buf) noexcept = 0;
-    };
-
-    struct hid_enumeration_entry
-    {
-      std::wstring path;
-      hid_attributes attributes;
-      connection link {connection::unknown};
-      size_t input_report_length {0};
-    };
-
-    connection
-    classify_link (size_t input_report_length) noexcept;
-
-    std::vector<hid_enumeration_entry>
-    enumerate (const context&);
-
-    std::unique_ptr<hid_device>
-    open (const context&, const std::wstring& path);
-  }
+	std::unique_ptr<HidDevice> TryOpen(const Context& context, const std::wstring& path);
 }

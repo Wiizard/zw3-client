@@ -1,71 +1,67 @@
-#include "Deadzone.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Aim/Deadzone.hpp"
 
-#include <cmath>
-#include <cassert>
-#include <algorithm>
-
-namespace Controller
+namespace Controller::Aim
 {
-  namespace aim
-  {
-    bool
-    validate (const deadzone_params& p, std::string& why) noexcept
-    {
-      auto in01 = [] (float f) noexcept {return f >= 0.0f && f < 1.0f;};
+	static bool IsInHalfOpenUnit(float value) noexcept
+	{
+		return value >= 0.0f && value < 1.0f;
+	}
 
-      if (!in01 (p.inner.value))
-      {
-        why = "inner deadzone must be in [0, 1)";
-        return false;
-      }
+	bool IsValid(const DeadzoneParams& params, std::string& why)
+	{
+		if (!IsInHalfOpenUnit(params.inner.value))
+		{
+			why = "inner deadzone must be in [0, 1)";
+			return false;
+		}
 
-      if (!in01 (p.outer.value))
-      {
-        why = "outer deadzone must be in [0, 1)";
-        return false;
-      }
+		if (!IsInHalfOpenUnit(params.outer.value))
+		{
+			why = "outer deadzone must be in [0, 1)";
+			return false;
+		}
 
-      if (!in01 (p.anti.value))
-      {
-        why = "anti-deadzone must be in [0, 1)";
-        return false;
-      }
+		if (!IsInHalfOpenUnit(params.anti.value))
+		{
+			why = "anti-deadzone must be in [0, 1)";
+			return false;
+		}
 
-      if (p.inner.value >= 1.0f - p.outer.value)
-      {
-        why = "inner deadzone must be below (1 - outer deadzone)";
-        return false;
-      }
+		if (params.inner.value >= 1.0f - params.outer.value)
+		{
+			why = "inner deadzone must be below (1 - outer deadzone)";
+			return false;
+		}
 
-      return true;
-    }
+		return true;
+	}
 
-    stick_vector
-    apply (const deadzone_params& p, stick_vector v) noexcept
-    {
-      const float inner (p.inner.value);
-      const float outer (p.outer.value);
-      const float anti (p.anti.value);
+	StickVector ApplyDeadzone(const DeadzoneParams& params, StickVector stick) noexcept
+	{
+		const float inner = params.inner.value;
+		const float outer = params.outer.value;
+		const float anti = params.anti.value;
 
-      assert (inner >= 0.0f && outer >= 0.0f && anti >= 0.0f &&
-              inner < 1.0f - outer);
+		assert(inner >= 0.0f && outer >= 0.0f && anti >= 0.0f && inner < 1.0f - outer);
 
-      const float m (std::sqrt (v.x * v.x + v.y * v.y));
+		const float magnitude = std::sqrt(stick.x * stick.x + stick.y * stick.y);
 
-      if (m <= inner)
-        return {0.0f, 0.0f};
+		if (magnitude <= inner)
+		{
+			return { 0.0f, 0.0f };
+		}
 
-      const float denom ((1.0f - outer) - inner);
-      float t ((m - inner) / denom);
-      t = std::clamp (t, 0.0f, 1.0f);
+		const float range = (1.0f - outer) - inner;
+		float travel = std::clamp((magnitude - inner) / range, 0.0f, 1.0f);
 
-      if (anti > 0.0f)
-        t = anti + t * (1.0f - anti);
+		if (anti > 0.0f)
+		{
+			travel = anti + travel * (1.0f - anti);
+		}
 
-      const float scale (t / m);
-      return {v.x * scale, v.y * scale};
-    }
-  }
+		const float scale = travel / magnitude;
+		return { stick.x * scale, stick.y * scale };
+	}
 }

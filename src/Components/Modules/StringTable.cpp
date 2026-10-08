@@ -1,79 +1,81 @@
+#include "STDInclude.hpp"
+
 #include "StringTable.hpp"
+#include "AssetHandler.hpp"
+#include "FileSystem.hpp"
+#include "Logger.hpp"
 
 namespace Components
 {
-	std::unordered_map<std::string, Game::StringTable*> StringTable::StringTableMap;
+	std::mutex StringTable::tablesMutex;
+	std::unordered_map<std::string, Game::StringTable*> StringTable::tables;
+	Utils::Memory::Allocator StringTable::allocator;
 
-	Game::StringTable* StringTable::LoadObject(std::string filename)
+	constexpr std::uintptr_t StringTable_HashString = 0x140280F80;
+
+	constexpr unsigned int ASSET_TYPE_STRINGTABLE = 0x25;
+
+	Game::StringTable* StringTable::LoadObject(const std::string& filename)
 	{
-		Utils::Memory::Allocator* allocator = Utils::Memory::GetAllocator();
+		FileSystem::File rawTable(filename, FileSystem::GetCurrentThread());
 
-		filename = Utils::String::ToLower(filename);
-
-		Game::StringTable* table = nullptr;
-		FileSystem::File rawTable(filename);
-
-		if (rawTable.exists())
+		if (!rawTable.Exists())
 		{
-			Utils::CSV parsedTable(rawTable.getBuffer(), false, false);
+			tables[filename] = nullptr;
+			return nullptr;
+		}
 
-			table = allocator->allocate<Game::StringTable>();
+		const Utils::CSV parsed(rawTable.GetBuffer(), false, false);
+		const auto hashString = reinterpret_cast<int(*)(const char*)>(Utils::Hook::Rebase(StringTable_HashString));
 
-			if (table)
+		auto* const table = allocator.Allocate<Game::StringTable>();
+		table->name = allocator.DuplicateString(filename);
+		table->columnCount = static_cast<int>(parsed.GetColumns());
+		table->rowCount = static_cast<int>(parsed.GetRows());
+
+		const std::size_t cellCount = static_cast<std::size_t>(table->columnCount) * static_cast<std::size_t>(table->rowCount);
+
+		if (cellCount > 0)
+		{
+			table->values = allocator.AllocateArray<Game::StringTableCell>(cellCount);
+		}
+
+		for (int row = 0; row < table->rowCount; ++row)
+		{
+			for (int column = 0; column < table->columnCount; ++column)
 			{
-				table->name = allocator->duplicateString(filename);
-				table->columnCount = static_cast<int>(parsedTable.getColumns());
-				table->rowCount = static_cast<int>(parsedTable.getRows());
+				const std::string value = parsed.GetElementAt(static_cast<std::size_t>(row), static_cast<std::size_t>(column));
+				Game::StringTableCell* const cell = &table->values[row * table->columnCount + column];
 
-				table->values = allocator->allocateArray<Game::StringTableCell>(table->columnCount * table->rowCount);
-
-				if (!table->values)
-				{
-					return nullptr;
-				}
-
-				for (int i = 0; i < table->rowCount; ++i)
-				{
-					for (int j = 0; j < table->columnCount; ++j)
-					{
-						std::string value = parsedTable.getElementAt(i, j);
-
-						Game::StringTableCell* cell = &table->values[i * table->columnCount + j];
-						cell->hash = Game::StringTable_HashString(value.data());
-						cell->string = allocator->duplicateString(value);
-						//if (!cell->string) cell->string = ""; // We have to assume it allocated successfully
-					}
-				}
-
-				StringTableMap[filename] = table;
+				cell->hash = hashString(value.data());
+				cell->string = allocator.DuplicateString(value);
 			}
 		}
-		else
-		{
-			StringTableMap[filename] = nullptr;
-		}
 
+		tables[filename] = table;
 		return table;
 	}
 
 	StringTable::StringTable()
 	{
-		AssetHandler::OnFind(Game::XAssetType::ASSET_TYPE_STRINGTABLE, [](Game::XAssetType, const std::string& _filename)
+		const bool isAnswering = AssetHandler::OnFind(ASSET_TYPE_STRINGTABLE, [](unsigned int, const std::string& name) -> void*
 		{
-			Game::XAssetHeader header = { nullptr };
+			const std::string filename = Utils::String::ToLower(name);
+			const std::lock_guard lock(tablesMutex);
 
-			std::string filename = Utils::String::ToLower(_filename);
+			const auto cached = tables.find(filename);
 
-			if (StringTableMap.contains(filename))
+			if (cached != tables.end())
 			{
-				header.stringTable = StringTableMap[filename];
-			}
-			else
-			{
-				header.stringTable = LoadObject(filename);
+				return cached->second;
 			}
 
-			return header;
+			return LoadObject(filename);
 		});
+
+		if (!isAnswering)
+		{
+			Logger::Error("stringtable: lookups cannot be answered, IW4x's own tables will not replace the stock ones\n");
+		}
 	}
 }

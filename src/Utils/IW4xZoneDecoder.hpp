@@ -1,22 +1,18 @@
 #pragma once
 
-#include <cstddef>
-#include <cstdint>
 #include <emmintrin.h>
 #include <intrin.h>
 
 namespace Utils
 {
-	// The original feedback decoder is p[i] = rotr8(c[i] ^ p[i-1], 2) ^ 0xff.
-	// Rotation is linear over XOR. A parallel prefix scan resolves 16 bytes
-	// in four steps, preserving the previous decoded byte across read calls.
 	inline void DecodeIW4xZone(unsigned char* data, std::size_t size, unsigned char& previous)
 	{
-		const auto low2 = _mm_set1_epi8(0x3f);
-		const auto high2 = _mm_set1_epi8(static_cast<char>(0xc0));
-		const auto low4 = _mm_set1_epi8(0x0f);
-		const auto high4 = _mm_set1_epi8(static_cast<char>(0xf0));
-		const auto invert = _mm_set1_epi8(static_cast<char>(0xff));
+		const auto low2 = _mm_set1_epi8(0x3F);
+		const auto high2 = _mm_set1_epi8(static_cast<char>(0xC0));
+		const auto low4 = _mm_set1_epi8(0x0F);
+		const auto high4 = _mm_set1_epi8(static_cast<char>(0xF0));
+		const auto invert = _mm_set1_epi8(static_cast<char>(0xFF));
+
 		while (size >= 16)
 		{
 			auto value = _mm_xor_si128(_mm_loadu_si128(reinterpret_cast<const __m128i*>(data)), _mm_cvtsi32_si128(previous));
@@ -38,10 +34,12 @@ namespace Utils
 			size -= 16;
 		}
 
-		while (size--)
+		while (size)
 		{
-			previous = static_cast<unsigned char>(_rotr8(static_cast<unsigned char>(*data ^ previous), 2) ^ 0xff);
-			*data++ = previous;
+			previous = static_cast<unsigned char>(_rotr8(static_cast<unsigned char>(*data ^ previous), 2) ^ 0xFF);
+			*data = previous;
+			++data;
+			--size;
 		}
 	}
 }

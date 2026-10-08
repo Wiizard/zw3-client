@@ -1,162 +1,173 @@
+#include "STDInclude.hpp"
 
 namespace Game
 {
-	AddRefToObject_t AddRefToObject = AddRefToObject_t(0x61C360);
-	RemoveRefToObject_t RemoveRefToObject = RemoveRefToObject_t(0x437190);
-	RemoveRefToValue_t RemoveRefToValue = RemoveRefToValue_t(0x48E170);
-	AllocObject_t AllocObject = AllocObject_t(0x434320);
-	AddRefToValue_t AddRefToValue = AddRefToValue_t(0x482740);
-	FindVariable_t FindVariable = FindVariable_t(0x4AB650);
-	GetVariable_t GetVariable = GetVariable_t(0x419970);
-	RemoveVariable_t RemoveVariable = RemoveVariable_t(0x480B40);
-	FindObject_t FindObject = FindObject_t(0x4CF2F0);
-	GetObject_t GetObject = GetObject_t(0x48B9D0);
-	GetNewVariable_t GetNewVariable = GetNewVariable_t(0x4CC520);
-	AllocThread_t AllocThread = AllocThread_t(0x4F78C0);
+	Scr_GetNumParam_t Scr_GetNumParam = nullptr;
+	Scr_GetString_t Scr_GetString = nullptr;
+	Scr_GetConstString_t Scr_GetConstString = nullptr;
+	Scr_GetInt_t Scr_GetInt = nullptr;
+	Scr_GetFloat_t Scr_GetFloat = nullptr;
+	Scr_GetVector_t Scr_GetVector = nullptr;
+	Scr_GetType_t Scr_GetType = nullptr;
+	Scr_GetPointerType_t Scr_GetPointerType = nullptr;
+	Scr_GetTypeName_t Scr_GetTypeName = nullptr;
+	Scr_AddInt_t Scr_AddInt = nullptr;
+	Scr_AddInt_t Scr_AddBool = nullptr;
+	Scr_AddFloat_t Scr_AddFloat = nullptr;
+	Scr_AddString_t Scr_AddString = nullptr;
+	Scr_AddString_t Scr_AddIString = nullptr;
+	Scr_AddConstString_t Scr_AddConstString = nullptr;
+	Scr_AddObject_t Scr_AddObject = nullptr;
+	Scr_AddArray_t Scr_AddArray = nullptr;
+	Scr_AddArray_t Scr_MakeArray = nullptr;
+	Scr_LoadScript_t Scr_LoadScript = nullptr;
+	Scr_GetFunctionHandle_t Scr_GetFunctionHandle = nullptr;
+	Scr_ExecThread_t Scr_ExecThread = nullptr;
+	Scr_FreeThread_t Scr_FreeThread = nullptr;
+	Scr_ClearOutParams_t Scr_ClearOutParams = nullptr;
+	Scr_GetEntityId_t Scr_GetEntityId = nullptr;
+	AddRefToObject_t AddRefToObject = nullptr;
+	AllocThread_t AllocThread = nullptr;
+	RemoveRefToObject_t RemoveRefToObject = nullptr;
+	AllocObject_t AllocObject = nullptr;
+	Scr_IsSystemActive_t Scr_IsSystemActive = nullptr;
+	Scr_NotifyId_t Scr_NotifyId = nullptr;
+	VM_Execute_t VM_Execute = nullptr;
+	RemoveRefToValue_t RemoveRefToValue = nullptr;
+	Scr_ErrorInternal_t Scr_ErrorInternal = nullptr;
+	Scr_RegisterFunction_t Scr_RegisterFunction = nullptr;
+	SL_ConvertToString_t SL_ConvertToString = nullptr;
+	SL_AddRefToString_t SL_AddRefToString = nullptr;
+	SL_AddRefToString_t SL_RemoveRefToString = nullptr;
+	Scr_LoadGameType_t Scr_LoadGameType = nullptr;
+	Scr_LoadGameType_t Scr_StartupGameType = nullptr;
+	Scr_LoadGameType_t GScr_LoadGameTypeScript = nullptr;
+	Scr_SetObjectField_t Scr_SetObjectField = nullptr;
+	Scr_SetClientField_t Scr_SetClientField = nullptr;
+	Scr_GetEntityField_t Scr_GetEntityField = nullptr;
+	Scr_AddClassField_t Scr_AddClassField = nullptr;
+	Scr_Notify_t Scr_Notify = nullptr;
+	Scr_NotifyLevel_t Scr_NotifyLevel = nullptr;
+	Scr_AddEntity_t Scr_AddEntity = nullptr;
+	SL_GetString_t SL_GetString = nullptr;
+	SL_FindLowercaseString_t SL_FindLowercaseString = nullptr;
+	scr_const_t* scr_const = nullptr;
+	GetEntity_t GetEntity = nullptr;
+	BuiltinMethod PlayerCmd_switchToWeapon = nullptr;
 
-	VM_Execute_0_t VM_Execute_0 = VM_Execute_0_t(0x6222A0);
+	VariableValue** scrVmPub_top = nullptr;
+	unsigned int* scrVmPub_inparamcount = nullptr;
+	unsigned int* scrVmPub_outparamcount = nullptr;
+	VariableValue** scrVmPub_maxstack = nullptr;
 
-	Scr_GetGameTypeNameForScript_t Scr_GetGameTypeNameForScript = Scr_GetGameTypeNameForScript_t(0x462460);
-	Scr_IsValidGameType_t Scr_IsValidGameType = Scr_IsValidGameType_t(0x4F1B60);
-	Scr_LoadGameType_t Scr_LoadGameType = Scr_LoadGameType_t(0x4D9520);
-	Scr_StartupGameType_t Scr_StartupGameType = Scr_StartupGameType_t(0x438720);
-
-	Scr_LoadScript_t Scr_LoadScript = Scr_LoadScript_t(0x45D940);
-	Scr_ReadFile_FastFile_t Scr_ReadFile_FastFile = Scr_ReadFile_FastFile_t(0x61AAB0);
-	Scr_GetFunctionHandle_t Scr_GetFunctionHandle = Scr_GetFunctionHandle_t(0x4234F0);
-	Scr_CreateCanonicalFilename_t Scr_CreateCanonicalFilename = Scr_CreateCanonicalFilename_t(0x4A0220);
-
-	Scr_GetString_t Scr_GetString = Scr_GetString_t(0x425900);
-	Scr_GetConstString_t Scr_GetConstString = Scr_GetConstString_t(0x494830);
-	Scr_GetDebugString_t Scr_GetDebugString = Scr_GetDebugString_t(0x4EBF50);
-	Scr_GetFloat_t Scr_GetFloat = Scr_GetFloat_t(0x443140);
-	Scr_GetVector_t Scr_GetVector = Scr_GetVector_t(0x411560);
-	Scr_GetInt_t Scr_GetInt = Scr_GetInt_t(0x4F31D0);
-	Scr_GetObject_t Scr_GetObject = Scr_GetObject_t(0x462100);
-	Scr_GetTypeName_t Scr_GetTypeName = Scr_GetTypeName_t(0x4EFF10);
-	Scr_GetNumParam_t Scr_GetNumParam = Scr_GetNumParam_t(0x4B0E90);
-	Scr_GetEntityId_t Scr_GetEntityId = Scr_GetEntityId_t(0x4165E0);
-
-	Scr_ExecThread_t Scr_ExecThread = Scr_ExecThread_t(0x4AD0B0);
-	Scr_FreeThread_t Scr_FreeThread = Scr_FreeThread_t(0x4BD320);
-
-	Scr_AddEntity_t Scr_AddEntity = Scr_AddEntity_t(0x4BFB40);
-	Scr_AddString_t Scr_AddString = Scr_AddString_t(0x412310);
-	Scr_AddConstString_t Scr_AddConstString = Scr_AddConstString_t(0x488860);
-	Scr_AddIString_t Scr_AddIString = Scr_AddIString_t(0x455F20);
-	Scr_AddInt_t Scr_AddInt = Scr_AddInt_t(0x41D7D0);
-	Scr_AddFloat_t Scr_AddFloat = Scr_AddFloat_t(0x61E860);
-	Scr_AddObject_t Scr_AddObject = Scr_AddObject_t(0x430F40);
-	Scr_Notify_t Scr_Notify = Scr_Notify_t(0x4A4750);
-	Scr_NotifyLevel_t Scr_NotifyLevel = Scr_NotifyLevel_t(0x4D9C30);
-
-	Scr_ErrorInternal_t Scr_ErrorInternal = Scr_ErrorInternal_t(0x61DB10);
-	Scr_Error_t Scr_Error = Scr_Error_t(0x61E8B0);
-	Scr_ObjectError_t Scr_ObjectError = Scr_ObjectError_t(0x42EF40);
-	Scr_ParamError_t Scr_ParamError = Scr_ParamError_t(0x4FBC70);
-
-	Scr_GetType_t Scr_GetType = Scr_GetType_t(0x422900);
-	Scr_GetPointerType_t Scr_GetPointerType = Scr_GetPointerType_t(0x4828E0);
-
-	Scr_ClearOutParams_t Scr_ClearOutParams = Scr_ClearOutParams_t(0x4386E0);
-
-	Scr_GetObjectField_t Scr_GetObjectField = Scr_GetObjectField_t(0x4FF3D0);
-	Scr_SetObjectField_t Scr_SetObjectField = Scr_SetObjectField_t(0x4F20F0);
-	Scr_GetEntityField_t Scr_GetEntityField = Scr_GetEntityField_t(0x4E8390);
-	Scr_SetClientField_t Scr_SetClientField = Scr_SetClientField_t(0x4A6DF0);
-	Scr_AddClassField_t Scr_AddClassField = Scr_AddClassField_t(0x4C0E70);
-
-	Scr_ConstructMessageString_t Scr_ConstructMessageString = Scr_ConstructMessageString_t(0x45F940);
-
-	Scr_FreeHudElemConstStrings_t Scr_FreeHudElemConstStrings = Scr_FreeHudElemConstStrings_t(0x5E1120);
-
-	GScr_LoadGameTypeScript_t GScr_LoadGameTypeScript = GScr_LoadGameTypeScript_t(0x4ED9A0);
-
-	GetEntity_t GetEntity = GetEntity_t(0x4BC270);
-	GetPlayerEntity_t GetPlayerEntity = GetPlayerEntity_t(0x49C4A0);
-
-	Scr_RegisterFunction_t Scr_RegisterFunction = Scr_RegisterFunction_t(0x492D50);
-	Scr_ShutdownAllocNode_t Scr_ShutdownAllocNode = Scr_ShutdownAllocNode_t(0x441650);
-	Scr_IsSystemActive_t Scr_IsSystemActive = Scr_IsSystemActive_t(0x4B24E0);
-
-	SL_ConvertToString_t SL_ConvertToString = SL_ConvertToString_t(0x4EC1D0);
-	SL_GetString_t SL_GetString = SL_GetString_t(0x4CDC10);
-	SL_GetString__t  SL_GetString_ = SL_GetString__t(0x47E310);
-	SL_FindString_t SL_FindString = SL_FindString_t(0x434EE0);
-	SL_FindLowercaseString_t SL_FindLowercaseString = SL_FindLowercaseString_t(0x4C63E0);
-	SL_AddRefToString_t SL_AddRefToString = SL_AddRefToString_t(0x4D9B00);
-	SL_RemoveRefToString_t SL_RemoveRefToString = SL_RemoveRefToString_t(0x47CD70);
-
-	ScriptParse_t ScriptParse = ScriptParse_t(0x48A4F0);
-	ScriptCompile_t ScriptCompile = ScriptCompile_t(0x426B80);
-
-	scr_const_t* scr_const = reinterpret_cast<scr_const_t*>(0x1AA2E00);
-
-	scrVmPub_t* scrVmPub = reinterpret_cast<scrVmPub_t*>(0x2040CF0);
-	scrVarPub_t* scrVarPub = reinterpret_cast<scrVarPub_t*>(0x201A408);
-	scrCompilePub_t* scrCompilePub = reinterpret_cast<scrCompilePub_t*>(0x1CDEEC0);
-	scrAnimPub_t* scrAnimPub = reinterpret_cast<scrAnimPub_t*>(0x1CDEAA0);
-
-	char* g_EndPos = reinterpret_cast<char*>(0x2045498);
-	bool* g_loadedImpureScript = reinterpret_cast<bool*>(0x1DC2208);
-
-	game_hudelem_s* g_hudelems = reinterpret_cast<game_hudelem_s*>(0x18565A8);
-
-	void IncInParam()
+	void BindScript()
 	{
-		Scr_ClearOutParams();
+		Scr_GetNumParam = BindFunction<Scr_GetNumParam_t>(0x14022A1B0);
 
-		if (scrVmPub->top == scrVmPub->maxStack)
-		{
-			Sys_Error("Internal script stack overflow");
-		}
+		Scr_GetString = BindFunction<Scr_GetString_t>(0x14022A470);
 
-		scrVmPub->top++;
-		scrVmPub->inparamcount++;
-	}
+		Scr_GetConstString = BindFunction<Scr_GetConstString_t>(0x140229D20);
 
-	void Scr_AddBool(int value)
-	{
-		assert(value == 0 || value == 1);
+		Scr_GetInt = BindFunction<Scr_GetInt_t>(0x14022A100);
 
-		IncInParam();
-		scrVmPub->top->type = VAR_INTEGER;
-		scrVmPub->top->u.intValue = value;
-	}
+		Scr_GetFloat = BindFunction<Scr_GetFloat_t>(0x140229FC0);
 
-	void RuntimeErrorInternal(int channel, const char* codePos, unsigned int index, const char* msg)
-	{
-		static DWORD RuntimeErrorInternal_t = 0x61ABE0;
+		Scr_GetVector = BindFunction<Scr_GetVector_t>(0x14022A5F0);
 
-		__asm
-		{
-			pushad
-			mov eax, msg
-			mov edi, channel
-			push index
-			push codePos
-			call RuntimeErrorInternal_t
-			add esp, 0x8
-			popad
-		}
-	}
+		Scr_GetType = BindFunction<Scr_GetType_t>(0x14022A490);
 
-	__declspec(naked) void Scr_NotifyId(unsigned int /*id*/, unsigned __int16 /*stringValue*/, unsigned int /*paramcount*/)
-	{
-		static DWORD Scr_NotifyId_t = 0x61E670;
+		Scr_GetPointerType = BindFunction<Scr_GetPointerType_t>(0x14022A3C0);
 
-		__asm
-		{
-			pushad
+		Scr_GetTypeName = BindFunction<Scr_GetTypeName_t>(0x14022A500);
 
-			mov eax, [esp + 0x20 + 0xC] // paramcount
-			push [esp + 0x20 + 0x8] // stringValue
-			push [esp + 0x20 + 0x8] // id
-			call Scr_NotifyId_t
-			add esp, 0x8
+		Scr_AddInt = BindFunction<Scr_AddInt_t>(0x140229310);
+		Scr_AddBool = Scr_AddInt;
 
-			popad
-			ret
-		}
+		Scr_AddFloat = BindFunction<Scr_AddFloat_t>(0x140229420);
+
+		Scr_AddString = BindFunction<Scr_AddString_t>(0x1402294D0);
+
+		Scr_AddIString = BindFunction<Scr_AddString_t>(0x140229460);
+
+		Scr_AddConstString = BindFunction<Scr_AddConstString_t>(0x140229340);
+
+		Scr_AddObject = BindFunction<Scr_AddObject_t>(0x1402294A0);
+
+		Scr_AddArray = BindFunction<Scr_AddArray_t>(0x140229270);
+
+		Scr_MakeArray = BindFunction<Scr_AddArray_t>(0x14022A9F0);
+
+		Scr_LoadScript = BindFunction<Scr_LoadScript_t>(0x14021DC10);
+
+		Scr_GetFunctionHandle = BindFunction<Scr_GetFunctionHandle_t>(0x14021DAE0);
+
+		Scr_ExecThread = BindFunction<Scr_ExecThread_t>(0x140229960);
+
+		Scr_FreeThread = BindFunction<Scr_FreeThread_t>(0x1402299F0);
+
+		Scr_ClearOutParams = BindFunction<Scr_ClearOutParams_t>(0x140229820);
+
+		Scr_GetEntityId = BindFunction<Scr_GetEntityId_t>(0x1402283C0);
+
+		AddRefToObject = BindFunction<AddRefToObject_t>(0x1402226E0);
+
+		AllocThread = BindFunction<AllocThread_t>(0x1402229D0);
+
+		RemoveRefToObject = BindFunction<RemoveRefToObject_t>(0x140224E70);
+
+		AllocObject = BindFunction<AllocObject_t>(0x1402229A0);
+
+		Scr_IsSystemActive = BindFunction<Scr_IsSystemActive_t>(0x14022A9E0);
+
+		Scr_NotifyId = BindFunction<Scr_NotifyId_t>(0x14022AA20);
+
+		VM_Execute = BindFunction<VM_Execute_t>(0x14022B7B0);
+
+		RemoveRefToValue = BindFunction<RemoveRefToValue_t>(0x140224F90);
+
+		Scr_ErrorInternal = BindFunction<Scr_ErrorInternal_t>(0x140229860);
+
+		Scr_RegisterFunction = BindFunction<Scr_RegisterFunction_t>(0x14021CCE0);
+
+		SL_ConvertToString = BindFunction<SL_ConvertToString_t>(0x140221660);
+
+		SL_AddRefToString = BindFunction<SL_AddRefToString_t>(0x1402215E0);
+
+		SL_RemoveRefToString = BindFunction<SL_AddRefToString_t>(0x140221BC0);
+
+		Scr_LoadGameType = BindFunction<Scr_LoadGameType_t>(0x1401A7630);
+
+		Scr_StartupGameType = BindFunction<Scr_LoadGameType_t>(0x1401A7D50);
+
+		GScr_LoadGameTypeScript = BindFunction<Scr_LoadGameType_t>(0x1401A6710);
+
+		Scr_SetObjectField = BindFunction<Scr_SetObjectField_t>(0x1401A9F30);
+
+		Scr_SetClientField = BindFunction<Scr_SetClientField_t>(0x140163E80);
+
+		Scr_GetEntityField = BindFunction<Scr_GetEntityField_t>(0x1401A9A90);
+
+		Scr_AddClassField = BindFunction<Scr_AddClassField_t>(0x140225340);
+
+		Scr_Notify = BindFunction<Scr_Notify_t>(0x1401A9DF0);
+
+		Scr_NotifyLevel = BindFunction<Scr_NotifyLevel_t>(0x14022AB10);
+
+		Scr_AddEntity = BindFunction<Scr_AddEntity_t>(0x1401A9700);
+
+		SL_GetString = BindFunction<SL_GetString_t>(0x140221970);
+
+		SL_FindLowercaseString = BindFunction<SL_FindLowercaseString_t>(0x1402216D0);
+		scr_const = reinterpret_cast<scr_const_t*>(Utils::Hook::Rebase(0x1417CC2E0));
+
+		GetEntity = BindFunction<GetEntity_t>(0x140181DF0);
+
+		PlayerCmd_switchToWeapon = BindFunction<BuiltinMethod>(0x140164700);
+
+		scrVmPub_top = reinterpret_cast<VariableValue**>(Utils::Hook::Rebase(0x14227DA30));
+		scrVmPub_inparamcount = reinterpret_cast<unsigned int*>(Utils::Hook::Rebase(0x14227DA38));
+		scrVmPub_outparamcount = reinterpret_cast<unsigned int*>(Utils::Hook::Rebase(0x14227DA3C));
+
+		scrVmPub_maxstack = reinterpret_cast<VariableValue**>(Utils::Hook::Rebase(0x14227DA18));
 	}
 }

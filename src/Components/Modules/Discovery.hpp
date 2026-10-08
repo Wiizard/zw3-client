@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Dvar.hpp"
+
 namespace Components
 {
 	class Discovery : public Component
@@ -7,17 +9,14 @@ namespace Components
 	public:
 		Discovery();
 
-		void preDestroy() override;
-
 		static void Perform();
 
 	private:
-		static bool IsTerminating;
-		static bool IsPerforming;
-		static std::thread Thread;
-		static std::string Challenge;
+		static std::atomic_bool isPerforming;
+		static std::jthread thread;
+		static std::string challenge;
 
-		static Dvar::Var NetDiscoveryPortRangeMin;
-		static Dvar::Var NetDiscoveryPortRangeMax;
+		static Dvar::Var net_discoveryPortRangeMin;
+		static Dvar::Var net_discoveryPortRangeMax;
 	};
 }

@@ -1,158 +1,131 @@
-#include "RawMouse.hpp"
+#include "STDInclude.hpp"
 
-#include "Controller.hpp"
+#include <hidusage.h>
+
+#include "RawMouse.hpp"
+#include "Events.hpp"
+#include "Gamepad.hpp"
 #include "LobbyScene.hpp"
+#include "Logger.hpp"
 #include "Window.hpp"
 
 namespace Components
 {
-	// Engine specific constants.
-	//
 	constexpr int mw_up = 205;
 	constexpr int mw_down = 206;
 
-	void
-		rawMouseValue_t::ResetDelta()
+	constexpr std::uintptr_t Sys_Init_INInitCall = 0x1402A5635;
+	constexpr std::uintptr_t IN_Init_Engine = 0x1402A2D80;
+
+	constexpr std::uintptr_t IN_FrameCalls[] = { 0x1400F6DE1, 0x1400FD3FA, 0x1401F6B21 };
+	constexpr std::uintptr_t IN_Frame_Engine = 0x1402A2B70;
+
+	constexpr std::uintptr_t MainWndProc_RecenterCall = 0x1402AAD48;
+	constexpr std::uintptr_t IN_RecenterMouse_Engine = 0x1402A2E70;
+
+	static Utils::Hook hooks[std::size(IN_FrameCalls) + 2];
+
+	void rawMouseValue_t::ResetDelta()
 	{
-		// Snapshot the current total so next GetDelta() returns 0.
-		//
 		this->previous = this->current;
 	}
 
-	int
-		rawMouseValue_t::GetDelta() const
+	int rawMouseValue_t::GetDelta() const
 	{
 		return this->current - this->previous;
 	}
 
-	void
-		rawMouseValue_t::Update(int v, bool a)
+	void rawMouseValue_t::Update(int value, bool absolute)
 	{
-		// If the device reports absolute positioning), we reset our accumulator.
-		// The incoming value isn't a delta in this case, it's the new coordinate,
-		// and if we treated it as a delta, the view would spin uncontrollably
-		// because the coordinates are usually large.
-		//
-		if (a)
+		if (absolute)
+		{
 			this->current = 0;
-
-		this->current += v;
-	}
-
-	// Static state initialization.
-	//
-	Dvar::Var RawMouse::M_RawInput;
-	Dvar::Var RawMouse::M_RawInputVerbose;
-	Dvar::Var RawMouse::R_AutoPriority = nullptr;
-	Dvar::Var RawMouse::R_FullScreen = nullptr;
-
-	rawMouseValue_t RawMouse::MouseRawX{ 0, 0 };
-	rawMouseValue_t RawMouse::MouseRawY{ 0, 0 };
-	uint32_t RawMouse::MouseRawEvents = 0;
-
-	bool RawMouse::InRawInput = false;
-	bool RawMouse::FirstRawInputUpdate = true;
-	bool RawMouse::FirstLegacyInputUpdate = true;
-	bool RawMouse::CursorClipped = false;
-
-	static Utils::Hook CL_MouseEventHook;
-	static Game::CL_MouseEvent_t OriginalCL_MouseEvent = nullptr;
-
-	static int CL_MouseEventCustom(int x, int y, int dx, int dy)
-	{
-		if (LobbyScene::IsTransitionActive())
-		{
-			return 0;
 		}
 
-		if (OriginalCL_MouseEvent)
-		{
-			return OriginalCL_MouseEvent(x, y, dx, dy);
-		}
-
-		return 0;
+		this->current += value;
 	}
 
-	// We need to keep the OS cursor confined to the window rect. If we don't,
-	// clicks on the edge might register outside the context (losing focus) or
-	// trigger window resizing.
-	//
-	void
-		ClampMousePos(POINT& p)
+	Dvar::Var RawMouse::m_rawinput;
+	Dvar::Var RawMouse::m_rawinput_verbose;
+	Dvar::Var RawMouse::r_autopriority;
+
+	rawMouseValue_t RawMouse::mouseRawX{ 0, 0 };
+	rawMouseValue_t RawMouse::mouseRawY{ 0, 0 };
+	std::uint32_t RawMouse::mouseRawEvents = 0;
+
+	bool RawMouse::inRawInput = false;
+	bool RawMouse::firstRawInputUpdate = true;
+	bool RawMouse::firstLegacyInputUpdate = true;
+	bool RawMouse::isCursorClipped = false;
+
+	static void ClampMousePos(POINT& point)
 	{
-		if (!Window::HasFocus() || Window::IsLoadingScreenMovable() || Window::IsDragging()) return;
-		tagRECT rc;
-		if (GetWindowRect(Window::GetWindow(), &rc) != TRUE)
+		if (!Window::HasFocus() || Window::IsLoadingScreenMovable() || Window::IsDragging())
+		{
 			return;
+		}
 
-		auto c(false);
-
-		// X-axis.
-		//
-		if (p.x >= rc.left)
+		RECT rect;
+		if (GetWindowRect(Window::GetWindow(), &rect) != TRUE)
 		{
-			if (p.x >= rc.right)
+			return;
+		}
+
+		bool isClamped = false;
+
+		if (point.x >= rect.left)
+		{
+			if (point.x >= rect.right)
 			{
-				p.x = rc.right - 1;
-				c = true;
+				point.x = rect.right - 1;
+				isClamped = true;
 			}
 		}
 		else
 		{
-			p.x = rc.left;
-			c = true;
+			point.x = rect.left;
+			isClamped = true;
 		}
 
-		// Y-axis.
-		//
-		if (p.y >= rc.top)
+		if (point.y >= rect.top)
 		{
-			if (p.y >= rc.bottom)
+			if (point.y >= rect.bottom)
 			{
-				p.y = rc.bottom - 1;
-				c = true;
+				point.y = rect.bottom - 1;
+				isClamped = true;
 			}
 		}
 		else
 		{
-			p.y = rc.top;
-			c = true;
+			point.y = rect.top;
+			isClamped = true;
 		}
 
-		// Only talk to the OS if we actually modified the coordinates to avoid
-		// unnecessary IPC overhead/context switches.
-		//
-		if (c)
-			SetCursorPos(p.x, p.y);
+		if (isClamped)
+		{
+			SetCursorPos(point.x, point.y);
+		}
 	}
 
-	void
-		RawMouse::IN_ClampMouseMove()
+	void RawMouse::IN_ClampMouseMove()
 	{
-		tagPOINT p;
-		GetCursorPos(&p);
-		ClampMousePos(p);
+		POINT point;
+		GetCursorPos(&point);
+		ClampMousePos(point);
 	}
 
-	bool
-		CheckButtonFlag(DWORD f, DWORD m)
+	static bool CheckButtonFlag(DWORD flags, DWORD mask)
 	{
-		return (f & m) != 0u;
+		return (flags & mask) != 0u;
 	}
 
-	void
-		RawMouse::ResetMouseRawEvents()
+	void RawMouse::ResetMouseRawEvents()
 	{
-		// We used to try force-releasing buttons here during alt-tab to prevent
-		// "stuck" firing, but that logic was flaky. Now we just zero out the
-		// event state and reset the update flag so the delta calculation doesn't
-		// snap angles on refocus.
-		//
-		MouseRawEvents = 0u;
-		MouseRawX.ResetDelta();
-		MouseRawY.ResetDelta();
-		FirstRawInputUpdate = true;
-		FirstLegacyInputUpdate = true;
+		mouseRawEvents = 0u;
+		mouseRawX.ResetDelta();
+		mouseRawY.ResetDelta();
+		firstRawInputUpdate = true;
+		firstLegacyInputUpdate = true;
 	}
 
 	void RawMouse::SuspendMouseInput()
@@ -164,337 +137,307 @@ namespace Components
 
 	void RawMouse::ReleaseMouseCursor()
 	{
-		// Do not repeatedly unclip the cursor while another foreground app owns it.
-		if (!CursorClipped) return;
-		ClipCursor(nullptr);
-		CursorClipped = false;
-	}
-
-	// Translates raw input flags into our internal bitmask for button states.
-	// We have to be careful about matching press/release pairs to avoid logical
-	// desyncs where the game thinks a key is held down forever.
-	//
-	void
-		RawMouse::ProcessMouseRawEvent(DWORD f, DWORD d, DWORD e)
-	{
-		const uint32_t p(MouseRawEvents);
-
-		// Down.
-		//
-		if (CheckButtonFlag(f, d))
+		if (!isCursorClipped)
 		{
-			if (M_RawInputVerbose.get<bool>())
-			{
-				if ((p & e) != 0u)
-					Logger::Debug("Pressing button that wasn't released");
-
-				Logger::Debug("Mouse button down: [{}, {}]", e, p);
-			}
-
-			MouseRawEvents |= e;
+			return;
 		}
 
-		// Up (shifted flag).
-		//
-		if (CheckButtonFlag(f, d << 1u))
+		ClipCursor(nullptr);
+		isCursorClipped = false;
+	}
+
+	void RawMouse::ProcessMouseRawEvent(DWORD usButtonFlags, DWORD flagDown, DWORD mouseEvent)
+	{
+		const std::uint32_t previous = mouseRawEvents;
+
+		if (CheckButtonFlag(usButtonFlags, flagDown))
 		{
-			// Protection against the "Alt-Tab Ghost Release" scenario. Sometimes
-			// Windows sends a release event for a button we never saw getting
-			// pressed (because we weren't focused). Ignore those or the game state
-			// might get corrupted.
-			//
-			if ((p & e) == 0u)
+			if (m_rawinput_verbose.Get<bool>())
 			{
-				if (M_RawInputVerbose.get<bool>())
+				if ((previous & mouseEvent) != 0u)
+				{
+					Logger::Debug("Pressing button that wasn't released");
+				}
+
+				Logger::Debug("Mouse button down: [{}, {}]", mouseEvent, previous);
+			}
+
+			mouseRawEvents |= mouseEvent;
+		}
+
+		if (CheckButtonFlag(usButtonFlags, flagDown << 1u))
+		{
+			if ((previous & mouseEvent) == 0u)
+			{
+				if (m_rawinput_verbose.Get<bool>())
+				{
 					Logger::Debug("!! Releasing button that wasn't pressed");
+				}
 
 				return;
 			}
 
-			if (M_RawInputVerbose.get<bool>())
-				Logger::Debug("Mouse button up: [{}, {}]", e, p);
+			if (m_rawinput_verbose.Get<bool>())
+			{
+				Logger::Debug("Mouse button up: [{}, {}]", mouseEvent, previous);
+			}
 
-			MouseRawEvents &= ~e;
+			mouseRawEvents &= ~mouseEvent;
 		}
 	}
 
-	bool
-		RawMouse::GetRawInput(LPARAM l, RAWINPUT& r, UINT& s)
+	bool RawMouse::GetRawInput(LPARAM lParam, RAWINPUT& raw, UINT& dwSize)
 	{
-		const UINT res(GetRawInputData(reinterpret_cast<HRAWINPUT> (l),
-			RID_INPUT,
-			&r,
-			&s,
-			sizeof(RAWINPUTHEADER)));
+		const UINT result = GetRawInputData(reinterpret_cast<HRAWINPUT>(lParam), RID_INPUT, &raw, &dwSize, sizeof(RAWINPUTHEADER));
 
-		if (res == static_cast<UINT> (-1) || r.header.dwType != RIM_TYPEMOUSE)
+		if (result == static_cast<UINT>(-1) || raw.header.dwType != RIM_TYPEMOUSE)
+		{
 			return false;
+		}
 
 		return true;
 	}
 
-	BOOL
-		RawMouse::OnRawInput(LPARAM l, WPARAM w)
+	LRESULT RawMouse::OnRawInput(LPARAM lParam, WPARAM wParam)
 	{
-		// If the dvar is disabled, we still receive the message but should ignore
-		// it. Also, reset events to not conflict with legacy handling if we
-		// switched modes at runtime.
-		//
-		if (!InRawInput || !Window::HasFocus() || GET_RAWINPUT_CODE_WPARAM(w) != RIM_INPUT || LobbyScene::IsTransitionActive())
+		if (!inRawInput || !Window::HasFocus() || GET_RAWINPUT_CODE_WPARAM(wParam) != RIM_INPUT || LobbyScene::IsTransitionActive())
 		{
 			ResetMouseRawEvents();
-			return static_cast<BOOL>(DefWindowProcA(Window::GetWindow(), WM_INPUT, w, l));
+			return DefWindowProcA(Window::GetWindow(), WM_INPUT, wParam, lParam);
 		}
 
-		UINT s(sizeof(RAWINPUT));
-		static RAWINPUT r;
+		UINT size = sizeof(RAWINPUT);
+		static RAWINPUT raw;
 
-		if (!GetRawInput(l, r, s))
-			return static_cast<BOOL>(DefWindowProcA(Window::GetWindow(), WM_INPUT, w, l));
-
-		// Does absolute mouse movement actually exist in the wild for gaming
-		// mice? Probably not, but the spec says yes, so we handle the flag.
-		//
-		const bool a((r.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) != 0u);
-
-		MouseRawX.Update(r.data.mouse.lLastX, a);
-		MouseRawY.Update(r.data.mouse.lLastY, a);
-
-		// Fix for the violent angle snap that happens when alt-tabbing back in.
-		// The first update usually contains a massive delta from the cursor
-		// moving across the screen while we were backgrounded.
-		//
-		if (FirstRawInputUpdate)
+		if (!GetRawInput(lParam, raw, size))
 		{
-			MouseRawX.ResetDelta();
-			MouseRawY.ResetDelta();
-			FirstRawInputUpdate = false;
+			return DefWindowProcA(Window::GetWindow(), WM_INPUT, wParam, lParam);
 		}
 
-		// Map the platform specific RI flags to our internal engine indices.
-		// 1=LMB, 2=RMB, 4=MMB, etc.
-		//
-		ProcessMouseRawEvent(r.data.mouse.usButtonFlags, RI_MOUSE_BUTTON_1_DOWN, 1);
-		ProcessMouseRawEvent(r.data.mouse.usButtonFlags, RI_MOUSE_BUTTON_2_DOWN, 2);
-		ProcessMouseRawEvent(r.data.mouse.usButtonFlags, RI_MOUSE_BUTTON_3_DOWN, 4);
-		ProcessMouseRawEvent(r.data.mouse.usButtonFlags, RI_MOUSE_BUTTON_4_DOWN, 8);
-		ProcessMouseRawEvent(r.data.mouse.usButtonFlags, RI_MOUSE_BUTTON_5_DOWN, 16);
+		const bool isAbsolute = (raw.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) != 0u;
 
-		Game::IN_MouseEvent(MouseRawEvents);
+		mouseRawX.Update(raw.data.mouse.lLastX, isAbsolute);
+		mouseRawY.Update(raw.data.mouse.lLastY, isAbsolute);
 
-		// Handle scroll wheel separately as it's not a boolean state but a value.
-		// We map positive/negative deltas to virtual key events.
-		//
-		if (r.data.mouse.usButtonFlags & RI_MOUSE_WHEEL)
+		if (firstRawInputUpdate)
 		{
-			const SHORT d(static_cast<SHORT> (r.data.mouse.usButtonData));
-
-			if (d > 0)
-				Game::Sys_QueEvents(Game::g_wv->sysMsgTime, 1, mw_down, 0, 0);
-			if (d < 0)
-				Game::Sys_QueEvents(Game::g_wv->sysMsgTime, 1, mw_up, 0, 0);
+			mouseRawX.ResetDelta();
+			mouseRawY.ResetDelta();
+			firstRawInputUpdate = false;
 		}
 
-		// Foreground WM_INPUT messages require default processing for OS cleanup.
-		return static_cast<BOOL>(DefWindowProcA(Window::GetWindow(), WM_INPUT, w, l));
+		ProcessMouseRawEvent(raw.data.mouse.usButtonFlags, RI_MOUSE_BUTTON_1_DOWN, 1);
+		ProcessMouseRawEvent(raw.data.mouse.usButtonFlags, RI_MOUSE_BUTTON_2_DOWN, 2);
+		ProcessMouseRawEvent(raw.data.mouse.usButtonFlags, RI_MOUSE_BUTTON_3_DOWN, 4);
+		ProcessMouseRawEvent(raw.data.mouse.usButtonFlags, RI_MOUSE_BUTTON_4_DOWN, 8);
+		ProcessMouseRawEvent(raw.data.mouse.usButtonFlags, RI_MOUSE_BUTTON_5_DOWN, 16);
+
+		Game::IN_MouseEvent(mouseRawEvents);
+
+		if (raw.data.mouse.usButtonFlags & RI_MOUSE_WHEEL)
+		{
+			const SHORT delta = static_cast<SHORT>(raw.data.mouse.usButtonData);
+
+			if (delta > 0)
+			{
+				Game::Sys_QueEvent(Game::g_wv->sysMsgTime, 1, mw_down, TRUE, 0, nullptr);
+				Game::Sys_QueEvent(Game::g_wv->sysMsgTime, 1, mw_down, FALSE, 0, nullptr);
+			}
+
+			if (delta < 0)
+			{
+				Game::Sys_QueEvent(Game::g_wv->sysMsgTime, 1, mw_up, TRUE, 0, nullptr);
+				Game::Sys_QueEvent(Game::g_wv->sysMsgTime, 1, mw_up, FALSE, 0, nullptr);
+			}
+		}
+
+		return DefWindowProcA(Window::GetWindow(), WM_INPUT, wParam, lParam);
 	}
 
-	bool
-		RawMouse::IsMouseInClientBounds()
+	bool RawMouse::IsMouseInClientBounds()
 	{
 		return Window::HasFocus() && Window::IsCursorWithin(Window::GetWindow());
 	}
 
-	// Fallback handler for standard Windows mouse messages.
-	//
-	BOOL
-		RawMouse::OnLegacyMouseEvent(UINT m, LPARAM l, WPARAM w)
+	LRESULT RawMouse::OnLegacyMouseEvent(UINT Msg, LPARAM lParam, WPARAM wParam)
 	{
 		if (!Window::HasFocus() || LobbyScene::IsTransitionActive())
 		{
 			ResetMouseRawEvents();
-			return static_cast<BOOL>(DefWindowProcA(Window::GetWindow(), m, w, l));
+			return DefWindowProcA(Window::GetWindow(), Msg, wParam, lParam);
 		}
-		int e((w & MK_LBUTTON) != 0);
 
-		if ((w & MK_RBUTTON) != 0)  e |= 2u;
-		if ((w & MK_MBUTTON) != 0)  e |= 4u;
-		if ((w & MK_XBUTTON1) != 0) e |= 8u;
-		if ((w & MK_XBUTTON2) != 0) e |= 0x10u;
+		int mouseEvent = (wParam & MK_LBUTTON) != 0;
 
-		// If raw input is active, we generally ignore legacy messages to avoid
-		// double inputs, but we still track them for debugging or if we lose
-		// focus.
-		//
-		if (M_RawInput.get<bool>())
+		if ((wParam & MK_RBUTTON) != 0)
 		{
-			if (e == 0)
-				return FALSE;
-
-			if (M_RawInputVerbose.get<bool>())
-				Logger::Debug("Window Mouse Message: [{}, {}]", e, MouseRawEvents);
-
-			MouseRawEvents = e;
+			mouseEvent |= 2u;
 		}
 
-		Game::IN_MouseEvent(e);
+		if ((wParam & MK_MBUTTON) != 0)
+		{
+			mouseEvent |= 4u;
+		}
 
-		// We have to call the default proc here because the game expects certain
-		// window behaviors (like drag/move) if we aren't trapping input.
-		//
-		return DefWindowProcA(Window::GetWindow(), m, w, l);
+		if ((wParam & MK_XBUTTON1) != 0)
+		{
+			mouseEvent |= 8u;
+		}
+
+		if ((wParam & MK_XBUTTON2) != 0)
+		{
+			mouseEvent |= 0x10u;
+		}
+
+		if (m_rawinput.Get<bool>())
+		{
+			if (mouseEvent == 0)
+			{
+				return FALSE;
+			}
+
+			if (m_rawinput_verbose.Get<bool>())
+			{
+				Logger::Debug("Window Mouse Message: [{}, {}]", mouseEvent, mouseRawEvents);
+			}
+
+			mouseRawEvents = mouseEvent;
+		}
+
+		Game::IN_MouseEvent(mouseEvent);
+
+		return DefWindowProcA(Window::GetWindow(), Msg, wParam, lParam);
 	}
 
-	BOOL
-		RawMouse::OnKillFocus([[maybe_unused]] LPARAM l, WPARAM)
+	LRESULT RawMouse::OnKillFocus([[maybe_unused]] LPARAM lParam, WPARAM)
 	{
-		// When losing focus, we must release the raw input device. If we don't,
-		// we might "steal" the mouse from other applications or the desktop.
-		//
 		SuspendMouseInput();
 
-		// Drop priority to save CPU when we aren't the active window.
-		//
-		if (R_AutoPriority.get<Game::dvar_t*>() && R_AutoPriority.get<bool>())
+		Game::Key_ClearStates(0);
+
+		Game::IN_MouseEvent(0);
+
+		if (r_autopriority.Get<bool>())
+		{
 			SetPriorityClass(GetCurrentProcess(), IDLE_PRIORITY_CLASS);
+		}
 
 		return DefWindowProc(Window::GetWindow(), WM_KILLFOCUS, 0, 0);
 	}
 
-	BOOL
-		RawMouse::OnSetFocus([[maybe_unused]] LPARAM l, WPARAM)
+	LRESULT RawMouse::OnSetFocus([[maybe_unused]] LPARAM lParam, WPARAM)
 	{
 		ResetMouseRawEvents();
 
-		// Restore priority when we become the active window.
-		//
-		if (Window::HasFocus() && R_AutoPriority.get<Game::dvar_t*>() && R_AutoPriority.get<bool>())
+		if (Window::HasFocus() && r_autopriority.Get<bool>())
+		{
 			SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+		}
 
 		return DefWindowProc(Window::GetWindow(), WM_SETFOCUS, 0, 0);
 	}
 
-	// The actual movement logic when Raw Input is active.
-	//
-	void
-		RawMouse::IN_RawMouseMove()
+	void RawMouse::IN_RawMouseMove()
 	{
 		if (!Window::HasFocus() || LobbyScene::IsTransitionActive())
 		{
 			SuspendMouseInput();
 			return;
 		}
-		auto dx(MouseRawX.GetDelta());
-		auto dy(MouseRawY.GetDelta());
 
-		// Reset accumulators immediately so we don't process the same movement
-		// twice if the next frame comes in fast.
-		//
-		MouseRawX.ResetDelta();
-		MouseRawY.ResetDelta();
+		const auto dx = mouseRawX.GetDelta();
+		const auto dy = mouseRawY.GetDelta();
 
-		// Even with raw input, the game menu logic relies on client coordinates
-		// for UI interaction (hovering buttons). We grab the cursor, convert, and
-		// store it for the UI system.
-		//
-		tagPOINT p;
-		GetCursorPos(&p);
-		Game::s_wmv->oldPos = p;
-		ScreenToClient(Window::GetWindow(), &p);
+		mouseRawX.ResetDelta();
+		mouseRawY.ResetDelta();
 
-		Controller::OnMouseMove(dx, dy);
+		POINT point;
+		GetCursorPos(&point);
+		Game::s_wmv->oldPos = point;
+		ScreenToClient(Window::GetWindow(), &point);
 
-		// CL_MouseEvent returns false if we are in a state where the mouse should
-		// float freely (e.g., menu). If true, it means we are in-game and looking
-		// around, so we need to lock/clip the cursor to the window.
-		//
-		if (LobbyScene::IsTransitionActive())
+		Gamepad::OnMouseMove(point.x, point.y, dx, dy);
+
+		if (!Game::CL_MouseEvent(point.x, point.y, dx, dy))
 		{
 			ReleaseMouseCursor();
 			return;
 		}
 
-		if (!Game::CL_MouseEvent(p.x, p.y, dx, dy))
+		RECT rect;
+		if (GetWindowRect(Window::GetWindow(), &rect) == TRUE)
 		{
-			ReleaseMouseCursor();
-			return;
-		}
-
-		// Force the cursor back to the center if we are in FPS mode to never hit
-		// the screen edge.
-		//
-		RECT rc;
-		if (GetWindowRect(Window::GetWindow(), &rc) == TRUE)
-		{
-			RawMouse::IN_RecenterMouse();
+			IN_RecenterMouse();
 		}
 	}
 
-	bool
-		RawMouse::ToggleRawInput(bool e)
+	bool RawMouse::ToggleRawInput(bool enable)
 	{
-		// RIDEV_NOLEGACY suppresses the button/motion messages needed to drag
-		// a loading window. Keep the OS mouse available until loading finishes.
-		e = e && Window::HasFocus() && !Window::IsLoadingScreenMovable() && !Window::IsDragging();
-		// If the Dvar is off, force disable regardless of requested state. We
-		// don't want to enable raw input if the user explicitly turned it off in
-		// the config.
-		//
-		if (!M_RawInput.get<bool>())
-		{
-			if (!InRawInput)
-				return false;
+		enable = enable && Window::HasFocus() && !Window::IsLoadingScreenMovable() && !Window::IsDragging();
 
-			e = false;
+		if (!m_rawinput.Get<bool>())
+		{
+			if (!inRawInput)
+			{
+				return false;
+			}
+
+			enable = false;
 		}
 		else
 		{
-			// No change needed.
-			//
-			if (InRawInput == e)
-				return InRawInput;
+			if (inRawInput == enable)
+			{
+				return inRawInput;
+			}
 		}
 
-		// Mouse input is foreground-only; background delivery is never needed.
-		constexpr DWORD f(RIDEV_NOLEGACY);
+		constexpr DWORD flags = RIDEV_NOLEGACY;
 
 		RAWINPUTDEVICE rid[1];
 		rid[0].usUsagePage = HID_USAGE_PAGE_GENERIC;
 		rid[0].usUsage = HID_USAGE_GENERIC_MOUSE;
-		rid[0].dwFlags = e ? f : RIDEV_REMOVE;
-		rid[0].hwndTarget = e ? Window::GetWindow() : NULL;
 
-		bool ok(RegisterRawInputDevices(rid, ARRAYSIZE(rid), sizeof(rid[0])) ==
-			TRUE);
-
-		if (!ok)
+		if (enable)
 		{
-			Logger::Warning(Game::CON_CHANNEL_SYSTEM,
-				"RawInputDevices: failed: {}\n",
-				GetLastError());
+			rid[0].dwFlags = flags;
+			rid[0].hwndTarget = Window::GetWindow();
 		}
 		else
 		{
-			InRawInput = (rid[0].dwFlags & RIDEV_REMOVE) == 0u;
+			rid[0].dwFlags = RIDEV_REMOVE;
+			rid[0].hwndTarget = NULL;
+		}
 
-			if (M_RawInputVerbose.get<bool>())
+		const bool isRegistered = RegisterRawInputDevices(rid, ARRAYSIZE(rid), sizeof(rid[0])) == TRUE;
+
+		if (!isRegistered)
+		{
+			Logger::Warning("RawInputDevices: failed: {}\n", GetLastError());
+		}
+		else
+		{
+			inRawInput = (rid[0].dwFlags & RIDEV_REMOVE) == 0u;
+
+			if (m_rawinput_verbose.Get<bool>())
 			{
-				if (InRawInput)
+				if (inRawInput)
+				{
 					Logger::Debug("Raw Input enabled");
+				}
 				else
+				{
 					Logger::Debug("Raw Input disabled");
+				}
 			}
 
-			// Both transitions start with fresh deltas and button state.
-			//
 			ResetMouseRawEvents();
 		}
 
 		return true;
 	}
 
-	void
-		RawMouse::IN_RawMouse_Init()
+	void RawMouse::IN_RawMouse_Init()
 	{
 		if (Window::GetWindow() && ToggleRawInput(true))
 		{
@@ -502,19 +445,16 @@ namespace Components
 		}
 	}
 
-	void
-		RawMouse::IN_Init()
+	void RawMouse::IN_Init()
 	{
-		Game::IN_Init();
+		reinterpret_cast<void(*)()>(Utils::Hook::Rebase(IN_Init_Engine))();
 		IN_RawMouse_Init();
 		ResetMouseRawEvents();
 
-		R_AutoPriority = Dvar::Var("r_autopriority");
-		R_FullScreen = Dvar::Var(0x069F0DA0);
+		r_autopriority = Dvar::Var("r_autopriority");
 	}
 
-	void
-		RawMouse::IN_Frame()
+	void RawMouse::IN_Frame()
 	{
 		if (Window::IsLoadingScreenMovable() || Window::IsDragging())
 		{
@@ -522,54 +462,57 @@ namespace Components
 			Window::PumpLoadingEvents();
 			return;
 		}
-		// Only toggle raw input on if the mouse is actually inside our window,
-		// otherwise we steal input from the rest of the OS.
-		//
-		if (Window::HasFocus())
-			ToggleRawInput(IsMouseInClientBounds());
-		else
-			SuspendMouseInput();
 
-		return Game::IN_Frame();
+		if (Window::HasFocus())
+		{
+			ToggleRawInput(IsMouseInClientBounds());
+		}
+		else
+		{
+			SuspendMouseInput();
+		}
+
+		reinterpret_cast<void(*)()>(Utils::Hook::Rebase(IN_Frame_Engine))();
 	}
 
-	BOOL
-		RawMouse::IN_ClipCursor()
+	BOOL RawMouse::IN_ClipCursor()
 	{
 		if (!Window::HasFocus() || Window::IsLoadingScreenMovable() || Window::IsDragging())
 		{
 			ReleaseMouseCursor();
 			return FALSE;
 		}
-		RECT rc;
-		if (!GetClientRect(Window::GetWindow(), &rc))
+
+		RECT rect;
+		if (!GetClientRect(Window::GetWindow(), &rect))
 		{
 			return FALSE;
 		}
 
-		// Convert client area to screen coordinates because ClipCursor expects
-		// global screen positions, not window-relative ones.
-		//
-		ClientToScreen(Window::GetWindow(), std::bit_cast<POINT*> (&rc.left));
-		ClientToScreen(Window::GetWindow(), std::bit_cast<POINT*> (&rc.right));
-		const auto clipped = ClipCursor(&rc);
-		if (clipped) CursorClipped = true;
-		return clipped;
+		ClientToScreen(Window::GetWindow(), reinterpret_cast<POINT*>(&rect.left));
+		ClientToScreen(Window::GetWindow(), reinterpret_cast<POINT*>(&rect.right));
+
+		const BOOL isClipped = ClipCursor(&rect);
+
+		if (isClipped)
+		{
+			isCursorClipped = true;
+		}
+
+		return isClipped;
 	}
 
-	BOOL
-		RawMouse::IN_RecenterMouse()
+	BOOL RawMouse::IN_RecenterMouse()
 	{
-		if (!IN_ClipCursor()) return FALSE;
-		return Game::IN_RecenterMouse();
+		if (!IN_ClipCursor())
+		{
+			return FALSE;
+		}
+
+		return reinterpret_cast<BOOL(*)()>(Utils::Hook::Rebase(IN_RecenterMouse_Engine))();
 	}
 
-	// The main mouse entry point hooked from the engine. Decides whether to use
-	// our Raw implementation or legacy behavior based on focus and dvar
-	// settings.
-	//
-	void
-		RawMouse::IN_MouseMove()
+	void RawMouse::IN_MouseMove()
 	{
 		if (!Window::HasFocus() || Window::IsLoadingScreenMovable() || Window::IsDragging() || LobbyScene::IsTransitionActive())
 		{
@@ -577,144 +520,151 @@ namespace Components
 			return;
 		}
 
-		if (InRawInput)
+		if (inRawInput)
 		{
-			return IN_RawMouseMove();
-		}
-
-		// Legacy path below.
-		//
-		tagPOINT c;
-		static tagPOINT p;
-
-		GetCursorPos(&c);
-		if (FirstLegacyInputUpdate)
-		{
-			p = c;
-			FirstLegacyInputUpdate = false;
-		}
-		if (R_FullScreen.get<Game::dvar_t*>() && R_FullScreen.get<bool>())
-			ClampMousePos(c);
-
-		int dx(c.x - p.x);
-		int dy(c.y - p.y);
-		p = c;
-
-		ScreenToClient(Window::GetWindow(), &c);
-		if (LobbyScene::IsTransitionActive())
-		{
-			ReleaseMouseCursor();
+			IN_RawMouseMove();
 			return;
 		}
-		auto recenter(Game::CL_MouseEvent(c.x, c.y, dx, dy));
 
-		if (recenter && (dx || dy))
+		POINT current;
+		static POINT previous;
+
+		GetCursorPos(&current);
+
+		if (firstLegacyInputUpdate)
 		{
-			RECT rc;
-			if (GetWindowRect(Window::GetWindow(), &rc) == TRUE)
-			{
-				if (!RawMouse::IN_ClipCursor()) return;
+			previous = current;
+			firstLegacyInputUpdate = false;
+		}
 
-				// Reset the hardware cursor to the center of the window so we don't
-				// hit the screen edge.
-				//
-				int cx((rc.right + rc.left) / 2);
-				int cy((rc.top + rc.bottom) / 2);
+		const auto* r_displayMode = *Game::r_displayMode;
+		if (r_displayMode && r_displayMode->current.integer == 0)
+		{
+			ClampMousePos(current);
+		}
+
+		const int dx = current.x - previous.x;
+		const int dy = current.y - previous.y;
+		previous = current;
+
+		ScreenToClient(Window::GetWindow(), &current);
+
+		Gamepad::OnMouseMove(current.x, current.y, dx, dy);
+
+		const auto shouldRecenter = Game::CL_MouseEvent(current.x, current.y, dx, dy);
+
+		if (shouldRecenter && (dx || dy))
+		{
+			RECT rect;
+			if (GetWindowRect(Window::GetWindow(), &rect) == TRUE)
+			{
+				if (!IN_ClipCursor())
+				{
+					return;
+				}
+
+				const int cx = (rect.right + rect.left) / 2;
+				const int cy = (rect.top + rect.bottom) / 2;
 				SetCursorPos(cx, cy);
 
-				p.x = cx;
-				p.y = cy;
+				previous.x = cx;
+				previous.y = cy;
 			}
 		}
-		else if (!recenter)
+		else if (!shouldRecenter)
 		{
 			ReleaseMouseCursor();
 		}
 	}
 
-	BOOL
-		RawMouse::OnLBDown(LPARAM l, WPARAM w)
+	LRESULT RawMouse::OnLBDown(LPARAM lParam, WPARAM wParam)
 	{
-		return OnLegacyMouseEvent(WM_LBUTTONDOWN, l, w);
+		return OnLegacyMouseEvent(WM_LBUTTONDOWN, lParam, wParam);
 	}
 
-	BOOL
-		RawMouse::OnLBUp(LPARAM l, WPARAM w)
+	LRESULT RawMouse::OnLBUp(LPARAM lParam, WPARAM wParam)
 	{
-		return OnLegacyMouseEvent(WM_LBUTTONUP, l, w);
+		return OnLegacyMouseEvent(WM_LBUTTONUP, lParam, wParam);
 	}
 
-	BOOL
-		RawMouse::OnRBDown(LPARAM l, WPARAM w)
+	LRESULT RawMouse::OnRBDown(LPARAM lParam, WPARAM wParam)
 	{
-		return OnLegacyMouseEvent(WM_RBUTTONDOWN, l, w);
+		return OnLegacyMouseEvent(WM_RBUTTONDOWN, lParam, wParam);
 	}
 
-	BOOL
-		RawMouse::OnRBUp(LPARAM l, WPARAM w)
+	LRESULT RawMouse::OnRBUp(LPARAM lParam, WPARAM wParam)
 	{
-		return OnLegacyMouseEvent(WM_RBUTTONUP, l, w);
+		return OnLegacyMouseEvent(WM_RBUTTONUP, lParam, wParam);
 	}
 
-	BOOL
-		RawMouse::OnMBDown(LPARAM l, WPARAM w)
+	LRESULT RawMouse::OnMBDown(LPARAM lParam, WPARAM wParam)
 	{
-		return OnLegacyMouseEvent(WM_MBUTTONDOWN, l, w);
+		return OnLegacyMouseEvent(WM_MBUTTONDOWN, lParam, wParam);
 	}
 
-	BOOL
-		RawMouse::OnMBUp(LPARAM l, WPARAM w)
+	LRESULT RawMouse::OnMBUp(LPARAM lParam, WPARAM wParam)
 	{
-		return OnLegacyMouseEvent(WM_MBUTTONUP, l, w);
+		return OnLegacyMouseEvent(WM_MBUTTONUP, lParam, wParam);
 	}
 
-	BOOL
-		RawMouse::OnXBDown(LPARAM l, WPARAM w)
+	LRESULT RawMouse::OnXBDown(LPARAM lParam, WPARAM wParam)
 	{
-		return OnLegacyMouseEvent(WM_XBUTTONDOWN, l, w);
+		return OnLegacyMouseEvent(WM_XBUTTONDOWN, lParam, wParam);
 	}
 
-	BOOL
-		RawMouse::OnXBUp(LPARAM l, WPARAM w)
+	LRESULT RawMouse::OnXBUp(LPARAM lParam, WPARAM wParam)
 	{
-		return OnLegacyMouseEvent(WM_XBUTTONUP, l, w);
+		return OnLegacyMouseEvent(WM_XBUTTONUP, lParam, wParam);
 	}
 
 	RawMouse::RawMouse()
 	{
-		Utils::Hook(0x475E65, IN_MouseMove, HOOK_JUMP).install()->quick();
-		Utils::Hook(0x475E8D, IN_MouseMove, HOOK_JUMP).install()->quick();
+		bool isExpected = Utils::Hook::BranchesTo(Sys_Init_INInitCall, IN_Init_Engine, false)
+			&& Utils::Hook::BranchesTo(MainWndProc_RecenterCall, IN_RecenterMouse_Engine, false);
 
-		Utils::Hook(0x467C03, IN_Init, HOOK_CALL).install()->quick();
-		Utils::Hook(0x64D095, IN_Init, HOOK_JUMP).install()->quick();
+		for (const auto call : IN_FrameCalls)
+		{
+			isExpected = isExpected && Utils::Hook::BranchesTo(call, IN_Frame_Engine, false);
+		}
 
-		Utils::Hook(0x60BFB9, IN_Frame, HOOK_CALL).install()->quick();
-		Utils::Hook(0x4A87E2, IN_Frame, HOOK_CALL).install()->quick();
-		Utils::Hook(0x48A0E6, IN_Frame, HOOK_CALL).install()->quick();
+		if (!isExpected)
+		{
+			Logger::Error("rawmouse: the input code does not read as expected, no raw input\n");
+			return;
+		}
 
-		Utils::Hook(0x473517, IN_RecenterMouse, HOOK_CALL).install()->quick();
+		std::size_t hookCount = 0;
+		bool isSeated = hooks[hookCount++].Initialize(Sys_Init_INInitCall, reinterpret_cast<void*>(IN_Init), HOOK_CALL)->Install()->IsInstalled();
 
-		OriginalCL_MouseEvent = Game::CL_MouseEvent;
-		Game::CL_MouseEvent = CL_MouseEventCustom;
-		CL_MouseEventHook.initialize(0x64C507, CL_MouseEventCustom, HOOK_CALL)->install()->quick();
+		for (const auto call : IN_FrameCalls)
+		{
+			isSeated = hooks[hookCount++].Initialize(call, reinterpret_cast<void*>(IN_Frame), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+		}
 
-		M_RawInput =
-			Dvar::Register<bool>("m_rawinput",
-				true,
-				Game::DVAR_ARCHIVE | Game::DVAR_SAVED,
-				"Use raw mouse input");
-		M_RawInputVerbose =
-			Dvar::Register<bool>("m_rawinput_verbose",
-				false,
-				Game::DVAR_ARCHIVE | Game::DVAR_SAVED,
-				"Show raw mouse input log");
+		isSeated = hooks[hookCount++].Initialize(MainWndProc_RecenterCall, reinterpret_cast<void*>(IN_RecenterMouse), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+
+		assert(hookCount == std::size(hooks));
+
+		if (!isSeated)
+		{
+			for (auto& hook : hooks)
+			{
+				hook.Uninstall();
+			}
+
+			Logger::Error("rawmouse: could not seat every hook, no raw input\n");
+			return;
+		}
+
+		Events::OnDvarInit([]
+		{
+			m_rawinput = Dvar::Register("m_rawinput", true, Game::DVAR_ARCHIVE, "Use raw mouse input");
+			m_rawinput_verbose = Dvar::Register("m_rawinput_verbose", false, Game::DVAR_ARCHIVE, "Show raw mouse input log");
+		});
 
 		Window::OnWndMessage(WM_KILLFOCUS, OnKillFocus);
 		Window::OnWndMessage(WM_SETFOCUS, OnSetFocus);
 
-		// It's verbose to hook every button message individually, but we need the
-		// Msg ID in arguments for the legacy handler.
-		//
 		Window::OnWndMessage(WM_LBUTTONDOWN, OnLBDown);
 		Window::OnWndMessage(WM_LBUTTONUP, OnLBUp);
 		Window::OnWndMessage(WM_RBUTTONDOWN, OnRBDown);

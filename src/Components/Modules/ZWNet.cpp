@@ -1,1649 +1,2079 @@
-#include <Utils/WebIO.hpp>
-#include <Utils/CSV.hpp>
+#include "STDInclude.hpp"
+
 #include <wincrypt.h>
 
 #include "ZWNet.hpp"
 #include "Auth.hpp"
 #include "Command.hpp"
+#include "Dedicated.hpp"
 #include "Events.hpp"
 #include "FileSystem.hpp"
 #include "Friends.hpp"
 #include "Localization.hpp"
+#include "Logger.hpp"
 #include "Maps.hpp"
 #include "Party.hpp"
 #include "Scheduler.hpp"
 #include "TextRenderer.hpp"
-#include "UIScript.hpp"
 
 namespace Components
 {
-	namespace
+	constexpr auto apiBase = "https://backend.zw3.eu";
+
+	constexpr auto clientVersion = "3.0.4";
+	constexpr auto modVersion = "3.0.4";
+	constexpr auto userAgent = "ZW3-ZWNET/3.0.4";
+
+	template <typename Callback>
+	class ScopeExit
 	{
-		constexpr auto ZWNET_API_BASE = "https://backend.zw3.eu";
-		constexpr auto ZWNET_CLIENT_VERSION = "3.0.3";
-		constexpr auto ZWNET_MOD_VERSION = "3.0.3";
-		constexpr std::size_t ZWNET_MATERIAL_ENUM_CAPACITY = 16384;
-		constexpr std::size_t ZWNET_PLAYLIST_PAGE_SIZE = 5;
-		constexpr std::size_t ZWNET_PLAYLIST_MAX_MAPS = 512;
-		constexpr auto ZWNET_CONTENT_MANIFEST = "zw3/core/zwnet-content-manifest.json";
-		constexpr std::uintmax_t ZWNET_CONTENT_MANIFEST_MAX_BYTES = 256 * 1024;
-		constexpr std::size_t ZWNET_CONTENT_MANIFEST_MAX_ENTRIES = 256;
-		constexpr std::size_t ZWNET_CONTENT_ENTRY_MAX_FILES = 32;
-		constexpr std::size_t ZWNET_CONTENT_MANIFEST_MAX_FILES = 1024;
-		constexpr std::uintmax_t ZWNET_CONTENT_MANIFEST_MAX_DECLARED_BYTES = 50ULL * 1024 * 1024 * 1024;
-		constexpr std::size_t ZWNET_CONTENT_HASH_BUFFER_SIZE = 1024 * 1024;
-
-		struct ClientContentFile
+	public:
+		explicit ScopeExit(Callback callback) : callback(std::move(callback))
 		{
-			std::filesystem::path relativePath;
-			std::uintmax_t size = 0;
-			std::string sha256;
-		};
+		}
 
-		struct ClientContentDefinition
+		~ScopeExit()
 		{
-			std::string id;
-			std::string version;
-			std::vector<ClientContentFile> files;
-		};
+			this->callback();
+		}
 
-		struct ClientContentManifest
+		ScopeExit(const ScopeExit&) = delete;
+		ScopeExit& operator=(const ScopeExit&) = delete;
+
+	private:
+		Callback callback;
+	};
+
+	struct SharedLobbyRank
+	{
+		int level = 1;
+		int prestige = 0;
+	};
+
+	struct LocalBarracksRank
+	{
+		int level = 1;
+		int prestige = 0;
+		int experience = 0;
+		int experienceTarget = 50;
+	};
+
+	struct LocalChallengeProgress
+	{
+		int progress = 0;
+		int tier = 0;
+	};
+
+	struct LocalBarracksChallenges
+	{
+		std::unordered_map<std::string, LocalChallengeProgress> entries;
+		int zombieKills = 0;
+		int zombieDeaths = 0;
+		int zombieRevives = 0;
+	};
+
+	struct ChallengeDefinition
+	{
+		std::string id;
+		std::array<int, 4> targets{};
+		std::array<int, 4> rewards{};
+	};
+
+	constexpr std::array challengeSlotProgressDvars
+	{
+		"zw3_ch_slot_0_progress", "zw3_ch_slot_1_progress", "zw3_ch_slot_2_progress",
+		"zw3_ch_slot_3_progress", "zw3_ch_slot_4_progress"
+	};
+
+	constexpr std::array challengeSlotTargetDvars
+	{
+		"zw3_ch_slot_0_target", "zw3_ch_slot_1_target", "zw3_ch_slot_2_target",
+		"zw3_ch_slot_3_target", "zw3_ch_slot_4_target"
+	};
+
+	constexpr std::array challengeSlotTierDvars
+	{
+		"zw3_ch_slot_0_tier", "zw3_ch_slot_1_tier", "zw3_ch_slot_2_tier",
+		"zw3_ch_slot_3_tier", "zw3_ch_slot_4_tier"
+	};
+
+	constexpr std::array challengeSlotTierCountDvars
+	{
+		"zw3_ch_slot_0_tier_count", "zw3_ch_slot_1_tier_count", "zw3_ch_slot_2_tier_count",
+		"zw3_ch_slot_3_tier_count", "zw3_ch_slot_4_tier_count"
+	};
+
+	constexpr std::array challengeSlotRewardDvars
+	{
+		"zw3_ch_slot_0_reward", "zw3_ch_slot_1_reward", "zw3_ch_slot_2_reward",
+		"zw3_ch_slot_3_reward", "zw3_ch_slot_4_reward"
+	};
+
+	constexpr std::array challengeSlotPercentDvars
+	{
+		"zw3_ch_slot_0_percent", "zw3_ch_slot_1_percent", "zw3_ch_slot_2_percent",
+		"zw3_ch_slot_3_percent", "zw3_ch_slot_4_percent"
+	};
+
+	constexpr std::array challengeSlotCompleteDvars
+	{
+		"zw3_ch_slot_0_complete", "zw3_ch_slot_1_complete", "zw3_ch_slot_2_complete",
+		"zw3_ch_slot_3_complete", "zw3_ch_slot_4_complete"
+	};
+
+	using SharedLobbyRankMap = std::unordered_map<std::string, SharedLobbyRank>;
+
+	static std::atomic_bool isActive = false;
+	static std::atomic_bool isSearching = false;
+	static std::atomic_bool isClosingOnlineSession = false;
+	static std::atomic_bool isServerJoinTransition = false;
+	static std::atomic_bool isOnlineEntryPending = false;
+	static std::atomic_bool isInGame = false;
+	static std::atomic_bool isLocalPartyLeader = false;
+	static std::atomic_bool isVisibilitySyncPending = false;
+	static std::atomic_bool isEndpointJoinInFlight = false;
+	static std::atomic_bool isTerminalDisconnectRequested = false;
+	static std::atomic_bool isCachedPartyJoinStateSupported = false;
+	static std::atomic_bool isIdleReturnPending = false;
+	static std::atomic_int desiredPartyPrivacy = 0;
+	static std::atomic_int cachedPartyMemberCount = 0;
+	static std::atomic_int cachedPartyVisibility = 2;
+
+	static std::mutex stateMutex;
+	static bool isLoginInFlight = false;
+	static std::string accessToken;
+	static std::string refreshToken;
+	static std::string currentPartyId;
+	static std::string currentPlayerId;
+	static std::string currentProposalId;
+	static std::string currentMatchId;
+	static std::string presenceUiState = "OFFLINE";
+
+	static std::mutex asyncTaskMutex;
+	static std::deque<std::function<void()>> asyncTasks;
+
+	static std::mutex sharedLobbyRankMutex;
+	static SharedLobbyRankMap sharedLobbyRanks;
+	static std::string sharedLobbyRankPartyId;
+	static std::chrono::steady_clock::time_point nextRankPublishAttempt{};
+	static std::string lastRankPublishPartyId;
+	static int lastRankPublishLevel = -1;
+	static int lastRankPublishPrestige = -1;
+
+	struct MatchLobbySoundDelta
+	{
+		bool hasJoined = false;
+		bool hasLeft = false;
+	};
+
+	static std::mutex matchLobbySoundMutex;
+	static std::string matchLobbySoundMatchId;
+	static std::unordered_set<std::string> matchLobbySoundMembers;
+	static bool isMatchLobbySoundInitialized = false;
+
+	static void SetDisplayText(const std::string& dvarName, const std::string& value)
+	{
+		Dvar::Var(dvarName).Set(TextRenderer::StripMaterialTextIcons(value));
+	}
+
+	static void SetPresenceUiState(const std::string& state)
+	{
+		std::lock_guard _(stateMutex);
+		presenceUiState = state;
+	}
+
+	static const char* PartyVisibilityName(const int privacy)
+	{
+		switch (privacy)
 		{
-			std::string version;
-			std::unordered_map<std::string, ClientContentDefinition> entries;
-			std::string error;
+		case 1:
+			return "INVITE_ONLY";
+		case 2:
+			return "CLOSED";
+		default:
+			return "OPEN";
+		}
+	}
 
-			[[nodiscard]] bool valid() const noexcept
+	static std::string NormalizePartyVisibility(std::string visibility)
+	{
+		std::ranges::transform(visibility, visibility.begin(), [](const unsigned char character)
+		{
+			return static_cast<char>(std::toupper(character));
+		});
+
+		if (visibility == "INVITE" || visibility == "FRIENDS")
+		{
+			return "INVITE_ONLY";
+		}
+
+		if (visibility != "OPEN" && visibility != "INVITE_ONLY" && visibility != "CLOSED")
+		{
+			return "OPEN";
+		}
+
+		return visibility;
+	}
+
+	static int PartyVisibilityValue(const std::string& visibility)
+	{
+		if (visibility == "CLOSED")
+		{
+			return 2;
+		}
+
+		if (visibility == "INVITE_ONLY")
+		{
+			return 1;
+		}
+
+		return 0;
+	}
+
+	static bool IsPartyJoinStateSupported(const std::string& state)
+	{
+		return state == "IDLE" || state == "IN_PARTY"
+			|| state == "SEARCHING" || state == "MATCH_FOUND"
+			|| state == "MAP_VOTE" || state == "READY_CHECK"
+			|| state == "WAITING_FOR_READY" || state == "RESERVING_SERVER"
+			|| state == "STARTING_SERVER" || state == "SERVER_STARTING"
+			|| state == "CONNECTING" || state == "IN_MATCH";
+	}
+
+	static bool IsOpaqueId(const std::string& value)
+	{
+		return std::ranges::all_of(value, [](const unsigned char character)
+		{
+			return std::isalnum(character) != 0 || character == '-' || character == '_';
+		});
+	}
+
+	static bool IsOpaquePartyId(const std::string& value)
+	{
+		return value.starts_with("pty_") && value.size() <= 80 && IsOpaqueId(value);
+	}
+
+	static bool IsOpaqueJoinCapability(const std::string& value)
+	{
+		return value.size() >= 16 && value.size() <= 256 && IsOpaqueId(value);
+	}
+
+	static bool IsOpaqueMatchId(const std::string& value)
+	{
+		return value.starts_with("mat_") && value.size() <= 80 && IsOpaqueId(value);
+	}
+
+	static bool IsOpaqueDescriptorValue(const std::string& value)
+	{
+		return !value.empty() && value.size() <= 128 && IsOpaqueId(value);
+	}
+
+	constexpr std::size_t playlistPageSize = 5;
+	constexpr std::size_t playlistMaxMaps = 512;
+	constexpr auto contentManifestPath = "zw3/core/zwnet-content-manifest.json";
+	constexpr std::uintmax_t contentManifestMaxBytes = 256 * 1024;
+	constexpr std::size_t contentManifestMaxEntries = 256;
+	constexpr std::size_t contentEntryMaxFiles = 32;
+	constexpr std::size_t contentManifestMaxFiles = 1024;
+	constexpr std::uintmax_t contentManifestMaxDeclaredBytes = 50ULL * 1024 * 1024 * 1024;
+	constexpr std::size_t contentHashBufferSize = 1024 * 1024;
+
+	constexpr std::array playlistSlotVisibleDvars
+	{
+		"zwnet_catalog_slot_0_visible", "zwnet_catalog_slot_1_visible", "zwnet_catalog_slot_2_visible",
+		"zwnet_catalog_slot_3_visible", "zwnet_catalog_slot_4_visible"
+	};
+
+	constexpr std::array playlistSlotSelectedDvars
+	{
+		"zwnet_catalog_slot_0_selected", "zwnet_catalog_slot_1_selected", "zwnet_catalog_slot_2_selected",
+		"zwnet_catalog_slot_3_selected", "zwnet_catalog_slot_4_selected"
+	};
+
+	constexpr std::array playlistSlotNameDvars
+	{
+		"zwnet_catalog_slot_0_name", "zwnet_catalog_slot_1_name", "zwnet_catalog_slot_2_name",
+		"zwnet_catalog_slot_3_name", "zwnet_catalog_slot_4_name"
+	};
+
+	constexpr std::array playlistSlotDescriptionDvars
+	{
+		"zwnet_catalog_slot_0_description", "zwnet_catalog_slot_1_description", "zwnet_catalog_slot_2_description",
+		"zwnet_catalog_slot_3_description", "zwnet_catalog_slot_4_description"
+	};
+
+	constexpr std::array playlistSlotPreviewDvars
+	{
+		"zwnet_catalog_slot_0_preview", "zwnet_catalog_slot_1_preview", "zwnet_catalog_slot_2_preview",
+		"zwnet_catalog_slot_3_preview", "zwnet_catalog_slot_4_preview"
+	};
+
+	constexpr std::array playlistSlotImageDvars
+	{
+		"zwnet_catalog_slot_0_image", "zwnet_catalog_slot_1_image", "zwnet_catalog_slot_2_image",
+		"zwnet_catalog_slot_3_image", "zwnet_catalog_slot_4_image"
+	};
+
+	constexpr std::array playlistSlotAudienceDvars
+	{
+		"zwnet_catalog_slot_0_audience", "zwnet_catalog_slot_1_audience", "zwnet_catalog_slot_2_audience",
+		"zwnet_catalog_slot_3_audience", "zwnet_catalog_slot_4_audience"
+	};
+
+	constexpr std::array playlistSlotAvailabilityDvars
+	{
+		"zwnet_catalog_slot_0_availability", "zwnet_catalog_slot_1_availability", "zwnet_catalog_slot_2_availability",
+		"zwnet_catalog_slot_3_availability", "zwnet_catalog_slot_4_availability"
+	};
+
+	constexpr std::array playlistSlotStatusDvars
+	{
+		"zwnet_catalog_slot_0_status", "zwnet_catalog_slot_1_status", "zwnet_catalog_slot_2_status",
+		"zwnet_catalog_slot_3_status", "zwnet_catalog_slot_4_status"
+	};
+
+	struct ClientContentFile
+	{
+		std::filesystem::path relativePath;
+		std::uintmax_t size = 0;
+		std::string sha256;
+	};
+
+	struct ClientContentDefinition
+	{
+		std::string id;
+		std::string version;
+		std::vector<ClientContentFile> files;
+	};
+
+	struct ClientContentManifest
+	{
+		std::string version;
+		std::unordered_map<std::string, ClientContentDefinition> entries;
+		std::string error;
+	};
+
+	struct ClientContentFileStamp
+	{
+		std::uintmax_t size = 0;
+		std::filesystem::file_time_type modified{};
+
+		bool operator==(const ClientContentFileStamp&) const = default;
+	};
+
+	struct ClientContentHash
+	{
+		ClientContentFileStamp stamp;
+		std::string sha256;
+	};
+
+	struct ClientPlaylist
+	{
+		std::string id;
+		std::string name;
+		std::string description;
+		std::string audience;
+		std::string availability;
+		std::string preview;
+		std::string mapId;
+		std::string mapImage;
+		std::string rotationSummary;
+		std::string zombieSettingsSummary;
+		int minPlayers = 1;
+		int maxPlayers = 4;
+		std::string availabilityDetail;
+		std::vector<std::string> requiredContent;
+		std::vector<std::string> verifiedContent;
+		std::int64_t revision = 0;
+	};
+
+	struct ClientPlaylistCatalog
+	{
+		std::mutex mutex;
+		std::vector<ClientPlaylist> entries;
+		std::vector<ClientPlaylist> pendingEntries;
+		std::string accountId;
+		std::string selectedId;
+		std::string partySelectedId;
+		std::int64_t revision = 0;
+		std::int64_t pendingRevision = 0;
+		std::int64_t partySelectedRevision = 0;
+		std::uint64_t generation = 0;
+		std::size_t page = 0;
+		bool isLoaded = false;
+		bool isStale = false;
+		bool isInFlight = false;
+		bool hasPending = false;
+		bool hasNotice = false;
+		std::chrono::steady_clock::time_point lastAttempt{};
+	};
+
+	struct JoinPreviewState
+	{
+		std::mutex mutex;
+		std::uint64_t generation = 0;
+		std::string matchId;
+		std::string completedMatchId;
+		bool isActive = false;
+	};
+
+	static std::mutex contentHashMutex;
+	static std::unordered_map<std::string, ClientContentHash> contentHashCache;
+
+	static ClientPlaylistCatalog playlistCatalog;
+	static std::atomic_bool isPlaylistSearchStarting = false;
+	static std::atomic_bool isPlaylistSelectionStarting = false;
+	static std::atomic_bool isPlaylistSelectorOpen = false;
+	static std::atomic_uint64_t playlistSelectorGeneration = 0;
+	static std::atomic_int64_t playlistSelectorOpenedAtMs = 0;
+
+	static JoinPreviewState joinPreview;
+	static std::atomic_bool isJoinInProgressSoundPending = false;
+	static std::atomic_bool isNetworkMetricsEnabled = false;
+	static std::atomic_uint64_t joinTransitionGeneration = 0;
+	static std::chrono::steady_clock::time_point lastMetricsSuccess{};
+
+	struct ManagedRouteAttempt
+	{
+		std::mutex mutex;
+		std::string matchId;
+		std::string playerId;
+		std::string sessionId;
+		std::string serverIdentity;
+		std::string instanceId;
+		Network::Address directTarget;
+		Network::Address assignedTarget;
+		bool isDirectWaiting = false;
+		bool isRelayUsed = false;
+		bool isRouteRelay = false;
+		bool isReconnectAttempt = false;
+	};
+
+	struct RelayHandshake
+	{
+		std::mutex mutex;
+		std::uint64_t generation = 0;
+		bool isPending = false;
+		bool isReady = false;
+		Network::Address target;
+		std::string matchId;
+		std::string playerId;
+		std::string nonce;
+		std::string hello;
+		std::chrono::steady_clock::time_point deadline{};
+	};
+
+	constexpr auto relayHandshakeTimeout = 8s;
+	constexpr std::size_t relayPacketLimit = 1400;
+	constexpr std::size_t relayReadyLimit = 256;
+
+	static ManagedRouteAttempt routeAttempt;
+	static RelayHandshake relayHandshake;
+	static std::atomic_bool isManagedReconnectInFlight = false;
+
+	static void CancelRelayHandshake()
+	{
+		std::lock_guard _(relayHandshake.mutex);
+
+		++relayHandshake.generation;
+		relayHandshake.isPending = false;
+		relayHandshake.isReady = false;
+		std::ranges::fill(relayHandshake.hello, '\0');
+		relayHandshake.hello.clear();
+		relayHandshake.nonce.clear();
+		relayHandshake.matchId.clear();
+		relayHandshake.playerId.clear();
+	}
+
+	static void ClearManagedRouteAttempt()
+	{
+		std::lock_guard _(routeAttempt.mutex);
+
+		routeAttempt.matchId.clear();
+		routeAttempt.playerId.clear();
+		routeAttempt.sessionId.clear();
+		routeAttempt.serverIdentity.clear();
+		routeAttempt.instanceId.clear();
+		routeAttempt.isDirectWaiting = false;
+		routeAttempt.isRelayUsed = false;
+		routeAttempt.isRouteRelay = false;
+		routeAttempt.isReconnectAttempt = false;
+	}
+
+	static void MarkManagedRouteConnected()
+	{
+		std::lock_guard _(routeAttempt.mutex);
+		routeAttempt.isDirectWaiting = false;
+	}
+
+	static bool IsRelayUsedForMatch(const std::string& matchId)
+	{
+		std::lock_guard _(routeAttempt.mutex);
+		return routeAttempt.matchId == matchId && routeAttempt.isRelayUsed;
+	}
+
+	static void ResetManagedRoute()
+	{
+		isManagedReconnectInFlight = false;
+		CancelRelayHandshake();
+		ClearManagedRouteAttempt();
+		Auth::ClearManagedConnectTicket();
+	}
+
+	static std::int64_t PlaylistClockMilliseconds()
+	{
+		return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+	}
+
+	static bool IsCurrentPlaylistActivation(const std::uint64_t generation)
+	{
+		return isPlaylistSelectorOpen && playlistSelectorGeneration == generation;
+	}
+
+	static std::string SafePlaylistText(const std::string& value, const std::size_t limit)
+	{
+		std::string safe;
+		safe.reserve(std::min(value.size(), limit));
+
+		for (const auto character : value)
+		{
+			if (safe.size() >= limit)
 			{
-				return error.empty();
+				break;
 			}
-		};
 
-		struct ClientContentFileStamp
-		{
-			std::uintmax_t size = 0;
-			std::filesystem::file_time_type modified{};
+			const auto code = static_cast<unsigned char>(character);
 
-			bool operator==(const ClientContentFileStamp&) const = default;
-		};
-
-		struct ClientContentHash
-		{
-			ClientContentFileStamp stamp;
-			std::string sha256;
-		};
-
-		std::mutex ClientContentHashMutex;
-		std::unordered_map<std::string, ClientContentHash> ClientContentHashCache;
-
-		struct ClientPlaylist
-		{
-			std::string id;
-			std::string name;
-			std::string description;
-			std::string audience;
-			std::string availability;
-			std::string preview;
-			std::string mapId;
-			std::string mapImage;
-			std::string rotationSummary;
-			std::string zombieSettingsSummary;
-			int minPlayers = 1;
-			int maxPlayers = 4;
-			std::string availabilityDetail;
-			std::vector<std::string> requiredContent;
-			std::vector<std::string> verifiedContent;
-			std::int64_t revision = 0;
-		};
-
-		struct ClientPlaylistCatalog
-		{
-			std::mutex mutex;
-			std::vector<ClientPlaylist> entries;
-			std::vector<ClientPlaylist> pendingEntries;
-			std::string accountId;
-			std::string selectedId;
-			std::string partySelectedId;
-			std::int64_t revision = 0;
-			std::int64_t pendingRevision = 0;
-			std::int64_t partySelectedRevision = 0;
-			std::uint64_t generation = 0;
-			std::size_t page = 0;
-			bool loaded = false;
-			bool stale = false;
-			bool inFlight = false;
-			bool hasPending = false;
-			bool notice = false;
-			std::chrono::steady_clock::time_point lastAttempt{};
-		};
-
-		ClientPlaylistCatalog& PlaylistCatalogState()
-		{
-			static ClientPlaylistCatalog value;
-			return value;
-		}
-
-		std::atomic_bool& PlaylistSearchStarting()
-		{
-			static std::atomic_bool value = false;
-			return value;
-		}
-
-		std::atomic_bool& PlaylistSelectionStarting()
-		{
-			static std::atomic_bool value = false;
-			return value;
-		}
-
-		std::atomic_bool& PlaylistSelectorOpen()
-		{
-			static std::atomic_bool value = false;
-			return value;
-		}
-
-		std::atomic_uint64_t& PlaylistSelectorGeneration()
-		{
-			static std::atomic_uint64_t value = 0;
-			return value;
-		}
-
-		std::atomic_int64_t& PlaylistSelectorOpenedAt()
-		{
-			static std::atomic_int64_t value = 0;
-			return value;
-		}
-
-		std::int64_t PlaylistClockMilliseconds()
-		{
-			return std::chrono::duration_cast<std::chrono::milliseconds>(
-				std::chrono::steady_clock::now().time_since_epoch()).count();
-		}
-
-		bool IsCurrentPlaylistActivation(const std::uint64_t generation)
-		{
-			return PlaylistSelectorOpen() && PlaylistSelectorGeneration() == generation;
-		}
-
-		std::string SafePlaylistText(const std::string& value, const std::size_t limit)
-		{
-			std::string safe;
-			safe.reserve(std::min(value.size(), limit));
-			for (const auto c : value)
+			if (code < 32 || code == 127)
 			{
-				if (safe.size() >= limit) break;
-				if (static_cast<unsigned char>(c) < 32 || c == 127) continue;
-				safe.push_back(c);
+				continue;
 			}
-			return safe;
+
+			safe.push_back(character);
 		}
 
-		bool IsContentId(const std::string& value)
+		return safe;
+	}
+
+	static const char* OnOffText(const bool isOn)
+	{
+		if (isOn)
 		{
-			return !value.empty() && value.size() <= 120 &&
-				std::ranges::all_of(value, [](const unsigned char c)
-				{
-					return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-						(c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-';
-				});
+			return "ON";
 		}
 
-		bool IsLowerSha256(const std::string& value)
+		return "OFF";
+	}
+
+	static bool IsContentId(const std::string& value)
+	{
+		if (value.empty() || value.size() > 120)
 		{
-			return value.size() == 64 && std::ranges::all_of(value, [](const unsigned char c)
-			{
-				return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
-			});
+			return false;
 		}
 
-		std::optional<std::filesystem::path> SafeContentRelativePath(const std::string& raw)
+		return std::ranges::all_of(value, [](const unsigned char character)
 		{
-			if (raw.empty() || raw.size() > 240 || raw.find('\\') != std::string::npos ||
-				raw.find(':') != std::string::npos ||
-				raw.front() == '/' || raw.back() == '/') return std::nullopt;
-			const std::filesystem::path relative{raw};
-			if (relative.is_absolute() || relative.has_root_path()) return std::nullopt;
-			for (const auto& part : relative)
+			return std::isalnum(character) != 0 || character == '_' || character == '.' || character == '-';
+		});
+	}
+
+	static bool IsLowerSha256(const std::string& value)
+	{
+		return value.size() == 64 && std::ranges::all_of(value, [](const unsigned char character)
+		{
+			return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f');
+		});
+	}
+
+	static bool IsPlaylistId(const std::string& value)
+	{
+		return std::ranges::all_of(value, [](const unsigned char character)
+		{
+			return std::isalnum(character) != 0 || character == '-' || character == '_';
+		});
+	}
+
+	static std::optional<std::filesystem::path> TryGetContentRelativePath(const std::string& raw)
+	{
+		if (raw.empty() || raw.size() > 240 || raw.find('\\') != std::string::npos || raw.find(':') != std::string::npos
+			|| raw.front() == '/' || raw.back() == '/')
+		{
+			return std::nullopt;
+		}
+
+		const std::filesystem::path relative{ raw };
+
+		if (relative.is_absolute() || relative.has_root_path())
+		{
+			return std::nullopt;
+		}
+
+		for (const auto& part : relative)
+		{
+			if (part == "." || part == ".." || part.empty())
 			{
-				if (part == "." || part == ".." || part.empty()) return std::nullopt;
-			}
-			const auto normalized = relative.generic_string();
-			if (normalized != raw) return std::nullopt;
-			static constexpr std::array allowedPrefixes
-			{
-				"zw3/", "main/", "zone/", "usermaps/", "userraw/"
-			};
-			if (normalized != "zw3.dll" && normalized != "zw3.exe" &&
-				!std::ranges::any_of(allowedPrefixes,
-					[&](const std::string_view prefix) { return normalized.starts_with(prefix); }))
 				return std::nullopt;
-			return relative;
+			}
 		}
 
-		std::optional<ClientContentFileStamp> ContentFileStamp(const std::filesystem::path& path)
+		const auto normalized = relative.generic_string();
+
+		if (normalized != raw)
 		{
-			std::error_code error;
-			if (!std::filesystem::is_regular_file(path, error) || error) return std::nullopt;
-			const auto size = std::filesystem::file_size(path, error);
-			if (error) return std::nullopt;
-			const auto modified = std::filesystem::last_write_time(path, error);
-			if (error) return std::nullopt;
-			return ClientContentFileStamp{size, modified};
+			return std::nullopt;
 		}
 
-		std::optional<std::filesystem::path> ResolveContentFile(const std::filesystem::path& base,
-			const std::filesystem::path& relative)
+		static constexpr std::array<std::string_view, 5> allowedPrefixes
 		{
-			std::error_code error;
-			const auto resolved = std::filesystem::canonical(base / relative, error);
-			if (error) return std::nullopt;
-			const auto within = resolved.lexically_relative(base);
-			if (within.empty() || within.is_absolute() || *within.begin() == "..") return std::nullopt;
-			return resolved;
+			"zw3/", "main/", "zone/", "usermaps/", "userraw/"
+		};
+
+		const bool isAllowedPrefix = std::ranges::any_of(allowedPrefixes, [&normalized](const std::string_view prefix)
+		{
+			return normalized.starts_with(prefix);
+		});
+
+		if (normalized != "zw3.dll" && normalized != "zw3.exe" && !isAllowedPrefix)
+		{
+			return std::nullopt;
 		}
 
-		std::optional<std::string> HashContentFile(const std::filesystem::path& path,
-			const ClientContentFileStamp& expectedStamp)
-		{
-			const auto cacheKey = path.lexically_normal().generic_string();
-			{
-				std::lock_guard lock(ClientContentHashMutex);
-				if (const auto cached = ClientContentHashCache.find(cacheKey);
-					cached != ClientContentHashCache.end() && cached->second.stamp == expectedStamp)
-					return cached->second.sha256;
-			}
+		return relative;
+	}
 
-			const auto file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
-				nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
-			if (file == INVALID_HANDLE_VALUE) return std::nullopt;
-			const auto closeFile = gsl::finally([file] { CloseHandle(file); });
-			hash_state state{};
-			if (sha256_init(&state) != CRYPT_OK) return std::nullopt;
-			std::vector<unsigned char> buffer(ZWNET_CONTENT_HASH_BUFFER_SIZE);
-			for (;;)
-			{
-				DWORD bytesRead = 0;
-				if (!ReadFile(file, buffer.data(), static_cast<DWORD>(buffer.size()), &bytesRead, nullptr))
-					return std::nullopt;
-				if (bytesRead == 0) break;
-				if (sha256_process(&state, buffer.data(), bytesRead) != CRYPT_OK) return std::nullopt;
-			}
-			std::array<unsigned char, 32> digest{};
-			if (sha256_done(&state, digest.data()) != CRYPT_OK) return std::nullopt;
-			const auto finalStamp = ContentFileStamp(path);
-			if (!finalStamp || *finalStamp != expectedStamp) return std::nullopt;
-			static constexpr char hex[] = "0123456789abcdef";
-			std::string result;
-			result.resize(digest.size() * 2);
-			for (std::size_t i = 0; i < digest.size(); ++i)
-			{
-				result[i * 2] = hex[digest[i] >> 4];
-				result[i * 2 + 1] = hex[digest[i] & 0x0F];
-			}
-			{
-				std::lock_guard lock(ClientContentHashMutex);
-				ClientContentHashCache[cacheKey] = {*finalStamp, result};
-			}
-			return result;
+	static std::optional<ClientContentFileStamp> TryGetContentFileStamp(const std::filesystem::path& path)
+	{
+		std::error_code error;
+
+		if (!std::filesystem::is_regular_file(path, error) || error)
+		{
+			return std::nullopt;
 		}
 
-		ClientContentManifest LoadClientContentManifest()
+		const auto size = std::filesystem::file_size(path, error);
+
+		if (error)
 		{
-			ClientContentManifest manifest;
-			std::error_code error;
-			const auto basePath = std::filesystem::canonical(
-				std::filesystem::path{(*Game::fs_basepath)->current.string}, error);
-			const auto path = error ? std::nullopt :
-				ResolveContentFile(basePath, std::filesystem::path{ZWNET_CONTENT_MANIFEST});
-			const auto size = path ? std::filesystem::file_size(*path, error) : 0;
-			if (error || size == 0 || size > ZWNET_CONTENT_MANIFEST_MAX_BYTES)
+			return std::nullopt;
+		}
+
+		const auto modified = std::filesystem::last_write_time(path, error);
+
+		if (error)
+		{
+			return std::nullopt;
+		}
+
+		return ClientContentFileStamp{ size, modified };
+	}
+
+	static std::optional<std::filesystem::path> TryResolveContentFile(const std::filesystem::path& base, const std::filesystem::path& relative)
+	{
+		std::error_code error;
+		const auto resolved = std::filesystem::canonical(base / relative, error);
+
+		if (error)
+		{
+			return std::nullopt;
+		}
+
+		const auto within = resolved.lexically_relative(base);
+
+		if (within.empty() || within.is_absolute() || *within.begin() == "..")
+		{
+			return std::nullopt;
+		}
+
+		return resolved;
+	}
+
+	static std::optional<std::string> TryHashContentFile(const std::filesystem::path& path, const ClientContentFileStamp& expectedStamp)
+	{
+		const auto cacheKey = path.lexically_normal().generic_string();
+
+		{
+			std::lock_guard _(contentHashMutex);
+
+			const auto cached = contentHashCache.find(cacheKey);
+
+			if (cached != contentHashCache.end() && cached->second.stamp == expectedStamp)
 			{
-				manifest.error = "The local ZW3 content manifest is missing or too large.";
-				return manifest;
+				return cached->second.sha256;
 			}
-			std::string serialized;
-			if (!path || !Utils::IO::ReadFile(path->string(), &serialized) || serialized.size() != size)
+		}
+
+		const auto file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+			FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+
+		if (file == INVALID_HANDLE_VALUE)
+		{
+			return std::nullopt;
+		}
+
+		ScopeExit closeFile([file]
+		{
+			CloseHandle(file);
+		});
+
+		hash_state state{};
+
+		if (sha256_init(&state) != CRYPT_OK)
+		{
+			return std::nullopt;
+		}
+
+		std::vector<unsigned char> buffer(contentHashBufferSize);
+
+		while (true)
+		{
+			DWORD bytesRead = 0;
+
+			if (!::ReadFile(file, buffer.data(), static_cast<DWORD>(buffer.size()), &bytesRead, nullptr))
 			{
-				manifest.error = "The local ZW3 content manifest could not be read.";
-				return manifest;
+				return std::nullopt;
 			}
-			const auto document = nlohmann::json::parse(serialized, nullptr, false);
-			if (!document.is_object() || document.value("schema_version", 0) != 1 ||
-				!document.contains("manifest_version") || !document.at("manifest_version").is_string() ||
-				!document.contains("content") || !document.at("content").is_array() ||
-				document.at("content").size() > ZWNET_CONTENT_MANIFEST_MAX_ENTRIES)
+
+			if (bytesRead == 0)
 			{
-				manifest.error = "The local ZW3 content manifest is invalid.";
-				return manifest;
+				break;
 			}
-			manifest.version = document.at("manifest_version").get<std::string>();
-			if (manifest.version.empty() || manifest.version.size() > 64)
+
+			if (sha256_process(&state, buffer.data(), bytesRead) != CRYPT_OK)
 			{
-				manifest.error = "The local ZW3 content manifest version is invalid.";
-				return manifest;
+				return std::nullopt;
 			}
-			std::size_t totalFiles = 0;
-			std::uintmax_t totalBytes = 0;
-			for (const auto& item : document.at("content"))
-			{
-				if (!item.is_object() || !item.contains("id") || !item.at("id").is_string() ||
-					!item.contains("version") || !item.at("version").is_string() ||
-					!item.contains("files") || !item.at("files").is_array() ||
-					item.at("files").empty() || item.at("files").size() > ZWNET_CONTENT_ENTRY_MAX_FILES)
-				{
-					manifest.error = "A local ZW3 content definition is invalid.";
-					return manifest;
-				}
-				ClientContentDefinition definition;
-				definition.id = item.at("id").get<std::string>();
-				definition.version = item.at("version").get<std::string>();
-				if (!IsContentId(definition.id) || definition.version.empty() ||
-					definition.version.size() > 64 || manifest.entries.contains(definition.id))
-				{
-					manifest.error = "A local ZW3 content identity is invalid or duplicated.";
-					return manifest;
-				}
-				totalFiles += item.at("files").size();
-				if (totalFiles > ZWNET_CONTENT_MANIFEST_MAX_FILES)
-				{
-					manifest.error = "The local ZW3 content manifest defines too many files.";
-					return manifest;
-				}
-				std::unordered_set<std::string> paths;
-				for (const auto& file : item.at("files"))
-				{
-					if (!file.is_object() || !file.contains("path") || !file.at("path").is_string() ||
-						!file.contains("size") || !file.at("size").is_number_unsigned() ||
-						!file.contains("sha256") || !file.at("sha256").is_string())
-					{
-						manifest.error = "A local ZW3 content file definition is invalid.";
-						return manifest;
-					}
-					const auto rawPath = file.at("path").get<std::string>();
-					const auto relativePath = SafeContentRelativePath(rawPath);
-					const auto sha256 = file.at("sha256").get<std::string>();
-					const auto fileSize = file.at("size").get<std::uintmax_t>();
-					if (!relativePath || !paths.insert(Utils::String::ToLower(rawPath)).second ||
-						!IsLowerSha256(sha256) ||
-						fileSize > ZWNET_CONTENT_MANIFEST_MAX_DECLARED_BYTES - totalBytes)
-					{
-						manifest.error = "A local ZW3 content file path or hash is invalid.";
-						return manifest;
-					}
-					totalBytes += fileSize;
-					definition.files.push_back({*relativePath, fileSize, sha256});
-				}
-				manifest.entries.emplace(definition.id, std::move(definition));
-			}
+		}
+
+		std::array<unsigned char, 32> digest{};
+
+		if (sha256_done(&state, digest.data()) != CRYPT_OK)
+		{
+			return std::nullopt;
+		}
+
+		const auto finalStamp = TryGetContentFileStamp(path);
+
+		if (!finalStamp || *finalStamp != expectedStamp)
+		{
+			return std::nullopt;
+		}
+
+		static constexpr char hexDigits[] = "0123456789abcdef";
+
+		std::string result;
+		result.resize(digest.size() * 2);
+
+		for (std::size_t i = 0; i < digest.size(); ++i)
+		{
+			result[i * 2] = hexDigits[digest[i] >> 4];
+			result[i * 2 + 1] = hexDigits[digest[i] & 0x0F];
+		}
+
+		{
+			std::lock_guard _(contentHashMutex);
+			contentHashCache[cacheKey] = { *finalStamp, result };
+		}
+
+		return result;
+	}
+
+	static ClientContentManifest LoadClientContentManifest()
+	{
+		ClientContentManifest manifest;
+
+		std::error_code error;
+		const auto basePath = std::filesystem::canonical(std::filesystem::path{ (*Game::fs_basepath)->current.string }, error);
+
+		std::optional<std::filesystem::path> path;
+		std::uintmax_t size = 0;
+
+		if (!error)
+		{
+			path = TryResolveContentFile(basePath, std::filesystem::path{ contentManifestPath });
+		}
+
+		if (path)
+		{
+			size = std::filesystem::file_size(*path, error);
+		}
+
+		if (error || size == 0 || size > contentManifestMaxBytes)
+		{
+			manifest.error = "The local ZW3 content manifest is missing or too large.";
 			return manifest;
 		}
 
-		void VerifyPlaylistContent(std::vector<ClientPlaylist>& entries)
+		std::string serialized;
+
+		if (!path || !Utils::IO::ReadFile(path->string(), &serialized) || serialized.size() != size)
 		{
-			if (!std::ranges::any_of(entries,
-				[](const ClientPlaylist& entry) { return !entry.requiredContent.empty(); }))
+			manifest.error = "The local ZW3 content manifest could not be read.";
+			return manifest;
+		}
+
+		const auto document = nlohmann::json::parse(serialized, nullptr, false);
+
+		const bool isValidDocument = document.is_object() && document.value("schema_version", 0) == 1
+			&& document.contains("manifest_version") && document.at("manifest_version").is_string()
+			&& document.contains("content") && document.at("content").is_array()
+			&& document.at("content").size() <= contentManifestMaxEntries;
+
+		if (!isValidDocument)
+		{
+			manifest.error = "The local ZW3 content manifest is invalid.";
+			return manifest;
+		}
+
+		manifest.version = document.at("manifest_version").get<std::string>();
+
+		if (manifest.version.empty() || manifest.version.size() > 64)
+		{
+			manifest.error = "The local ZW3 content manifest version is invalid.";
+			return manifest;
+		}
+
+		std::size_t totalFiles = 0;
+		std::uintmax_t totalBytes = 0;
+
+		for (const auto& item : document.at("content"))
+		{
+			const bool isValidItem = item.is_object() && item.contains("id") && item.at("id").is_string()
+				&& item.contains("version") && item.at("version").is_string()
+				&& item.contains("files") && item.at("files").is_array()
+				&& !item.at("files").empty() && item.at("files").size() <= contentEntryMaxFiles;
+
+			if (!isValidItem)
 			{
-				for (auto& entry : entries)
-					entry.availabilityDetail = entry.availability == "AVAILABLE"
-						? "Ready to search." : "No compatible server capacity is available.";
-				return;
+				manifest.error = "A local ZW3 content definition is invalid.";
+				return manifest;
 			}
 
-			const auto manifest = LoadClientContentManifest();
-			std::error_code baseError;
-			const auto basePath = std::filesystem::canonical(
-				std::filesystem::path{(*Game::fs_basepath)->current.string}, baseError);
+			ClientContentDefinition definition;
+			definition.id = item.at("id").get<std::string>();
+			definition.version = item.at("version").get<std::string>();
+
+			if (!IsContentId(definition.id) || definition.version.empty() || definition.version.size() > 64
+				|| manifest.entries.contains(definition.id))
+			{
+				manifest.error = "A local ZW3 content identity is invalid or duplicated.";
+				return manifest;
+			}
+
+			totalFiles += item.at("files").size();
+
+			if (totalFiles > contentManifestMaxFiles)
+			{
+				manifest.error = "The local ZW3 content manifest defines too many files.";
+				return manifest;
+			}
+
+			std::unordered_set<std::string> paths;
+
+			for (const auto& file : item.at("files"))
+			{
+				const bool isValidFile = file.is_object() && file.contains("path") && file.at("path").is_string()
+					&& file.contains("size") && file.at("size").is_number_unsigned()
+					&& file.contains("sha256") && file.at("sha256").is_string();
+
+				if (!isValidFile)
+				{
+					manifest.error = "A local ZW3 content file definition is invalid.";
+					return manifest;
+				}
+
+				const auto rawPath = file.at("path").get<std::string>();
+				const auto relativePath = TryGetContentRelativePath(rawPath);
+				const auto sha256 = file.at("sha256").get<std::string>();
+				const auto fileSize = file.at("size").get<std::uintmax_t>();
+
+				if (!relativePath || !paths.insert(Utils::String::ToLower(rawPath)).second || !IsLowerSha256(sha256)
+					|| fileSize > contentManifestMaxDeclaredBytes - totalBytes)
+				{
+					manifest.error = "A local ZW3 content file path or hash is invalid.";
+					return manifest;
+				}
+
+				totalBytes += fileSize;
+				definition.files.push_back({ *relativePath, fileSize, sha256 });
+			}
+
+			manifest.entries.emplace(definition.id, std::move(definition));
+		}
+
+		return manifest;
+	}
+
+	static void VerifyPlaylistContent(std::vector<ClientPlaylist>& entries)
+	{
+		const bool needsContent = std::ranges::any_of(entries, [](const ClientPlaylist& entry)
+		{
+			return !entry.requiredContent.empty();
+		});
+
+		if (!needsContent)
+		{
 			for (auto& entry : entries)
 			{
-				entry.verifiedContent.clear();
-				if (entry.availability != "AVAILABLE")
-				{
-					entry.availabilityDetail = "No compatible server capacity is available.";
-					continue;
-				}
-				if (entry.requiredContent.empty())
+				entry.availabilityDetail = "No compatible server capacity is available.";
+
+				if (entry.availability == "AVAILABLE")
 				{
 					entry.availabilityDetail = "Ready to search.";
-					continue;
-				}
-				if (!manifest.valid() || baseError)
-				{
-					entry.availability = "CONTENT_MANIFEST_INVALID";
-					entry.availabilityDetail = baseError ?
-						"The local ZW3 game root could not be verified." : manifest.error;
-					continue;
-				}
-				bool failed = false;
-				for (const auto& contentId : entry.requiredContent)
-				{
-					const auto definition = manifest.entries.find(contentId);
-					if (definition == manifest.entries.end())
-					{
-						entry.availability = "CONTENT_UNKNOWN";
-						entry.availabilityDetail = SafePlaylistText(
-							"Update required: content " + contentId + " is not defined locally.", 180);
-						failed = true;
-						break;
-					}
-					for (const auto& file : definition->second.files)
-					{
-						const auto absolutePath = ResolveContentFile(basePath, file.relativePath);
-						const auto stamp = absolutePath ? ContentFileStamp(*absolutePath) : std::nullopt;
-						if (!stamp || stamp->size != file.size)
-						{
-							entry.availability = "CONTENT_MISSING";
-							entry.availabilityDetail = SafePlaylistText(
-								"Update required: " + contentId + " is missing " + file.relativePath.generic_string() + ".", 180);
-							failed = true;
-							break;
-						}
-						const auto hash = HashContentFile(*absolutePath, *stamp);
-						if (!hash || *hash != file.sha256)
-						{
-							entry.availability = "CONTENT_CORRUPT";
-							entry.availabilityDetail = SafePlaylistText(
-								"Repair required: " + contentId + " failed its integrity check.", 180);
-							failed = true;
-							break;
-						}
-					}
-					if (failed) break;
-					entry.verifiedContent.push_back(contentId);
-				}
-				if (!failed)
-				{
-					entry.availabilityDetail = std::format("Content verified (manifest {}).", manifest.version);
 				}
 			}
+
+			return;
 		}
 
-		bool ParseClientPlaylistCatalog(const nlohmann::json& data,
-			std::int64_t& revision, std::vector<ClientPlaylist>& entries)
+		const auto manifest = LoadClientContentManifest();
+
+		std::error_code baseError;
+		const auto basePath = std::filesystem::canonical(std::filesystem::path{ (*Game::fs_basepath)->current.string }, baseError);
+
+		for (auto& entry : entries)
 		{
-			if (!data.is_object() || !data.contains("schema_version") ||
-				!data.at("schema_version").is_number_integer() ||
-				data.at("schema_version").get<int>() != 1 ||
-				!data.contains("catalog_revision") ||
-				!data.at("catalog_revision").is_number_integer() ||
-				!data.contains("playlists") || !data.at("playlists").is_array() ||
-				data.at("playlists").size() > 128) return false;
-			revision = data.at("catalog_revision").get<std::int64_t>();
-			if (revision < 0) return false;
-			std::unordered_set<std::string> ids;
-			for (const auto& row : data.at("playlists"))
+			entry.verifiedContent.clear();
+
+			if (entry.availability != "AVAILABLE")
 			{
-				if (!row.is_object() || !row.contains("id") || !row.at("id").is_string() ||
-					!row.contains("name") || !row.at("name").is_string() ||
-					(row.contains("description") && !row.at("description").is_string()) ||
-					!row.contains("revision") || !row.at("revision").is_number_integer() ||
-					!row.contains("audience") || !row.at("audience").is_string() ||
-					!row.contains("availability") || !row.at("availability").is_string())
-					return false;
-				if (!row.contains("required_content") || !row.at("required_content").is_array() ||
-					row.at("required_content").size() > 64) return false;
-				ClientPlaylist entry;
-				entry.id = row.at("id").get<std::string>();
-				entry.name = SafePlaylistText(row.at("name").get<std::string>(), 80);
-				entry.description = row.value("description", std::string{});
-				entry.description = SafePlaylistText(entry.description, 180);
-				entry.audience = row.at("audience").get<std::string>();
-				entry.availability = row.at("availability").get<std::string>();
-				entry.revision = row.at("revision").get<std::int64_t>();
-				if (row.contains("min_players") && row.at("min_players").is_number_integer())
-					entry.minPlayers = row.at("min_players").get<int>();
-				if (row.contains("max_players") && row.at("max_players").is_number_integer())
-					entry.maxPlayers = row.at("max_players").get<int>();
-				std::string zombieMode = "NORMAL";
-				bool hitmarkers = true, zombieCounter = false, damageNumbers = true, dayNightCycle = true, omnimovement = true;
-				if (row.contains("zombie_settings"))
-				{
-					const auto& settings = row.at("zombie_settings");
-					if (!settings.is_object() || !settings.contains("mode") || !settings.at("mode").is_string() ||
-						!settings.contains("hitmarkers") || !settings.at("hitmarkers").is_boolean() ||
-						!settings.contains("zombie_counter") || !settings.at("zombie_counter").is_boolean() ||
-						!settings.contains("damage_numbers") || !settings.at("damage_numbers").is_boolean() ||
-						!settings.contains("day_night_cycle") || !settings.at("day_night_cycle").is_boolean() ||
-						!settings.contains("omnimovement") || !settings.at("omnimovement").is_boolean()) return false;
-					zombieMode = settings.at("mode").get<std::string>();
-					hitmarkers = settings.at("hitmarkers").get<bool>();
-					zombieCounter = settings.at("zombie_counter").get<bool>();
-					damageNumbers = settings.at("damage_numbers").get<bool>();
-					dayNightCycle = settings.at("day_night_cycle").get<bool>();
-					omnimovement = settings.at("omnimovement").get<bool>();
-				}
-				if (zombieMode != "NORMAL" && zombieMode != "CLASSIC" && zombieMode != "HARDCORE") return false;
-				entry.zombieSettingsSummary = std::format("{} / HITMARKERS {} / COUNTER {} / DAMAGE {} / DAY-NIGHT {} / OMNI {}",
-					zombieMode, hitmarkers ? "ON" : "OFF", zombieCounter ? "ON" : "OFF", damageNumbers ? "ON" : "OFF",
-					dayNightCycle ? "ON" : "OFF", omnimovement ? "ON" : "OFF");
-				if (entry.id.empty() || entry.id.size() > 96 || entry.name.empty() ||
-					entry.revision < 1 || !ids.insert(entry.id).second ||
-					entry.minPlayers < 1 || entry.maxPlayers < entry.minPlayers || entry.maxPlayers > 18 ||
-					(entry.audience != "PUBLIC" && entry.audience != "RESTRICTED") ||
-					(entry.availability != "AVAILABLE" && entry.availability != "NO_CAPACITY") ||
-					!std::ranges::all_of(entry.id, [](const unsigned char c)
-					{
-						return std::isalnum(c) || c == '-' || c == '_';
-					})) return false;
-				for (const auto& item : row.at("required_content"))
-				{
-					if (!item.is_string()) return false;
-					const auto contentId = item.get<std::string>();
-					if (!IsContentId(contentId)) return false;
-					entry.requiredContent.push_back(contentId);
-				}
-				if (row.contains("maps"))
-				{
-					if (!row.at("maps").is_array() || row.at("maps").empty() ||
-						row.at("maps").size() > ZWNET_PLAYLIST_MAX_MAPS) return false;
-					std::vector<std::string> mapNames;
-					for (const auto& map : row.at("maps"))
-					{
-						if (!map.is_object() || !map.contains("id") || !map.at("id").is_string() ||
-							!map.contains("name") || !map.at("name").is_string()) return false;
-						const auto mapId = map.at("id").get<std::string>();
-						const auto mapName = SafePlaylistText(map.at("name").get<std::string>(), 60);
-						if (mapId.empty() || mapId.size() > 80 || mapName.empty() ||
-							!std::ranges::all_of(mapId, [](const unsigned char c)
-							{
-								return std::isalnum(c) || c == '_';
-							})) return false;
-						if (mapNames.empty())
-						{
-							entry.mapId = mapId;
-							if (map.contains("image") && map.at("image").is_string())
-								entry.mapImage = map.at("image").get<std::string>();
-							if (entry.mapImage.size() > 80) return false;
-						}
-						mapNames.push_back(mapName);
-					}
-					if (mapNames.size() == 1)
-					{
-						entry.preview = mapNames.front();
-						entry.rotationSummary = "FIXED MAP  /  " + mapNames.front();
-					}
-					else
-					{
-						entry.preview = std::format("{} MAP ROTATION", mapNames.size());
-						entry.rotationSummary = std::format("{} maps: {}", mapNames.size(), mapNames[0]);
-						if (mapNames.size() > 1) entry.rotationSummary += ", " + mapNames[1];
-						if (mapNames.size() > 2) entry.rotationSummary +=
-							std::format(" + {} more", mapNames.size() - 2);
-						entry.rotationSummary = SafePlaylistText(entry.rotationSummary, 180);
-					}
-				}
-				entries.push_back(std::move(entry));
+				entry.availabilityDetail = "No compatible server capacity is available.";
+				continue;
 			}
+
+			if (entry.requiredContent.empty())
+			{
+				entry.availabilityDetail = "Ready to search.";
+				continue;
+			}
+
+			if (baseError)
+			{
+				entry.availability = "CONTENT_MANIFEST_INVALID";
+				entry.availabilityDetail = "The local ZW3 game root could not be verified.";
+				continue;
+			}
+
+			if (!manifest.error.empty())
+			{
+				entry.availability = "CONTENT_MANIFEST_INVALID";
+				entry.availabilityDetail = manifest.error;
+				continue;
+			}
+
+			bool hasFailed = false;
+
+			for (const auto& contentId : entry.requiredContent)
+			{
+				const auto definition = manifest.entries.find(contentId);
+
+				if (definition == manifest.entries.end())
+				{
+					entry.availability = "CONTENT_UNKNOWN";
+					entry.availabilityDetail = SafePlaylistText("Update required: content " + contentId + " is not defined locally.", 180);
+					hasFailed = true;
+					break;
+				}
+
+				for (const auto& file : definition->second.files)
+				{
+					const auto absolutePath = TryResolveContentFile(basePath, file.relativePath);
+					std::optional<ClientContentFileStamp> stamp;
+
+					if (absolutePath)
+					{
+						stamp = TryGetContentFileStamp(*absolutePath);
+					}
+
+					if (!stamp || stamp->size != file.size)
+					{
+						entry.availability = "CONTENT_MISSING";
+						entry.availabilityDetail = SafePlaylistText("Update required: " + contentId + " is missing " + file.relativePath.generic_string() + ".", 180);
+						hasFailed = true;
+						break;
+					}
+
+					const auto hash = TryHashContentFile(*absolutePath, *stamp);
+
+					if (!hash || *hash != file.sha256)
+					{
+						entry.availability = "CONTENT_CORRUPT";
+						entry.availabilityDetail = SafePlaylistText("Repair required: " + contentId + " failed its integrity check.", 180);
+						hasFailed = true;
+						break;
+					}
+				}
+
+				if (hasFailed)
+				{
+					break;
+				}
+
+				entry.verifiedContent.push_back(contentId);
+			}
+
+			if (!hasFailed)
+			{
+				entry.availabilityDetail = std::format("Content verified (manifest {}).", manifest.version);
+			}
+		}
+	}
+
+	static bool TryParseZombieSettings(const nlohmann::json& row, std::string& summary)
+	{
+		std::string zombieMode = "NORMAL";
+		bool hasHitmarkers = true;
+		bool hasZombieCounter = false;
+		bool hasDamageNumbers = true;
+		bool hasDayNightCycle = true;
+		bool hasOmnimovement = true;
+
+		if (row.contains("zombie_settings"))
+		{
+			const auto& settings = row.at("zombie_settings");
+
+			const bool isValidSettings = settings.is_object()
+				&& settings.contains("mode") && settings.at("mode").is_string()
+				&& settings.contains("hitmarkers") && settings.at("hitmarkers").is_boolean()
+				&& settings.contains("zombie_counter") && settings.at("zombie_counter").is_boolean()
+				&& settings.contains("damage_numbers") && settings.at("damage_numbers").is_boolean()
+				&& settings.contains("day_night_cycle") && settings.at("day_night_cycle").is_boolean()
+				&& settings.contains("omnimovement") && settings.at("omnimovement").is_boolean();
+
+			if (!isValidSettings)
+			{
+				return false;
+			}
+
+			zombieMode = settings.at("mode").get<std::string>();
+			hasHitmarkers = settings.at("hitmarkers").get<bool>();
+			hasZombieCounter = settings.at("zombie_counter").get<bool>();
+			hasDamageNumbers = settings.at("damage_numbers").get<bool>();
+			hasDayNightCycle = settings.at("day_night_cycle").get<bool>();
+			hasOmnimovement = settings.at("omnimovement").get<bool>();
+		}
+
+		if (zombieMode != "NORMAL" && zombieMode != "CLASSIC" && zombieMode != "HARDCORE")
+		{
+			return false;
+		}
+
+		summary = std::format("{} / HITMARKERS {} / COUNTER {} / DAMAGE {} / DAY-NIGHT {} / OMNI {}", zombieMode,
+			OnOffText(hasHitmarkers), OnOffText(hasZombieCounter), OnOffText(hasDamageNumbers),
+			OnOffText(hasDayNightCycle), OnOffText(hasOmnimovement));
+
+		return true;
+	}
+
+	static bool TryParsePlaylistMaps(const nlohmann::json& row, ClientPlaylist& entry)
+	{
+		if (!row.contains("maps"))
+		{
 			return true;
 		}
 
-		std::array<Game::XAssetHeader, ZWNET_MATERIAL_ENUM_CAPACITY> MaterialEnumerationAssets{};
-		std::uint32_t MaterialEnumerationCount{};
-		std::string FormatPublicGuid();
+		const auto& maps = row.at("maps");
 
-		std::string ResolveVoteMapImage(const std::string& mapId, const std::string& serverImage)
+		if (!maps.is_array() || maps.empty() || maps.size() > playlistMaxMaps)
 		{
-			if (!mapId.empty())
+			return false;
+		}
+
+		std::vector<std::string> mapNames;
+
+		for (const auto& map : maps)
+		{
+			if (!map.is_object() || !map.contains("id") || !map.at("id").is_string() || !map.contains("name") || !map.at("name").is_string())
 			{
-				const auto* arenaImage = Localization::GetMapImageName(mapId.c_str());
-				if (arenaImage && arenaImage[0]) return arenaImage;
+				return false;
 			}
 
-			if (!serverImage.empty() && serverImage != mapId &&
-				!serverImage.starts_with("preview_mp_mp_") && serverImage.starts_with("preview_"))
+			const auto mapId = map.at("id").get<std::string>();
+			const auto mapName = SafePlaylistText(map.at("name").get<std::string>(), 60);
+
+			const bool isPlainMapId = std::ranges::all_of(mapId, [](const unsigned char character)
 			{
-				return serverImage;
-			}
-
-			return mapId.empty() ? serverImage : "preview_" + mapId;
-		}
-
-		std::string ResolveVoteMapDisplayName(const std::string& mapId, const std::string& serverName)
-		{
-			if (!serverName.empty() && serverName != mapId) return serverName;
-			if (!mapId.empty())
-			{
-				const auto* localized = Localization::LocalizeMapName(mapId.c_str());
-				if (localized && localized[0] && localized != mapId) return localized;
-			}
-			return serverName.empty() ? mapId : serverName;
-		}
-
-		struct SharedLobbyRank
-		{
-			int level = 1;
-			int prestige = 0;
-		};
-
-		struct LocalBarracksRank
-		{
-			int level = 1;
-			int prestige = 0;
-			int experience = 0;
-			int experienceTarget = 50;
-		};
-
-		struct LocalChallengeProgress
-		{
-			int progress = 0;
-			int tier = 0;
-		};
-
-		struct LocalBarracksChallenges
-		{
-			std::unordered_map<std::string, LocalChallengeProgress> entries;
-			int zombieKills = 0;
-			int zombieDeaths = 0;
-			int zombieRevives = 0;
-		};
-
-		struct ChallengeDefinition
-		{
-			std::string id;
-			std::array<int, 4> targets{};
-			std::array<int, 4> rewards{};
-		};
-
-		constexpr std::array ChallengeSlotProgressDvars
-		{
-			"zw3_ch_slot_0_progress", "zw3_ch_slot_1_progress", "zw3_ch_slot_2_progress",
-			"zw3_ch_slot_3_progress", "zw3_ch_slot_4_progress"
-		};
-		constexpr std::array ChallengeSlotTargetDvars
-		{
-			"zw3_ch_slot_0_target", "zw3_ch_slot_1_target", "zw3_ch_slot_2_target",
-			"zw3_ch_slot_3_target", "zw3_ch_slot_4_target"
-		};
-		constexpr std::array ChallengeSlotTierDvars
-		{
-			"zw3_ch_slot_0_tier", "zw3_ch_slot_1_tier", "zw3_ch_slot_2_tier",
-			"zw3_ch_slot_3_tier", "zw3_ch_slot_4_tier"
-		};
-		constexpr std::array ChallengeSlotTierCountDvars
-		{
-			"zw3_ch_slot_0_tier_count", "zw3_ch_slot_1_tier_count", "zw3_ch_slot_2_tier_count",
-			"zw3_ch_slot_3_tier_count", "zw3_ch_slot_4_tier_count"
-		};
-		constexpr std::array ChallengeSlotRewardDvars
-		{
-			"zw3_ch_slot_0_reward", "zw3_ch_slot_1_reward", "zw3_ch_slot_2_reward",
-			"zw3_ch_slot_3_reward", "zw3_ch_slot_4_reward"
-		};
-		constexpr std::array ChallengeSlotPercentDvars
-		{
-			"zw3_ch_slot_0_percent", "zw3_ch_slot_1_percent", "zw3_ch_slot_2_percent",
-			"zw3_ch_slot_3_percent", "zw3_ch_slot_4_percent"
-		};
-		constexpr std::array ChallengeSlotCompleteDvars
-		{
-			"zw3_ch_slot_0_complete", "zw3_ch_slot_1_complete", "zw3_ch_slot_2_complete",
-			"zw3_ch_slot_3_complete", "zw3_ch_slot_4_complete"
-		};
-
-		using SharedLobbyRankMap =
-			std::unordered_map<std::string, SharedLobbyRank>;
-
-		std::mutex SharedLobbyRankMutex;
-		SharedLobbyRankMap SharedLobbyRanks;
-		std::string SharedLobbyRankPartyId;
-		std::chrono::steady_clock::time_point NextRankPublishAttempt{};
-		std::string LastRankPublishPartyId;
-		int LastRankPublishLevel = -1;
-		int LastRankPublishPrestige = -1;
-
-		std::atomic_int& DesiredPartyPrivacy()
-		{
-			static std::atomic_int value{0};
-			return value;
-		}
-
-		std::atomic_bool& LocalPartyLeader()
-		{
-			static std::atomic_bool value{false};
-			return value;
-		}
-
-		std::atomic_bool& VisibilitySyncPending()
-		{
-			static std::atomic_bool value{false};
-			return value;
-		}
-
-		std::atomic_bool& EndpointJoinInFlight()
-		{
-			static std::atomic_bool value{false};
-			return value;
-		}
-
-		std::atomic_bool& ManagedReconnectInFlight()
-		{
-			static std::atomic_bool value{false};
-			return value;
-		}
-
-		std::atomic_uint64_t& JoinTransitionGeneration()
-		{
-			static std::atomic_uint64_t value{0};
-			return value;
-		}
-
-		struct JoinPreviewState
-		{
-			std::mutex mutex;
-			std::uint64_t generation{};
-			std::string matchId;
-			std::string completedMatchId;
-			bool active{};
-		};
-
-		JoinPreviewState& JoinPreview()
-		{
-			static JoinPreviewState value;
-			return value;
-		}
-
-		std::atomic_bool& JoinInProgressConnectionSoundPending()
-		{
-			static std::atomic_bool value{false};
-			return value;
-		}
-
-		std::atomic_bool& NetworkMetricsEnabled()
-		{
-			static std::atomic_bool value{false};
-			return value;
-		}
-
-		void MarkJoinInProgressConnectionStarted(const std::string& matchId)
-		{
-			auto& preview = JoinPreview();
-			{
-				std::lock_guard lock(preview.mutex);
-				if (preview.completedMatchId != matchId) return;
-			}
-			JoinInProgressConnectionSoundPending() = true;
-			Scheduler::Once([] { JoinInProgressConnectionSoundPending() = false; },
-				Scheduler::Pipeline::MAIN, 15s);
-		}
-
-		struct ManagedRouteAttempt
-		{
-			std::mutex mutex;
-			std::string matchId;
-			std::string playerId;
-			std::string sessionId;
-			std::string serverIdentity;
-			std::string instanceId;
-			Network::Address directTarget;
-			Network::Address assignedTarget;
-			bool directWaiting = false;
-			bool relayUsed = false;
-			bool routeIsRelay = false;
-			bool reconnectAttempt = false;
-		};
-
-		ManagedRouteAttempt& RouteAttempt()
-		{
-			static ManagedRouteAttempt value;
-			return value;
-		}
-
-		struct RelayHandshake
-		{
-			std::mutex mutex;
-			std::uint64_t generation = 0;
-			bool pending = false;
-			bool ready = false;
-			Network::Address target;
-			std::string matchId;
-			std::string playerId;
-			std::string nonce;
-			std::string hello;
-			std::chrono::steady_clock::time_point deadline{};
-		};
-
-		RelayHandshake& RelayState()
-		{
-			static RelayHandshake value;
-			return value;
-		}
-
-		void CancelRelayHandshake()
-		{
-			auto& relay = RelayState();
-			std::lock_guard lock(relay.mutex);
-			++relay.generation;
-			relay.pending = false;
-			relay.ready = false;
-			std::ranges::fill(relay.hello, '\0');
-			relay.hello.clear();
-			relay.nonce.clear();
-			relay.matchId.clear();
-			relay.playerId.clear();
-		}
-
-		void ClearManagedRouteAttempt()
-		{
-			auto& route = RouteAttempt();
-			std::lock_guard lock(route.mutex);
-			route.matchId.clear();
-			route.playerId.clear();
-			route.sessionId.clear();
-			route.serverIdentity.clear();
-			route.instanceId.clear();
-			route.directWaiting = false;
-			route.relayUsed = false;
-			route.routeIsRelay = false;
-			route.reconnectAttempt = false;
-		}
-
-		void MarkManagedRouteConnected()
-		{
-			auto& route = RouteAttempt();
-			std::lock_guard lock(route.mutex);
-			route.directWaiting = false;
-		}
-
-		bool RelayAlreadyUsedForMatch(const std::string& matchId)
-		{
-			auto& route = RouteAttempt();
-			std::lock_guard lock(route.mutex);
-			return route.matchId == matchId && route.relayUsed;
-		}
-
-		bool IsRelayOpaque(const std::string& value)
-		{
-			return !value.empty() && value.size() <= 128 &&
-				std::ranges::all_of(value, [](const unsigned char character)
-				{
-					return std::isalnum(character) != 0 || character == '-' || character == '_';
-				});
-		}
-
-		std::atomic_bool& TerminalDisconnectRequested()
-		{
-			static std::atomic_bool value{false};
-			return value;
-		}
-
-		const char* PartyVisibilityName(const int privacy)
-		{
-			switch (privacy)
-			{
-			case 1: return "INVITE_ONLY";
-			case 2: return "CLOSED";
-			default: return "OPEN";
-			}
-		}
-
-		std::string NormalizePartyVisibility(std::string visibility)
-		{
-			std::ranges::transform(visibility, visibility.begin(), [](const unsigned char character)
-			{
-				return static_cast<char>(std::toupper(character));
+				return std::isalnum(character) != 0 || character == '_';
 			});
-			if (visibility == "INVITE" || visibility == "FRIENDS") return "INVITE_ONLY";
-			if (visibility != "OPEN" && visibility != "INVITE_ONLY" && visibility != "CLOSED") return "OPEN";
-			return visibility;
-		}
 
-		std::atomic_int& CachedPartyMemberCount()
-		{
-			static std::atomic_int value{0};
-			return value;
-		}
+			if (mapId.empty() || mapId.size() > 80 || mapName.empty() || !isPlainMapId)
+			{
+				return false;
+			}
 
-		std::atomic_int& CachedPartyVisibility()
-		{
-			static std::atomic_int value{2};
-			return value;
-		}
+			if (mapNames.empty())
+			{
+				entry.mapId = mapId;
 
-		std::atomic_bool& CachedPartyJoinStateSupported()
-		{
-			static std::atomic_bool value{false};
-			return value;
-		}
-
-		int PartyVisibilityValue(const std::string& visibility)
-		{
-			if (visibility == "CLOSED") return 2;
-			if (visibility == "INVITE_ONLY") return 1;
-			return 0;
-		}
-
-		bool IsPartyJoinStateSupported(const std::string& state)
-		{
-			return state == "IDLE" || state == "IN_PARTY" ||
-				state == "SEARCHING" || state == "MATCH_FOUND" ||
-				state == "MAP_VOTE" || state == "READY_CHECK" ||
-				state == "WAITING_FOR_READY" || state == "RESERVING_SERVER" ||
-				state == "STARTING_SERVER" || state == "SERVER_STARTING" ||
-				state == "CONNECTING" || state == "IN_MATCH";
-		}
-
-		bool IsOpaquePartyId(const std::string& value)
-		{
-			return value.starts_with("pty_") && value.size() <= 80 &&
-				std::ranges::all_of(value, [](const unsigned char character)
+				if (map.contains("image") && map.at("image").is_string())
 				{
-					return std::isalnum(character) != 0 || character == '-' || character == '_';
-				});
-		}
+					entry.mapImage = map.at("image").get<std::string>();
+				}
 
-		bool IsOpaqueMatchId(const std::string& value)
-		{
-			return value.starts_with("mat_") && value.size() <= 80 &&
-				std::ranges::all_of(value, [](const unsigned char character)
+				if (entry.mapImage.size() > 80)
 				{
-					return std::isalnum(character) != 0 || character == '-' || character == '_';
-				});
+					return false;
+				}
+			}
+
+			mapNames.push_back(mapName);
 		}
 
-		bool IsOpaqueJoinCapability(const std::string& value)
+		if (mapNames.size() == 1)
 		{
-			return value.size() >= 16 && value.size() <= 256 &&
-				std::ranges::all_of(value, [](const unsigned char character)
-				{
-					return std::isalnum(character) != 0 || character == '-' || character == '_';
-				});
-		}
-
-		struct MatchLobbySoundDelta
-		{
-			bool joined{};
-			bool left{};
-		};
-
-		std::mutex MatchLobbySoundMutex;
-		std::string MatchLobbySoundMatchId;
-		std::unordered_set<std::string> MatchLobbySoundMembers;
-		bool MatchLobbySoundInitialized{};
-
-		void ResetMatchLobbySoundSnapshot()
-		{
-			std::lock_guard lock(MatchLobbySoundMutex);
-			MatchLobbySoundMatchId.clear();
-			MatchLobbySoundMembers.clear();
-			MatchLobbySoundInitialized = false;
-		}
-
-		MatchLobbySoundDelta ObserveMatchLobbyMembers(const std::string& matchId,
-			const std::unordered_set<std::string>& members)
-		{
-			std::lock_guard lock(MatchLobbySoundMutex);
-			if (matchId.empty())
-			{
-				MatchLobbySoundMatchId.clear();
-				MatchLobbySoundMembers.clear();
-				MatchLobbySoundInitialized = false;
-				return {};
-			}
-
-			// Entering a lobby or switching matches establishes a silent baseline.
-			if (!MatchLobbySoundInitialized || MatchLobbySoundMatchId != matchId)
-			{
-				MatchLobbySoundMatchId = matchId;
-				MatchLobbySoundMembers = members;
-				MatchLobbySoundInitialized = true;
-				return {};
-			}
-
-			MatchLobbySoundDelta delta;
-			for (const auto& member : members)
-			{
-				if (!MatchLobbySoundMembers.contains(member)) delta.joined = true;
-			}
-			for (const auto& member : MatchLobbySoundMembers)
-			{
-				if (!members.contains(member)) delta.left = true;
-			}
-			MatchLobbySoundMembers = members;
-			return delta;
-		}
-
-		bool TryParseRankValue(const std::string& data,
-			const std::string_view field, int& value)
-		{
-			const auto fieldPosition = data.find(field);
-			if (fieldPosition == std::string::npos)
-			{
-				return false;
-			}
-
-			auto valuePosition = fieldPosition + field.size();
-			while (valuePosition < data.size() &&
-				(data[valuePosition] == ' ' || data[valuePosition] == '\t'))
-			{
-				++valuePosition;
-			}
-			if (valuePosition >= data.size() || data[valuePosition] != ':')
-			{
-				return false;
-			}
-			++valuePosition;
-			while (valuePosition < data.size() &&
-				(data[valuePosition] == ' ' || data[valuePosition] == '\t'))
-			{
-				++valuePosition;
-			}
-
-			if (valuePosition >= data.size())
-			{
-				return false;
-			}
-
-			char* end = nullptr;
-			const auto parsed = std::strtol(
-				data.c_str() + valuePosition, &end, 10);
-			if (end == data.c_str() + valuePosition)
-			{
-				return false;
-			}
-			while (end < data.c_str() + data.size() &&
-				(*end == ' ' || *end == '\t'))
-			{
-				++end;
-			}
-			if (end < data.c_str() + data.size() && *end != ';')
-			{
-				return false;
-			}
-			if (parsed < std::numeric_limits<int>::min() ||
-				parsed > std::numeric_limits<int>::max())
-			{
-				return false;
-			}
-
-			value = static_cast<int>(parsed);
+			entry.preview = mapNames.front();
+			entry.rotationSummary = "FIXED MAP  /  " + mapNames.front();
 			return true;
 		}
 
-		std::optional<SharedLobbyRank> ReadLocalLobbyRank()
+		entry.preview = std::format("{} MAP ROTATION", mapNames.size());
+		entry.rotationSummary = std::format("{} maps: {}, {}", mapNames.size(), mapNames[0], mapNames[1]);
+
+		if (mapNames.size() > 2)
 		{
-			const auto rankPath = std::filesystem::path("zw3") /
-				"core" / "scriptdata" /
-				("rank_" + FormatPublicGuid());
-			std::string data;
-			if (!Utils::IO::ReadFile(rankPath.string(), &data))
-			{
-				return std::nullopt;
-			}
-
-			int storedLevel = 0;
-			int storedPrestige = 0;
-			if (!TryParseRankValue(data, "level", storedLevel) ||
-				!TryParseRankValue(data, "prestige", storedPrestige) ||
-				storedLevel < 0 || storedLevel > 53 ||
-				storedPrestige < 0 || storedPrestige > 20)
-			{
-				return std::nullopt;
-			}
-
-			return SharedLobbyRank{storedLevel + 1, storedPrestige};
+			entry.rotationSummary += std::format(" + {} more", mapNames.size() - 2);
 		}
 
-		std::optional<LocalBarracksRank> ReadLocalBarracksRank()
+		entry.rotationSummary = SafePlaylistText(entry.rotationSummary, 180);
+		return true;
+	}
+
+	static bool TryParseClientPlaylistCatalog(const nlohmann::json& data, std::int64_t& revision, std::vector<ClientPlaylist>& entries)
+	{
+		const bool isValidCatalog = data.is_object()
+			&& data.contains("schema_version") && data.at("schema_version").is_number_integer()
+			&& data.at("schema_version").get<int>() == 1
+			&& data.contains("catalog_revision") && data.at("catalog_revision").is_number_integer()
+			&& data.contains("playlists") && data.at("playlists").is_array()
+			&& data.at("playlists").size() <= 128;
+
+		if (!isValidCatalog)
 		{
-			const auto rankPath = std::filesystem::path("zw3") /
-				"core" / "scriptdata" /
-				("rank_" + FormatPublicGuid());
-			std::string data;
-			if (!Utils::IO::ReadFile(rankPath.string(), &data))
-			{
-				return std::nullopt;
-			}
-
-			int storedLevel = 0;
-			int storedPrestige = 0;
-			int storedExperience = 0;
-			if (!TryParseRankValue(data, "level", storedLevel) ||
-				!TryParseRankValue(data, "prestige", storedPrestige) ||
-				!TryParseRankValue(data, "experience", storedExperience) ||
-				storedLevel < 0 || storedLevel > 53 ||
-				storedPrestige < 0 || storedPrestige > 255 ||
-				storedExperience < 0)
-			{
-				return std::nullopt;
-			}
-
-			int experienceTarget = 50;
-			switch (storedLevel)
-			{
-			case 0: experienceTarget = 50; break;
-			case 1: experienceTarget = 125; break;
-			case 2: experienceTarget = 200; break;
-			case 3: experienceTarget = 300; break;
-			case 4: experienceTarget = 450; break;
-			case 5: experienceTarget = 650; break;
-			default: experienceTarget = 650 + ((storedLevel - 5) * 250); break;
-			}
-
-			return LocalBarracksRank{storedLevel + 1, storedPrestige, storedExperience, experienceTarget};
+			return false;
 		}
 
-		std::string ZombiePrestigeIcon(const int prestige)
+		revision = data.at("catalog_revision").get<std::int64_t>();
+
+		if (revision < 0)
 		{
-			const auto iconLevel = prestige + 1;
-			return iconLevel > 8 ? "skullicon" : std::format("prestige_{}", iconLevel);
+			return false;
 		}
 
-		bool TryParseChallengeEntry(const std::string& data,
-			const std::string_view id, LocalChallengeProgress& entry)
+		std::unordered_set<std::string> ids;
+
+		for (const auto& row : data.at("playlists"))
 		{
-			const auto needle = std::string(id) + ":";
-			auto position = data.find(needle);
-			while (position != std::string::npos && position > 0 && data[position - 1] != ';')
-			{
-				position = data.find(needle, position + 1);
-			}
-			if (position == std::string::npos)
+			const bool isValidRow = row.is_object()
+				&& row.contains("id") && row.at("id").is_string()
+				&& row.contains("name") && row.at("name").is_string()
+				&& (!row.contains("description") || row.at("description").is_string())
+				&& row.contains("revision") && row.at("revision").is_number_integer()
+				&& row.contains("audience") && row.at("audience").is_string()
+				&& row.contains("availability") && row.at("availability").is_string()
+				&& row.contains("required_content") && row.at("required_content").is_array()
+				&& row.at("required_content").size() <= 64;
+
+			if (!isValidRow)
 			{
 				return false;
 			}
 
-			const auto* progressStart = data.c_str() + position + needle.size();
-			char* progressEnd = nullptr;
-			const auto progress = std::strtol(progressStart, &progressEnd, 10);
-			if (progressEnd == progressStart || *progressEnd != ':')
+			ClientPlaylist entry;
+			entry.id = row.at("id").get<std::string>();
+			entry.name = SafePlaylistText(row.at("name").get<std::string>(), 80);
+			entry.description = SafePlaylistText(row.value("description", std::string{}), 180);
+			entry.audience = row.at("audience").get<std::string>();
+			entry.availability = row.at("availability").get<std::string>();
+			entry.revision = row.at("revision").get<std::int64_t>();
+
+			if (row.contains("min_players") && row.at("min_players").is_number_integer())
+			{
+				entry.minPlayers = row.at("min_players").get<int>();
+			}
+
+			if (row.contains("max_players") && row.at("max_players").is_number_integer())
+			{
+				entry.maxPlayers = row.at("max_players").get<int>();
+			}
+
+			if (!TryParseZombieSettings(row, entry.zombieSettingsSummary))
 			{
 				return false;
 			}
 
-			const auto* tierStart = progressEnd + 1;
-			char* tierEnd = nullptr;
-			const auto tier = std::strtol(tierStart, &tierEnd, 10);
-			if (tierEnd == tierStart || *tierEnd != ';' ||
-				progress < 0 || progress > std::numeric_limits<int>::max() ||
-				tier < 0 || tier > std::numeric_limits<int>::max())
+			const bool isValidEntry = !entry.id.empty() && entry.id.size() <= 96 && !entry.name.empty()
+				&& entry.revision >= 1 && ids.insert(entry.id).second
+				&& entry.minPlayers >= 1 && entry.maxPlayers >= entry.minPlayers && entry.maxPlayers <= 18
+				&& (entry.audience == "PUBLIC" || entry.audience == "RESTRICTED")
+				&& (entry.availability == "AVAILABLE" || entry.availability == "NO_CAPACITY")
+				&& IsPlaylistId(entry.id);
+
+			if (!isValidEntry)
 			{
 				return false;
 			}
 
-			entry.progress = static_cast<int>(progress);
-			entry.tier = static_cast<int>(tier);
-			return true;
+			for (const auto& item : row.at("required_content"))
+			{
+				if (!item.is_string())
+				{
+					return false;
+				}
+
+				const auto contentId = item.get<std::string>();
+
+				if (!IsContentId(contentId))
+				{
+					return false;
+				}
+
+				entry.requiredContent.push_back(contentId);
+			}
+
+			if (!TryParsePlaylistMaps(row, entry))
+			{
+				return false;
+			}
+
+			entries.push_back(std::move(entry));
 		}
 
-		std::vector<ChallengeDefinition> ReadChallengeDefinitions()
+		return true;
+	}
+
+	static void MarkJoinInProgressConnectionStarted(const std::string& matchId)
+	{
 		{
-			Utils::CSV table("zw3/core/mp/zw3_challenge_ui.csv", true, false);
-			std::vector<ChallengeDefinition> definitions;
-			if (!table.isValid())
+			std::lock_guard _(joinPreview.mutex);
+
+			if (joinPreview.completedMatchId != matchId)
 			{
-				return definitions;
+				return;
 			}
+		}
 
-			definitions.reserve(table.getRows());
-			for (std::size_t row = 0; row < table.getRows(); ++row)
+		isJoinInProgressSoundPending = true;
+
+		Scheduler::Once([]
+		{
+			isJoinInProgressSoundPending = false;
+		}, Scheduler::Pipeline::MAIN, 15s);
+	}
+
+	static void ResetMatchLobbySoundSnapshot()
+	{
+		std::lock_guard _(matchLobbySoundMutex);
+
+		matchLobbySoundMatchId.clear();
+		matchLobbySoundMembers.clear();
+		isMatchLobbySoundInitialized = false;
+	}
+
+	static MatchLobbySoundDelta ObserveMatchLobbyMembers(const std::string& matchId, const std::unordered_set<std::string>& members)
+	{
+		std::lock_guard _(matchLobbySoundMutex);
+
+		if (matchId.empty())
+		{
+			matchLobbySoundMatchId.clear();
+			matchLobbySoundMembers.clear();
+			isMatchLobbySoundInitialized = false;
+			return {};
+		}
+
+		if (!isMatchLobbySoundInitialized || matchLobbySoundMatchId != matchId)
+		{
+			matchLobbySoundMatchId = matchId;
+			matchLobbySoundMembers = members;
+			isMatchLobbySoundInitialized = true;
+			return {};
+		}
+
+		MatchLobbySoundDelta delta;
+
+		for (const auto& member : members)
+		{
+			if (!matchLobbySoundMembers.contains(member))
 			{
-				ChallengeDefinition definition;
-				definition.id = table.getElementAt(row, 0);
-				if (definition.id.empty())
-				{
-					continue;
-				}
-
-				for (std::size_t tier = 0; tier < definition.targets.size(); ++tier)
-				{
-					const auto targetText = table.getElementAt(row, 4 + tier * 2);
-					const auto rewardText = table.getElementAt(row, 5 + tier * 2);
-					if (targetText.empty())
-					{
-						break;
-					}
-
-					char* targetEnd = nullptr;
-					char* rewardEnd = nullptr;
-					const auto target = std::strtol(targetText.c_str(), &targetEnd, 10);
-					const auto reward = std::strtol(rewardText.c_str(), &rewardEnd, 10);
-					if (targetEnd == targetText.c_str() || *targetEnd != '\0' || target <= 0 ||
-						target > std::numeric_limits<int>::max() ||
-						rewardEnd == rewardText.c_str() || *rewardEnd != '\0' || reward < 0 ||
-						reward > std::numeric_limits<int>::max())
-					{
-						break;
-					}
-
-					definition.targets[tier] = static_cast<int>(target);
-					definition.rewards[tier] = static_cast<int>(reward);
-				}
-
-				if (definition.targets[0] > 0)
-				{
-					definitions.emplace_back(std::move(definition));
-				}
+				delta.hasJoined = true;
 			}
+		}
 
+		for (const auto& member : matchLobbySoundMembers)
+		{
+			if (!members.contains(member))
+			{
+				delta.hasLeft = true;
+			}
+		}
+
+		matchLobbySoundMembers = members;
+		return delta;
+	}
+
+	static const std::string& PublicGuid()
+	{
+		static const std::string guid = std::format("{:016x}", Auth::GetKeyHash());
+		return guid;
+	}
+
+	static bool TryParseRankValue(const std::string& data, const std::string_view field, int& value)
+	{
+		const auto fieldPosition = data.find(field);
+
+		if (fieldPosition == std::string::npos)
+		{
+			return false;
+		}
+
+		auto position = fieldPosition + field.size();
+
+		while (position < data.size() && (data[position] == ' ' || data[position] == '\t'))
+		{
+			++position;
+		}
+
+		if (position >= data.size() || data[position] != ':')
+		{
+			return false;
+		}
+
+		++position;
+
+		while (position < data.size() && (data[position] == ' ' || data[position] == '\t'))
+		{
+			++position;
+		}
+
+		if (position >= data.size())
+		{
+			return false;
+		}
+
+		const char* const start = data.data() + position;
+		const char* const dataEnd = data.data() + data.size();
+		char* end = nullptr;
+		const auto parsed = std::strtol(start, &end, 10);
+
+		if (end == start)
+		{
+			return false;
+		}
+
+		while (end < dataEnd && (*end == ' ' || *end == '\t'))
+		{
+			++end;
+		}
+
+		if (end < dataEnd && *end != ';')
+		{
+			return false;
+		}
+
+		if (parsed < std::numeric_limits<int>::min() || parsed > std::numeric_limits<int>::max())
+		{
+			return false;
+		}
+
+		value = static_cast<int>(parsed);
+		return true;
+	}
+
+	static std::filesystem::path ScriptDataPath(const std::string& prefix)
+	{
+		return std::filesystem::path("zw3") / "core" / "scriptdata" / (prefix + PublicGuid());
+	}
+
+	static std::optional<SharedLobbyRank> ReadLocalLobbyRank()
+	{
+		std::string data;
+
+		if (!Utils::IO::ReadFile(ScriptDataPath("rank_").string(), &data))
+		{
+			return std::nullopt;
+		}
+
+		int storedLevel = 0;
+		int storedPrestige = 0;
+
+		if (!TryParseRankValue(data, "level", storedLevel) || !TryParseRankValue(data, "prestige", storedPrestige)
+			|| storedLevel < 0 || storedLevel > 53 || storedPrestige < 0 || storedPrestige > 20)
+		{
+			return std::nullopt;
+		}
+
+		return SharedLobbyRank{ storedLevel + 1, storedPrestige };
+	}
+
+	static int ExperienceTarget(const int storedLevel)
+	{
+		static constexpr int firstTargets[] = { 50, 125, 200, 300, 450, 650 };
+
+		if (storedLevel >= 0 && storedLevel < static_cast<int>(std::size(firstTargets)))
+		{
+			return firstTargets[storedLevel];
+		}
+
+		return 650 + ((storedLevel - 5) * 250);
+	}
+
+	static std::optional<LocalBarracksRank> ReadLocalBarracksRank()
+	{
+		std::string data;
+
+		if (!Utils::IO::ReadFile(ScriptDataPath("rank_").string(), &data))
+		{
+			return std::nullopt;
+		}
+
+		int storedLevel = 0;
+		int storedPrestige = 0;
+		int storedExperience = 0;
+
+		if (!TryParseRankValue(data, "level", storedLevel) || !TryParseRankValue(data, "prestige", storedPrestige)
+			|| !TryParseRankValue(data, "experience", storedExperience)
+			|| storedLevel < 0 || storedLevel > 53 || storedPrestige < 0 || storedPrestige > 255 || storedExperience < 0)
+		{
+			return std::nullopt;
+		}
+
+		return LocalBarracksRank{ storedLevel + 1, storedPrestige, storedExperience, ExperienceTarget(storedLevel) };
+	}
+
+	static std::string ZombiePrestigeIcon(const int prestige)
+	{
+		const auto iconLevel = prestige + 1;
+
+		if (iconLevel > 8)
+		{
+			return "skullicon";
+		}
+
+		return std::format("prestige_{}", iconLevel);
+	}
+
+	static bool TryParseChallengeEntry(const std::string& data, const std::string_view id, LocalChallengeProgress& entry)
+	{
+		const auto needle = std::string(id) + ":";
+		auto position = data.find(needle);
+
+		while (position != std::string::npos && position > 0 && data[position - 1] != ';')
+		{
+			position = data.find(needle, position + 1);
+		}
+
+		if (position == std::string::npos)
+		{
+			return false;
+		}
+
+		const char* const progressStart = data.data() + position + needle.size();
+		char* progressEnd = nullptr;
+		const auto progress = std::strtol(progressStart, &progressEnd, 10);
+
+		if (progressEnd == progressStart || *progressEnd != ':')
+		{
+			return false;
+		}
+
+		const char* const tierStart = progressEnd + 1;
+		char* tierEnd = nullptr;
+		const auto tier = std::strtol(tierStart, &tierEnd, 10);
+
+		if (tierEnd == tierStart || *tierEnd != ';' || progress < 0 || tier < 0)
+		{
+			return false;
+		}
+
+		entry.progress = static_cast<int>(progress);
+		entry.tier = static_cast<int>(tier);
+		return true;
+	}
+
+	static std::vector<ChallengeDefinition> ReadChallengeDefinitions()
+	{
+		Utils::CSV table("zw3/core/mp/zw3_challenge_ui.csv", true, false);
+		std::vector<ChallengeDefinition> definitions;
+
+		if (!table.IsValid())
+		{
 			return definitions;
 		}
 
-		LocalBarracksChallenges ReadLocalBarracksChallenges(
-			const std::vector<ChallengeDefinition>& definitions)
+		definitions.reserve(table.GetRows());
+
+		for (std::size_t row = 0; row < table.GetRows(); ++row)
 		{
-			LocalBarracksChallenges challenges;
-			const auto challengePath = std::filesystem::path("zw3") /
-				"core" / "scriptdata" /
-				("challenges_" + FormatPublicGuid());
-			std::string data;
-			if (!Utils::IO::ReadFile(challengePath.string(), &data))
+			ChallengeDefinition definition;
+			definition.id = table.GetElementAt(row, 0);
+
+			if (definition.id.empty())
 			{
-				return challenges;
+				continue;
 			}
 
-			for (const auto& definition : definitions)
+			for (std::size_t tier = 0; tier < definition.targets.size(); ++tier)
 			{
-				LocalChallengeProgress entry;
-				if (TryParseChallengeEntry(data, definition.id, entry))
+				const auto targetText = table.GetElementAt(row, 4 + tier * 2);
+				const auto rewardText = table.GetElementAt(row, 5 + tier * 2);
+
+				if (targetText.empty())
 				{
-					challenges.entries.emplace(definition.id, entry);
+					break;
 				}
+
+				char* targetEnd = nullptr;
+				char* rewardEnd = nullptr;
+				const auto target = std::strtol(targetText.data(), &targetEnd, 10);
+				const auto reward = std::strtol(rewardText.data(), &rewardEnd, 10);
+
+				if (targetEnd == targetText.data() || *targetEnd != '\0' || target <= 0
+					|| rewardEnd == rewardText.data() || *rewardEnd != '\0' || reward < 0)
+				{
+					break;
+				}
+
+				definition.targets[tier] = static_cast<int>(target);
+				definition.rewards[tier] = static_cast<int>(reward);
 			}
 
-			LocalChallengeProgress value;
-			const auto hasKills = TryParseChallengeEntry(data, "stat_zw3_zombie_kills", value);
-			if (hasKills) challenges.zombieKills = value.progress;
-			const auto hasDeaths = TryParseChallengeEntry(data, "stat_zw3_zombie_deaths", value);
-			if (hasDeaths) challenges.zombieDeaths = value.progress;
-			const auto hasRevives = TryParseChallengeEntry(data, "stat_zw3_zombie_revives", value);
-			if (hasRevives) challenges.zombieRevives = value.progress;
-
-			// Older or briefly out-of-sync challenge files retain the largest known
-			// value. Lifetime counters can exceed the final challenge milestone.
-			if (const auto it = challenges.entries.find("ch_zw3_zombie_killer"); it != challenges.entries.end())
+			if (definition.targets[0] > 0)
 			{
-				challenges.zombieKills = std::max(challenges.zombieKills, it->second.progress);
+				definitions.emplace_back(std::move(definition));
 			}
-			if (const auto it = challenges.entries.find("ch_zw3_reviver"); it != challenges.entries.end())
-			{
-				challenges.zombieRevives = std::max(challenges.zombieRevives, it->second.progress);
-			}
+		}
 
+		return definitions;
+	}
+
+	static LocalBarracksChallenges ReadLocalBarracksChallenges(const std::vector<ChallengeDefinition>& definitions)
+	{
+		LocalBarracksChallenges challenges;
+		std::string data;
+
+		if (!Utils::IO::ReadFile(ScriptDataPath("challenges_").string(), &data))
+		{
 			return challenges;
 		}
 
-		void RefreshChallengeCategory(const int startIndex)
+		for (const auto& definition : definitions)
 		{
-			const auto definitions = ReadChallengeDefinitions();
-			const auto challenges = ReadLocalBarracksChallenges(definitions);
-			for (std::size_t slot = 0; slot < ChallengeSlotProgressDvars.size(); ++slot)
+			LocalChallengeProgress entry;
+
+			if (TryParseChallengeEntry(data, definition.id, entry))
 			{
-				int progress = 0;
-				int target = 0;
-				int tier = 0;
-				int tierCount = 0;
-				int reward = 0;
-				int percent = 0;
-				bool complete = false;
-
-				const auto definitionIndex = startIndex + static_cast<int>(slot);
-				if (definitionIndex >= 0 && definitionIndex < static_cast<int>(definitions.size()))
-				{
-					const auto& definition = definitions[definitionIndex];
-					tierCount = static_cast<int>(std::ranges::count_if(definition.targets,
-						[](const int value) { return value > 0; }));
-					if (const auto it = challenges.entries.find(definition.id); it != challenges.entries.end())
-					{
-						progress = std::max(it->second.progress, 0);
-						tier = std::clamp(it->second.tier, 0, tierCount);
-					}
-
-					complete = tierCount > 0 && tier >= tierCount;
-					const auto targetTier = complete ? tierCount - 1 : tier;
-					if (targetTier >= 0)
-					{
-						target = definition.targets[targetTier];
-						reward = complete ? 0 : definition.rewards[targetTier];
-					}
-					if (complete)
-					{
-						percent = 100;
-					}
-					else if (target > 0)
-					{
-						percent = std::clamp(static_cast<int>(
-							(static_cast<std::int64_t>(progress) * 100) / target), 0, 100);
-					}
-				}
-
-				Dvar::Var(ChallengeSlotProgressDvars[slot]).set(progress);
-				Dvar::Var(ChallengeSlotTargetDvars[slot]).set(target);
-				Dvar::Var(ChallengeSlotTierDvars[slot]).set(tier);
-				Dvar::Var(ChallengeSlotTierCountDvars[slot]).set(tierCount);
-				Dvar::Var(ChallengeSlotRewardDvars[slot]).set(reward);
-				Dvar::Var(ChallengeSlotPercentDvars[slot]).set(percent);
-				Dvar::Var(ChallengeSlotCompleteDvars[slot]).set(complete);
+				challenges.entries.emplace(definition.id, entry);
 			}
 		}
 
-		void RefreshBarracksProfile()
-		{
-			const auto rank = ReadLocalBarracksRank();
-			Dvar::Var("zw3_barracks_rank_known").set(rank.has_value());
-			if (!rank)
-			{
-				Dvar::Var("zw3_barracks_rank_level").set(1);
-				Dvar::Var("zw3_barracks_rank_prestige").set(0);
-				Dvar::Var("zw3_barracks_rank_experience").set(0);
-				Dvar::Var("zw3_barracks_rank_experience_target").set(50);
-				Dvar::Var("zw3_barracks_rank_experience_percent").set(0);
-				Dvar::Var("zw3_barracks_rank_icon").set("prestige_1");
-			}
-			else
-			{
-				Dvar::Var("zw3_barracks_rank_level").set(rank->level);
-				Dvar::Var("zw3_barracks_rank_prestige").set(rank->prestige);
-				Dvar::Var("zw3_barracks_rank_experience").set(rank->experience);
-				Dvar::Var("zw3_barracks_rank_experience_target").set(rank->experienceTarget);
-				Dvar::Var("zw3_barracks_rank_experience_percent").set(std::clamp(static_cast<int>(
-					(static_cast<std::int64_t>(rank->experience) * 100) / rank->experienceTarget), 0, 100));
-				Dvar::Var("zw3_barracks_rank_icon").set(ZombiePrestigeIcon(rank->prestige));
-			}
+		LocalChallengeProgress value;
 
-			const auto definitions = ReadChallengeDefinitions();
-			const auto challenges = ReadLocalBarracksChallenges(definitions);
-			Dvar::Var("zw3_barracks_zombie_kills").set(challenges.zombieKills);
-			Dvar::Var("zw3_barracks_zombie_deaths").set(challenges.zombieDeaths);
-			Dvar::Var("zw3_barracks_zombie_revives").set(challenges.zombieRevives);
+		if (TryParseChallengeEntry(data, "stat_zw3_zombie_kills", value))
+		{
+			challenges.zombieKills = value.progress;
 		}
 
-		SharedLobbyRankMap ParseSharedLobbyRanks(
-			const nlohmann::json& party)
+		if (TryParseChallengeEntry(data, "stat_zw3_zombie_deaths", value))
 		{
-			SharedLobbyRankMap ranks;
-			const auto settingsIt = party.find("zombie_settings");
-			if (settingsIt != party.end() && settingsIt->is_object())
+			challenges.zombieDeaths = value.progress;
+		}
+
+		if (TryParseChallengeEntry(data, "stat_zw3_zombie_revives", value))
+		{
+			challenges.zombieRevives = value.progress;
+		}
+
+		const auto killer = challenges.entries.find("ch_zw3_zombie_killer");
+
+		if (killer != challenges.entries.end())
+		{
+			challenges.zombieKills = std::max(challenges.zombieKills, killer->second.progress);
+		}
+
+		const auto reviver = challenges.entries.find("ch_zw3_reviver");
+
+		if (reviver != challenges.entries.end())
+		{
+			challenges.zombieRevives = std::max(challenges.zombieRevives, reviver->second.progress);
+		}
+
+		return challenges;
+	}
+
+	static void RefreshChallengeCategory(const int startIndex)
+	{
+		const auto definitions = ReadChallengeDefinitions();
+		const auto challenges = ReadLocalBarracksChallenges(definitions);
+
+		for (std::size_t slot = 0; slot < challengeSlotProgressDvars.size(); ++slot)
+		{
+			int progress = 0;
+			int target = 0;
+			int tier = 0;
+			int tierCount = 0;
+			int reward = 0;
+			int percent = 0;
+			bool isComplete = false;
+
+			const auto definitionIndex = startIndex + static_cast<int>(slot);
+
+			if (definitionIndex >= 0 && definitionIndex < static_cast<int>(definitions.size()))
 			{
-				const auto ranksIt = settingsIt->find("zwnet_player_ranks");
-				if (ranksIt != settingsIt->end() && ranksIt->is_object())
+				const auto& definition = definitions[definitionIndex];
+
+				tierCount = static_cast<int>(std::ranges::count_if(definition.targets, [](const int value)
 				{
-					for (const auto& [guid, value] : ranksIt->items())
+					return value > 0;
+				}));
+
+				const auto entry = challenges.entries.find(definition.id);
+
+				if (entry != challenges.entries.end())
+				{
+					progress = std::max(entry->second.progress, 0);
+					tier = std::clamp(entry->second.tier, 0, tierCount);
+				}
+
+				isComplete = tierCount > 0 && tier >= tierCount;
+
+				auto targetTier = tier;
+
+				if (isComplete)
+				{
+					targetTier = tierCount - 1;
+				}
+
+				if (targetTier >= 0)
+				{
+					target = definition.targets[targetTier];
+
+					if (!isComplete)
 					{
-						if (guid.size() != 16 || !value.is_object()) continue;
-						SharedLobbyRank rank;
-						rank.level = std::clamp(value.value("level", 1), 1, 54);
-						rank.prestige = std::max(value.value("prestige", 0), 0);
-						ranks[guid] = rank;
+						reward = definition.rewards[targetTier];
 					}
+				}
+
+				if (isComplete)
+				{
+					percent = 100;
+				}
+				else if (target > 0)
+				{
+					percent = std::clamp(static_cast<int>((static_cast<std::int64_t>(progress) * 100) / target), 0, 100);
 				}
 			}
 
-			const auto membersIt = party.find("members");
-			if (membersIt != party.end() && membersIt->is_array())
+			Dvar::Var(challengeSlotProgressDvars[slot]).Set(progress);
+			Dvar::Var(challengeSlotTargetDvars[slot]).Set(target);
+			Dvar::Var(challengeSlotTierDvars[slot]).Set(tier);
+			Dvar::Var(challengeSlotTierCountDvars[slot]).Set(tierCount);
+			Dvar::Var(challengeSlotRewardDvars[slot]).Set(reward);
+			Dvar::Var(challengeSlotPercentDvars[slot]).Set(percent);
+			Dvar::Var(challengeSlotCompleteDvars[slot]).Set(isComplete);
+		}
+	}
+
+	static void RefreshBarracksProfile()
+	{
+		const auto rank = ReadLocalBarracksRank();
+		Dvar::Var("zw3_barracks_rank_known").Set(rank.has_value());
+
+		if (!rank)
+		{
+			Dvar::Var("zw3_barracks_rank_level").Set(1);
+			Dvar::Var("zw3_barracks_rank_prestige").Set(0);
+			Dvar::Var("zw3_barracks_rank_experience").Set(0);
+			Dvar::Var("zw3_barracks_rank_experience_target").Set(50);
+			Dvar::Var("zw3_barracks_rank_experience_percent").Set(0);
+			Dvar::Var("zw3_barracks_rank_icon").Set("prestige_1");
+		}
+		else
+		{
+			const auto percent = std::clamp(static_cast<int>((static_cast<std::int64_t>(rank->experience) * 100) / rank->experienceTarget), 0, 100);
+
+			Dvar::Var("zw3_barracks_rank_level").Set(rank->level);
+			Dvar::Var("zw3_barracks_rank_prestige").Set(rank->prestige);
+			Dvar::Var("zw3_barracks_rank_experience").Set(rank->experience);
+			Dvar::Var("zw3_barracks_rank_experience_target").Set(rank->experienceTarget);
+			Dvar::Var("zw3_barracks_rank_experience_percent").Set(percent);
+			Dvar::Var("zw3_barracks_rank_icon").Set(ZombiePrestigeIcon(rank->prestige));
+		}
+
+		const auto definitions = ReadChallengeDefinitions();
+		const auto challenges = ReadLocalBarracksChallenges(definitions);
+
+		Dvar::Var("zw3_barracks_zombie_kills").Set(challenges.zombieKills);
+		Dvar::Var("zw3_barracks_zombie_deaths").Set(challenges.zombieDeaths);
+		Dvar::Var("zw3_barracks_zombie_revives").Set(challenges.zombieRevives);
+	}
+
+	static bool IsPublicGuid(const std::string& guid)
+	{
+		return guid.size() == 16 && std::ranges::all_of(guid, [](const unsigned char character)
+		{
+			return std::isxdigit(character) != 0;
+		});
+	}
+
+	static int JsonIntegerOr(const nlohmann::json& object, const char* key, const int fallback)
+	{
+		if (object.contains(key) && object.at(key).is_number_integer())
+		{
+			return object.at(key).get<int>();
+		}
+
+		return fallback;
+	}
+
+	static SharedLobbyRankMap ParseSharedLobbyRanks(const nlohmann::json& party)
+	{
+		SharedLobbyRankMap ranks;
+
+		const auto settings = party.find("zombie_settings");
+
+		if (settings != party.end() && settings->is_object())
+		{
+			const auto playerRanks = settings->find("zwnet_player_ranks");
+
+			if (playerRanks != settings->end() && playerRanks->is_object())
 			{
-				for (const auto& member : *membersIt)
+				for (const auto& [guid, value] : playerRanks->items())
 				{
-					if (!member.is_object()) continue;
-					const auto playerId = member.find("player_id");
-					if (playerId == member.end() || !playerId->is_string()) continue;
-					const auto guid = playerId->get<std::string>();
-					if (guid.size() != 16 || !std::ranges::all_of(guid,
-						[](const unsigned char character) { return std::isxdigit(character) != 0; })) continue;
+					if (guid.size() != 16 || !value.is_object())
+					{
+						continue;
+					}
+
 					SharedLobbyRank rank;
-					bool rankKnown = false;
-					const auto rankIt = member.find("rank");
-					if (rankIt != member.end() && rankIt->is_object() &&
-						rankIt->contains("level") && rankIt->at("level").is_number_integer())
-					{
-						rank.level = std::clamp(rankIt->at("level").get<int>(), 1, 54);
-						rank.prestige = rankIt->contains("prestige") &&
-							rankIt->at("prestige").is_number_integer()
-							? std::max(rankIt->at("prestige").get<int>(), 0)
-							: 0;
-						rankKnown = true;
-					}
-					else if (member.contains("level") && member.at("level").is_number_integer())
-					{
-						rank.level = std::clamp(member.at("level").get<int>(), 1, 54);
-						rank.prestige = member.contains("prestige") &&
-							member.at("prestige").is_number_integer()
-							? std::max(member.at("prestige").get<int>(), 0)
-							: 0;
-						rankKnown = true;
-					}
-					if (!rankKnown) continue;
+					rank.level = std::clamp(value.value("level", 1), 1, 54);
+					rank.prestige = std::max(value.value("prestige", 0), 0);
 					ranks[guid] = rank;
 				}
 			}
+		}
 
+		const auto members = party.find("members");
+
+		if (members == party.end() || !members->is_array())
+		{
 			return ranks;
 		}
 
-		SharedLobbyRankMap CacheSharedLobbyRanks(
-			const nlohmann::json& party)
+		for (const auto& member : *members)
 		{
-			auto ranks = ParseSharedLobbyRanks(party);
-			const auto localGuid = FormatPublicGuid();
-			if (const auto localRank = ReadLocalLobbyRank())
+			if (!member.is_object())
 			{
-				ranks[localGuid] = *localRank;
+				continue;
+			}
+
+			const auto playerId = member.find("player_id");
+
+			if (playerId == member.end() || !playerId->is_string())
+			{
+				continue;
+			}
+
+			const auto guid = playerId->get<std::string>();
+
+			if (!IsPublicGuid(guid))
+			{
+				continue;
+			}
+
+			SharedLobbyRank rank;
+			const auto memberRank = member.find("rank");
+
+			if (memberRank != member.end() && memberRank->is_object() && memberRank->contains("level") && memberRank->at("level").is_number_integer())
+			{
+				rank.level = std::clamp(memberRank->at("level").get<int>(), 1, 54);
+				rank.prestige = std::max(JsonIntegerOr(*memberRank, "prestige", 0), 0);
+			}
+			else if (member.contains("level") && member.at("level").is_number_integer())
+			{
+				rank.level = std::clamp(member.at("level").get<int>(), 1, 54);
+				rank.prestige = std::max(JsonIntegerOr(member, "prestige", 0), 0);
 			}
 			else
 			{
-				ranks.erase(localGuid);
-			}
-			const auto partyId = party.value("id", std::string{});
-			{
-				std::lock_guard lock(SharedLobbyRankMutex);
-				SharedLobbyRankPartyId = partyId;
-				SharedLobbyRanks = ranks;
-			}
-			return ranks;
-		}
-
-		SharedLobbyRankMap GetCachedSharedLobbyRanks()
-		{
-			std::lock_guard lock(SharedLobbyRankMutex);
-			return SharedLobbyRanks;
-		}
-
-		void PatchMaterialEnumerationScratch()
-		{
-			static_assert(sizeof(Game::XAssetHeader) == sizeof(void*));
-			constexpr std::array<DWORD, 12> assetArrayOperands
-			{
-				0x507AB9, 0x50D8BB, 0x50DBEE, 0x50DC41, 0x50DC95, 0x50DCED,
-				0x518C22, 0x5239D5, 0x523A0C, 0x523A47, 0x553EE5, 0x5545E6
-			};
-			constexpr std::array<DWORD, 7> assetCountOperands
-			{
-				0x518C0C, 0x518C17, 0x5239CA, 0x523A01, 0x523A12, 0x523A2E, 0x523A3C
-			};
-
-			for (const auto operand : assetArrayOperands)
-			{
-				Utils::Hook::Set<Game::XAssetHeader*>(operand, MaterialEnumerationAssets.data());
-			}
-			for (const auto operand : assetCountOperands)
-			{
-				Utils::Hook::Set<std::uint32_t*>(operand, &MaterialEnumerationCount);
+				continue;
 			}
 
-			// The ZW3 material pool is already expanded to 16384 entries, while the
-			// stock renderer scratch list only holds 4096. A successful online join
-			// can enumerate more than 4096 map materials and overwrite the adjacent
-			// counter before the first frame. Keep the renderer scratch capacity in
-			// lockstep with the existing material pool.
-			Logger::Print("ZWNET material enumeration scratch: {} entries\n", ZWNET_MATERIAL_ENUM_CAPACITY);
+			ranks[guid] = rank;
 		}
 
-		std::string EncodeLowerHex(const std::string& bytes)
+		return ranks;
+	}
+
+	static SharedLobbyRankMap CacheSharedLobbyRanks(const nlohmann::json& party)
+	{
+		auto ranks = ParseSharedLobbyRanks(party);
+		const auto localRank = ReadLocalLobbyRank();
+
+		if (localRank)
 		{
-			static constexpr char digits[] = "0123456789abcdef";
-			std::string result;
-			result.reserve(bytes.size() * 2);
-			for (const auto byte : bytes)
-			{
-				const auto value = static_cast<unsigned char>(byte);
-				result.push_back(digits[value >> 4]);
-				result.push_back(digits[value & 0x0F]);
-			}
-			return result;
+			ranks[PublicGuid()] = *localRank;
+		}
+		else
+		{
+			ranks.erase(PublicGuid());
 		}
 
-		const char* PublicGuidText()
+		const auto partyId = party.value("id", std::string{});
+
 		{
-			static constexpr char digits[] = "0123456789abcdef";
-			static const auto result = []
-			{
-				std::array<char, 17> buffer{};
-				auto value = Auth::GetKeyHash();
-				for (std::size_t index = 0; index < 16; ++index)
-				{
-					buffer[15 - index] = digits[value & 0x0F];
-					value >>= 4;
-				}
-				return buffer;
-			}();
-			return result.data();
+			std::lock_guard _(sharedLobbyRankMutex);
+			sharedLobbyRankPartyId = partyId;
+			sharedLobbyRanks = ranks;
 		}
 
-		std::string FormatPublicGuid()
+		return ranks;
+	}
+
+	static SharedLobbyRankMap GetCachedSharedLobbyRanks()
+	{
+		std::lock_guard _(sharedLobbyRankMutex);
+		return sharedLobbyRanks;
+	}
+
+	static std::string EncodeLowerHex(const std::string& bytes)
+	{
+		static constexpr char digits[] = "0123456789abcdef";
+
+		std::string result;
+		result.reserve(bytes.size() * 2);
+
+		for (const auto byte : bytes)
 		{
-			return PublicGuidText();
+			const auto value = static_cast<unsigned char>(byte);
+			result.push_back(digits[value >> 4]);
+			result.push_back(digits[value & 0x0F]);
 		}
 
-		std::string FriendlyStateText(const std::string& state)
+		return result;
+	}
+
+	static std::string FriendlyStateText(const std::string& state)
+	{
+		static const std::unordered_map<std::string, std::string> texts =
 		{
-			if (state == "SIGNING_IN") return "SIGNING IN";
-			if (state == "LOGIN_REQUIRED") return "LOGIN REQUIRED";
-			if (state == "SEARCH_STARTING") return "STARTING SEARCH";
-			if (state == "IN_PARTY") return "IN PARTY";
-			if (state == "MATCH_FOUND") return "MATCH FOUND";
-			if (state == "MAP_VOTE") return "MAP VOTE";
-			if (state == "READY_CHECK" || state == "WAITING_FOR_READY") return "WAITING FOR READY";
-			if (state == "RESERVING_SERVER") return "RESERVING SERVER";
-			if (state == "STARTING_SERVER" || state == "SERVER_STARTING") return "SERVER STARTING";
-			if (state == "COUNTDOWN") return "JOIN COUNTDOWN";
-			if (state == "JOIN_PREVIEW") return "JOINING GAME IN PROGRESS";
-			if (state == "DIRECT_CONNECTION") return "DIRECT CONNECTION";
-			if (state == "RELAY_CONNECTION") return "RELAY CONNECTION";
-			if (state == "IN_MATCH") return "IN MATCH";
+			{ "SIGNING_IN", "SIGNING IN" },
+			{ "LOGIN_REQUIRED", "LOGIN REQUIRED" },
+			{ "SEARCH_STARTING", "STARTING SEARCH" },
+			{ "IN_PARTY", "IN PARTY" },
+			{ "MATCH_FOUND", "MATCH FOUND" },
+			{ "MAP_VOTE", "MAP VOTE" },
+			{ "READY_CHECK", "WAITING FOR READY" },
+			{ "WAITING_FOR_READY", "WAITING FOR READY" },
+			{ "RESERVING_SERVER", "RESERVING SERVER" },
+			{ "STARTING_SERVER", "SERVER STARTING" },
+			{ "SERVER_STARTING", "SERVER STARTING" },
+			{ "COUNTDOWN", "JOIN COUNTDOWN" },
+			{ "JOIN_PREVIEW", "JOINING GAME IN PROGRESS" },
+			{ "DIRECT_CONNECTION", "DIRECT CONNECTION" },
+			{ "RELAY_CONNECTION", "RELAY CONNECTION" },
+			{ "IN_MATCH", "IN MATCH" },
+		};
+
+		const auto text = texts.find(state);
+
+		if (text == texts.end())
+		{
 			return state;
 		}
 
-		std::string FriendlyErrorText(const std::string& error)
+		return text->second;
+	}
+
+	static std::string FriendlyErrorText(const std::string& error)
+	{
+		static const std::unordered_map<std::string, std::string> texts =
 		{
-			if (error.empty()) return {};
-			if (error == "ZWNET_LOGIN_REQUIRED") return "Sign in on the ZW3 Stats page.";
-			if (error == "ZWNET_SESSION_EXPIRED") return "Your ZW3 session expired. Please sign in again.";
-			if (error == "ZWNET_SEARCH_FAILED") return "The selected playlist could not enter matchmaking. Please try again.";
-			if (error == "ZWNET_CATALOG_UNAVAILABLE") return "Playlists are unavailable. Please refresh the list.";
-			if (error == "ZWNET_PLAYLIST_REFRESH_REQUIRED") return "This playlist changed or access ended. Refresh the list and choose again.";
-			if (error == "ZWNET_PLAYLIST_SELECTION_FAILED") return "The party playlist could not be changed. Refresh and try again.";
-			if (error == "ZWNET_VERSION_MISMATCH") return "Your ZW3 client version does not match the online service.";
-			if (error == "ZWNET_LEADER_REQUIRED") return "Only the party leader can start matchmaking.";
-			if (error == "ZWNET_PARTY_TOO_LARGE") return "This party has too many players for the selected playlist.";
-			if (error == "ZWNET_CONTENT_MISSING") return "Required ZW3 content is missing.";
-			if (error == "ZWNET_ROUTE_UNAVAILABLE") return "No direct or relay route is available.";
-			if (error == "ZWNET_RELAY_TIMEOUT") return "The relay did not confirm the connection. Return to the lobby and try again.";
-			if (error == "ZWNET_SERVER_NOT_READY") return "The assigned ZW3 server is no longer available. Return to the lobby and search again.";
-			if (error == "ZWNET_DESCRIPTOR_INVALID") return "The assigned server address is invalid.";
-			if (error == "ZWNET_ACCOUNT_LINK_REQUIRED") return "Link this GUID in ZW3 Stats Settings.";
-			if (error == "ZWNET_SESSION_STORAGE_FAILED") return "The secure ZW3 session could not be stored.";
-			if (error == "ZWNET_REGISTRATION_UNAVAILABLE") return "The ZW3 account page is unavailable.";
-			if (error == "ZWNET_PARTY_FAILED") return "The ZW3 party could not be created or loaded.";
-			if (error == "ZWNET_PRIVATE_MATCH_FAILED") return "The private ZW3 server could not be reserved.";
-			if (error == "ZWNET_MAP_VOTE_FAILED") return "Your map vote could not be submitted.";
-			if (error == "ZWNET_MATCH_FAILED") return "Server start failed. Return to the lobby and try again.";
-			if (error == "ZWNET_GUID_COPY_FAILED") return "The ZW3 GUID could not be copied.";
-			if (error == "ZWNET_MANUAL_JOIN_DENIED") return "Manual test access is unavailable. Check your invitation and sign in again.";
+			{ "ZWNET_LOGIN_REQUIRED", "Sign in on the ZW3 Stats page." },
+			{ "ZWNET_SESSION_EXPIRED", "Your ZW3 session expired. Please sign in again." },
+			{ "ZWNET_SEARCH_FAILED", "The selected playlist could not enter matchmaking. Please try again." },
+			{ "ZWNET_CATALOG_UNAVAILABLE", "Playlists are unavailable. Please refresh the list." },
+			{ "ZWNET_PLAYLIST_REFRESH_REQUIRED", "This playlist changed or access ended. Refresh the list and choose again." },
+			{ "ZWNET_PLAYLIST_SELECTION_FAILED", "The party playlist could not be changed. Refresh and try again." },
+			{ "ZWNET_VERSION_MISMATCH", "Your ZW3 client version does not match the online service." },
+			{ "ZWNET_LEADER_REQUIRED", "Only the party leader can start matchmaking." },
+			{ "ZWNET_PARTY_TOO_LARGE", "This party has too many players for the selected playlist." },
+			{ "ZWNET_CONTENT_MISSING", "Required ZW3 content is missing." },
+			{ "ZWNET_ROUTE_UNAVAILABLE", "No direct or relay route is available." },
+			{ "ZWNET_RELAY_TIMEOUT", "The relay did not confirm the connection. Return to the lobby and try again." },
+			{ "ZWNET_SERVER_NOT_READY", "The assigned ZW3 server is no longer available. Return to the lobby and search again." },
+			{ "ZWNET_DESCRIPTOR_INVALID", "The assigned server address is invalid." },
+			{ "ZWNET_ACCOUNT_LINK_REQUIRED", "Link this GUID in ZW3 Stats Settings." },
+			{ "ZWNET_SESSION_STORAGE_FAILED", "The secure ZW3 session could not be stored." },
+			{ "ZWNET_REGISTRATION_UNAVAILABLE", "The ZW3 account page is unavailable." },
+			{ "ZWNET_PARTY_FAILED", "The ZW3 party could not be created or loaded." },
+			{ "ZWNET_PRIVATE_MATCH_FAILED", "The private ZW3 server could not be reserved." },
+			{ "ZWNET_MAP_VOTE_FAILED", "Your map vote could not be submitted." },
+			{ "ZWNET_MATCH_FAILED", "Server start failed. Return to the lobby and try again." },
+			{ "ZWNET_GUID_COPY_FAILED", "The ZW3 GUID could not be copied." },
+			{ "ZWNET_MANUAL_JOIN_DENIED", "Manual test access is unavailable. Check your invitation and sign in again." },
+		};
+
+		if (error.empty())
+		{
+			return {};
+		}
+
+		const auto text = texts.find(error);
+
+		if (text == texts.end())
+		{
 			return "The ZW3 online service could not complete this request.";
 		}
 
-		std::string JsonString(const nlohmann::json& object, const char* key, const char* fallback = "")
-		{
-			if (!object.is_object()) return fallback;
-			const auto it = object.find(key);
-			return it != object.end() && it->is_string() ? it->get<std::string>() : std::string{fallback};
-		}
-
-		std::string SafeDisplayName(std::string value)
-		{
-			constexpr std::size_t maxLength = 48;
-			value = TextRenderer::EncodeUtf8ForGame(value, maxLength);
-			Utils::String::Trim(value);
-			return value.empty() ? "ZW3 Player" : value;
-		}
-
-		std::string ResponseErrorCode(const nlohmann::json& response)
-		{
-			if (!response.contains("error") || !response.at("error").is_object()) return {};
-			return JsonString(response.at("error"), "code");
-		}
-
-		bool IsActiveMatchmakingState(const std::string& state)
-		{
-			return state == "SEARCHING"
-				|| state == "MATCH_FOUND"
-				|| state == "MAP_VOTE"
-				|| state == "READY_CHECK"
-				|| state == "WAITING_FOR_READY"
-				|| state == "RESERVING_SERVER"
-				|| state == "STARTING_SERVER"
-				|| state == "SERVER_STARTING"
-				|| state == "CONNECTING"
-				|| state == "IN_MATCH";
-		}
-
-		std::uint64_t NextPresenceSequence()
-		{
-			static std::atomic_uint64_t sequence{1};
-			return sequence.fetch_add(1, std::memory_order_relaxed);
-		}
-
-		bool CopyPublicGuidToClipboard()
-		{
-			if (!OpenClipboard(GetDesktopWindow())) return false;
-			const auto closeClipboard = gsl::finally([] { CloseClipboard(); });
-			if (!EmptyClipboard()) return false;
-
-			const auto guid = FormatPublicGuid();
-			auto memory = GlobalAlloc(GMEM_MOVEABLE, guid.size() + 1);
-			if (!memory) return false;
-			bool clipboardOwnsMemory = false;
-			const auto releaseMemory = gsl::finally([&]
-			{
-				if (!clipboardOwnsMemory) GlobalFree(memory);
-			});
-
-			auto* destination = static_cast<char*>(GlobalLock(memory));
-			if (!destination) return false;
-			std::memcpy(destination, guid.c_str(), guid.size() + 1);
-			GlobalUnlock(memory);
-			if (!SetClipboardData(CF_TEXT, memory)) return false;
-			clipboardOwnsMemory = true;
-			return true;
-		}
-
+		return text->second;
 	}
 
-	std::atomic_bool& ZWNet::ActiveState() { static std::atomic_bool value = false; return value; }
-	std::atomic_bool& ZWNet::SearchingState() { static std::atomic_bool value = false; return value; }
-	std::atomic_bool& ZWNet::ClosingOnlineSessionState() { static std::atomic_bool value = false; return value; }
-	std::atomic_bool& ZWNet::ServerJoinTransitionState() { static std::atomic_bool value = false; return value; }
-	std::atomic_bool& ZWNet::OnlineEntryPendingState() { static std::atomic_bool value = false; return value; }
-	std::atomic_bool& ZWNet::InGameState() { static std::atomic_bool value = false; return value; }
-	bool& ZWNet::LoginInFlightState() { static bool value = false; return value; }
-	std::mutex& ZWNet::StateMutex() { static std::mutex value; return value; }
-	std::string& ZWNet::AccessTokenState() { static std::string value; return value; }
-	std::string& ZWNet::RefreshTokenState() { static std::string value; return value; }
-	std::string& ZWNet::CurrentPartyIdState() { static std::string value; return value; }
-	std::string& ZWNet::CurrentPlayerIdState() { static std::string value; return value; }
-	std::string& ZWNet::CurrentProposalIdState() { static std::string value; return value; }
-	std::string& ZWNet::CurrentMatchIdState() { static std::string value; return value; }
-	std::mutex& ZWNet::AsyncTaskMutex() { static std::mutex value; return value; }
-	std::deque<std::function<void()>>& ZWNet::AsyncTasks() { static std::deque<std::function<void()>> value; return value; }
+	static std::string JsonString(const nlohmann::json& object, const char* key, const char* fallback = "")
+	{
+		if (!object.is_object())
+		{
+			return fallback;
+		}
+
+		const auto value = object.find(key);
+
+		if (value == object.end() || !value->is_string())
+		{
+			return fallback;
+		}
+
+		return value->get<std::string>();
+	}
+
+	static std::string SafeDisplayName(const std::string& name)
+	{
+		auto value = TextRenderer::EncodeUtf8ForGame(name, 48);
+		Utils::String::Trim(value);
+
+		if (value.empty())
+		{
+			return "ZW3 Player";
+		}
+
+		return value;
+	}
+
+	static std::string ResponseErrorCode(const nlohmann::json& response)
+	{
+		if (!response.contains("error") || !response.at("error").is_object())
+		{
+			return {};
+		}
+
+		return JsonString(response.at("error"), "code");
+	}
+
+	static bool IsActiveMatchmakingState(const std::string& state)
+	{
+		return state == "SEARCHING" || state == "MATCH_FOUND" || state == "MAP_VOTE"
+			|| state == "READY_CHECK" || state == "WAITING_FOR_READY" || state == "RESERVING_SERVER"
+			|| state == "STARTING_SERVER" || state == "SERVER_STARTING" || state == "CONNECTING"
+			|| state == "IN_MATCH";
+	}
+
+	static std::uint64_t NextPresenceSequence()
+	{
+		static std::atomic_uint64_t sequence = 1;
+		return sequence.fetch_add(1, std::memory_order_relaxed);
+	}
+
+	static bool TryCopyPublicGuidToClipboard()
+	{
+		if (!OpenClipboard(GetDesktopWindow()))
+		{
+			return false;
+		}
+
+		ScopeExit closeClipboard([]
+		{
+			CloseClipboard();
+		});
+
+		if (!EmptyClipboard())
+		{
+			return false;
+		}
+
+		const auto& guid = PublicGuid();
+		auto* const memory = GlobalAlloc(GMEM_MOVEABLE, guid.size() + 1);
+
+		if (!memory)
+		{
+			return false;
+		}
+
+		auto* const destination = static_cast<char*>(GlobalLock(memory));
+
+		if (!destination)
+		{
+			GlobalFree(memory);
+			return false;
+		}
+
+		std::memcpy(destination, guid.data(), guid.size() + 1);
+		GlobalUnlock(memory);
+
+		if (!SetClipboardData(CF_TEXT, memory))
+		{
+			GlobalFree(memory);
+			return false;
+		}
+
+		return true;
+	}
+
+	static void ClearMatchDvars()
+	{
+		Dvar::Var("zwnet_vote_active").Set(false);
+		Dvar::Var("zwnet_vote_selection").Set("");
+		Dvar::Var("zwnet_all_ready").Set(false);
+		Dvar::Var("zwnet_start_phase").Set("");
+		Dvar::Var("zwnet_start_seconds").Set(0);
+		Dvar::Var("zwnet_vote_reveal_time").Set(0);
+		Dvar::Var("zwnet_vote_winner_id").Set("");
+		Dvar::Var("zwnet_vote_winner_name").Set("");
+		Dvar::Var("zwnet_vote_winner_image").Set("");
+		Dvar::Var("zwnet_server_endpoint").Set("");
+		Dvar::Var("zwnet_server_hostname").Set("");
+		Dvar::Var("zwnet_server_status").Set("NOT ASSIGNED");
+		Dvar::Var("zwnet_join_status").Set("WAITING IN LOBBY");
+	}
+
+	static void ClearMemberDvars(const std::string& prefix)
+	{
+		Dvar::Var(prefix + "_name").Set("");
+		Dvar::Var(prefix + "_guid").Set("");
+		Dvar::Var(prefix + "_role").Set("");
+		Dvar::Var(prefix + "_ready").Set(false);
+		Dvar::Var(prefix + "_self").Set(false);
+		Dvar::Var(prefix + "_shared_rank_known").Set(false);
+		Dvar::Var(prefix + "_shared_rank_level").Set(1);
+		Dvar::Var(prefix + "_shared_rank_prestige").Set(0);
+	}
 
 	bool ZWNet::TryGetSharedLobbyRank(const std::string& guid, int& level, int& prestige)
 	{
 		auto normalizedGuid = guid;
+
 		std::ranges::transform(normalizedGuid, normalizedGuid.begin(), [](const unsigned char character)
 		{
 			return static_cast<char>(std::tolower(character));
 		});
 
-		std::lock_guard lock(SharedLobbyRankMutex);
-		const auto rank = SharedLobbyRanks.find(normalizedGuid);
-		if (rank == SharedLobbyRanks.end()) return false;
+		std::lock_guard _(sharedLobbyRankMutex);
+
+		const auto rank = sharedLobbyRanks.find(normalizedGuid);
+
+		if (rank == sharedLobbyRanks.end())
+		{
+			return false;
+		}
+
 		level = rank->second.level;
 		prestige = rank->second.prestige;
 		return true;
@@ -1651,23 +2081,35 @@ namespace Components
 
 	void ZWNet::EnqueueAsync(std::function<void()> task)
 	{
-		if (!ActiveState()) return;
-		std::lock_guard lock(AsyncTaskMutex());
-		if (!ActiveState()) return;
-		AsyncTasks().emplace_back(std::move(task));
+		if (!isActive)
+		{
+			return;
+		}
+
+		std::lock_guard _(asyncTaskMutex);
+
+		if (isActive)
+		{
+			asyncTasks.emplace_back(std::move(task));
+		}
 	}
 
 	void ZWNet::ProcessAsyncTasks()
 	{
-		if (!ActiveState()) return;
 		std::function<void()> task;
+
 		{
-			std::lock_guard lock(AsyncTaskMutex());
-			if (!ActiveState() || AsyncTasks().empty()) return;
-			task = std::move(AsyncTasks().front());
-			AsyncTasks().pop_front();
+			std::lock_guard _(asyncTaskMutex);
+
+			if (!isActive || asyncTasks.empty())
+			{
+				return;
+			}
+
+			task = std::move(asyncTasks.front());
+			asyncTasks.pop_front();
 		}
-		if (!ActiveState()) return;
+
 		try
 		{
 			task();
@@ -1676,50 +2118,92 @@ namespace Components
 		{
 			SetState("ERROR", "ZWNET_REQUEST_FAILED");
 		}
-		catch (...)
-		{
-			SetState("ERROR", "ZWNET_REQUEST_FAILED");
-		}
 	}
 
 	std::string ZWNet::SessionPath()
 	{
-		return (FileSystem::GetAppdataPath() / "zwnet.session").string();
+		const auto appdata = FileSystem::GetAppdataPath();
+
+		if (appdata.empty())
+		{
+			return {};
+		}
+
+		const auto directory = appdata.parent_path() / BASEGAME;
+		Utils::IO::CreateDir(directory.string());
+
+		return (directory / "zwnet.session").string();
 	}
 
-	bool ZWNet::StoreSession(const std::string& accessToken, const std::string& refreshToken)
+	bool ZWNet::StoreSession(const std::string& newAccessToken, const std::string& newRefreshToken)
 	{
-		if (accessToken.empty() || refreshToken.empty()) return false;
-		const auto plain = nlohmann::json{{"access_token", accessToken}, {"refresh_token", refreshToken}}.dump();
-		DATA_BLOB input{static_cast<DWORD>(plain.size()), reinterpret_cast<BYTE*>(const_cast<char*>(plain.data()))};
+		const auto path = SessionPath();
+
+		if (newAccessToken.empty() || newRefreshToken.empty() || path.empty())
+		{
+			return false;
+		}
+
+		const auto plain = nlohmann::json{ { "access_token", newAccessToken }, { "refresh_token", newRefreshToken } }.dump();
+
+		DATA_BLOB input{ static_cast<DWORD>(plain.size()), reinterpret_cast<BYTE*>(const_cast<char*>(plain.data())) };
 		DATA_BLOB output{};
-		if (!CryptProtectData(&input, L"ZW3 ZWNET session", nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &output)) return false;
-		const std::string encrypted{reinterpret_cast<char*>(output.pbData), output.cbData};
+
+		if (!CryptProtectData(&input, L"ZW3 ZWNET session", nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &output))
+		{
+			return false;
+		}
+
+		const std::string encrypted(reinterpret_cast<char*>(output.pbData), output.cbData);
 		LocalFree(output.pbData);
-		if (!Utils::IO::WriteFile(SessionPath(), encrypted)) return false;
-		std::lock_guard lock(StateMutex());
-		AccessTokenState() = accessToken;
-		RefreshTokenState() = refreshToken;
+
+		if (!Utils::IO::WriteFile(path, encrypted))
+		{
+			return false;
+		}
+
+		std::lock_guard _(stateMutex);
+		accessToken = newAccessToken;
+		refreshToken = newRefreshToken;
 		return true;
 	}
 
 	bool ZWNet::LoadSession()
 	{
-		const auto encrypted = Utils::IO::ReadFile(SessionPath());
-		if (encrypted.empty()) return false;
-		DATA_BLOB input{static_cast<DWORD>(encrypted.size()), reinterpret_cast<BYTE*>(const_cast<char*>(encrypted.data()))};
+		const auto path = SessionPath();
+
+		if (path.empty())
+		{
+			return false;
+		}
+
+		const auto encrypted = Utils::IO::ReadFile(path);
+
+		if (encrypted.empty())
+		{
+			return false;
+		}
+
+		DATA_BLOB input{ static_cast<DWORD>(encrypted.size()), reinterpret_cast<BYTE*>(const_cast<char*>(encrypted.data())) };
 		DATA_BLOB output{};
-		if (!CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &output)) return false;
-		const std::string plain{reinterpret_cast<char*>(output.pbData), output.cbData};
+
+		if (!CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &output))
+		{
+			return false;
+		}
+
+		const std::string plain(reinterpret_cast<char*>(output.pbData), output.cbData);
 		SecureZeroMemory(output.pbData, output.cbData);
 		LocalFree(output.pbData);
+
 		try
 		{
 			const auto data = nlohmann::json::parse(plain);
-			std::lock_guard lock(StateMutex());
-			AccessTokenState() = data.at("access_token").get<std::string>();
-			RefreshTokenState() = data.at("refresh_token").get<std::string>();
-			return !AccessTokenState().empty() && !RefreshTokenState().empty();
+
+			std::lock_guard _(stateMutex);
+			accessToken = data.at("access_token").get<std::string>();
+			refreshToken = data.at("refresh_token").get<std::string>();
+			return !accessToken.empty() && !refreshToken.empty();
 		}
 		catch (const nlohmann::json::exception&)
 		{
@@ -1729,116 +2213,216 @@ namespace Components
 
 	void ZWNet::ClearSession()
 	{
-		ManagedReconnectInFlight() = false;
-		PlaylistSelectionStarting() = false;
-		CancelRelayHandshake();
-		ClearManagedRouteAttempt();
-		Auth::ClearManagedConnectTicket();
+		isPlaylistSelectionStarting = false;
+		ResetManagedRoute();
+
 		{
-			std::lock_guard lock(StateMutex());
-			std::ranges::fill(AccessTokenState(), '\0');
-			std::ranges::fill(RefreshTokenState(), '\0');
-			AccessTokenState().clear(); RefreshTokenState().clear();
-			CurrentPlayerIdState().clear();
-			Utils::IO::RemoveFile(SessionPath());
+			std::lock_guard _(stateMutex);
+
+			std::ranges::fill(accessToken, '\0');
+			std::ranges::fill(refreshToken, '\0');
+			accessToken.clear();
+			refreshToken.clear();
+			currentPlayerId.clear();
+
+			const auto path = SessionPath();
+
+			if (!path.empty())
+			{
+				Utils::IO::RemoveFile(path);
+			}
 		}
+
 		ClearPlaylistCatalog();
 	}
 
 	std::optional<nlohmann::json> ZWNet::Request(const std::string& method, const std::string& path, const nlohmann::json& body)
 	{
-		if (!ActiveState()) return std::nullopt;
+		if (!isActive)
+		{
+			return std::nullopt;
+		}
+
 		try
 		{
 			std::string token;
+
 			{
-				std::lock_guard lock(StateMutex());
-				token = AccessTokenState();
+				std::lock_guard _(stateMutex);
+				token = accessToken;
 			}
-			Utils::WebIO::params headers{{"Accept", "application/json"}, {"Content-Type", "application/json"}};
-			if (!token.empty()) headers["Authorization"] = "Bearer " + token;
-			bool success = false;
-			// Dvars belong to the main game thread, while all HTTP requests run on the
-			// asynchronous scheduler. Keep the trusted production endpoint immutable.
-			Utils::WebIO request("ZW3-ZWNET/3.0.3", std::string(ZWNET_API_BASE) + path);
-			request.setTimeout(5000)->setReadHttpErrorBody(true);
-			const auto response = method == "GET" ? request.get(headers, &success) : request.post(body.dump(), headers, &success);
-			if (!ActiveState() || response.empty()) return std::nullopt;
+
+			Utils::WebIO::Params headers = { { "Accept", "application/json" }, { "Content-Type", "application/json" } };
+
+			if (!token.empty())
+			{
+				headers["Authorization"] = "Bearer " + token;
+			}
+
+			const auto url = std::string(apiBase) + path;
+			bool isSuccessful = false;
+
+			Utils::WebIO request(userAgent);
+			request.SetTimeout(5000);
+			request.SetReadHttpErrorBody(true);
+
+			std::string response;
+
+			if (method == "GET")
+			{
+				request.SetURL(url);
+				response = request.Get(headers, &isSuccessful);
+			}
+			else
+			{
+				response = request.Post(url, body.dump(), headers, &isSuccessful);
+			}
+
+			if (!isActive || response.empty())
+			{
+				return std::nullopt;
+			}
+
 			auto parsed = nlohmann::json::parse(response);
-			if (!success && !parsed.contains("error")) return std::nullopt;
+
+			if (!isSuccessful && !parsed.contains("error"))
+			{
+				return std::nullopt;
+			}
+
 			return parsed;
 		}
-		catch (const std::exception&) { return std::nullopt; }
-		catch (...) { return std::nullopt; }
+		catch (const std::exception&)
+		{
+			return std::nullopt;
+		}
 	}
 
 	void ZWNet::SetState(const std::string& state, const std::string& error)
 	{
 		const auto stateText = FriendlyStateText(state);
 		const auto errorText = FriendlyErrorText(error);
+
+		SetPresenceUiState(state);
+
 		Scheduler::Once([state, stateText, error, errorText]
 		{
-			if (!ActiveState()) return;
+			if (!isActive)
+			{
+				return;
+			}
+
 			if (state == "ERROR")
 			{
-				Dvar::Var("zwnet_start_phase").set("");
-				Dvar::Var("zwnet_start_seconds").set(0);
+				Dvar::Var("zwnet_start_phase").Set("");
+				Dvar::Var("zwnet_start_seconds").Set(0);
 			}
-			Dvar::Var("ui_zwnet_state").set(state);
-			Dvar::Var("ui_zwnet_state_text").set(stateText);
-			Dvar::Var("ui_zwnet_error").set(error);
-			Dvar::Var("ui_zwnet_error_text").set(errorText);
+
+			SetDisplayText("ui_zwnet_state", state);
+			SetDisplayText("ui_zwnet_state_text", stateText);
+			Dvar::Var("ui_zwnet_error").Set(error);
+			Dvar::Var("ui_zwnet_error_text").Set(errorText);
 		}, Scheduler::Pipeline::MAIN);
 	}
 
 	void ZWNet::Refresh()
 	{
-		if (!ActiveState()) return;
+		if (!isActive)
+		{
+			return;
+		}
+
 		std::string refresh;
-		{ std::lock_guard lock(StateMutex()); refresh = RefreshTokenState(); }
-		if (refresh.empty()) { Login(); return; }
-		const auto result = Request("POST", "/social/client/refresh", {{"refresh_token", refresh}});
+
+		{
+			std::lock_guard _(stateMutex);
+			refresh = refreshToken;
+		}
+
+		if (refresh.empty())
+		{
+			Login();
+			return;
+		}
+
+		const auto result = Request("POST", "/social/client/refresh", { { "refresh_token", refresh } });
+
 		if (!result || result->contains("error"))
 		{
-			if (!ActiveState()) return;
+			if (!isActive)
+			{
+				return;
+			}
+
 			ClearSession();
 			Login();
 			return;
 		}
-		if (!ActiveState()) return;
+
+		if (!isActive)
+		{
+			return;
+		}
+
 		const auto access = result->at("access_token").get<std::string>();
 		StoreSession(access, result->value("refresh_token", access));
-		if (const auto me = Request("GET", "/social/me"); me && me->contains("id"))
+
+		const auto me = Request("GET", "/social/me");
+
+		if (me && me->contains("id"))
 		{
-			std::lock_guard lock(StateMutex());
-			CurrentPlayerIdState() = me->at("id").get<std::string>();
+			std::lock_guard _(stateMutex);
+			currentPlayerId = me->at("id").get<std::string>();
 		}
+
 		SetState("ONLINE");
 		RefreshPlaylistCatalog(true);
 		CompleteOnlineEntry();
-		Request("POST", "/social/presence", {{"status", "MAIN_MENU"}, {"sequence", NextPresenceSequence()}, {"joinable", false}});
+		Request("POST", "/social/presence", { { "status", "MAIN_MENU" }, { "sequence", NextPresenceSequence() }, { "joinable", false } });
 	}
 
 	void ZWNet::Login()
 	{
-		if (!ActiveState()) return;
+		if (!isActive)
 		{
-			std::lock_guard lock(StateMutex());
-			if (LoginInFlightState()) return;
-			LoginInFlightState() = true;
+			return;
 		}
+
+		{
+			std::lock_guard _(stateMutex);
+
+			if (isLoginInFlight)
+			{
+				return;
+			}
+
+			isLoginInFlight = true;
+		}
+
 		SetState("SIGNING_IN");
-		const auto guid = FormatPublicGuid();
-		const auto entropy = Auth::GetMachineEntropy();
-		const auto deviceId = EncodeLowerHex(Utils::Cryptography::SHA256::Compute(entropy));
+
+		const auto deviceId = EncodeLowerHex(Utils::Cryptography::SHA256::Compute(Auth::GetMachineEntropy()));
+
 		if (deviceId.size() != 64)
 		{
-			std::lock_guard lock(StateMutex());
-			LoginInFlightState() = false;
+			{
+				std::lock_guard _(stateMutex);
+				isLoginInFlight = false;
+			}
+
 			SetState("ERROR", "ZWNET_REQUEST_FAILED");
 			return;
 		}
-		EnqueueAsync([requestBody = nlohmann::json{{"guid", guid}, {"device_id", deviceId}, {"client_version", ZWNET_CLIENT_VERSION}, {"mod_version", ZWNET_MOD_VERSION}}]() mutable
+
+		auto requestBody = nlohmann::json
+		{
+			{ "guid", PublicGuid() },
+			{ "device_id", deviceId },
+			{ "client_version", clientVersion },
+			{ "mod_version", modVersion },
+		};
+
+		EnqueueAsync([requestBody = std::move(requestBody)]() mutable
 		{
 			CompleteLogin(std::move(requestBody));
 		});
@@ -1846,69 +2430,109 @@ namespace Components
 
 	void ZWNet::CompleteLogin(nlohmann::json requestBody)
 	{
-		if (!ActiveState()) return;
-		const auto loginGuard = gsl::finally([]
+		if (!isActive)
 		{
-			std::lock_guard lock(StateMutex());
-			LoginInFlightState() = false;
+			return;
+		}
+
+		ScopeExit loginGuard([]
+		{
+			std::lock_guard _(stateMutex);
+			isLoginInFlight = false;
 		});
+
 		const auto result = Request("POST", "/social/client/login", requestBody);
-		if (!ActiveState()) return;
+
+		if (!isActive)
+		{
+			return;
+		}
+
 		if (!result)
 		{
 			SetState("ERROR", "ZWNET_REQUEST_FAILED");
 			return;
 		}
+
 		if (result->contains("error"))
 		{
 			SetState("LOGIN_REQUIRED", "ZWNET_ACCOUNT_LINK_REQUIRED");
 			return;
 		}
+
 		const auto access = result->value("access_token", result->value("token", ""));
 		const auto refresh = result->value("refresh_token", access);
+
 		if (!StoreSession(access, refresh))
 		{
 			SetState("ERROR", "ZWNET_SESSION_STORAGE_FAILED");
 			return;
 		}
+
 		if (result->contains("profile") && result->at("profile").contains("id"))
 		{
-			std::lock_guard lock(StateMutex());
-			CurrentPlayerIdState() = result->at("profile").at("id").get<std::string>();
+			std::lock_guard _(stateMutex);
+			currentPlayerId = result->at("profile").at("id").get<std::string>();
 		}
+
 		SetState("ONLINE");
 		RefreshPlaylistCatalog(true);
 		CompleteOnlineEntry();
-		Request("POST", "/social/presence", {{"status", "MAIN_MENU"}, {"sequence", NextPresenceSequence()}, {"joinable", false}});
+		Request("POST", "/social/presence", { { "status", "MAIN_MENU" }, { "sequence", NextPresenceSequence() }, { "joinable", false } });
 	}
 
 	void ZWNet::BeginOnlineEntry()
 	{
-		if (!ActiveState()) return;
-		OnlineEntryPendingState() = true;
+		if (!isActive)
+		{
+			return;
+		}
+
+		isOnlineEntryPending = true;
 		SetState("SIGNING_IN");
 
 		bool hasRefreshToken = false;
+
 		{
-			std::lock_guard lock(StateMutex());
-			hasRefreshToken = !RefreshTokenState().empty();
+			std::lock_guard _(stateMutex);
+			hasRefreshToken = !refreshToken.empty();
 		}
-		if (hasRefreshToken) EnqueueAsync([] { Refresh(); });
-		else Login();
+
+		if (hasRefreshToken)
+		{
+			EnqueueAsync([]
+			{
+				Refresh();
+			});
+		}
+		else
+		{
+			Login();
+		}
+	}
+
+	std::optional<nlohmann::json> ZWNet::CurrentOrNewParty()
+	{
+		auto party = Request("GET", "/zwnet/parties/current");
+
+		if (!party || party->is_null())
+		{
+			party = Request("POST", "/zwnet/parties/create", { { "visibility", PartyVisibilityName(desiredPartyPrivacy.load()) } });
+		}
+
+		return party;
 	}
 
 	void ZWNet::CompleteOnlineEntry()
 	{
 		EnqueueAsync([]
 		{
-			if (!ActiveState() || !OnlineEntryPendingState()) return;
-
-			auto party = Request("GET", "/zwnet/parties/current");
-			if (!party || party->is_null())
+			if (!isActive || !isOnlineEntryPending)
 			{
-				party = Request("POST", "/zwnet/parties/create",
-					{{"visibility", PartyVisibilityName(DesiredPartyPrivacy().load())}});
+				return;
 			}
+
+			const auto party = CurrentOrNewParty();
 
 			if (!party || party->is_null() || party->contains("error"))
 			{
@@ -1916,22 +2540,38 @@ namespace Components
 			}
 			else
 			{
-				*party = PublishLocalRank(std::move(*party));
-				UpdateLobbyDvars(*party);
-				const auto partyState = party->value("state", "IDLE");
-				const auto activeMatchmaking = IsActiveMatchmakingState(partyState);
-				SearchingState() = activeMatchmaking;
-				SetState(activeMatchmaking ? partyState : "IN_PARTY");
-				if (activeMatchmaking) UpdateMatchmaking();
+				const auto published = PublishLocalRank(*party);
+				UpdateLobbyDvars(published);
+
+				const auto partyState = published.value("state", "IDLE");
+				const bool isMatchmaking = IsActiveMatchmakingState(partyState);
+				isSearching = isMatchmaking;
+
+				if (isMatchmaking)
+				{
+					SetState(partyState);
+					UpdateMatchmaking();
+				}
+				else
+				{
+					SetState("IN_PARTY");
+				}
 			}
 
 			Scheduler::Once([]
 			{
-				if (!ActiveState() || !OnlineEntryPendingState().exchange(false)) return;
-				if (auto* connecting = Game::Menus_FindByName(Game::uiContext, "popup_zwnet_connecting"))
+				if (!isActive || !isOnlineEntryPending.exchange(false))
+				{
+					return;
+				}
+
+				auto* const connecting = Game::Menus_FindByName(Game::uiContext, "popup_zwnet_connecting");
+
+				if (connecting)
 				{
 					Game::Menus_CloseRequest(Game::uiContext, connecting);
 				}
+
 				Game::Menus_OpenByName(Game::uiContext, "zwnet_matchmaking");
 			}, Scheduler::Pipeline::MAIN);
 		});
@@ -1941,435 +2581,397 @@ namespace Components
 	{
 		CancelJoinInProgressPreview();
 		ResetMatchLobbySoundSnapshot();
-		SearchingState() = false;
-		EndpointJoinInFlight() = false;
-		ServerJoinTransitionState() = false;
-		OnlineEntryPendingState() = false;
-		LocalPartyLeader() = false;
-		CachedPartyMemberCount() = 0;
-		CachedPartyVisibility() = 2;
-		CachedPartyJoinStateSupported() = false;
+
+		isSearching = false;
+		isEndpointJoinInFlight = false;
+		isServerJoinTransition = false;
+		isOnlineEntryPending = false;
+		isLocalPartyLeader = false;
+		cachedPartyMemberCount = 0;
+		cachedPartyVisibility = 2;
+		isCachedPartyJoinStateSupported = false;
+
 		{
-			std::lock_guard lock(StateMutex());
-			CurrentPartyIdState().clear();
-			CurrentProposalIdState().clear();
-			CurrentMatchIdState().clear();
+			std::lock_guard _(stateMutex);
+			currentPartyId.clear();
+			currentProposalId.clear();
+			currentMatchId.clear();
 		}
-		Dvar::Var("zwnet_lobby_active").set(false);
-		Dvar::Var("zwnet_lobby_party_id").set("");
-		Dvar::Var("zwnet_lobby_visibility").set("OPEN");
-		Dvar::Var("zwnet_lobby_owner").set("");
-		Dvar::Var("zwnet_lobby_member_count").set(0);
-		Dvar::Var("zwnet_lobby_status_text").set("IDLE");
-		Dvar::Var("zwnet_lobby_can_start").set(false);
-		Dvar::Var("zwnet_lobby_self_ready").set(false);
+
+		Dvar::Var("zwnet_lobby_active").Set(false);
+		Dvar::Var("zwnet_lobby_party_id").Set("");
+		Dvar::Var("zwnet_lobby_visibility").Set("OPEN");
+		Dvar::Var("zwnet_lobby_owner").Set("");
+		Dvar::Var("zwnet_lobby_member_count").Set(0);
+		Dvar::Var("zwnet_lobby_status_text").Set("IDLE");
+		Dvar::Var("zwnet_lobby_can_start").Set(false);
+		Dvar::Var("zwnet_lobby_self_ready").Set(false);
+
 		for (std::size_t i = 0; i < 4; ++i)
 		{
 			const auto prefix = std::format("zwnet_lobby_member_{}", i);
-			Dvar::Var(prefix + "_name").set("");
-			Dvar::Var(prefix + "_guid").set("");
-			Dvar::Var(prefix + "_role").set("");
-			Dvar::Var(prefix + "_ready").set(false);
-			Dvar::Var(prefix + "_self").set(false);
-			Dvar::Var(prefix + "_shared_rank_known").set(false);
-			Dvar::Var(prefix + "_shared_rank_level").set(1);
-			Dvar::Var(prefix + "_shared_rank_prestige").set(0);
-			Dvar::Var(prefix + "_rank_icon").set("");
-			Dvar::Var(prefix + "_rank_level").set("");
+
+			ClearMemberDvars(prefix);
+			Dvar::Var(prefix + "_rank_icon").Set("");
+			Dvar::Var(prefix + "_rank_level").Set("");
 		}
-		Dvar::Var("zwnet_vote_active").set(false);
-		Dvar::Var("zwnet_vote_selection").set("");
-		Dvar::Var("zwnet_all_ready").set(false);
-		Dvar::Var("zwnet_start_phase").set("");
-		Dvar::Var("zwnet_start_seconds").set(0);
-		Dvar::Var("zwnet_vote_reveal_time").set(0);
-		Dvar::Var("zwnet_vote_winner_id").set("");
-		Dvar::Var("zwnet_vote_winner_name").set("");
-		Dvar::Var("zwnet_vote_winner_image").set("");
-		Dvar::Var("zwnet_match_id").set("");
-		Dvar::Var("zwnet_server_endpoint").set("");
-		Dvar::Var("zwnet_server_hostname").set("");
-		Dvar::Var("zwnet_server_status").set("NOT ASSIGNED");
-		Dvar::Var("zwnet_join_status").set("WAITING IN LOBBY");
-		Dvar::Var("zwnet_join_countdown").set(0);
-		Dvar::Var("zwnet_managed_session").set(false);
+
+		ClearMatchDvars();
+		Dvar::Var("zwnet_match_id").Set("");
+		Dvar::Var("zwnet_join_countdown").Set(0);
+		Dvar::Var("zwnet_managed_session").Set(false);
 	}
 
 	void ZWNet::Register()
 	{
 		const auto result = Request("GET", "/social/client/register");
+
 		if (!result || !result->contains("guid_link_url"))
 		{
 			SetState("ERROR", "ZWNET_REGISTRATION_UNAVAILABLE");
 			return;
 		}
+
 		const auto url = JsonString(*result, "guid_link_url");
+
 		if (url != "https://stats.zw3.eu/settings")
 		{
 			SetState("ERROR", "ZWNET_REGISTRATION_UNAVAILABLE");
 			return;
 		}
+
 		Scheduler::Once([url]
 		{
-			if (!ActiveState()) return;
-			Command::Execute("openLink " + url, false);
+			if (isActive)
+			{
+				Command::Execute("openLink " + url, false);
+			}
+		}, Scheduler::Pipeline::MAIN);
+	}
+
+	static void ResetPlaylistCatalogLocked(const bool isStale)
+	{
+		++playlistCatalog.generation;
+		playlistCatalog.entries.clear();
+		playlistCatalog.pendingEntries.clear();
+		playlistCatalog.accountId.clear();
+		playlistCatalog.selectedId.clear();
+		playlistCatalog.partySelectedId.clear();
+		playlistCatalog.revision = 0;
+		playlistCatalog.pendingRevision = 0;
+		playlistCatalog.partySelectedRevision = 0;
+		playlistCatalog.page = 0;
+		playlistCatalog.isLoaded = false;
+		playlistCatalog.isStale = isStale;
+		playlistCatalog.isInFlight = false;
+		playlistCatalog.hasPending = false;
+		playlistCatalog.hasNotice = false;
+	}
+
+	void ZWNet::SchedulePlaylistCatalogPublish()
+	{
+		Scheduler::Once([]
+		{
+			PublishPlaylistCatalog();
 		}, Scheduler::Pipeline::MAIN);
 	}
 
 	void ZWNet::ClearPlaylistCatalog()
 	{
-		PlaylistSelectorOpen() = false;
-		++PlaylistSelectorGeneration();
-		PlaylistSelectionStarting() = false;
-		auto& catalog = PlaylistCatalogState();
+		isPlaylistSelectorOpen = false;
+		++playlistSelectorGeneration;
+		isPlaylistSelectionStarting = false;
+
 		{
-			std::lock_guard lock(catalog.mutex);
-			++catalog.generation;
-			catalog.entries.clear();
-			catalog.pendingEntries.clear();
-			catalog.accountId.clear();
-			catalog.selectedId.clear();
-			catalog.partySelectedId.clear();
-			catalog.revision = 0;
-			catalog.pendingRevision = 0;
-			catalog.partySelectedRevision = 0;
-			catalog.page = 0;
-			catalog.loaded = false;
-			catalog.stale = false;
-			catalog.inFlight = false;
-			catalog.hasPending = false;
-			catalog.notice = false;
+			std::lock_guard _(playlistCatalog.mutex);
+			ResetPlaylistCatalogLocked(false);
 		}
-		Scheduler::Once([] { PublishPlaylistCatalog(); }, Scheduler::Pipeline::MAIN);
+
+		SchedulePlaylistCatalogPublish();
 	}
 
-	void ZWNet::PublishPlaylistCatalog()
+	void ZWNet::RefreshPlaylistCatalog(const bool isForced)
 	{
-		if (!ActiveState()) return;
-		std::string matchId;
+		if (!isActive)
 		{
-			std::lock_guard lock(StateMutex());
-			matchId = CurrentMatchIdState();
+			return;
 		}
-		const auto pinned = PlaylistSearchStarting() || PlaylistSelectionStarting() || SearchingState() ||
-			InGameState() || !matchId.empty();
-		auto& catalog = PlaylistCatalogState();
-		std::lock_guard lock(catalog.mutex);
-		if (!pinned && catalog.hasPending)
-		{
-			catalog.entries = std::move(catalog.pendingEntries);
-			catalog.revision = catalog.pendingRevision;
-			catalog.hasPending = false;
-			catalog.pendingRevision = 0;
-		}
-		const auto selected = std::ranges::find_if(catalog.entries,
-			[&](const ClientPlaylist& entry) { return entry.id == catalog.selectedId; });
-		if (selected == catalog.entries.end())
-		{
-			catalog.selectedId.clear();
-			if (!catalog.partySelectedId.empty())
-			{
-				const auto partySelected = std::ranges::find_if(catalog.entries,
-					[&](const ClientPlaylist& entry) { return entry.id == catalog.partySelectedId; });
-				if (partySelected != catalog.entries.end()) catalog.selectedId = partySelected->id;
-			}
-			if (catalog.selectedId.empty() && !pinned)
-			{
-				const auto first = std::ranges::find_if(catalog.entries,
-					[](const ClientPlaylist& entry) { return entry.availability == "AVAILABLE"; });
-				if (first != catalog.entries.end()) catalog.selectedId = first->id;
-			}
-		}
-		const auto active = std::ranges::find_if(catalog.entries,
-			[&](const ClientPlaylist& entry) { return entry.id == catalog.selectedId; });
-		const auto selectionCurrent = active != catalog.entries.end() &&
-			(catalog.partySelectedId.empty() ||
-				(active->id == catalog.partySelectedId && active->revision == catalog.partySelectedRevision));
-		const auto pageCount = std::max<std::size_t>(1,
-			(catalog.entries.size() + ZWNET_PLAYLIST_PAGE_SIZE - 1) / ZWNET_PLAYLIST_PAGE_SIZE);
-		if (catalog.page >= pageCount) catalog.page = pageCount - 1;
-		Dvar::Var("zwnet_catalog_status").set(!catalog.loaded ?
-			(catalog.stale ? "PLAYLIST SERVICE UNAVAILABLE" : "LOADING") :
-			(catalog.stale ? "STALE - SERVICE UNAVAILABLE" : "READY"));
-		Dvar::Var("zwnet_catalog_notice").set(catalog.notice);
-		Dvar::Var("zwnet_catalog_page").set(static_cast<int>(catalog.page + 1));
-		Dvar::Var("zwnet_catalog_pages").set(static_cast<int>(pageCount));
-		Dvar::Var("zwnet_catalog_selected_name").set(active == catalog.entries.end() ?
-			"NO AVAILABLE PLAYLIST" : active->name);
-		Dvar::Var("zwnet_catalog_selected_description").set(active == catalog.entries.end() ?
-			"Select an available playlist to find a match." : active->description);
-		Dvar::Var("zwnet_catalog_selected_audience").set(active == catalog.entries.end() ?
-			"" : active->audience);
-		Dvar::Var("zwnet_catalog_selected_availability").set(active == catalog.entries.end() ?
-			"NO_SELECTION" : active->availability);
-		Dvar::Var("zwnet_catalog_selected_status").set(active == catalog.entries.end() ?
-			(catalog.partySelectedId.empty() ? "Choose a playlist to continue." :
-				"The party playlist is no longer in your authorized catalog.") :
-			(!selectionCurrent ? "A new playlist revision is available. The party leader must confirm it." :
-				active->availabilityDetail));
-		Dvar::Var("zwnet_catalog_selected_revision").set(active == catalog.entries.end() ?
-			0 : static_cast<int>(active->revision));
-		Dvar::Var("zwnet_catalog_selected_rotation").set(active == catalog.entries.end() ?
-			"No map rotation is available." : active->rotationSummary);
-		Dvar::Var("zwnet_catalog_selected_image").set(active == catalog.entries.end() || active->mapId.empty() ?
-			"" : ResolveVoteMapImage(active->mapId, active->mapImage));
-		Dvar::Var("zwnet_catalog_selected_players").set(active == catalog.entries.end() ? "" :
-			std::format("{}-{} PLAYERS", active->minPlayers, active->maxPlayers));
-		Dvar::Var("zwnet_catalog_selected_zombie_settings").set(active == catalog.entries.end() ? "" :
-			active->zombieSettingsSummary);
-		Dvar::Var("zwnet_catalog_busy").set(PlaylistSelectionStarting());
-		Dvar::Var("zwnet_catalog_can_select").set(LocalPartyLeader() && !pinned && !catalog.stale &&
-			!PlaylistSelectionStarting());
-		Dvar::Var("zwnet_catalog_can_search").set(active != catalog.entries.end() &&
-			active->availability == "AVAILABLE" && !catalog.stale && !pinned &&
-			LocalPartyLeader() && selectionCurrent);
-		for (std::size_t slot = 0; slot < ZWNET_PLAYLIST_PAGE_SIZE; ++slot)
-		{
-			const auto prefix = std::format("zwnet_catalog_slot_{}", slot);
-			const auto index = catalog.page * ZWNET_PLAYLIST_PAGE_SIZE + slot;
-			const auto exists = index < catalog.entries.size();
-			Dvar::Var(prefix + "_visible").set(exists);
-			Dvar::Var(prefix + "_name").set(exists ? catalog.entries[index].name : "");
-			Dvar::Var(prefix + "_description").set(exists ? catalog.entries[index].description : "");
-			Dvar::Var(prefix + "_preview").set(exists ? catalog.entries[index].preview : "");
-			Dvar::Var(prefix + "_image").set(exists && !catalog.entries[index].mapId.empty() ?
-				ResolveVoteMapImage(catalog.entries[index].mapId, catalog.entries[index].mapImage) : "");
-			Dvar::Var(prefix + "_audience").set(exists ? catalog.entries[index].audience : "");
-			Dvar::Var(prefix + "_availability").set(exists ? catalog.entries[index].availability : "");
-			Dvar::Var(prefix + "_status").set(exists ? catalog.entries[index].availabilityDetail : "");
-			Dvar::Var(prefix + "_selected").set(exists &&
-				catalog.entries[index].id == catalog.selectedId);
-		}
-	}
 
-	void ZWNet::RefreshPlaylistCatalog(const bool force)
-	{
-		if (!ActiveState()) return;
 		std::string accountId;
 		bool hasToken = false;
+
 		{
-			std::lock_guard lock(StateMutex());
-			accountId = CurrentPlayerIdState();
-			hasToken = !AccessTokenState().empty();
+			std::lock_guard _(stateMutex);
+			accountId = currentPlayerId;
+			hasToken = !accessToken.empty();
 		}
-		if (accountId.empty() || !hasToken) return;
-		auto& catalog = PlaylistCatalogState();
-		std::uint64_t generation;
-		bool accountChanged = false;
+
+		if (accountId.empty() || !hasToken)
 		{
-			std::lock_guard lock(catalog.mutex);
+			return;
+		}
+
+		std::uint64_t generation = 0;
+		bool hasAccountChanged = false;
+
+		{
+			std::lock_guard _(playlistCatalog.mutex);
+
 			const auto now = std::chrono::steady_clock::now();
-			if (catalog.accountId != accountId)
+
+			if (playlistCatalog.accountId != accountId)
 			{
-				accountChanged = true;
-				++catalog.generation;
-				catalog.entries.clear();
-				catalog.pendingEntries.clear();
-				catalog.selectedId.clear();
-				catalog.partySelectedId.clear();
-				catalog.page = 0;
-				catalog.revision = 0;
-				catalog.pendingRevision = 0;
-				catalog.partySelectedRevision = 0;
-				catalog.loaded = false;
-				catalog.stale = false;
-				catalog.hasPending = false;
-				catalog.notice = false;
-				catalog.accountId = accountId;
-				catalog.inFlight = false;
-				catalog.lastAttempt = {};
+				hasAccountChanged = true;
+				ResetPlaylistCatalogLocked(false);
+				playlistCatalog.accountId = accountId;
+				playlistCatalog.lastAttempt = {};
 			}
-			// Changing accounts must invalidate a restricted catalog immediately,
-			// even when the previous account still has an HTTP request in flight.
-			if (catalog.inFlight ||
-				(!force && now - catalog.lastAttempt < 30s)) return;
-			catalog.inFlight = true;
-			catalog.lastAttempt = now;
-			generation = catalog.generation;
+
+			if (playlistCatalog.isInFlight || (!isForced && now - playlistCatalog.lastAttempt < 30s))
+			{
+				return;
+			}
+
+			playlistCatalog.isInFlight = true;
+			playlistCatalog.lastAttempt = now;
+			generation = playlistCatalog.generation;
 		}
-		if (accountChanged)
+
+		if (hasAccountChanged)
 		{
-			PlaylistSelectorOpen() = false;
-			++PlaylistSelectorGeneration();
-			Scheduler::Once([] { PublishPlaylistCatalog(); }, Scheduler::Pipeline::MAIN);
+			isPlaylistSelectorOpen = false;
+			++playlistSelectorGeneration;
+			SchedulePlaylistCatalogPublish();
 		}
+
 		const auto response = Request("GET", "/zwnet/playlists/catalog");
+
 		if (response && response->is_object() && response->contains("error"))
 		{
 			const auto code = ResponseErrorCode(*response);
+
 			if (code == "AUTH_REQUIRED" || code == "SESSION_INVALID")
 			{
 				{
-					std::lock_guard lock(catalog.mutex);
-					if (catalog.generation != generation || catalog.accountId != accountId) return;
-					++catalog.generation;
-					catalog.entries.clear();
-					catalog.pendingEntries.clear();
-					catalog.selectedId.clear();
-					catalog.partySelectedId.clear();
-					catalog.accountId.clear();
-					catalog.revision = 0;
-					catalog.pendingRevision = 0;
-					catalog.partySelectedRevision = 0;
-					catalog.page = 0;
-					catalog.loaded = false;
-					catalog.stale = true;
-					catalog.inFlight = false;
-					catalog.hasPending = false;
-					catalog.notice = false;
+					std::lock_guard _(playlistCatalog.mutex);
+
+					if (playlistCatalog.generation != generation || playlistCatalog.accountId != accountId)
+					{
+						return;
+					}
+
+					ResetPlaylistCatalogLocked(true);
 				}
-				Scheduler::Once([] { PublishPlaylistCatalog(); }, Scheduler::Pipeline::MAIN);
+
+				SchedulePlaylistCatalogPublish();
 				return;
 			}
 		}
+
 		std::int64_t revision = 0;
 		std::vector<ClientPlaylist> entries;
-		bool valid = false;
+		bool isValid = false;
+
 		try
 		{
-			valid = response && ParseClientPlaylistCatalog(*response, revision, entries);
-			if (valid) VerifyPlaylistContent(entries);
+			isValid = response && TryParseClientPlaylistCatalog(*response, revision, entries);
+
+			if (isValid)
+			{
+				VerifyPlaylistContent(entries);
+			}
 		}
 		catch (const nlohmann::json::exception&)
 		{
-			valid = false;
+			isValid = false;
 		}
+
 		std::string currentAccountId;
+
 		{
-			std::lock_guard lock(StateMutex());
-			currentAccountId = CurrentPlayerIdState();
+			std::lock_guard _(stateMutex);
+			currentAccountId = currentPlayerId;
 		}
+
 		{
-			std::lock_guard lock(catalog.mutex);
-			if (catalog.generation != generation || catalog.accountId != accountId) return;
-		catalog.inFlight = false;
-		if (currentAccountId != accountId)
-		{
-			++catalog.generation;
-			catalog.entries.clear();
-			catalog.pendingEntries.clear();
-			catalog.selectedId.clear();
-			catalog.partySelectedId.clear();
-			catalog.accountId.clear();
-			catalog.revision = 0;
-			catalog.pendingRevision = 0;
-			catalog.partySelectedRevision = 0;
-			catalog.page = 0;
-			catalog.loaded = false;
-			catalog.stale = true;
-			catalog.hasPending = false;
-			catalog.notice = false;
-		}
-		else if (!valid)
+			std::lock_guard _(playlistCatalog.mutex);
+
+			if (playlistCatalog.generation != generation || playlistCatalog.accountId != accountId)
 			{
-				catalog.stale = true;
+				return;
+			}
+
+			playlistCatalog.isInFlight = false;
+
+			if (currentAccountId != accountId)
+			{
+				ResetPlaylistCatalogLocked(true);
+			}
+			else if (!isValid)
+			{
+				playlistCatalog.isStale = true;
 			}
 			else
 			{
-				// A refreshed authorization result takes effect immediately, even
-				// while a match pins other catalog changes for continuity.
 				std::unordered_set<std::string> visibleIds;
-				for (const auto& entry : entries) visibleIds.insert(entry.id);
-				const auto revoked = [&visibleIds](const ClientPlaylist& entry)
+
+				for (const auto& entry : entries)
+				{
+					visibleIds.insert(entry.id);
+				}
+
+				const auto isRevoked = [&visibleIds](const ClientPlaylist& entry)
 				{
 					return entry.audience == "RESTRICTED" && !visibleIds.contains(entry.id);
 				};
-				std::erase_if(catalog.entries, revoked);
-				std::erase_if(catalog.pendingEntries, revoked);
-				const auto currentRevision = catalog.hasPending ?
-					catalog.pendingRevision : catalog.revision;
-				const auto changed = catalog.loaded && revision != currentRevision;
-				catalog.loaded = true;
-				catalog.stale = false;
-				if (changed)
+
+				std::erase_if(playlistCatalog.entries, isRevoked);
+				std::erase_if(playlistCatalog.pendingEntries, isRevoked);
+
+				auto currentRevision = playlistCatalog.revision;
+
+				if (playlistCatalog.hasPending)
 				{
-					catalog.pendingEntries = std::move(entries);
-					catalog.pendingRevision = revision;
-					catalog.hasPending = true;
-					catalog.notice = true;
+					currentRevision = playlistCatalog.pendingRevision;
 				}
-				else if (!catalog.hasPending)
+
+				const bool hasChanged = playlistCatalog.isLoaded && revision != currentRevision;
+
+				playlistCatalog.isLoaded = true;
+				playlistCatalog.isStale = false;
+
+				if (hasChanged)
 				{
-					catalog.entries = std::move(entries);
-					catalog.revision = revision;
+					playlistCatalog.pendingEntries = std::move(entries);
+					playlistCatalog.pendingRevision = revision;
+					playlistCatalog.hasPending = true;
+					playlistCatalog.hasNotice = true;
 				}
-				else catalog.pendingEntries = std::move(entries);
+				else if (!playlistCatalog.hasPending)
+				{
+					playlistCatalog.entries = std::move(entries);
+					playlistCatalog.revision = revision;
+				}
+				else
+				{
+					playlistCatalog.pendingEntries = std::move(entries);
+				}
 			}
 		}
-		Scheduler::Once([] { PublishPlaylistCatalog(); }, Scheduler::Pipeline::MAIN);
-		if (valid && currentAccountId == accountId) PublishPartyContent();
+
+		SchedulePlaylistCatalogPublish();
+
+		if (isValid && currentAccountId == accountId)
+		{
+			PublishPartyContent();
+		}
 	}
 
 	void ZWNet::BeginPlaylistSelection()
 	{
-		if (!ActiveState() || SearchingState() || InGameState() || PlaylistSearchStarting()) return;
-		PlaylistSelectorOpen() = true;
-		++PlaylistSelectorGeneration();
-		PlaylistSelectorOpenedAt() = PlaylistClockMilliseconds();
-		Dvar::Var("zwnet_catalog_action_error").set("");
+		if (!isActive || isSearching || isInGame || isPlaylistSearchStarting)
+		{
+			return;
+		}
+
+		isPlaylistSelectorOpen = true;
+		++playlistSelectorGeneration;
+		playlistSelectorOpenedAtMs = PlaylistClockMilliseconds();
+
+		Dvar::Var("zwnet_catalog_action_error").Set("");
 		SetState("IN_PARTY");
 		PublishPlaylistCatalog();
 	}
 
 	void ZWNet::CancelPlaylistSelection()
 	{
-		PlaylistSelectorOpen() = false;
-		++PlaylistSelectorGeneration();
-		Dvar::Var("zwnet_catalog_action_error").set("");
+		isPlaylistSelectorOpen = false;
+		++playlistSelectorGeneration;
+
+		Dvar::Var("zwnet_catalog_action_error").Set("");
 		PublishPlaylistCatalog();
 	}
 
 	void ZWNet::HighlightPlaylistSlot(const int slot)
 	{
-		if (!PlaylistSelectorOpen() || PlaylistSelectionStarting() ||
-			slot < 0 || slot >= static_cast<int>(ZWNET_PLAYLIST_PAGE_SIZE)) return;
-		auto& catalog = PlaylistCatalogState();
+		if (!isPlaylistSelectorOpen || isPlaylistSelectionStarting || slot < 0 || slot >= static_cast<int>(playlistPageSize))
 		{
-			std::lock_guard lock(catalog.mutex);
-			const auto index = catalog.page * ZWNET_PLAYLIST_PAGE_SIZE + slot;
-			if (!catalog.loaded || index >= catalog.entries.size()) return;
-			catalog.selectedId = catalog.entries[index].id;
+			return;
 		}
-		Dvar::Var("zwnet_catalog_action_error").set("");
+
+		{
+			std::lock_guard _(playlistCatalog.mutex);
+
+			const auto index = playlistCatalog.page * playlistPageSize + slot;
+
+			if (!playlistCatalog.isLoaded || index >= playlistCatalog.entries.size())
+			{
+				return;
+			}
+
+			playlistCatalog.selectedId = playlistCatalog.entries[index].id;
+		}
+
+		Dvar::Var("zwnet_catalog_action_error").Set("");
 		PublishPlaylistCatalog();
 	}
 
 	void ZWNet::ActivatePlaylistSlot(const int slot)
 	{
-		if (!PlaylistSelectorOpen() || PlaylistSearchStarting() || SearchingState() || InGameState() ||
-			slot < 0 || slot >= static_cast<int>(ZWNET_PLAYLIST_PAGE_SIZE)) return;
-		// Opening FIND MATCH and confirming a row are separate gestures. This also
-		// prevents the opening click or key press from falling through to row zero.
-		if (PlaylistClockMilliseconds() - PlaylistSelectorOpenedAt() < 200) return;
-		if (!LocalPartyLeader())
+		if (!isPlaylistSelectorOpen || isPlaylistSearchStarting || isSearching || isInGame
+			|| slot < 0 || slot >= static_cast<int>(playlistPageSize))
 		{
-			Dvar::Var("zwnet_catalog_action_error").set("Only the party leader can start matchmaking.");
 			return;
 		}
+
+		if (PlaylistClockMilliseconds() - playlistSelectorOpenedAtMs < 200)
+		{
+			return;
+		}
+
+		if (!isLocalPartyLeader)
+		{
+			Dvar::Var("zwnet_catalog_action_error").Set("Only the party leader can start matchmaking.");
+			return;
+		}
+
 		std::string playlistId;
 		std::int64_t playlistRevision = 0;
-		auto& catalog = PlaylistCatalogState();
+
 		{
-			std::lock_guard lock(catalog.mutex);
-			const auto index = catalog.page * ZWNET_PLAYLIST_PAGE_SIZE + slot;
-			if (!catalog.loaded || catalog.stale || index >= catalog.entries.size())
+			std::lock_guard _(playlistCatalog.mutex);
+
+			const auto index = playlistCatalog.page * playlistPageSize + slot;
+
+			if (!playlistCatalog.isLoaded || playlistCatalog.isStale || index >= playlistCatalog.entries.size())
 			{
-				Dvar::Var("zwnet_catalog_action_error").set("The playlist list is not ready. Refresh and try again.");
+				Dvar::Var("zwnet_catalog_action_error").Set("The playlist list is not ready. Refresh and try again.");
 				return;
 			}
-			catalog.selectedId = catalog.entries[index].id;
-			if (catalog.entries[index].availability != "AVAILABLE")
+
+			const auto& entry = playlistCatalog.entries[index];
+			playlistCatalog.selectedId = entry.id;
+
+			if (entry.availability != "AVAILABLE")
 			{
-				Dvar::Var("zwnet_catalog_action_error").set(catalog.entries[index].availabilityDetail);
+				Dvar::Var("zwnet_catalog_action_error").Set(entry.availabilityDetail);
 				return;
 			}
-			playlistId = catalog.entries[index].id;
-			playlistRevision = catalog.entries[index].revision;
+
+			playlistId = entry.id;
+			playlistRevision = entry.revision;
 		}
-		if (PlaylistSelectionStarting().exchange(true)) return;
-		const auto generation = PlaylistSelectorGeneration().load();
-		Dvar::Var("zwnet_catalog_action_error").set("");
+
+		if (isPlaylistSelectionStarting.exchange(true))
+		{
+			return;
+		}
+
+		const auto generation = playlistSelectorGeneration.load();
+
+		Dvar::Var("zwnet_catalog_action_error").Set("");
 		PublishPlaylistCatalog();
+
 		EnqueueAsync([playlistId, playlistRevision, generation]
 		{
 			StartQuickPlay(playlistId, playlistRevision, generation);
@@ -2378,305 +2980,526 @@ namespace Components
 
 	void ZWNet::ChangePlaylistPage(const int direction)
 	{
-		if (direction != -1 && direction != 1) return;
-		auto& catalog = PlaylistCatalogState();
+		if (direction != -1 && direction != 1)
 		{
-			std::lock_guard lock(catalog.mutex);
-			const auto pages = std::max<std::size_t>(1,
-				(catalog.entries.size() + ZWNET_PLAYLIST_PAGE_SIZE - 1) / ZWNET_PLAYLIST_PAGE_SIZE);
-			if (direction < 0 && catalog.page > 0) --catalog.page;
-			else if (direction > 0 && catalog.page + 1 < pages) ++catalog.page;
+			return;
 		}
+
+		{
+			std::lock_guard _(playlistCatalog.mutex);
+
+			const auto pageCount = std::max<std::size_t>(1, (playlistCatalog.entries.size() + playlistPageSize - 1) / playlistPageSize);
+
+			if (direction < 0 && playlistCatalog.page > 0)
+			{
+				--playlistCatalog.page;
+			}
+			else if (direction > 0 && playlistCatalog.page + 1 < pageCount)
+			{
+				++playlistCatalog.page;
+			}
+		}
+
 		PublishPlaylistCatalog();
 	}
 
 	void ZWNet::AcknowledgePlaylistNotice()
 	{
-		auto& catalog = PlaylistCatalogState();
 		{
-			std::lock_guard lock(catalog.mutex);
-			catalog.notice = false;
+			std::lock_guard _(playlistCatalog.mutex);
+			playlistCatalog.hasNotice = false;
 		}
+
 		PublishPlaylistCatalog();
 	}
 
 	std::optional<nlohmann::json> ZWNet::PublishPartyContent()
 	{
-		if (!ActiveState()) return std::nullopt;
-		std::string partyId;
-		{ std::lock_guard lock(StateMutex()); partyId = CurrentPartyIdState(); }
-		if (partyId.empty()) return std::nullopt;
-		std::unordered_set<std::string> unique;
+		if (!isActive)
 		{
-			auto& catalog = PlaylistCatalogState();
-			std::lock_guard lock(catalog.mutex);
-			for (const auto* collection : {&catalog.entries, &catalog.pendingEntries})
+			return std::nullopt;
+		}
+
+		std::string partyId;
+
+		{
+			std::lock_guard _(stateMutex);
+			partyId = currentPartyId;
+		}
+
+		if (partyId.empty())
+		{
+			return std::nullopt;
+		}
+
+		std::unordered_set<std::string> unique;
+
+		{
+			std::lock_guard _(playlistCatalog.mutex);
+
+			for (const auto* collection : { &playlistCatalog.entries, &playlistCatalog.pendingEntries })
 			{
 				for (const auto& entry : *collection)
-					for (const auto& contentId : entry.verifiedContent) unique.insert(contentId);
+				{
+					for (const auto& contentId : entry.verifiedContent)
+					{
+						unique.insert(contentId);
+					}
+				}
 			}
 		}
+
 		std::vector<std::string> content(unique.begin(), unique.end());
 		std::ranges::sort(content);
+
 		const auto result = Request("POST", "/zwnet/parties/" + partyId + "/content",
-			{{"content", content}, {"client_version", ZWNET_CLIENT_VERSION},
-				{"mod_version", ZWNET_MOD_VERSION}});
-		if (result && result->is_object() && !result->contains("error")) UpdateLobbyDvars(*result);
+			{ { "content", content }, { "client_version", clientVersion }, { "mod_version", modVersion } });
+
+		if (result && result->is_object() && !result->contains("error"))
+		{
+			UpdateLobbyDvars(*result);
+		}
+
 		return result;
 	}
 
-	void ZWNet::StartQuickPlay(std::string playlistId, const std::int64_t playlistRevision,
-		const std::uint64_t selectorGeneration)
+	void ZWNet::StartQuickPlay(const std::string& playlistId, const std::int64_t playlistRevision, const std::uint64_t selectorGeneration)
 	{
 		std::vector<std::string> verifiedContent;
 		std::string playlistName;
 		std::string playlistSettings;
+
 		{
-			auto& catalog = PlaylistCatalogState();
-			std::lock_guard lock(catalog.mutex);
-			const auto selected = std::ranges::find_if(catalog.entries,
-				[&](const ClientPlaylist& entry)
-				{
-					return entry.id == playlistId && entry.revision == playlistRevision;
-				});
-			if (catalog.loaded && !catalog.stale && selected != catalog.entries.end() &&
-				selected->availability == "AVAILABLE")
+			std::lock_guard _(playlistCatalog.mutex);
+
+			const auto selected = std::ranges::find_if(playlistCatalog.entries, [&playlistId, playlistRevision](const ClientPlaylist& entry)
+			{
+				return entry.id == playlistId && entry.revision == playlistRevision;
+			});
+
+			const bool isSelectable = playlistCatalog.isLoaded && !playlistCatalog.isStale
+				&& selected != playlistCatalog.entries.end() && selected->availability == "AVAILABLE";
+
+			if (isSelectable)
 			{
 				verifiedContent = selected->verifiedContent;
 				playlistName = selected->name;
 				playlistSettings = selected->zombieSettingsSummary;
 			}
 		}
+
 		if (playlistName.empty() || !IsCurrentPlaylistActivation(selectorGeneration))
 		{
-			SearchingState() = false;
-			PlaylistSelectionStarting() = false;
+			isSearching = false;
+			isPlaylistSelectionStarting = false;
+
 			if (IsCurrentPlaylistActivation(selectorGeneration))
+			{
 				SetState("IN_PARTY", "ZWNET_PLAYLIST_REFRESH_REQUIRED");
-			Scheduler::Once([] { PublishPlaylistCatalog(); }, Scheduler::Pipeline::MAIN);
+			}
+
+			SchedulePlaylistCatalogPublish();
 			return;
 		}
-		if (PlaylistSearchStarting().exchange(true))
+
+		if (isPlaylistSearchStarting.exchange(true))
 		{
-			PlaylistSelectionStarting() = false;
+			isPlaylistSelectionStarting = false;
 			return;
 		}
-		const auto searchGuard = gsl::finally([]
+
+		ScopeExit searchGuard([]
 		{
-			PlaylistSearchStarting() = false;
-			PlaylistSelectionStarting() = false;
-			Scheduler::Once([] { PublishPlaylistCatalog(); }, Scheduler::Pipeline::MAIN);
+			isPlaylistSearchStarting = false;
+			isPlaylistSelectionStarting = false;
+			SchedulePlaylistCatalogPublish();
 		});
-		Scheduler::Once([] { PublishPlaylistCatalog(); }, Scheduler::Pipeline::MAIN);
+
+		SchedulePlaylistCatalogPublish();
 		ResetMatchLobbySoundSnapshot();
 		SetState("SEARCH_STARTING");
+
 		const auto fail = [](const std::string& error)
 		{
-			SearchingState() = false;
+			isSearching = false;
 			SetState("IN_PARTY", error);
 		};
-		const auto cancelled = [selectorGeneration]
+
+		const auto isCancelled = [selectorGeneration]
 		{
-			if (IsCurrentPlaylistActivation(selectorGeneration)) return false;
-			SearchingState() = false;
+			if (IsCurrentPlaylistActivation(selectorGeneration))
+			{
+				return false;
+			}
+
+			isSearching = false;
 			SetState("IN_PARTY");
 			return true;
 		};
+
 		const auto accept = [selectorGeneration, playlistId, playlistName, playlistSettings, playlistRevision](const std::string& state)
 		{
-			if (!IsCurrentPlaylistActivation(selectorGeneration)) return false;
-			PlaylistSelectorOpen() = false;
-			++PlaylistSelectorGeneration();
-			SearchingState() = true;
+			if (!IsCurrentPlaylistActivation(selectorGeneration))
+			{
+				return false;
+			}
+
+			isPlaylistSelectorOpen = false;
+			++playlistSelectorGeneration;
+			isSearching = true;
 			SetState(state);
+
 			Scheduler::Once([playlistId, playlistName, playlistSettings, playlistRevision]
 			{
-				if (!ActiveState()) return;
-				Dvar::Var("zwnet_search_playlist_id").set(playlistId);
-				Dvar::Var("zwnet_search_playlist_name").set(playlistName);
-				Dvar::Var("zwnet_search_playlist_revision").set(static_cast<int>(playlistRevision));
-				Dvar::Var("zwnet_search_playlist_settings").set(playlistSettings);
-				Dvar::Var("zwnet_catalog_action_error").set("");
+				if (!isActive)
+				{
+					return;
+				}
+
+				Dvar::Var("zwnet_search_playlist_id").Set(playlistId);
+				Dvar::Var("zwnet_search_playlist_name").Set(playlistName);
+				Dvar::Var("zwnet_search_playlist_revision").Set(static_cast<int>(playlistRevision));
+				Dvar::Var("zwnet_search_playlist_settings").Set(playlistSettings);
+				Dvar::Var("zwnet_catalog_action_error").Set("");
 				Command::Execute("closemenu popup_zwnet_playlists", false);
 			}, Scheduler::Pipeline::MAIN);
+
 			return true;
 		};
 
 		auto party = Request("GET", "/zwnet/parties/current");
-		if (cancelled()) return;
+
+		if (isCancelled())
+		{
+			return;
+		}
+
 		if (!party || party->is_null())
 		{
-			party = Request("POST", "/zwnet/parties/create",
-				{{"visibility", PartyVisibilityName(DesiredPartyPrivacy().load())}});
-			if (cancelled()) return;
+			party = Request("POST", "/zwnet/parties/create", { { "visibility", PartyVisibilityName(desiredPartyPrivacy.load()) } });
+
+			if (isCancelled())
+			{
+				return;
+			}
 		}
+
 		if (!party || party->is_null() || party->contains("error"))
 		{
 			fail("ZWNET_PARTY_FAILED");
 			return;
 		}
+
 		party = ApplyPartyVisibility(std::move(*party));
-		if (cancelled()) return;
+
+		if (isCancelled())
+		{
+			return;
+		}
+
 		if (!party)
 		{
 			fail("ZWNET_PARTY_FAILED");
 			return;
 		}
+
 		const auto partyId = JsonString(*party, "id");
-		std::string currentPlayerId;
-		{ std::lock_guard lock(StateMutex()); currentPlayerId = CurrentPlayerIdState(); }
-		if (JsonString(*party, "leader_id") != currentPlayerId)
+
+		std::string playerId;
+
+		{
+			std::lock_guard _(stateMutex);
+			playerId = currentPlayerId;
+		}
+
+		if (JsonString(*party, "leader_id") != playerId)
 		{
 			fail("ZWNET_LEADER_REQUIRED");
 			return;
 		}
+
 		const auto contentResult = Request("POST", "/zwnet/parties/" + partyId + "/content",
-			{{"content", verifiedContent}, {"client_version", ZWNET_CLIENT_VERSION},
-				{"mod_version", ZWNET_MOD_VERSION}});
-		if (cancelled()) return;
+			{ { "content", verifiedContent }, { "client_version", clientVersion }, { "mod_version", modVersion } });
+
+		if (isCancelled())
+		{
+			return;
+		}
+
 		if (!contentResult || !contentResult->is_object() || contentResult->contains("error"))
 		{
 			fail("ZWNET_CONTENT_MISSING");
 			return;
 		}
+
 		party = *contentResult;
-		const auto selectedRevision = party->contains("selected_playlist_revision") &&
-			party->at("selected_playlist_revision").is_number_integer()
-			? party->at("selected_playlist_revision").get<std::int64_t>() : 0;
-		if (JsonString(*party, "selected_playlist_id") != playlistId ||
-			selectedRevision != playlistRevision)
+
+		std::int64_t selectedRevision = 0;
+
+		if (party->contains("selected_playlist_revision") && party->at("selected_playlist_revision").is_number_integer())
+		{
+			selectedRevision = party->at("selected_playlist_revision").get<std::int64_t>();
+		}
+
+		if (JsonString(*party, "selected_playlist_id") != playlistId || selectedRevision != playlistRevision)
 		{
 			const auto selectedParty = Request("POST", "/zwnet/parties/" + partyId + "/select-playlist",
-				{{"playlist_id", playlistId}, {"playlist_revision", playlistRevision}});
-			if (selectedParty && selectedParty->is_object() && !selectedParty->contains("error"))
-				UpdateLobbyDvars(*selectedParty);
-			if (cancelled()) return;
-			if (!selectedParty || !selectedParty->is_object() || selectedParty->contains("error"))
+				{ { "playlist_id", playlistId }, { "playlist_revision", playlistRevision } });
+
+			const bool isSelected = selectedParty && selectedParty->is_object() && !selectedParty->contains("error");
+
+			if (isSelected)
 			{
-				const auto code = selectedParty && selectedParty->is_object() ?
-					ResponseErrorCode(*selectedParty) : std::string{};
-				if (code == "PLAYLIST_REVISION_STALE" || code == "PLAYLIST_ACCESS_DENIED" ||
-					code == "PLAYLIST_NO_CAPACITY")
+				UpdateLobbyDvars(*selectedParty);
+			}
+
+			if (isCancelled())
+			{
+				return;
+			}
+
+			if (!isSelected)
+			{
+				std::string code;
+
+				if (selectedParty && selectedParty->is_object())
+				{
+					code = ResponseErrorCode(*selectedParty);
+				}
+
+				if (code == "PLAYLIST_REVISION_STALE" || code == "PLAYLIST_ACCESS_DENIED" || code == "PLAYLIST_NO_CAPACITY")
 				{
 					RefreshPlaylistCatalog(true);
 					fail("ZWNET_PLAYLIST_REFRESH_REQUIRED");
 				}
-				else if (code == "LEADER_REQUIRED") fail("ZWNET_LEADER_REQUIRED");
-				else fail("ZWNET_PLAYLIST_SELECTION_FAILED");
+				else if (code == "LEADER_REQUIRED")
+				{
+					fail("ZWNET_LEADER_REQUIRED");
+				}
+				else
+				{
+					fail("ZWNET_PLAYLIST_SELECTION_FAILED");
+				}
+
 				return;
 			}
+
 			party = *selectedParty;
 		}
+
 		*party = PublishLocalRank(std::move(*party));
-		if (cancelled()) return;
-		UpdateLobbyDvars(*party);
-		const auto partyState = party->value("state", "IDLE");
-		if (IsActiveMatchmakingState(partyState))
+
+		if (isCancelled())
 		{
-			if (accept(partyState)) UpdateMatchmaking();
 			return;
 		}
-		if (cancelled()) return;
-		const auto result = Request("POST", "/zwnet/matchmaking/search", {{"playlist_id", playlistId}, {"playlist_revision", playlistRevision}, {"region_id", "eu-central"}, {"client_version", ZWNET_CLIENT_VERSION}, {"mod_version", ZWNET_MOD_VERSION}, {"content", verifiedContent}, {"ping_ms", 50}});
+
+		UpdateLobbyDvars(*party);
+
+		const auto partyState = party->value("state", "IDLE");
+
+		if (IsActiveMatchmakingState(partyState))
+		{
+			if (accept(partyState))
+			{
+				UpdateMatchmaking();
+			}
+
+			return;
+		}
+
+		if (isCancelled())
+		{
+			return;
+		}
+
+		const nlohmann::json search =
+		{
+			{ "playlist_id", playlistId },
+			{ "playlist_revision", playlistRevision },
+			{ "region_id", "eu-central" },
+			{ "client_version", clientVersion },
+			{ "mod_version", modVersion },
+			{ "content", verifiedContent },
+			{ "ping_ms", 50 },
+		};
+
+		const auto result = Request("POST", "/zwnet/matchmaking/search", search);
+
 		if (!IsCurrentPlaylistActivation(selectorGeneration))
 		{
-			if (result && (!result->contains("error") ||
-				ResponseErrorCode(*result) == "ALREADY_QUEUED" || ResponseErrorCode(*result) == "ALREADY_MATCHED"))
+			bool isQueued = false;
+
+			if (result)
+			{
+				const auto code = ResponseErrorCode(*result);
+				isQueued = !result->contains("error") || code == "ALREADY_QUEUED" || code == "ALREADY_MATCHED";
+			}
+
+			if (isQueued)
 			{
 				Request("POST", "/zwnet/matchmaking/cancel");
-				if (const auto current = Request("GET", "/zwnet/parties/current");
-					current && current->is_object() && !current->contains("error")) UpdateLobbyDvars(*current);
+
+				const auto current = Request("GET", "/zwnet/parties/current");
+
+				if (current && current->is_object() && !current->contains("error"))
+				{
+					UpdateLobbyDvars(*current);
+				}
 			}
-			SearchingState() = false;
+
+			isSearching = false;
 			SetState("IN_PARTY");
 			return;
 		}
+
 		if (!result)
 		{
 			fail("ZWNET_SEARCH_FAILED");
 			return;
 		}
+
 		if (result->contains("error"))
 		{
 			const auto code = ResponseErrorCode(*result);
+
 			if (code == "ALREADY_QUEUED" || code == "ALREADY_MATCHED")
 			{
-				if (accept("SEARCHING")) UpdateMatchmaking();
+				if (accept("SEARCHING"))
+				{
+					UpdateMatchmaking();
+				}
+
 				return;
 			}
-			if (code == "PLAYLIST_REVISION_STALE" || code == "PARTY_PLAYLIST_MISMATCH" ||
-				code == "PLAYLIST_NO_CAPACITY" || code == "PLAYLIST_ACCESS_DENIED")
+
+			if (code == "PLAYLIST_REVISION_STALE" || code == "PARTY_PLAYLIST_MISMATCH" || code == "PLAYLIST_NO_CAPACITY" || code == "PLAYLIST_ACCESS_DENIED")
 			{
 				RefreshPlaylistCatalog(true);
 				fail("ZWNET_PLAYLIST_REFRESH_REQUIRED");
-				return;
 			}
-			if (code == "VERSION_MISMATCH") fail("ZWNET_VERSION_MISMATCH");
-			else if (code == "LEADER_REQUIRED") fail("ZWNET_LEADER_REQUIRED");
-			else if (code == "PARTY_TOO_LARGE") fail("ZWNET_PARTY_TOO_LARGE");
-			else if (code == "CONTENT_MISSING" || code == "PARTY_CONTENT_MISSING") fail("ZWNET_CONTENT_MISSING");
-			else fail("ZWNET_SEARCH_FAILED");
+			else if (code == "VERSION_MISMATCH")
+			{
+				fail("ZWNET_VERSION_MISMATCH");
+			}
+			else if (code == "LEADER_REQUIRED")
+			{
+				fail("ZWNET_LEADER_REQUIRED");
+			}
+			else if (code == "PARTY_TOO_LARGE")
+			{
+				fail("ZWNET_PARTY_TOO_LARGE");
+			}
+			else if (code == "CONTENT_MISSING" || code == "PARTY_CONTENT_MISSING")
+			{
+				fail("ZWNET_CONTENT_MISSING");
+			}
+			else
+			{
+				fail("ZWNET_SEARCH_FAILED");
+			}
+
 			return;
 		}
+
 		const auto joinedState = JsonString(*result, "state", "SEARCHING");
-		if (accept(joinedState) && joinedState != "SEARCHING") UpdateMatchmaking();
+
+		if (accept(joinedState) && joinedState != "SEARCHING")
+		{
+			UpdateMatchmaking();
+		}
 	}
 
 	std::optional<nlohmann::json> ZWNet::ApplyPartyVisibility(nlohmann::json party)
 	{
-		if (!party.is_object() || party.contains("error")) return std::nullopt;
-		const auto partyId = JsonString(party, "id");
-		if (!IsOpaquePartyId(partyId)) return std::nullopt;
-
-		std::string currentPlayerId;
+		if (!party.is_object() || party.contains("error"))
 		{
-			std::lock_guard lock(StateMutex());
-			currentPlayerId = CurrentPlayerIdState();
+			return std::nullopt;
 		}
-		const auto isLeader = !currentPlayerId.empty() &&
-			JsonString(party, "leader_id") == currentPlayerId;
-		LocalPartyLeader() = isLeader;
-		if (!isLeader) return party;
 
-		const auto desiredVisibility = std::string{
-			PartyVisibilityName(DesiredPartyPrivacy().load())};
-		const auto currentVisibility = NormalizePartyVisibility(
-			JsonString(party, "visibility", "OPEN"));
-		if (currentVisibility == desiredVisibility) return party;
+		const auto partyId = JsonString(party, "id");
 
-		const auto updated = Request("POST",
-			"/zwnet/parties/" + partyId + "/set-visibility",
-			{{"visibility", desiredVisibility}});
+		if (!IsOpaquePartyId(partyId))
+		{
+			return std::nullopt;
+		}
+
+		std::string playerId;
+
+		{
+			std::lock_guard _(stateMutex);
+			playerId = currentPlayerId;
+		}
+
+		const bool isLeader = !playerId.empty() && JsonString(party, "leader_id") == playerId;
+		isLocalPartyLeader = isLeader;
+
+		if (!isLeader)
+		{
+			return party;
+		}
+
+		const std::string desiredVisibility = PartyVisibilityName(desiredPartyPrivacy.load());
+		const auto visibility = NormalizePartyVisibility(JsonString(party, "visibility", "OPEN"));
+
+		if (visibility == desiredVisibility)
+		{
+			return party;
+		}
+
+		const auto updated = Request("POST", "/zwnet/parties/" + partyId + "/set-visibility", { { "visibility", desiredVisibility } });
+
 		if (!updated || !updated->is_object() || updated->contains("error"))
 		{
 			return std::nullopt;
 		}
+
 		return *updated;
 	}
 
 	void ZWNet::RefreshPartyVisibility()
 	{
-		const auto resetPending = gsl::finally([]
+		ScopeExit resetPending([]
 		{
-			VisibilitySyncPending() = false;
+			isVisibilitySyncPending = false;
 		});
-		if (!ActiveState() || !LocalPartyLeader()) return;
+
+		if (!isActive || !isLocalPartyLeader)
+		{
+			return;
+		}
+
 		const auto party = Request("GET", "/zwnet/parties/current");
-		if (!party || party->is_null() || party->contains("error")) return;
+
+		if (!party || party->is_null() || party->contains("error"))
+		{
+			return;
+		}
+
 		const auto updated = ApplyPartyVisibility(*party);
-		if (updated) UpdateLobbyDvars(*updated);
+
+		if (updated)
+		{
+			UpdateLobbyDvars(*updated);
+		}
 	}
 
 	void ZWNet::CapturePartyPrivacy()
 	{
-		if (!ActiveState()) return;
-		const auto privacy = std::clamp(
-			Dvar::Var("partyPrivacy").get<int>(), 0, 2);
-		DesiredPartyPrivacy() = privacy;
-		if (LocalPartyLeader() && CachedPartyVisibility().load() != privacy &&
-			!VisibilitySyncPending().exchange(true))
+		if (!isActive)
 		{
-			EnqueueAsync([] { RefreshPartyVisibility(); });
+			return;
+		}
+
+		const auto privacy = std::clamp(Dvar::Var("partyPrivacy").Get<int>(), 0, 2);
+		desiredPartyPrivacy = privacy;
+
+		if (isLocalPartyLeader && cachedPartyVisibility.load() != privacy && !isVisibilitySyncPending.exchange(true))
+		{
+			EnqueueAsync([]
+			{
+				RefreshPartyVisibility();
+			});
 		}
 	}
 
@@ -2688,51 +3511,51 @@ namespace Components
 		}
 
 		const auto partyId = JsonString(party, "id");
+
 		if (partyId.empty())
 		{
 			return party;
 		}
 
-		const auto guid = FormatPublicGuid();
+		const auto& guid = PublicGuid();
 		const auto rank = ReadLocalLobbyRank();
+
 		if (!rank)
 		{
 			CacheSharedLobbyRanks(party);
 			return party;
 		}
+
 		const auto publishedRanks = ParseSharedLobbyRanks(party);
 		const auto publishedRank = publishedRanks.find(guid);
-		if (publishedRank != publishedRanks.end() &&
-			publishedRank->second.level == rank->level &&
-			publishedRank->second.prestige == rank->prestige)
+
+		if (publishedRank != publishedRanks.end() && publishedRank->second.level == rank->level && publishedRank->second.prestige == rank->prestige)
 		{
 			CacheSharedLobbyRanks(party);
 			return party;
 		}
 
 		const auto now = std::chrono::steady_clock::now();
+
 		{
-			std::lock_guard lock(SharedLobbyRankMutex);
-			const auto rankChanged =
-				partyId != LastRankPublishPartyId ||
-				rank->level != LastRankPublishLevel ||
-				rank->prestige != LastRankPublishPrestige;
-			if (!rankChanged && now < NextRankPublishAttempt)
+			std::lock_guard _(sharedLobbyRankMutex);
+
+			const bool hasRankChanged = partyId != lastRankPublishPartyId || rank->level != lastRankPublishLevel || rank->prestige != lastRankPublishPrestige;
+
+			if (!hasRankChanged && now < nextRankPublishAttempt)
 			{
-				SharedLobbyRanks[guid] = *rank;
+				sharedLobbyRanks[guid] = *rank;
 				return party;
 			}
 
-			LastRankPublishPartyId = partyId;
-			LastRankPublishLevel = rank->level;
-			LastRankPublishPrestige = rank->prestige;
-			NextRankPublishAttempt = now + std::chrono::seconds(30);
+			lastRankPublishPartyId = partyId;
+			lastRankPublishLevel = rank->level;
+			lastRankPublishPrestige = rank->prestige;
+			nextRankPublishAttempt = now + std::chrono::seconds(30);
 		}
 
-		const auto result = Request(
-			"POST",
-			"/zwnet/parties/" + partyId + "/player-rank",
-			{{"level", rank->level}, {"prestige", rank->prestige}});
+		const auto result = Request("POST", "/zwnet/parties/" + partyId + "/player-rank", { { "level", rank->level }, { "prestige", rank->prestige } });
+
 		if (result && result->is_object() && !result->contains("error"))
 		{
 			party = *result;
@@ -2742,37 +3565,62 @@ namespace Components
 		return party;
 	}
 
+	static bool IsPartyMemberReady(const nlohmann::json& member)
+	{
+		if (!member.is_object())
+		{
+			return false;
+		}
+
+		const auto ready = member.find("ready");
+
+		if (ready == member.end())
+		{
+			return false;
+		}
+
+		if (ready->is_boolean())
+		{
+			return ready->get<bool>();
+		}
+
+		if (ready->is_number_integer())
+		{
+			return ready->get<std::int64_t>() == 1;
+		}
+
+		return false;
+	}
+
 	void ZWNet::UpdateLobbyDvars(const nlohmann::json& party)
 	{
-		if (party.is_null() || !party.is_object()) return;
+		if (party.is_null() || !party.is_object())
+		{
+			return;
+		}
+
 		const auto sharedRanks = CacheSharedLobbyRanks(party);
 		const auto partyId = JsonString(party, "id");
 		const auto leaderId = JsonString(party, "leader_id");
 		const auto state = JsonString(party, "state", "IDLE");
-		auto selectedPlaylistId = JsonString(party, "selected_playlist_id");
-		std::int64_t selectedPlaylistRevision = 0;
-		if (party.contains("selected_playlist_revision") &&
-			party.at("selected_playlist_revision").is_number_integer())
-			selectedPlaylistRevision = party.at("selected_playlist_revision").get<std::int64_t>();
-		if (selectedPlaylistId.size() > 96 || selectedPlaylistRevision < 1 ||
-			!std::ranges::all_of(selectedPlaylistId, [](const unsigned char c)
-			{
-				return std::isalnum(c) || c == '-' || c == '_';
-			}))
-		{
-			selectedPlaylistId.clear();
-			selectedPlaylistRevision = 0;
-		}
 		const auto members = party.value("members", nlohmann::json::array());
+
+		std::string playerId;
+
+		{
+			std::lock_guard _(stateMutex);
+			playerId = currentPlayerId;
+		}
+
+		isLocalPartyLeader = !playerId.empty() && playerId == leaderId;
+
+		const auto visibility = NormalizePartyVisibility(JsonString(party, "visibility", "OPEN"));
+		cachedPartyMemberCount = static_cast<int>(members.size());
+		cachedPartyVisibility = PartyVisibilityValue(visibility);
+		isCachedPartyJoinStateSupported = IsPartyJoinStateSupported(state);
+
 		std::string owner;
-		std::string currentPlayerId;
-		{ std::lock_guard lock(StateMutex()); currentPlayerId = CurrentPlayerIdState(); }
-		LocalPartyLeader() = !currentPlayerId.empty() && currentPlayerId == leaderId;
-		const auto visibility = NormalizePartyVisibility(
-			JsonString(party, "visibility", "OPEN"));
-		CachedPartyMemberCount() = static_cast<int>(members.size());
-		CachedPartyVisibility() = PartyVisibilityValue(visibility);
-		CachedPartyJoinStateSupported() = IsPartyJoinStateSupported(state);
+
 		for (const auto& member : members)
 		{
 			if (JsonString(member, "player_id") == leaderId)
@@ -2781,93 +3629,167 @@ namespace Components
 				break;
 			}
 		}
+
 		{
-			std::lock_guard lock(StateMutex());
-			CurrentPartyIdState() = partyId;
+			std::lock_guard _(stateMutex);
+			currentPartyId = partyId;
 		}
+
+		auto selectedPlaylistId = JsonString(party, "selected_playlist_id");
+		std::int64_t selectedPlaylistRevision = 0;
+
+		if (party.contains("selected_playlist_revision") && party.at("selected_playlist_revision").is_number_integer())
 		{
-			auto& catalog = PlaylistCatalogState();
-			std::lock_guard lock(catalog.mutex);
-			catalog.partySelectedId = selectedPlaylistId;
-			catalog.partySelectedRevision = selectedPlaylistRevision;
-			if (!selectedPlaylistId.empty() &&
-				(!PlaylistSelectorOpen() || catalog.selectedId.empty()))
-				catalog.selectedId = selectedPlaylistId;
+			selectedPlaylistRevision = party.at("selected_playlist_revision").get<std::int64_t>();
 		}
-		Scheduler::Once([] { PublishPlaylistCatalog(); }, Scheduler::Pipeline::MAIN);
+
+		if (selectedPlaylistId.size() > 96 || selectedPlaylistRevision < 1 || !IsPlaylistId(selectedPlaylistId))
+		{
+			selectedPlaylistId.clear();
+			selectedPlaylistRevision = 0;
+		}
+
+		{
+			std::lock_guard _(playlistCatalog.mutex);
+
+			playlistCatalog.partySelectedId = selectedPlaylistId;
+			playlistCatalog.partySelectedRevision = selectedPlaylistRevision;
+
+			if (!selectedPlaylistId.empty() && (!isPlaylistSelectorOpen || playlistCatalog.selectedId.empty()))
+			{
+				playlistCatalog.selectedId = selectedPlaylistId;
+			}
+		}
+
+		SchedulePlaylistCatalogPublish();
+
 		const auto stateText = FriendlyStateText(state);
-		Scheduler::Once([partyId, leaderId, state, stateText, owner, members, currentPlayerId, sharedRanks, visibility]
+
+		Scheduler::Once([partyId, leaderId, state, stateText, owner, members, playerId, sharedRanks, visibility]
 		{
-			if (!ActiveState()) return;
-			Dvar::Var("zwnet_lobby_active").set(true);
-			Dvar::Var("zwnet_lobby_party_id").set(partyId);
-			Dvar::Var("zwnet_lobby_visibility").set(visibility);
-			Dvar::Var("zwnet_lobby_owner").set(owner);
-			Dvar::Var("zwnet_lobby_member_count").set(static_cast<int>(members.size()));
-			Dvar::Var("zwnet_lobby_status_text").set(stateText);
-			bool allReady = !members.empty();
-			bool selfReady = false;
+			if (!isActive)
+			{
+				return;
+			}
+
+			Dvar::Var("zwnet_lobby_active").Set(true);
+			SetDisplayText("zwnet_lobby_party_id", partyId);
+			Dvar::Var("zwnet_lobby_visibility").Set(visibility);
+			Dvar::Var("zwnet_lobby_owner").Set(owner);
+			Dvar::Var("zwnet_lobby_member_count").Set(static_cast<int>(members.size()));
+			SetDisplayText("zwnet_lobby_status_text", stateText);
+
+			bool isAllReady = !members.empty();
+			bool isSelfReady = false;
+
 			for (std::size_t i = 0; i < 4; ++i)
 			{
 				const auto prefix = std::format("zwnet_lobby_member_{}", i);
-				if (i < members.size())
+
+				if (i >= members.size())
 				{
-					const auto& member = members[i];
-					const auto ready = member.value("ready", 0) == 1;
-					const auto isSelf = JsonString(member, "player_id") == currentPlayerId;
-					const auto displayName = SafeDisplayName(JsonString(member, "display_name"));
-					Dvar::Var(prefix + "_name").set(displayName);
-					Dvar::Var(prefix + "_guid").set(JsonString(member, "player_id"));
-					Dvar::Var(prefix + "_role").set(JsonString(member, "player_id") == leaderId ? "PARTY LEADER" : "MEMBER");
-					Dvar::Var(prefix + "_ready").set(ready);
-					Dvar::Var(prefix + "_self").set(isSelf);
-					const auto rankIt = sharedRanks.find(
-						JsonString(member, "player_id"));
-					const auto rankKnown = rankIt != sharedRanks.end();
-					Dvar::Var(prefix + "_shared_rank_known").set(rankKnown);
-					Dvar::Var(prefix + "_shared_rank_level").set(
-						rankKnown ? rankIt->second.level : 1);
-					Dvar::Var(prefix + "_shared_rank_prestige").set(
-						rankKnown ? rankIt->second.prestige : 0);
-					allReady = allReady && ready;
-					if (isSelf) selfReady = ready;
+					ClearMemberDvars(prefix);
+					continue;
+				}
+
+				const auto& member = members[i];
+				const auto memberId = JsonString(member, "player_id");
+				const bool isReady = IsPartyMemberReady(member);
+				const bool isSelf = memberId == playerId;
+
+				Dvar::Var(prefix + "_name").Set(SafeDisplayName(JsonString(member, "display_name")));
+				SetDisplayText(prefix + "_guid", memberId);
+
+				if (memberId == leaderId)
+				{
+					Dvar::Var(prefix + "_role").Set("PARTY LEADER");
 				}
 				else
 				{
-					Dvar::Var(prefix + "_name").set("");
-					Dvar::Var(prefix + "_guid").set("");
-					Dvar::Var(prefix + "_role").set("");
-					Dvar::Var(prefix + "_ready").set(false);
-					Dvar::Var(prefix + "_self").set(false);
-					Dvar::Var(prefix + "_shared_rank_known").set(false);
-					Dvar::Var(prefix + "_shared_rank_level").set(1);
-					Dvar::Var(prefix + "_shared_rank_prestige").set(0);
+					Dvar::Var(prefix + "_role").Set("MEMBER");
+				}
+
+				Dvar::Var(prefix + "_ready").Set(isReady);
+				Dvar::Var(prefix + "_self").Set(isSelf);
+
+				const auto rank = sharedRanks.find(memberId);
+				const bool isRankKnown = rank != sharedRanks.end();
+
+				Dvar::Var(prefix + "_shared_rank_known").Set(isRankKnown);
+
+				if (isRankKnown)
+				{
+					Dvar::Var(prefix + "_shared_rank_level").Set(rank->second.level);
+					Dvar::Var(prefix + "_shared_rank_prestige").Set(rank->second.prestige);
+				}
+				else
+				{
+					Dvar::Var(prefix + "_shared_rank_level").Set(1);
+					Dvar::Var(prefix + "_shared_rank_prestige").Set(0);
+				}
+
+				isAllReady = isAllReady && isReady;
+
+				if (isSelf)
+				{
+					isSelfReady = isReady;
 				}
 			}
-			Dvar::Var("zwnet_lobby_self_ready").set(selfReady);
-			Dvar::Var("zwnet_all_ready").set(allReady);
-			Dvar::Var("zwnet_lobby_can_start").set(currentPlayerId == leaderId && allReady && state != "SEARCHING" && state != "IN_MATCH");
+
+			const bool canStart = playerId == leaderId && isAllReady && state != "SEARCHING" && state != "IN_MATCH";
+
+			Dvar::Var("zwnet_lobby_self_ready").Set(isSelfReady);
+			Dvar::Var("zwnet_all_ready").Set(isAllReady);
+			Dvar::Var("zwnet_lobby_can_start").Set(canStart);
 		}, Scheduler::Pipeline::MAIN);
 	}
 
 	void ZWNet::ResumeParty(const nlohmann::json& party)
 	{
-		if (!ActiveState() || !party.is_object() || JsonString(party, "id").empty()) return;
-		CancelJoinInProgressPreview();
-		auto resumedParty = PublishLocalRank(party);
-		const auto partyState = JsonString(resumedParty, "state", "IDLE");
-		const auto activeMatchmaking = IsActiveMatchmakingState(partyState);
-		SearchingState() = activeMatchmaking;
-		UpdateLobbyDvars(resumedParty);
-		SetState(activeMatchmaking ? partyState : "IN_PARTY");
-		Scheduler::Once([activeMatchmaking]
+		if (!isActive || !party.is_object() || JsonString(party, "id").empty())
 		{
-			if (!ActiveState()) return;
-			Command::Execute(activeMatchmaking
-				? "openmenu zwnet_matchmaking"
-				: "openmenu zwnet_party_lobby", false);
+			return;
+		}
+
+		CancelJoinInProgressPreview();
+
+		const auto resumedParty = PublishLocalRank(party);
+		const auto partyState = JsonString(resumedParty, "state", "IDLE");
+		const bool isMatchmaking = IsActiveMatchmakingState(partyState);
+
+		isSearching = isMatchmaking;
+		UpdateLobbyDvars(resumedParty);
+
+		if (isMatchmaking)
+		{
+			SetState(partyState);
+		}
+		else
+		{
+			SetState("IN_PARTY");
+		}
+
+		Scheduler::Once([isMatchmaking]
+		{
+			if (!isActive)
+			{
+				return;
+			}
+
+			if (isMatchmaking)
+			{
+				Command::Execute("openmenu zwnet_matchmaking", false);
+			}
+			else
+			{
+				Command::Execute("openmenu zwnet_party_lobby", false);
+			}
 		}, Scheduler::Pipeline::MAIN);
-		if (activeMatchmaking) UpdateMatchmaking();
+
+		if (isMatchmaking)
+		{
+			UpdateMatchmaking();
+		}
 	}
 
 	void ZWNet::JoinParty(const std::string& partyId)
@@ -2877,16 +3799,17 @@ namespace Components
 			SetState("ERROR", "ZWNET_PARTY_FAILED");
 			return;
 		}
+
 		EnqueueAsync([partyId]
 		{
-			const auto response = Request("POST",
-				"/zwnet/parties/" + partyId + "/join",
-				nlohmann::json::object());
+			const auto response = Request("POST", "/zwnet/parties/" + partyId + "/join", nlohmann::json::object());
+
 			if (!response || !response->is_object() || response->contains("error"))
 			{
 				SetState("ERROR", "ZWNET_PARTY_FAILED");
 				return;
 			}
+
 			ResumeParty(*response);
 		});
 	}
@@ -2898,75 +3821,89 @@ namespace Components
 			SetState("ERROR", "ZWNET_PARTY_FAILED");
 			return;
 		}
+
 		EnqueueAsync([capability]
 		{
-			const auto response = Request("POST",
-				"/zwnet/parties/join-capability",
-				{{"capability", capability}});
+			const auto response = Request("POST", "/zwnet/parties/join-capability", { { "capability", capability } });
+
 			if (!response || !response->is_object() || response->contains("error"))
 			{
 				SetState("ERROR", "ZWNET_PARTY_FAILED");
 				return;
 			}
+
 			ResumeParty(*response);
 		});
 	}
 
+	static void ConnectWhenUnmanaged(const std::string& endpoint)
+	{
+		Scheduler::Once([endpoint]
+		{
+			isEndpointJoinInFlight = false;
+
+			const Network::Address target(endpoint);
+
+			if (target.IsValid())
+			{
+				Party::Connect(target, false, true);
+			}
+		}, Scheduler::Pipeline::MAIN);
+	}
+
 	bool ZWNet::BeginEndpointJoin(const std::string& endpoint)
 	{
-		if (!ActiveState() || endpoint.empty() || endpoint.size() > 255) return false;
-		const Network::Address requestedTarget(endpoint);
-		if (!requestedTarget.isValid()) return false;
-		bool knownAssignedEndpoint = false;
-		bool hasAccessToken = false;
+		if (!isActive || endpoint.empty() || endpoint.size() > 255)
 		{
-			std::lock_guard lock(StateMutex());
-			hasAccessToken = !AccessTokenState().empty();
-			const Network::Address assignedTarget(
-				Dvar::Var("zwnet_server_endpoint").get<std::string>());
-			knownAssignedEndpoint = !CurrentMatchIdState().empty() &&
-				assignedTarget.isValid() && assignedTarget == requestedTarget;
+			return false;
 		}
-		EndpointJoinInFlight() = true;
+
+		const Network::Address requestedTarget(endpoint);
+
+		if (!requestedTarget.IsValid())
+		{
+			return false;
+		}
+
+		bool isKnownAssignedEndpoint = false;
+		bool hasAccessToken = false;
+
+		{
+			std::lock_guard _(stateMutex);
+			hasAccessToken = !accessToken.empty();
+
+			const Network::Address assignedTarget(Dvar::Var("zwnet_server_endpoint").Get<std::string>());
+			isKnownAssignedEndpoint = !currentMatchId.empty() && assignedTarget.IsValid() && assignedTarget == requestedTarget;
+		}
+
+		isEndpointJoinInFlight = true;
+
 		if (!hasAccessToken)
 		{
-			// Preserve native dedicated/private joins while requiring the endpoint's
-			// existing getinfo response to prove that it is not a managed session.
-			Scheduler::Once([endpoint]
-			{
-				EndpointJoinInFlight() = false;
-				const Network::Address target(endpoint);
-				if (target.isValid()) Party::Connect(target, false, true);
-			}, Scheduler::Pipeline::MAIN);
+			ConnectWhenUnmanaged(endpoint);
 			return true;
 		}
 
-		EnqueueAsync([endpoint, knownAssignedEndpoint]
+		EnqueueAsync([endpoint, isKnownAssignedEndpoint]
 		{
-			const auto response = Request("POST",
-				"/zwnet/matchmaking/join-by-endpoint",
-				{{"endpoint", endpoint}});
+			const auto response = Request("POST", "/zwnet/matchmaking/join-by-endpoint", { { "endpoint", endpoint } });
+
 			if (!response || !response->is_object())
 			{
-				if (knownAssignedEndpoint)
+				if (isKnownAssignedEndpoint)
 				{
-					EndpointJoinInFlight() = false;
+					isEndpointJoinInFlight = false;
 					SetState("ERROR", "ZWNET_REQUEST_FAILED");
 					return;
 				}
-				// An unknown endpoint must prove through the existing getinfo flow
-				// that it is unmanaged before the native connection may continue.
-				Scheduler::Once([endpoint]
-				{
-					EndpointJoinInFlight() = false;
-					const Network::Address target(endpoint);
-					if (target.isValid()) Party::Connect(target, false, true);
-				}, Scheduler::Pipeline::MAIN);
+
+				ConnectWhenUnmanaged(endpoint);
 				return;
 			}
+
 			if (response->contains("error"))
 			{
-				EndpointJoinInFlight() = false;
+				isEndpointJoinInFlight = false;
 				SetState("ERROR", "ZWNET_PARTY_FAILED");
 				return;
 			}
@@ -2975,84 +3912,112 @@ namespace Components
 			{
 				Scheduler::Once([endpoint]
 				{
-					EndpointJoinInFlight() = false;
+					isEndpointJoinInFlight = false;
+
 					const Network::Address target(endpoint);
-					if (target.isValid()) Party::Connect(target);
+
+					if (target.IsValid())
+					{
+						Party::Connect(target);
+					}
 				}, Scheduler::Pipeline::MAIN);
+
 				return;
 			}
 
 			const auto party = response->find("party");
-			if (!response->value("connect", false) || party == response->end() ||
-				!party->is_object() || party->contains("error"))
+
+			if (!response->value("connect", false) || party == response->end() || !party->is_object() || party->contains("error"))
 			{
-				EndpointJoinInFlight() = false;
+				isEndpointJoinInFlight = false;
 				SetState("ERROR", "ZWNET_PARTY_FAILED");
 				return;
 			}
 
-			// The endpoint only identifies a managed lobby. Joining it grants no
-			// transport access; the normal match descriptor must issue this player
-			// a short-lived ticket before Party::Connect may run.
-			EndpointJoinInFlight() = false;
+			isEndpointJoinInFlight = false;
 			ResumeParty(*party);
-			SearchingState() = true;
+			isSearching = true;
 			UpdateMatchmaking();
 		});
+
 		return true;
 	}
 
 	void ZWNet::EnterLobby(std::string map)
 	{
-		auto party = Request("GET", "/zwnet/parties/current");
-		if (!party || party->is_null())
+		auto party = CurrentOrNewParty();
+
+		if (!party || party->contains("error"))
 		{
-			party = Request("POST", "/zwnet/parties/create",
-				{{"visibility", PartyVisibilityName(DesiredPartyPrivacy().load())}});
+			SetState("ERROR", "ZWNET_PARTY_FAILED");
+			return;
 		}
-		if (!party || party->contains("error")) { SetState("ERROR", "ZWNET_PARTY_FAILED"); return; }
+
 		party = ApplyPartyVisibility(std::move(*party));
-		if (!party) { SetState("ERROR", "ZWNET_PARTY_FAILED"); return; }
+
+		if (!party)
+		{
+			SetState("ERROR", "ZWNET_PARTY_FAILED");
+			return;
+		}
+
 		*party = PublishLocalRank(std::move(*party));
 		UpdateLobbyDvars(*party);
+
 		const auto partyId = JsonString(*party, "id");
+
 		if (!partyId.empty())
 		{
-			Request("POST", "/zwnet/parties/" + partyId + "/set-map", {{"map", map}});
-			Request("POST", "/zwnet/parties/" + partyId + "/set-mode", {{"mode", "zw3"}});
+			Request("POST", "/zwnet/parties/" + partyId + "/set-map", { { "map", map } });
+			Request("POST", "/zwnet/parties/" + partyId + "/set-mode", { { "mode", "zw3" } });
 		}
+
 		SetState("IN_PARTY");
 	}
 
 	void ZWNet::RefreshLobby()
 	{
 		auto party = Request("GET", "/zwnet/parties/current");
-		if (party && !party->is_null() && !party->contains("error"))
+
+		if (!party || party->is_null() || party->contains("error"))
 		{
-			*party = PublishLocalRank(std::move(*party));
-			UpdateLobbyDvars(*party);
-			const auto partyState = party->value("state", "IDLE");
-			if (IsActiveMatchmakingState(partyState))
-			{
-				SearchingState() = true;
-				SetState(partyState);
-				UpdateMatchmaking();
-			}
+			return;
+		}
+
+		*party = PublishLocalRank(std::move(*party));
+		UpdateLobbyDvars(*party);
+
+		const auto partyState = party->value("state", "IDLE");
+
+		if (IsActiveMatchmakingState(partyState))
+		{
+			isSearching = true;
+			SetState(partyState);
+			UpdateMatchmaking();
 		}
 	}
 
 	void ZWNet::RefreshActiveParty()
 	{
-		if (!ActiveState() || SearchingState() || ClosingOnlineSessionState()) return;
+		if (!isActive || isSearching || isClosingOnlineSession)
+		{
+			return;
+		}
 
 		std::string partyId;
+
 		{
-			std::lock_guard lock(StateMutex());
-			partyId = CurrentPartyIdState();
+			std::lock_guard _(stateMutex);
+			partyId = currentPartyId;
 		}
-		if (partyId.empty()) return;
+
+		if (partyId.empty())
+		{
+			return;
+		}
 
 		auto party = Request("GET", "/zwnet/parties/current");
+
 		if (party && party->is_object() && !party->contains("error"))
 		{
 			*party = PublishLocalRank(std::move(*party));
@@ -3063,228 +4028,361 @@ namespace Components
 	void ZWNet::LeaveParty()
 	{
 		CancelJoinInProgressPreview();
+
 		const auto result = Request("POST", "/zwnet/parties/leave");
+
 		if (result && !result->contains("error"))
 		{
 			ResetMatchLobbySoundSnapshot();
-			std::lock_guard lock(StateMutex());
-			CurrentPartyIdState().clear(); CurrentProposalIdState().clear(); CurrentMatchIdState().clear();
+
+			std::lock_guard _(stateMutex);
+			currentPartyId.clear();
+			currentProposalId.clear();
+			currentMatchId.clear();
 		}
-		SearchingState() = false;
+
+		isSearching = false;
+
 		Scheduler::Once([]
 		{
-			if (!ActiveState()) return;
-			Dvar::Var("zwnet_lobby_active").set(false);
-			Dvar::Var("zwnet_vote_active").set(false);
-			Dvar::Var("zwnet_all_ready").set(false);
-			Dvar::Var("zwnet_start_phase").set("");
-			Dvar::Var("zwnet_start_seconds").set(0);
+			if (!isActive)
+			{
+				return;
+			}
+
+			Dvar::Var("zwnet_lobby_active").Set(false);
+			Dvar::Var("zwnet_vote_active").Set(false);
+			Dvar::Var("zwnet_all_ready").Set(false);
+			Dvar::Var("zwnet_start_phase").Set("");
+			Dvar::Var("zwnet_start_seconds").Set(0);
 		}, Scheduler::Pipeline::MAIN);
 	}
 
+	struct LobbyMemberSnapshot
+	{
+		std::string playerId;
+		std::string displayName;
+		std::string role;
+		bool isReady = false;
+		bool isRankKnown = false;
+		int rankLevel = 1;
+		int rankPrestige = 0;
+	};
+
 	void ZWNet::UpdateMatchLobbyDvars(const nlohmann::json& status)
 	{
-		if (!status.contains("lobby") || !status.at("lobby").is_object()) return;
-		const auto& lobby = status.at("lobby");
-		const auto membersIt = lobby.find("members");
-		if (membersIt == lobby.end() || !membersIt->is_array()) return;
-		struct LobbyMemberSnapshot
+		if (!status.contains("lobby") || !status.at("lobby").is_object())
 		{
-			std::string playerId;
-			std::string displayName;
-			std::string role;
-			bool ready{};
-			bool rankKnown{};
-			int rankLevel{1};
-			int rankPrestige{};
-		};
+			return;
+		}
+
+		const auto& lobby = status.at("lobby");
+		const auto lobbyMembers = lobby.find("members");
+
+		if (lobbyMembers == lobby.end() || !lobbyMembers->is_array())
+		{
+			return;
+		}
+
 		std::array<LobbyMemberSnapshot, 4> members{};
 		std::unordered_set<std::string> memberIds;
-		std::size_t memberCount{};
-		for (const auto& member : *membersIt)
+		std::size_t memberCount = 0;
+
+		for (const auto& member : *lobbyMembers)
 		{
-			if (memberCount >= members.size()) break;
-			if (!member.is_object()) continue;
-			auto& snapshot = members[memberCount++];
+			if (memberCount >= members.size())
+			{
+				break;
+			}
+
+			if (!member.is_object())
+			{
+				continue;
+			}
+
+			auto& snapshot = members[memberCount];
+			++memberCount;
+
 			snapshot.playerId = JsonString(member, "player_id");
-			if (!snapshot.playerId.empty()) memberIds.emplace(snapshot.playerId);
+
+			if (!snapshot.playerId.empty())
+			{
+				memberIds.emplace(snapshot.playerId);
+			}
+
 			snapshot.displayName = SafeDisplayName(JsonString(member, "display_name"));
 			snapshot.role = JsonString(member, "role", "MEMBER");
-			const auto rankIt = member.find("rank");
-			if (rankIt != member.end() && rankIt->is_object())
+
+			const auto rank = member.find("rank");
+
+			if (rank != member.end() && rank->is_object())
 			{
-				snapshot.rankLevel = std::clamp(rankIt->value("level", 1), 1, 54);
-				snapshot.rankPrestige = std::max(rankIt->value("prestige", 0), 0);
-				snapshot.rankKnown = rankIt->contains("level");
+				snapshot.rankLevel = std::clamp(rank->value("level", 1), 1, 54);
+				snapshot.rankPrestige = std::max(rank->value("prestige", 0), 0);
+				snapshot.isRankKnown = rank->contains("level");
 			}
 			else if (member.contains("level") && member.at("level").is_number_integer())
 			{
 				snapshot.rankLevel = std::clamp(member.at("level").get<int>(), 1, 54);
-				snapshot.rankPrestige = member.contains("prestige") &&
-					member.at("prestige").is_number_integer()
-					? std::max(member.at("prestige").get<int>(), 0)
-					: 0;
-				snapshot.rankKnown = true;
+				snapshot.rankPrestige = std::max(JsonIntegerOr(member, "prestige", 0), 0);
+				snapshot.isRankKnown = true;
 			}
 			else if (member.contains("rank_level"))
 			{
 				snapshot.rankLevel = std::clamp(member.value("rank_level", 1), 1, 54);
 				snapshot.rankPrestige = std::max(member.value("rank_prestige", 0), 0);
-				snapshot.rankKnown = true;
+				snapshot.isRankKnown = true;
 			}
-			if (!snapshot.rankKnown)
+
+			if (!snapshot.isRankKnown)
 			{
-				snapshot.rankKnown = Friends::TryGetZombieRankByGuid(
-					snapshot.playerId, snapshot.rankLevel, snapshot.rankPrestige);
+				snapshot.isRankKnown = Friends::TryGetZombieRankByGuid(snapshot.playerId, snapshot.rankLevel, snapshot.rankPrestige);
 			}
-			const auto readyIt = member.find("ready");
-			if (readyIt != member.end())
+
+			const auto ready = member.find("ready");
+
+			if (ready != member.end() && ready->is_boolean())
 			{
-				if (readyIt->is_boolean()) snapshot.ready = readyIt->get<bool>();
-				else if (readyIt->is_number_integer()) snapshot.ready = readyIt->get<std::int64_t>() != 0;
+				snapshot.isReady = ready->get<bool>();
+			}
+			else if (ready != member.end() && ready->is_number_integer())
+			{
+				snapshot.isReady = ready->get<std::int64_t>() != 0;
 			}
 		}
-		const auto soundDelta = ObserveMatchLobbyMembers(
-			JsonString(status, "match_id"), memberIds);
+
+		const auto soundDelta = ObserveMatchLobbyMembers(JsonString(status, "match_id"), memberIds);
 		const auto lobbyState = JsonString(status, "state", "WAITING_FOR_READY");
-		CachedPartyMemberCount() = static_cast<int>(memberCount);
-		CachedPartyJoinStateSupported() = IsPartyJoinStateSupported(lobbyState);
+
+		cachedPartyMemberCount = static_cast<int>(memberCount);
+		isCachedPartyJoinStateSupported = IsPartyJoinStateSupported(lobbyState);
+
 		const auto stateText = FriendlyStateText(lobbyState);
 		const auto sharedRanks = GetCachedSharedLobbyRanks();
-		std::string currentPlayerId;
-		{ std::lock_guard lock(StateMutex()); currentPlayerId = CurrentPlayerIdState(); }
-		Scheduler::Once([members = std::move(members), memberCount, stateText, currentPlayerId, sharedRanks, soundDelta]
+
+		std::string playerId;
+
 		{
-			if (!ActiveState()) return;
-			static constexpr std::array memberPrefixes
+			std::lock_guard _(stateMutex);
+			playerId = currentPlayerId;
+		}
+
+		Scheduler::Once([members = std::move(members), memberCount, stateText, playerId, sharedRanks, soundDelta]
+		{
+			if (!isActive)
 			{
-				"zwnet_lobby_member_0",
-				"zwnet_lobby_member_1",
-				"zwnet_lobby_member_2",
-				"zwnet_lobby_member_3",
-			};
-			Dvar::Var("zwnet_lobby_active").set(true);
-			Dvar::Var("zwnet_lobby_member_count").set(static_cast<int>(memberCount));
-			Dvar::Var("zwnet_lobby_status_text").set(stateText);
-			bool allReady = memberCount > 0;
-			bool selfReady = false;
+				return;
+			}
+
+			Dvar::Var("zwnet_lobby_active").Set(true);
+			Dvar::Var("zwnet_lobby_member_count").Set(static_cast<int>(memberCount));
+			SetDisplayText("zwnet_lobby_status_text", stateText);
+
+			bool isAllReady = memberCount > 0;
+			bool isSelfReady = false;
+
 			for (std::size_t i = 0; i < members.size(); ++i)
 			{
-				const auto prefix = memberPrefixes[i];
-				if (i < memberCount)
+				const auto prefix = std::format("zwnet_lobby_member_{}", i);
+
+				if (i >= memberCount)
 				{
-					const auto& member = members[i];
-					Dvar::Var(std::string{prefix} + "_name").set(member.displayName);
-					Dvar::Var(std::string{prefix} + "_guid").set(member.playerId);
-					Dvar::Var(std::string{prefix} + "_role").set(member.role);
-					Dvar::Var(std::string{prefix} + "_ready").set(member.ready);
-					Dvar::Var(std::string{prefix} + "_self").set(member.playerId == currentPlayerId);
-					const auto rankIt = sharedRanks.find(member.playerId);
-					const auto sharedRankKnown = rankIt != sharedRanks.end();
-					const auto rankKnown = member.rankKnown || sharedRankKnown;
-					Dvar::Var(std::string{prefix} + "_shared_rank_known").set(rankKnown);
-					Dvar::Var(std::string{prefix} + "_shared_rank_level").set(
-						member.rankKnown ? member.rankLevel :
-						sharedRankKnown ? rankIt->second.level : 1);
-					Dvar::Var(std::string{prefix} + "_shared_rank_prestige").set(
-						member.rankKnown ? member.rankPrestige :
-						sharedRankKnown ? rankIt->second.prestige : 0);
-					allReady = allReady && member.ready;
-					if (member.playerId == currentPlayerId) selfReady = member.ready;
+					ClearMemberDvars(prefix);
+					continue;
+				}
+
+				const auto& member = members[i];
+				const auto rank = sharedRanks.find(member.playerId);
+				const bool isSharedRankKnown = rank != sharedRanks.end();
+
+				Dvar::Var(prefix + "_name").Set(member.displayName);
+				SetDisplayText(prefix + "_guid", member.playerId);
+				SetDisplayText(prefix + "_role", member.role);
+				Dvar::Var(prefix + "_ready").Set(member.isReady);
+				Dvar::Var(prefix + "_self").Set(member.playerId == playerId);
+				Dvar::Var(prefix + "_shared_rank_known").Set(member.isRankKnown || isSharedRankKnown);
+
+				if (member.isRankKnown)
+				{
+					Dvar::Var(prefix + "_shared_rank_level").Set(member.rankLevel);
+					Dvar::Var(prefix + "_shared_rank_prestige").Set(member.rankPrestige);
+				}
+				else if (isSharedRankKnown)
+				{
+					Dvar::Var(prefix + "_shared_rank_level").Set(rank->second.level);
+					Dvar::Var(prefix + "_shared_rank_prestige").Set(rank->second.prestige);
 				}
 				else
 				{
-					Dvar::Var(std::string{prefix} + "_name").set("");
-					Dvar::Var(std::string{prefix} + "_guid").set("");
-					Dvar::Var(std::string{prefix} + "_role").set("");
-					Dvar::Var(std::string{prefix} + "_ready").set(false);
-					Dvar::Var(std::string{prefix} + "_self").set(false);
-					Dvar::Var(std::string{prefix} + "_shared_rank_known").set(false);
-					Dvar::Var(std::string{prefix} + "_shared_rank_level").set(1);
-					Dvar::Var(std::string{prefix} + "_shared_rank_prestige").set(0);
+					Dvar::Var(prefix + "_shared_rank_level").Set(1);
+					Dvar::Var(prefix + "_shared_rank_prestige").Set(0);
+				}
+
+				isAllReady = isAllReady && member.isReady;
+
+				if (member.playerId == playerId)
+				{
+					isSelfReady = member.isReady;
 				}
 			}
-			Dvar::Var("zwnet_lobby_self_ready").set(selfReady);
-			Dvar::Var("zwnet_all_ready").set(allReady);
-			Dvar::Var("zwnet_lobby_can_start").set(false);
-			// Matchmaking rosters are HTTP-backed, so reproduce the native private
-			// lobby membership sounds from stable player-ID deltas.
-			if (soundDelta.left) Command::Execute("snd_playLocal mp_player_leave", false);
-			if (soundDelta.joined) Command::Execute("snd_playLocal mp_player_join", false);
+
+			Dvar::Var("zwnet_lobby_self_ready").Set(isSelfReady);
+			Dvar::Var("zwnet_all_ready").Set(isAllReady);
+			Dvar::Var("zwnet_lobby_can_start").Set(false);
+
+			if (soundDelta.hasLeft)
+			{
+				Game::SND_PlayLocalSoundAliasByName(0, "mp_player_leave", 0);
+			}
+
+			if (soundDelta.hasJoined)
+			{
+				Game::SND_PlayLocalSoundAliasByName(0, "mp_player_join", 0);
+			}
 		}, Scheduler::Pipeline::MAIN);
 	}
 
 	void ZWNet::UpdatePresence()
 	{
-		if (!ActiveState() || ClosingOnlineSessionState() || OnlineEntryPendingState()) return;
-		std::string matchId;
-		std::string partyId;
+		if (!isActive || isClosingOnlineSession || isOnlineEntryPending)
 		{
-			std::lock_guard lock(StateMutex());
-			matchId = CurrentMatchIdState();
-			partyId = CurrentPartyIdState();
+			return;
 		}
-		auto status = std::string{"MAIN_MENU"};
-		const auto uiState = Dvar::Var("ui_zwnet_state").get<std::string>();
-		if (InGameState()) status = "IN_MATCH";
-		else if (uiState == "MAP_VOTE") status = "MAP_VOTE";
-		else if (uiState == "RESERVING_SERVER" || uiState == "STARTING_SERVER" || uiState == "SERVER_STARTING") status = "SERVER_STARTING";
-		else if (uiState == "JOIN_PREVIEW" || uiState == "COUNTDOWN" || uiState == "CONNECTING" || uiState == "DIRECT_CONNECTION" || uiState == "RELAY_CONNECTION") status = "CONNECTING";
-		else if (uiState == "READY_CHECK" || uiState == "WAITING_FOR_READY" || uiState == "MATCH_FOUND") status = "IN_PARTY";
-		else if (SearchingState()) status = "SEARCHING";
-		else if (IsOpaquePartyId(partyId)) status = "IN_PARTY";
-		const auto joinable = IsOpaquePartyId(partyId) &&
-			CachedPartyMemberCount().load() > 0 &&
-			CachedPartyMemberCount().load() < 4 &&
-			CachedPartyVisibility().load() != 2 &&
-			CachedPartyJoinStateSupported().load();
-		const auto result = Request("POST", "/social/presence",
-			{{"status", status}, {"sequence", NextPresenceSequence()}, {"joinable", joinable}});
+
+		std::string partyId;
+		std::string uiState;
+
+		{
+			std::lock_guard _(stateMutex);
+			partyId = currentPartyId;
+			uiState = presenceUiState;
+		}
+
+		std::string status = "MAIN_MENU";
+
+		if (isInGame)
+		{
+			status = "IN_MATCH";
+		}
+		else if (uiState == "MAP_VOTE")
+		{
+			status = "MAP_VOTE";
+		}
+		else if (uiState == "RESERVING_SERVER" || uiState == "STARTING_SERVER" || uiState == "SERVER_STARTING")
+		{
+			status = "SERVER_STARTING";
+		}
+		else if (uiState == "JOIN_PREVIEW" || uiState == "COUNTDOWN" || uiState == "CONNECTING" || uiState == "DIRECT_CONNECTION" || uiState == "RELAY_CONNECTION")
+		{
+			status = "CONNECTING";
+		}
+		else if (uiState == "READY_CHECK" || uiState == "WAITING_FOR_READY" || uiState == "MATCH_FOUND")
+		{
+			status = "IN_PARTY";
+		}
+		else if (isSearching)
+		{
+			status = "SEARCHING";
+		}
+		else if (IsOpaquePartyId(partyId))
+		{
+			status = "IN_PARTY";
+		}
+
+		const auto memberCount = cachedPartyMemberCount.load();
+		const bool isJoinable = IsOpaquePartyId(partyId) && memberCount > 0 && memberCount < 4 && cachedPartyVisibility.load() != 2 && isCachedPartyJoinStateSupported.load();
+
+		const auto result = Request("POST", "/social/presence", { { "status", status }, { "sequence", NextPresenceSequence() }, { "joinable", isJoinable } });
+
 		if (!result || result->contains("error"))
 		{
 			Logger::Print("ZWNET presence update failed; matchmaking state preserved\n");
 		}
 	}
 
-	void ZWNet::ToggleReady(const bool ready)
+	static void ClearReadyPending()
 	{
-		std::string partyId;
-		{ std::lock_guard lock(StateMutex()); partyId = CurrentPartyIdState(); }
-		if (partyId.empty())
-		{
-			Scheduler::Once([]
-			{
-				if (ActiveState()) Dvar::Var("zwnet_ready_pending").set(false);
-			}, Scheduler::Pipeline::MAIN);
-			return;
-		}
-		const auto result = Request("POST", "/zwnet/parties/" + partyId + (ready ? "/unready" : "/ready"));
 		Scheduler::Once([]
 		{
-			if (ActiveState()) Dvar::Var("zwnet_ready_pending").set(false);
-		}, Scheduler::Pipeline::MAIN);
-		if (result && !result->contains("error"))
-		{
-			Scheduler::Once([ready]
+			if (isActive)
 			{
-				if (!ActiveState()) return;
-				Dvar::Var("zwnet_lobby_self_ready").set(!ready);
-			}, Scheduler::Pipeline::MAIN);
-			UpdateLobbyDvars(*result);
-			if (SearchingState()) UpdateMatchmaking();
+				Dvar::Var("zwnet_ready_pending").Set(false);
+			}
+		}, Scheduler::Pipeline::MAIN);
+	}
+
+	void ZWNet::ToggleReady(const bool isReady)
+	{
+		std::string partyId;
+
+		{
+			std::lock_guard _(stateMutex);
+			partyId = currentPartyId;
+		}
+
+		if (partyId.empty())
+		{
+			ClearReadyPending();
+			return;
+		}
+
+		std::string action = "/ready";
+
+		if (isReady)
+		{
+			action = "/unready";
+		}
+
+		const auto result = Request("POST", "/zwnet/parties/" + partyId + action);
+		ClearReadyPending();
+
+		if (!result || result->contains("error"))
+		{
+			return;
+		}
+
+		Scheduler::Once([isReady]
+		{
+			if (isActive)
+			{
+				Dvar::Var("zwnet_lobby_self_ready").Set(!isReady);
+			}
+		}, Scheduler::Pipeline::MAIN);
+
+		UpdateLobbyDvars(*result);
+
+		if (isSearching)
+		{
+			UpdateMatchmaking();
 		}
 	}
 
 	void ZWNet::StartPrivateMatch(std::string map)
 	{
 		std::string partyId;
-		{ std::lock_guard lock(StateMutex()); partyId = CurrentPartyIdState(); }
-		if (partyId.empty()) return;
-		Request("POST", "/zwnet/parties/" + partyId + "/set-map", {{"map", map}});
-		Request("POST", "/zwnet/parties/" + partyId + "/set-mode", {{"mode", "zw3"}});
+
+		{
+			std::lock_guard _(stateMutex);
+			partyId = currentPartyId;
+		}
+
+		if (partyId.empty())
+		{
+			return;
+		}
+
+		Request("POST", "/zwnet/parties/" + partyId + "/set-map", { { "map", map } });
+		Request("POST", "/zwnet/parties/" + partyId + "/set-mode", { { "mode", "zw3" } });
+
 		const auto result = Request("POST", "/zwnet/parties/" + partyId + "/start-private-match");
-		if (!result || result->contains("error")) { SetState("ERROR", "ZWNET_PRIVATE_MATCH_FAILED"); return; }
-		SearchingState() = true;
+
+		if (!result || result->contains("error"))
+		{
+			SetState("ERROR", "ZWNET_PRIVATE_MATCH_FAILED");
+			return;
+		}
+
+		isSearching = true;
 		SetState(result->value("state", "RESERVING_SERVER"));
 		UpdateMatchmaking();
 	}
@@ -3292,10 +4390,25 @@ namespace Components
 	void ZWNet::VoteMap(const std::string& choice)
 	{
 		std::string proposalId;
-		{ std::lock_guard lock(StateMutex()); proposalId = CurrentProposalIdState(); }
-		if (proposalId.empty()) return;
-		const auto result = Request("POST", "/zwnet/matchmaking/map-vote", {{"proposal_id", proposalId}, {"choice", choice}});
-		if (!result) { SetState("ERROR", "ZWNET_MAP_VOTE_FAILED"); return; }
+
+		{
+			std::lock_guard _(stateMutex);
+			proposalId = currentProposalId;
+		}
+
+		if (proposalId.empty())
+		{
+			return;
+		}
+
+		const auto result = Request("POST", "/zwnet/matchmaking/map-vote", { { "proposal_id", proposalId }, { "choice", choice } });
+
+		if (!result)
+		{
+			SetState("ERROR", "ZWNET_MAP_VOTE_FAILED");
+			return;
+		}
+
 		if (result->contains("error"))
 		{
 			if (ResponseErrorCode(*result) == "MAP_VOTE_CLOSED")
@@ -3303,59 +4416,89 @@ namespace Components
 				UpdateMatchmaking();
 				return;
 			}
+
 			SetState("ERROR", "ZWNET_MAP_VOTE_FAILED");
 			return;
 		}
+
 		if (result->value("closed", false))
 		{
 			UpdateMatchmaking();
 			return;
 		}
+
 		Scheduler::Once([choice]
 		{
-			if (!ActiveState()) return;
-			Dvar::Var("zwnet_vote_selection").set(choice);
+			if (isActive)
+			{
+				Dvar::Var("zwnet_vote_selection").Set(choice);
+			}
 		}, Scheduler::Pipeline::MAIN);
-		const auto* vote = result->contains("map_vote") && result->at("map_vote").is_object()
-			? &result->at("map_vote")
-			: result->contains("choices") ? &*result : nullptr;
-		if (vote)
+
+		const nlohmann::json* vote = nullptr;
+
+		if (result->contains("map_vote") && result->at("map_vote").is_object())
 		{
-			std::string matchId;
-			{ std::lock_guard lock(StateMutex()); matchId = CurrentMatchIdState(); }
-			UpdateVoteDvars({{"match_id", matchId}, {"map_vote", *vote}});
+			vote = &result->at("map_vote");
 		}
+		else if (result->contains("choices"))
+		{
+			vote = &*result;
+		}
+
+		if (!vote)
+		{
+			return;
+		}
+
+		std::string matchId;
+
+		{
+			std::lock_guard _(stateMutex);
+			matchId = currentMatchId;
+		}
+
+		UpdateVoteDvars({ { "match_id", matchId }, { "map_vote", *vote } });
 	}
 
 	void ZWNet::CancelSearch()
 	{
 		Request("POST", "/zwnet/matchmaking/cancel");
-		SearchingState() = false; SetState("IDLE");
-		Scheduler::Once([] { PublishPlaylistCatalog(); }, Scheduler::Pipeline::MAIN);
+		isSearching = false;
+		SetState("IDLE");
+		SchedulePlaylistCatalogPublish();
 	}
 
 	void ZWNet::CancelMatchmaking()
 	{
 		CloseOnlineSession(false, false);
-		if (!ActiveState()) return;
+
+		if (!isActive)
+		{
+			return;
+		}
 
 		auto party = Request("GET", "/zwnet/parties/current");
+
 		if (party && party->is_null())
 		{
-			party = Request("POST", "/zwnet/parties/create",
-				{{"visibility", PartyVisibilityName(DesiredPartyPrivacy().load())}});
+			party = Request("POST", "/zwnet/parties/create", { { "visibility", PartyVisibilityName(desiredPartyPrivacy.load()) } });
 		}
+
 		if (!party || !party->is_object() || party->contains("error"))
 		{
 			SetState("ERROR", "ZWNET_PARTY_FAILED");
 			return;
 		}
+
 		party = ApplyPartyVisibility(std::move(*party));
+
 		if (!party)
 		{
 			SetState("ERROR", "ZWNET_PARTY_FAILED");
 			return;
 		}
+
 		*party = PublishLocalRank(std::move(*party));
 		UpdateLobbyDvars(*party);
 		SetState("IN_PARTY");
@@ -3363,1006 +4506,1679 @@ namespace Components
 		UpdatePresence();
 	}
 
-	void ZWNet::CloseOnlineSession(const bool shuttingDown, const bool terminal)
+	void ZWNet::CloseOnlineSession(const bool isShuttingDown, const bool isTerminal)
 	{
 		CancelJoinInProgressPreview();
-		if (!ActiveState() || ClosingOnlineSessionState().exchange(true)) return;
-		ManagedReconnectInFlight() = false;
-		PlaylistSelectionStarting() = false;
-		CancelRelayHandshake();
-		ClearManagedRouteAttempt();
-		Auth::ClearManagedConnectTicket();
-		const auto closingGuard = gsl::finally([] { ClosingOnlineSessionState() = false; });
+
+		if (!isActive || isClosingOnlineSession.exchange(true))
+		{
+			return;
+		}
+
+		isPlaylistSelectionStarting = false;
+		ResetManagedRoute();
+
+		ScopeExit closingGuard([]
+		{
+			isClosingOnlineSession = false;
+		});
+
 		ResetMatchLobbySoundSnapshot();
-		EndpointJoinInFlight() = false;
-		ServerJoinTransitionState() = false;
-		InGameState() = false;
+		isEndpointJoinInFlight = false;
+		isServerJoinTransition = false;
+		isInGame = false;
+
 		std::string matchId;
+
 		{
-			std::lock_guard lock(StateMutex());
-			matchId = CurrentMatchIdState();
+			std::lock_guard _(stateMutex);
+			matchId = currentMatchId;
 		}
+
 		auto body = nlohmann::json::object();
-		if (!matchId.empty()) body["match_id"] = matchId;
-		if (terminal) body["terminal"] = true;
-		Request("POST", "/zwnet/matchmaking/disconnect", body);
-		Request("POST", "/social/presence", {{"status", "OFFLINE"}, {"sequence", NextPresenceSequence()}, {"joinable", false}});
-		SearchingState() = false;
-		Scheduler::Once([] { PublishPlaylistCatalog(); }, Scheduler::Pipeline::MAIN);
+
+		if (!matchId.empty())
 		{
-			std::lock_guard lock(StateMutex());
-			if (terminal) CurrentPartyIdState().clear();
-			CurrentProposalIdState().clear();
-			CurrentMatchIdState().clear();
+			body["match_id"] = matchId;
 		}
-		if (shuttingDown) return;
-		SetState("IDLE");
-		Scheduler::Once([terminal]
+
+		if (isTerminal)
 		{
-			if (!ActiveState()) return;
-			if (terminal)
+			body["terminal"] = true;
+		}
+
+		Request("POST", "/zwnet/matchmaking/disconnect", body);
+		Request("POST", "/social/presence", { { "status", "OFFLINE" }, { "sequence", NextPresenceSequence() }, { "joinable", false } });
+
+		isSearching = false;
+		SchedulePlaylistCatalogPublish();
+
+		{
+			std::lock_guard _(stateMutex);
+
+			if (isTerminal)
+			{
+				currentPartyId.clear();
+			}
+
+			currentProposalId.clear();
+			currentMatchId.clear();
+		}
+
+		if (isShuttingDown)
+		{
+			return;
+		}
+
+		SetState("IDLE");
+
+		Scheduler::Once([isTerminal]
+		{
+			if (!isActive)
+			{
+				return;
+			}
+
+			if (isTerminal)
 			{
 				AbandonOnlineSession();
 				return;
 			}
-			Dvar::Var("zwnet_vote_active").set(false);
-			Dvar::Var("zwnet_vote_selection").set("");
-			Dvar::Var("zwnet_all_ready").set(false);
-			Dvar::Var("zwnet_start_phase").set("");
-			Dvar::Var("zwnet_start_seconds").set(0);
-			Dvar::Var("zwnet_vote_reveal_time").set(0);
-			Dvar::Var("zwnet_vote_winner_id").set("");
-			Dvar::Var("zwnet_vote_winner_name").set("");
-			Dvar::Var("zwnet_vote_winner_image").set("");
-			Dvar::Var("zwnet_server_endpoint").set("");
-			Dvar::Var("zwnet_server_hostname").set("");
-			Dvar::Var("zwnet_server_status").set("NOT ASSIGNED");
-			Dvar::Var("zwnet_join_status").set("WAITING IN LOBBY");
+
+			ClearMatchDvars();
+			Dvar::Var("zwnet_managed_session").Set(false);
 		}, Scheduler::Pipeline::MAIN);
 	}
 
 	bool ZWNet::ReturnToMatchmakingLobby()
 	{
-		auto completed = false;
+		bool isCompleted = false;
+
 		for (auto attempt = 0; attempt < 7; ++attempt)
 		{
 			const auto status = Request("GET", "/zwnet/matchmaking/status");
-			if (!status || !status->is_object() || status->contains("error")) return false;
+
+			if (!status || !status->is_object() || status->contains("error"))
+			{
+				return false;
+			}
+
 			const auto state = JsonString(*status, "state");
-			completed = state == "RESETTING" || state == "POST_MATCH" ||
-				state == "FINISHED" || state == "IDLE";
-			if (completed) break;
-			if (attempt < 6) std::this_thread::sleep_for(1s);
+			isCompleted = state == "RESETTING" || state == "POST_MATCH" || state == "FINISHED" || state == "IDLE";
+
+			if (isCompleted)
+			{
+				break;
+			}
+
+			if (attempt < 6)
+			{
+				std::this_thread::sleep_for(1s);
+			}
 		}
-		if (!completed) return false;
+
+		if (!isCompleted)
+		{
+			return false;
+		}
 
 		auto party = Request("GET", "/zwnet/parties/current");
-		if (!party || !party->is_object() || party->is_null() || party->contains("error") ||
-			JsonString(*party, "id").empty()) return false;
+
+		if (!party || !party->is_object() || party->contains("error") || JsonString(*party, "id").empty())
+		{
+			return false;
+		}
+
 		*party = PublishLocalRank(std::move(*party));
 
-		SearchingState() = false;
-		InGameState() = false;
-		EndpointJoinInFlight() = false;
-		ServerJoinTransitionState() = false;
+		isSearching = false;
+		isInGame = false;
+		isEndpointJoinInFlight = false;
+		isServerJoinTransition = false;
 		ResetMatchLobbySoundSnapshot();
+
 		{
-			std::lock_guard lock(StateMutex());
-			CurrentProposalIdState().clear();
-			CurrentMatchIdState().clear();
+			std::lock_guard _(stateMutex);
+			currentProposalId.clear();
+			currentMatchId.clear();
 		}
+
 		UpdateLobbyDvars(*party);
 		SetState("IN_PARTY");
 		RefreshPlaylistCatalog(true);
 		UpdatePresence();
+
 		Scheduler::Once([]
 		{
-			if (!ActiveState()) return;
-			Dvar::Var("zwnet_vote_active").set(false);
-			Dvar::Var("zwnet_vote_selection").set("");
-			Dvar::Var("zwnet_all_ready").set(false);
-			Dvar::Var("zwnet_start_phase").set("");
-			Dvar::Var("zwnet_start_seconds").set(0);
-			Dvar::Var("zwnet_vote_reveal_time").set(0);
-			Dvar::Var("zwnet_managed_session").set(false);
-			Dvar::Var("zwnet_vote_winner_id").set("");
-			Dvar::Var("zwnet_vote_winner_name").set("");
-			Dvar::Var("zwnet_vote_winner_image").set("");
-			Dvar::Var("zwnet_match_id").set("");
-			Dvar::Var("zwnet_server_endpoint").set("");
-			Dvar::Var("zwnet_server_hostname").set("");
-			Dvar::Var("zwnet_server_status").set("NOT ASSIGNED");
-			Dvar::Var("zwnet_join_status").set("WAITING IN LOBBY");
-			for (const auto* menuName : { "class", "team_marinesopfor" })
+			if (!isActive)
 			{
-				if (auto* menu = Game::Menus_FindByName(Game::uiContext, menuName))
+				return;
+			}
+
+			ClearMatchDvars();
+			Dvar::Var("zwnet_match_id").Set("");
+			Dvar::Var("zwnet_managed_session").Set(false);
+
+			for (const char* menuName : { "class", "team_marinesopfor" })
+			{
+				Game::menuDef_t* const menu = Game::Menus_FindByName(Game::uiContext, menuName);
+
+				if (menu)
 				{
 					Game::Menus_CloseRequest(Game::uiContext, menu);
 				}
 			}
+
 			Game::Menus_OpenByName(Game::uiContext, "zwnet_matchmaking");
 		}, Scheduler::Pipeline::MAIN, 500ms);
+
 		return true;
 	}
 
-	void ZWNet::ReturnToIdleMatchmakingMenu()
+	void ZWNet::ReturnToIdleMenu()
 	{
 		AbandonOnlineSession();
-		Dvar::Var("zwnet_managed_session").set(false);
+		Dvar::Var("zwnet_managed_session").Set(false);
 		SetState("IDLE");
+
 		Command::Execute("set xblive_privateserver 0", false);
 		Command::Execute("set xblive_privatematch 0", false);
 		Command::Execute("set xblive_rankedmatch 0", false);
-		for (const auto* menuName : { "class", "team_marinesopfor", "zwnet_matchmaking" })
+
+		for (const char* menuName : { "class", "team_marinesopfor", "zwnet_matchmaking" })
 		{
-			if (auto* menu = Game::Menus_FindByName(Game::uiContext, menuName))
+			Game::menuDef_t* const menu = Game::Menus_FindByName(Game::uiContext, menuName);
+
+			if (menu)
 			{
 				Game::Menus_CloseRequest(Game::uiContext, menu);
 			}
 		}
+
 		Game::Menus_OpenByName(Game::uiContext, "pregame_loaderror");
 		Game::Menus_OpenByName(Game::uiContext, "popup_zwnet_connecting");
 	}
 
-	void ZWNet::ScheduleReturnToIdleMatchmakingMenu()
+	void ZWNet::ScheduleReturnToIdleMenu()
 	{
-		static std::atomic_bool returnPending{false};
-		if (returnPending.exchange(true)) return;
+		if (isIdleReturnPending.exchange(true))
+		{
+			return;
+		}
 
 		const auto startedAt = Game::Sys_Milliseconds();
-		Scheduler::Schedule([startedAt, disconnectedAt = -1]() mutable -> bool
+
+		Scheduler::Schedule([startedAt, disconnectedAt = -1]() mutable
 		{
 			const auto now = Game::Sys_Milliseconds();
-			if (Game::CL_IsCgameInitialized())
+
+			if (Game::CL_IsCgameInitialized(0))
 			{
-				if (now - startedAt <= 10000) return false;
-				returnPending = false;
-				return true;
+				const bool hasTimedOut = (now - startedAt) > 10'000;
+
+				if (hasTimedOut)
+				{
+					isIdleReturnPending = false;
+				}
+
+				return hasTimedOut;
 			}
+
 			if (disconnectedAt < 0)
 			{
 				disconnectedAt = now;
 				return false;
 			}
-			if (now - disconnectedAt < 150) return false;
 
-			returnPending = false;
-			ReturnToIdleMatchmakingMenu();
+			if ((now - disconnectedAt) < 150)
+			{
+				return false;
+			}
+
+			isIdleReturnPending = false;
+			ReturnToIdleMenu();
 			return true;
 		}, Scheduler::Pipeline::MAIN, 50ms);
 	}
 
-	void ZWNet::HandleServerDisconnect(const bool terminal, const bool wasMatchmaking)
+	void ZWNet::HandleServerDisconnect(const bool isTerminal, const bool wasMatchmaking)
 	{
-		if (wasMatchmaking && !terminal && ReturnToMatchmakingLobby())
+		if (wasMatchmaking && !isTerminal && ReturnToMatchmakingLobby())
 		{
 			Logger::Print("ZWNET completed match: returned to the preserved party lobby\n");
 			return;
 		}
-		CloseOnlineSession(false, terminal);
-		if (wasMatchmaking) ScheduleReturnToIdleMatchmakingMenu();
+
+		CloseOnlineSession(false, isTerminal);
+
+		if (wasMatchmaking)
+		{
+			ScheduleReturnToIdleMenu();
+		}
 	}
 
 	bool ZWNet::BeginManagedReconnect(const std::string& endpoint)
 	{
-		if (!ActiveState()) return false;
-		if (ManagedReconnectInFlight()) return true;
+		if (!isActive)
+		{
+			return false;
+		}
+
+		if (isManagedReconnectInFlight)
+		{
+			return true;
+		}
+
 		std::string matchId;
 		std::string playerId;
+
 		{
-			std::lock_guard lock(StateMutex());
-			matchId = CurrentMatchIdState();
-			playerId = CurrentPlayerIdState();
+			std::lock_guard _(stateMutex);
+			matchId = currentMatchId;
+			playerId = currentPlayerId;
 		}
-		bool managed = false;
-		bool bound = false;
-		bool relay = false;
+
+		bool isManaged = false;
+		bool isBound = false;
+		bool isRelay = false;
+
 		{
-			auto& route = RouteAttempt();
-			std::lock_guard lock(route.mutex);
-			managed = !matchId.empty() && route.matchId == matchId;
-			if (managed)
+			std::lock_guard _(routeAttempt.mutex);
+			isManaged = !matchId.empty() && routeAttempt.matchId == matchId;
+
+			if (isManaged)
 			{
 				const Network::Address requestedTarget(endpoint);
-				bound = requestedTarget.isValid() && requestedTarget == route.assignedTarget &&
-					route.playerId == playerId && !route.sessionId.empty();
-				relay = route.routeIsRelay;
+
+				isBound = requestedTarget.IsValid()
+					&& requestedTarget == routeAttempt.assignedTarget
+					&& routeAttempt.playerId == playerId
+					&& !routeAttempt.sessionId.empty();
+
+				isRelay = routeAttempt.isRouteRelay;
 			}
 		}
-		if (!managed)
+
+		if (!isManaged)
 		{
-			if (!Dvar::Var("zwnet_managed_session").get<bool>()) return false;
+			if (!Dvar::Var("zwnet_managed_session").Get<bool>())
+			{
+				return false;
+			}
+
 			Auth::ClearManagedConnectTicket();
 			SetState("ERROR", "ZWNET_DESCRIPTOR_INVALID");
 			return true;
 		}
-		if (ManagedReconnectInFlight()) return true;
-		if (!bound || !IsOpaqueMatchId(matchId) || !IsRelayOpaque(playerId))
+
+		if (!isBound || !IsOpaqueMatchId(matchId) || !IsOpaqueDescriptorValue(playerId))
 		{
 			Auth::ClearManagedConnectTicket();
 			SetState("ERROR", "ZWNET_DESCRIPTOR_INVALID");
 			return true;
 		}
-		if (ManagedReconnectInFlight().exchange(true)) return true;
-		++JoinTransitionGeneration();
-		ServerJoinTransitionState() = true;
-		EnqueueAsync([matchId, relay] { ConnectMatch(matchId, relay, true); });
+
+		if (isManagedReconnectInFlight.exchange(true))
+		{
+			return true;
+		}
+
+		++joinTransitionGeneration;
+		isServerJoinTransition = true;
+
+		EnqueueAsync([matchId, isRelay]
+		{
+			ConnectMatch(matchId, isRelay, true);
+		});
+
 		return true;
 	}
 
 	bool ZWNet::TryRelayAfterDirectTimeout(const std::string& endpoint)
 	{
-		if (!ActiveState()) return false;
+		if (!isActive)
+		{
+			return false;
+		}
+
 		const Network::Address timedOutTarget(endpoint);
-		if (!timedOutTarget.isValid()) return false;
+
+		if (!timedOutTarget.IsValid())
+		{
+			return false;
+		}
+
 		std::string matchId;
 		std::string playerId;
+
 		{
-			std::lock_guard lock(StateMutex());
-			matchId = CurrentMatchIdState();
-			playerId = CurrentPlayerIdState();
+			std::lock_guard _(stateMutex);
+			matchId = currentMatchId;
+			playerId = currentPlayerId;
 		}
-		if (!IsOpaqueMatchId(matchId) || !IsRelayOpaque(playerId)) return false;
-		bool reconnect = false;
+
+		if (!IsOpaqueMatchId(matchId) || !IsOpaqueDescriptorValue(playerId))
 		{
-			auto& route = RouteAttempt();
-			std::lock_guard lock(route.mutex);
-			if (!route.directWaiting || route.relayUsed ||
-				route.matchId != matchId || route.playerId != playerId ||
-				route.directTarget != timedOutTarget) return false;
-			route.directWaiting = false;
-			route.relayUsed = true;
-			reconnect = route.reconnectAttempt;
+			return false;
 		}
-		// The existing direct getinfo timed out for this exact managed match.
-		// A second descriptor is issued under the authenticated player session.
-		++JoinTransitionGeneration();
-		ServerJoinTransitionState() = true;
-		EnqueueAsync([matchId, reconnect] { ConnectMatch(matchId, true, reconnect); });
+
+		bool isReconnect = false;
+
+		{
+			std::lock_guard _(routeAttempt.mutex);
+
+			const bool isThisDirectAttempt = routeAttempt.isDirectWaiting
+				&& !routeAttempt.isRelayUsed
+				&& routeAttempt.matchId == matchId
+				&& routeAttempt.playerId == playerId
+				&& routeAttempt.directTarget == timedOutTarget;
+
+			if (!isThisDirectAttempt)
+			{
+				return false;
+			}
+
+			routeAttempt.isDirectWaiting = false;
+			routeAttempt.isRelayUsed = true;
+			isReconnect = routeAttempt.isReconnectAttempt;
+		}
+
+		++joinTransitionGeneration;
+		isServerJoinTransition = true;
+
+		EnqueueAsync([matchId, isReconnect]
+		{
+			ConnectMatch(matchId, true, isReconnect);
+		});
+
 		return true;
 	}
 
-	void ZWNet::CancelJoinInProgressPreview()
+	void ZWNet::ConnectMatch(const std::string& matchId, const bool isRelay, const bool isReconnect)
 	{
-		auto& preview = JoinPreview();
+		if (!isRelay && IsRelayUsedForMatch(matchId))
 		{
-			std::lock_guard lock(preview.mutex);
-			++preview.generation;
-			preview.active = false;
-			preview.matchId.clear();
-			preview.completedMatchId.clear();
-		}
-		JoinInProgressConnectionSoundPending() = false;
-		Scheduler::Once([]
-		{
-			Dvar::Var("zwnet_join_preview_active").set(false);
-			Dvar::Var("zwnet_join_preview_seconds").set(0);
-		}, Scheduler::Pipeline::MAIN);
-	}
-
-	void ZWNet::BeginJoinInProgressPreview(const nlohmann::json& status)
-	{
-		const auto matchId = JsonString(status, "match_id");
-		if (!IsOpaqueMatchId(matchId)) return;
-		std::uint64_t generation{};
-		{
-			auto& preview = JoinPreview();
-			std::lock_guard lock(preview.mutex);
-			if ((preview.active && preview.matchId == matchId) || preview.completedMatchId == matchId) return;
-			++preview.generation;
-			generation = preview.generation;
-			preview.active = true;
-			preview.matchId = matchId;
-			preview.completedMatchId.clear();
-		}
-
-		const auto map = JsonString(status, "map");
-		auto mapName = std::string{};
-		auto mapImage = std::string{};
-		if (status.contains("selected_map") && status.at("selected_map").is_object())
-		{
-			mapName = JsonString(status.at("selected_map"), "name");
-			mapImage = JsonString(status.at("selected_map"), "image");
-		}
-		Scheduler::Once([generation, matchId, map, mapName, mapImage]
-		{
-			if (!ActiveState()) return;
-			{
-				auto& preview = JoinPreview();
-				std::lock_guard lock(preview.mutex);
-				if (!preview.active || preview.generation != generation || preview.matchId != matchId) return;
-			}
-			Dvar::Var("ui_zwnet_state").set("JOIN_PREVIEW");
-			Dvar::Var("ui_zwnet_state_text").set("JOINING GAME IN PROGRESS");
-			Dvar::Var("zwnet_join_preview_active").set(true);
-			Dvar::Var("zwnet_join_preview_seconds").set(3);
-			Dvar::Var("zwnet_join_status").set("PREVIEWING ACTIVE MATCH");
-			if (!map.empty())
-			{
-				Dvar::Var("ui_mapname").set(map);
-				Dvar::Var("zwnet_vote_winner_id").set(map);
-				Dvar::Var("zwnet_vote_winner_name").set(ResolveVoteMapDisplayName(map, mapName));
-				Dvar::Var("zwnet_vote_winner_image").set(ResolveVoteMapImage(map, mapImage));
-				Maps::SynchronizeMapDvars(map);
-			}
-			// This is the same confirmed roster-join alias used by the native
-			// Private Match lobby. It fires only after the preview is visible.
-			Command::Execute("snd_playLocal mp_player_join", false);
-			Scheduler::Once([generation, matchId]
-			{
-				EnqueueAsync([generation, matchId]
-				{
-					{
-						auto& preview = JoinPreview();
-						std::lock_guard lock(preview.mutex);
-						if (!preview.active || preview.generation != generation || preview.matchId != matchId) return;
-					}
-					const auto current = Request("GET", "/zwnet/matchmaking/status");
-					const auto valid = current && current->is_object() && !current->contains("error") &&
-						JsonString(*current, "match_id") == matchId && JsonString(*current, "state") == "CONNECTING" &&
-						current->value("join_in_progress", false);
-					if (!valid)
-					{
-						Request("POST", "/zwnet/matchmaking/disconnect", {{"match_id", matchId}});
-						SearchingState() = false;
-						CancelJoinInProgressPreview();
-						SetState("ERROR", "ZWNET_SERVER_NOT_READY");
-						return;
-					}
-					{
-						auto& preview = JoinPreview();
-						std::lock_guard lock(preview.mutex);
-						if (!preview.active || preview.generation != generation || preview.matchId != matchId) return;
-						preview.active = false;
-						preview.completedMatchId = matchId;
-					}
-					Scheduler::Once([]
-					{
-						Dvar::Var("zwnet_join_preview_active").set(false);
-						Dvar::Var("zwnet_join_preview_seconds").set(0);
-					}, Scheduler::Pipeline::MAIN);
-					ConnectMatch(matchId, false);
-				});
-			}, Scheduler::Pipeline::MAIN, 2500ms);
-		}, Scheduler::Pipeline::MAIN);
-	}
-
-	void ZWNet::ConnectMatch(const std::string& matchId, const bool relay, const bool reconnect)
-	{
-		if (!relay && RelayAlreadyUsedForMatch(matchId))
-		{
-			ManagedReconnectInFlight() = false;
+			isManagedReconnectInFlight = false;
 			Auth::ClearManagedConnectTicket();
-			++JoinTransitionGeneration();
-			ServerJoinTransitionState() = false;
+			++joinTransitionGeneration;
+			isServerJoinTransition = false;
 			SetState("ERROR", "ZWNET_ROUTE_UNAVAILABLE");
 			return;
 		}
+
 		CancelRelayHandshake();
 		Auth::ClearManagedConnectTicket();
+
 		std::string playerId;
+
 		{
-			std::lock_guard lock(StateMutex());
-			playerId = CurrentPlayerIdState();
+			std::lock_guard _(stateMutex);
+			playerId = currentPlayerId;
 		}
-		const auto fail = [relay, reconnect](const std::string& error)
+
+		const auto fail = [isRelay, isReconnect](const std::string& error)
 		{
-			SearchingState() = false;
-			ManagedReconnectInFlight() = false;
+			isSearching = false;
+			isManagedReconnectInFlight = false;
 			Auth::ClearManagedConnectTicket();
-			++JoinTransitionGeneration();
-			ServerJoinTransitionState() = false;
-			JoinInProgressConnectionSoundPending() = false;
-			if (relay || reconnect)
+			++joinTransitionGeneration;
+			isServerJoinTransition = false;
+			isJoinInProgressSoundPending = false;
+
+			if (isRelay || isReconnect)
 			{
-				Scheduler::Once([] { Command::Execute("closemenu popup_reconnectingtoparty", false); },
-					Scheduler::Pipeline::MAIN);
+				Scheduler::Once([]
+				{
+					Command::Execute("closemenu popup_reconnectingtoparty", false);
+				}, Scheduler::Pipeline::MAIN);
 			}
+
 			SetState("ERROR", error);
 		};
-		SetState(relay ? "RELAY_CONNECTION" : "DIRECT_CONNECTION");
-		auto reconnectBody = nlohmann::json{{"match_id", matchId}};
-		if (relay) reconnectBody["relay"] = true;
-		const auto descriptor = reconnect ?
-			Request("POST", "/zwnet/matchmaking/reconnect", reconnectBody) :
-			Request("GET", "/zwnet/connect/" + matchId + (relay ? "?relay=1" : ""));
+
+		const char* key = "direct_endpoint";
+		const char* routeType = "DIRECT";
+
+		if (isRelay)
+		{
+			SetState("RELAY_CONNECTION");
+			key = "relay_endpoint";
+			routeType = "RELAY";
+		}
+		else
+		{
+			SetState("DIRECT_CONNECTION");
+		}
+
+		std::optional<nlohmann::json> descriptor;
+
+		if (isReconnect)
+		{
+			nlohmann::json body = { { "match_id", matchId } };
+
+			if (isRelay)
+			{
+				body["relay"] = true;
+			}
+
+			descriptor = Request("POST", "/zwnet/matchmaking/reconnect", body);
+		}
+		else
+		{
+			std::string path = "/zwnet/connect/" + matchId;
+
+			if (isRelay)
+			{
+				path += "?relay=1";
+			}
+
+			descriptor = Request("GET", path);
+		}
+
 		if (!descriptor)
 		{
 			fail("ZWNET_REQUEST_FAILED");
 			return;
 		}
+
 		if (descriptor->contains("error"))
 		{
 			const auto code = ResponseErrorCode(*descriptor);
+
 			Scheduler::Once([]
 			{
-				if (!ActiveState()) return;
-				Dvar::Var("zwnet_server_status").set("SERVER UNAVAILABLE");
-				Dvar::Var("zwnet_join_status").set("RETURN TO LOBBY");
+				if (!isActive)
+				{
+					return;
+				}
+
+				Dvar::Var("zwnet_server_status").Set("SERVER UNAVAILABLE");
+				Dvar::Var("zwnet_join_status").Set("RETURN TO LOBBY");
 			}, Scheduler::Pipeline::MAIN);
-			fail(code == "SERVER_NOT_READY" ? "ZWNET_SERVER_NOT_READY" : "ZWNET_ROUTE_UNAVAILABLE");
+
+			if (code == "SERVER_NOT_READY")
+			{
+				fail("ZWNET_SERVER_NOT_READY");
+			}
+			else
+			{
+				fail("ZWNET_ROUTE_UNAVAILABLE");
+			}
+
 			return;
 		}
-		const auto key = relay ? "relay_endpoint" : "direct_endpoint";
+
 		const auto endpoint = JsonString(*descriptor, key);
-		if (endpoint.empty()) { fail("ZWNET_DESCRIPTOR_INVALID"); return; }
-		if (JsonString(*descriptor, "match_id") != matchId ||
-			JsonString(*descriptor, "route_type") != (relay ? "RELAY" : "DIRECT"))
+
+		if (endpoint.empty())
 		{
 			fail("ZWNET_DESCRIPTOR_INVALID");
 			return;
 		}
+
+		if (JsonString(*descriptor, "match_id") != matchId || JsonString(*descriptor, "route_type") != routeType)
+		{
+			fail("ZWNET_DESCRIPTOR_INVALID");
+			return;
+		}
+
 		const Network::Address authorizedTarget(endpoint);
 		const auto sessionId = JsonString(*descriptor, "session_id");
 		const auto serverIdentity = JsonString(*descriptor, "server_identity");
 		const auto instanceId = JsonString(*descriptor, "instance_id");
-		if (serverIdentity.empty() || !IsRelayOpaque(instanceId))
+
+		if (serverIdentity.empty() || !IsOpaqueDescriptorValue(instanceId))
 		{
 			fail("ZWNET_DESCRIPTOR_INVALID");
 			return;
 		}
+
+		bool isSameSession = false;
+
 		{
-			std::lock_guard lock(StateMutex());
-			if (CurrentPlayerIdState() != playerId || CurrentMatchIdState() != matchId)
-			{
-				fail("ZWNET_SESSION_EXPIRED");
-				return;
-			}
+			std::lock_guard _(stateMutex);
+			isSameSession = currentPlayerId == playerId && currentMatchId == matchId;
 		}
-		if (relay || reconnect)
+
+		if (!isSameSession)
 		{
-			auto& route = RouteAttempt();
-			std::lock_guard lock(route.mutex);
-			if (route.matchId == matchId && !route.sessionId.empty() &&
-				(route.sessionId != sessionId || route.playerId != playerId ||
-					route.serverIdentity != serverIdentity || route.instanceId != instanceId ||
-					(reconnect && !relay && route.routeIsRelay == relay &&
-						route.assignedTarget != authorizedTarget) ||
-					(reconnect && route.routeIsRelay != relay &&
-						!(relay && route.relayUsed))))
+			fail("ZWNET_SESSION_EXPIRED");
+			return;
+		}
+
+		if (isRelay || isReconnect)
+		{
+			bool isRouteConsistent = true;
+
+			{
+				std::lock_guard _(routeAttempt.mutex);
+
+				const bool hasRoute = routeAttempt.matchId == matchId && !routeAttempt.sessionId.empty();
+
+				const bool isSameRoute = routeAttempt.sessionId == sessionId
+					&& routeAttempt.playerId == playerId
+					&& routeAttempt.serverIdentity == serverIdentity
+					&& routeAttempt.instanceId == instanceId;
+
+				const bool hasDirectTargetMoved = isReconnect && !isRelay && !routeAttempt.isRouteRelay
+					&& routeAttempt.assignedTarget != authorizedTarget;
+
+				const bool hasRouteKindChanged = isReconnect && routeAttempt.isRouteRelay != isRelay
+					&& !(isRelay && routeAttempt.isRelayUsed);
+
+				if (hasRoute && (!isSameRoute || hasDirectTargetMoved || hasRouteKindChanged))
+				{
+					isRouteConsistent = false;
+				}
+
+				if (isReconnect && !hasRoute)
+				{
+					isRouteConsistent = false;
+				}
+			}
+
+			if (!isRouteConsistent)
 			{
 				fail("ZWNET_DESCRIPTOR_INVALID");
 				return;
 			}
-			if (reconnect && (route.matchId != matchId || route.sessionId.empty()))
-			{
-				fail("ZWNET_DESCRIPTOR_INVALID");
-				return;
-			}
 		}
-		if (!authorizedTarget.isValid() ||
-			!Auth::SetManagedConnectTicket(authorizedTarget,
-				JsonString(*descriptor, "connect_ticket"), matchId,
-				sessionId))
+
+		if (!authorizedTarget.IsValid() || !Auth::SetManagedConnectTicket(authorizedTarget, JsonString(*descriptor, "connect_ticket"), matchId, sessionId))
 		{
 			fail("ZWNET_DESCRIPTOR_INVALID");
 			return;
 		}
-		// The ticket is carried in Auth::Connect's binary packet, never a command line or URL.
-		SearchingState() = false;
-		if (relay)
+
+		isSearching = false;
+
+		if (isRelay)
 		{
 			const auto relayTicket = JsonString(*descriptor, "relay_ticket");
-			if (!IsOpaqueMatchId(matchId) || !IsRelayOpaque(playerId) ||
-				!IsRelayOpaque(sessionId) || !IsRelayOpaque(relayTicket))
+
+			const bool isRelayDescriptorValid = IsOpaqueMatchId(matchId)
+				&& IsOpaqueDescriptorValue(playerId)
+				&& IsOpaqueDescriptorValue(sessionId)
+				&& IsOpaqueDescriptorValue(relayTicket);
+
+			if (!isRelayDescriptorValid)
 			{
 				fail("ZWNET_DESCRIPTOR_INVALID");
 				return;
 			}
-			const auto nonce = std::format("{:016x}{:016x}",
-				Utils::Cryptography::Rand::GenerateLong(),
-				Utils::Cryptography::Rand::GenerateLong());
-			auto hello = nlohmann::json{{"schema_version", 1},
-				{"relay_ticket", relayTicket}, {"match_id", matchId},
-				{"player_id", playerId}, {"session_id", sessionId},
-				{"nonce", nonce}}.dump();
-			if (hello.size() + sizeof("zwnetRelayHello") + 4 > 1400)
+
+			const auto nonce = std::format("{:016x}{:016x}", Utils::Cryptography::Rand::GenerateLong(), Utils::Cryptography::Rand::GenerateLong());
+
+			std::string hello = nlohmann::json
+			{
+				{ "schema_version", 1 },
+				{ "relay_ticket", relayTicket },
+				{ "match_id", matchId },
+				{ "player_id", playerId },
+				{ "session_id", sessionId },
+				{ "nonce", nonce },
+			}.dump();
+
+			if (hello.size() + sizeof("zwnetRelayHello") + 4 > relayPacketLimit)
 			{
 				fail("ZWNET_DESCRIPTOR_INVALID");
 				return;
 			}
+
 			{
-				auto& route = RouteAttempt();
-				std::lock_guard lock(route.mutex);
-				if (route.matchId != matchId) route.matchId = matchId;
-				route.playerId = playerId;
-				route.sessionId = sessionId;
-				route.serverIdentity = serverIdentity;
-				route.instanceId = instanceId;
-				route.assignedTarget = authorizedTarget;
-				route.routeIsRelay = true;
-				route.reconnectAttempt = reconnect;
-				route.directWaiting = false;
-				route.relayUsed = true;
+				std::lock_guard _(routeAttempt.mutex);
+
+				routeAttempt.matchId = matchId;
+				routeAttempt.playerId = playerId;
+				routeAttempt.sessionId = sessionId;
+				routeAttempt.serverIdentity = serverIdentity;
+				routeAttempt.instanceId = instanceId;
+				routeAttempt.assignedTarget = authorizedTarget;
+				routeAttempt.isRouteRelay = true;
+				routeAttempt.isReconnectAttempt = isReconnect;
+				routeAttempt.isDirectWaiting = false;
+				routeAttempt.isRelayUsed = true;
 			}
-			++JoinTransitionGeneration();
-			ServerJoinTransitionState() = true;
+
+			++joinTransitionGeneration;
+			isServerJoinTransition = true;
+
 			Scheduler::Once([target = authorizedTarget, matchId, playerId, nonce, hello]() mutable
 			{
-				if (!ActiveState()) return;
+				if (!isActive)
 				{
-					std::lock_guard lock(StateMutex());
-					if (CurrentPlayerIdState() != playerId || CurrentMatchIdState() != matchId)
-					{
-						Auth::ClearManagedConnectTicket();
-						ManagedReconnectInFlight() = false;
-						ServerJoinTransitionState() = false;
-						return;
-					}
+					return;
 				}
+
+				bool isSameSession = false;
+
 				{
-					auto& pending = RelayState();
-					std::lock_guard lock(pending.mutex);
-					++pending.generation;
-					pending.pending = true;
-					pending.ready = false;
-					pending.target = target;
-					pending.matchId = matchId;
-					pending.playerId = playerId;
-					pending.nonce = nonce;
-					pending.hello = hello;
-					pending.deadline = std::chrono::steady_clock::now() + 8s;
+					std::lock_guard _(stateMutex);
+					isSameSession = currentPlayerId == playerId && currentMatchId == matchId;
 				}
-				Dvar::Var("zwnet_join_status").set("CONTACTING RELAY");
+
+				if (!isSameSession)
+				{
+					Auth::ClearManagedConnectTicket();
+					isManagedReconnectInFlight = false;
+					isServerJoinTransition = false;
+					return;
+				}
+
+				{
+					std::lock_guard _(relayHandshake.mutex);
+
+					++relayHandshake.generation;
+					relayHandshake.isPending = true;
+					relayHandshake.isReady = false;
+					relayHandshake.target = target;
+					relayHandshake.matchId = matchId;
+					relayHandshake.playerId = playerId;
+					relayHandshake.nonce = nonce;
+					relayHandshake.hello = hello;
+					relayHandshake.deadline = std::chrono::steady_clock::now() + relayHandshakeTimeout;
+				}
+
+				Dvar::Var("zwnet_join_status").Set("CONTACTING RELAY");
 				Network::SendCommand(target, "zwnetRelayHello", hello);
 				std::ranges::fill(hello, '\0');
 			}, Scheduler::Pipeline::MAIN);
+
 			return;
 		}
+
 		{
-			auto& route = RouteAttempt();
-			std::lock_guard lock(route.mutex);
-			if (route.matchId != matchId)
+			std::lock_guard _(routeAttempt.mutex);
+
+			if (routeAttempt.matchId != matchId)
 			{
-				route.matchId = matchId;
-				route.relayUsed = false;
+				routeAttempt.matchId = matchId;
+				routeAttempt.isRelayUsed = false;
 			}
-			route.playerId = playerId;
-			route.sessionId = sessionId;
-			route.serverIdentity = serverIdentity;
-			route.instanceId = instanceId;
-			route.directTarget = authorizedTarget;
-			route.assignedTarget = authorizedTarget;
-			route.routeIsRelay = false;
-			route.reconnectAttempt = reconnect;
-			route.directWaiting = true;
+
+			routeAttempt.playerId = playerId;
+			routeAttempt.sessionId = sessionId;
+			routeAttempt.serverIdentity = serverIdentity;
+			routeAttempt.instanceId = instanceId;
+			routeAttempt.directTarget = authorizedTarget;
+			routeAttempt.assignedTarget = authorizedTarget;
+			routeAttempt.isRouteRelay = false;
+			routeAttempt.isReconnectAttempt = isReconnect;
+			routeAttempt.isDirectWaiting = true;
 		}
+
 		Scheduler::Once([endpoint, target = authorizedTarget, matchId, playerId]
 		{
-			if (!ActiveState()) return;
+			if (!isActive)
 			{
-				std::lock_guard lock(StateMutex());
-				if (CurrentPlayerIdState() != playerId || CurrentMatchIdState() != matchId)
-				{
-					Auth::ClearManagedConnectTicket();
-					ManagedReconnectInFlight() = false;
-					++JoinTransitionGeneration();
-					ServerJoinTransitionState() = false;
-					return;
-				}
-			}
-			if (!target.isValid())
-			{
-				Dvar::Var("ui_zwnet_state").set("ERROR");
-				Dvar::Var("ui_zwnet_state_text").set("ERROR");
-				Dvar::Var("ui_zwnet_error").set("ZWNET_DESCRIPTOR_INVALID");
-				Dvar::Var("ui_zwnet_error_text").set(FriendlyErrorText("ZWNET_DESCRIPTOR_INVALID"));
-				Dvar::Var("zwnet_join_status").set("SERVER ADDRESS INVALID");
 				return;
 			}
-			Dvar::Var("ui_zwnet_state").set("CONNECTING");
-			Dvar::Var("ui_zwnet_error").set("");
-			Dvar::Var("zwnet_server_endpoint").set(endpoint);
-			Dvar::Var("zwnet_server_status").set("SERVER ASSIGNED");
-			Dvar::Var("zwnet_join_status").set("JOINING SERVER");
-			Dvar::Var("zwnet_managed_session").set(true);
+
+			bool isSameSession = false;
+
+			{
+				std::lock_guard _(stateMutex);
+				isSameSession = currentPlayerId == playerId && currentMatchId == matchId;
+			}
+
+			if (!isSameSession)
+			{
+				Auth::ClearManagedConnectTicket();
+				isManagedReconnectInFlight = false;
+				++joinTransitionGeneration;
+				isServerJoinTransition = false;
+				return;
+			}
+
+			SetPresenceUiState("CONNECTING");
+			Dvar::Var("ui_zwnet_state").Set("CONNECTING");
+			Dvar::Var("ui_zwnet_error").Set("");
+			Dvar::Var("zwnet_server_endpoint").Set(endpoint);
+			Dvar::Var("zwnet_server_status").Set("SERVER ASSIGNED");
+			Dvar::Var("zwnet_join_status").Set("JOINING SERVER");
+			Dvar::Var("zwnet_managed_session").Set(true);
+
 			MarkJoinInProgressConnectionStarted(matchId);
-			const auto transitionGeneration = ++JoinTransitionGeneration();
-			ServerJoinTransitionState() = true;
+
+			const auto transitionGeneration = ++joinTransitionGeneration;
+			isServerJoinTransition = true;
+
 			Scheduler::Once([transitionGeneration]
 			{
-				if (JoinTransitionGeneration() == transitionGeneration)
-					ServerJoinTransitionState() = false;
+				if (joinTransitionGeneration == transitionGeneration)
+				{
+					isServerJoinTransition = false;
+				}
 			}, Scheduler::Pipeline::MAIN, 12s);
+
 			Party::Connect(target);
-			ManagedReconnectInFlight() = false;
+			isManagedReconnectInFlight = false;
+		}, Scheduler::Pipeline::MAIN);
+	}
+
+	static std::string ResolveVoteMapImage(const std::string& mapId, const std::string& serverImage)
+	{
+		if (!mapId.empty())
+		{
+			const char* const arenaImage = Localization::GetMapImageName(mapId.data());
+
+			if (arenaImage[0])
+			{
+				return arenaImage;
+			}
+		}
+
+		const bool isServerPreview = serverImage != mapId && serverImage.starts_with("preview_") && !serverImage.starts_with("preview_mp_mp_");
+
+		if (isServerPreview)
+		{
+			return serverImage;
+		}
+
+		if (!mapId.empty())
+		{
+			return "preview_" + mapId;
+		}
+
+		return serverImage;
+	}
+
+	static std::string ResolveVoteMapDisplayName(const std::string& mapId, const std::string& serverName)
+	{
+		if (!serverName.empty() && serverName != mapId)
+		{
+			return serverName;
+		}
+
+		if (!mapId.empty())
+		{
+			const char* const localizedName = Localization::LocalizeMapName(mapId.data());
+
+			if (localizedName[0] && localizedName != mapId)
+			{
+				return localizedName;
+			}
+		}
+
+		return mapId;
+	}
+
+	void ZWNet::PublishPlaylistCatalog()
+	{
+		if (!isActive)
+		{
+			return;
+		}
+
+		bool hasMatch = false;
+
+		{
+			std::lock_guard _(stateMutex);
+			hasMatch = !currentMatchId.empty();
+		}
+
+		const bool isPinned = isPlaylistSearchStarting || isPlaylistSelectionStarting || isSearching || isInGame || hasMatch;
+
+		std::lock_guard _(playlistCatalog.mutex);
+
+		if (!isPinned && playlistCatalog.hasPending)
+		{
+			playlistCatalog.entries = std::move(playlistCatalog.pendingEntries);
+			playlistCatalog.pendingEntries.clear();
+			playlistCatalog.revision = playlistCatalog.pendingRevision;
+			playlistCatalog.hasPending = false;
+			playlistCatalog.pendingRevision = 0;
+		}
+
+		const auto findEntry = [](const std::string& id)
+		{
+			return std::ranges::find_if(playlistCatalog.entries, [&id](const ClientPlaylist& entry)
+			{
+				return entry.id == id;
+			});
+		};
+
+		if (findEntry(playlistCatalog.selectedId) == playlistCatalog.entries.end())
+		{
+			playlistCatalog.selectedId.clear();
+
+			if (!playlistCatalog.partySelectedId.empty())
+			{
+				const auto partySelected = findEntry(playlistCatalog.partySelectedId);
+
+				if (partySelected != playlistCatalog.entries.end())
+				{
+					playlistCatalog.selectedId = partySelected->id;
+				}
+			}
+
+			if (playlistCatalog.selectedId.empty() && !isPinned)
+			{
+				const auto first = std::ranges::find_if(playlistCatalog.entries, [](const ClientPlaylist& entry)
+				{
+					return entry.availability == "AVAILABLE";
+				});
+
+				if (first != playlistCatalog.entries.end())
+				{
+					playlistCatalog.selectedId = first->id;
+				}
+			}
+		}
+
+		const auto active = findEntry(playlistCatalog.selectedId);
+		const bool hasActive = active != playlistCatalog.entries.end();
+
+		bool isSelectionCurrent = false;
+
+		if (hasActive)
+		{
+			isSelectionCurrent = playlistCatalog.partySelectedId.empty()
+				|| (active->id == playlistCatalog.partySelectedId && active->revision == playlistCatalog.partySelectedRevision);
+		}
+
+		const auto pageCount = std::max<std::size_t>(1, (playlistCatalog.entries.size() + playlistPageSize - 1) / playlistPageSize);
+
+		if (playlistCatalog.page >= pageCount)
+		{
+			playlistCatalog.page = pageCount - 1;
+		}
+
+		std::string catalogStatus = "READY";
+
+		if (!playlistCatalog.isLoaded && playlistCatalog.isStale)
+		{
+			catalogStatus = "PLAYLIST SERVICE UNAVAILABLE";
+		}
+		else if (!playlistCatalog.isLoaded)
+		{
+			catalogStatus = "LOADING";
+		}
+		else if (playlistCatalog.isStale)
+		{
+			catalogStatus = "STALE - SERVICE UNAVAILABLE";
+		}
+
+		Dvar::Var("zwnet_catalog_status").Set(catalogStatus);
+		Dvar::Var("zwnet_catalog_notice").Set(playlistCatalog.hasNotice);
+		Dvar::Var("zwnet_catalog_page").Set(static_cast<int>(playlistCatalog.page + 1));
+		Dvar::Var("zwnet_catalog_pages").Set(static_cast<int>(pageCount));
+
+		if (hasActive)
+		{
+			Dvar::Var("zwnet_catalog_selected_name").Set(active->name);
+			Dvar::Var("zwnet_catalog_selected_description").Set(active->description);
+			Dvar::Var("zwnet_catalog_selected_audience").Set(active->audience);
+			Dvar::Var("zwnet_catalog_selected_availability").Set(active->availability);
+
+			if (isSelectionCurrent)
+			{
+				Dvar::Var("zwnet_catalog_selected_status").Set(active->availabilityDetail);
+			}
+			else
+			{
+				Dvar::Var("zwnet_catalog_selected_status").Set("A new playlist revision is available. The party leader must confirm it.");
+			}
+
+			Dvar::Var("zwnet_catalog_selected_revision").Set(static_cast<int>(active->revision));
+			Dvar::Var("zwnet_catalog_selected_rotation").Set(active->rotationSummary);
+
+			if (active->mapId.empty())
+			{
+				Dvar::Var("zwnet_catalog_selected_image").Set("");
+			}
+			else
+			{
+				Dvar::Var("zwnet_catalog_selected_image").Set(ResolveVoteMapImage(active->mapId, active->mapImage));
+			}
+
+			Dvar::Var("zwnet_catalog_selected_players").Set(std::format("{}-{} PLAYERS", active->minPlayers, active->maxPlayers));
+			Dvar::Var("zwnet_catalog_selected_zombie_settings").Set(active->zombieSettingsSummary);
+		}
+		else
+		{
+			Dvar::Var("zwnet_catalog_selected_name").Set("NO AVAILABLE PLAYLIST");
+			Dvar::Var("zwnet_catalog_selected_description").Set("Select an available playlist to find a match.");
+			Dvar::Var("zwnet_catalog_selected_audience").Set("");
+			Dvar::Var("zwnet_catalog_selected_availability").Set("NO_SELECTION");
+
+			if (playlistCatalog.partySelectedId.empty())
+			{
+				Dvar::Var("zwnet_catalog_selected_status").Set("Choose a playlist to continue.");
+			}
+			else
+			{
+				Dvar::Var("zwnet_catalog_selected_status").Set("The party playlist is no longer in your authorized catalog.");
+			}
+
+			Dvar::Var("zwnet_catalog_selected_revision").Set(0);
+			Dvar::Var("zwnet_catalog_selected_rotation").Set("No map rotation is available.");
+			Dvar::Var("zwnet_catalog_selected_image").Set("");
+			Dvar::Var("zwnet_catalog_selected_players").Set("");
+			Dvar::Var("zwnet_catalog_selected_zombie_settings").Set("");
+		}
+
+		const bool isSelectionStarting = isPlaylistSelectionStarting;
+		const bool canSelect = isLocalPartyLeader && !isPinned && !playlistCatalog.isStale && !isSelectionStarting;
+		const bool canSearch = hasActive && active->availability == "AVAILABLE" && !playlistCatalog.isStale && !isPinned
+			&& isLocalPartyLeader && isSelectionCurrent;
+
+		Dvar::Var("zwnet_catalog_busy").Set(isSelectionStarting);
+		Dvar::Var("zwnet_catalog_can_select").Set(canSelect);
+		Dvar::Var("zwnet_catalog_can_search").Set(canSearch);
+
+		for (std::size_t slot = 0; slot < playlistPageSize; ++slot)
+		{
+			const auto index = playlistCatalog.page * playlistPageSize + slot;
+
+			if (index >= playlistCatalog.entries.size())
+			{
+				Dvar::Var(playlistSlotVisibleDvars[slot]).Set(false);
+				Dvar::Var(playlistSlotNameDvars[slot]).Set("");
+				Dvar::Var(playlistSlotDescriptionDvars[slot]).Set("");
+				Dvar::Var(playlistSlotPreviewDvars[slot]).Set("");
+				Dvar::Var(playlistSlotImageDvars[slot]).Set("");
+				Dvar::Var(playlistSlotAudienceDvars[slot]).Set("");
+				Dvar::Var(playlistSlotAvailabilityDvars[slot]).Set("");
+				Dvar::Var(playlistSlotStatusDvars[slot]).Set("");
+				Dvar::Var(playlistSlotSelectedDvars[slot]).Set(false);
+				continue;
+			}
+
+			const auto& entry = playlistCatalog.entries[index];
+
+			Dvar::Var(playlistSlotVisibleDvars[slot]).Set(true);
+			Dvar::Var(playlistSlotNameDvars[slot]).Set(entry.name);
+			Dvar::Var(playlistSlotDescriptionDvars[slot]).Set(entry.description);
+			Dvar::Var(playlistSlotPreviewDvars[slot]).Set(entry.preview);
+
+			if (entry.mapId.empty())
+			{
+				Dvar::Var(playlistSlotImageDvars[slot]).Set("");
+			}
+			else
+			{
+				Dvar::Var(playlistSlotImageDvars[slot]).Set(ResolveVoteMapImage(entry.mapId, entry.mapImage));
+			}
+
+			Dvar::Var(playlistSlotAudienceDvars[slot]).Set(entry.audience);
+			Dvar::Var(playlistSlotAvailabilityDvars[slot]).Set(entry.availability);
+			Dvar::Var(playlistSlotStatusDvars[slot]).Set(entry.availabilityDetail);
+			Dvar::Var(playlistSlotSelectedDvars[slot]).Set(entry.id == playlistCatalog.selectedId);
+		}
+	}
+
+	void ZWNet::CancelJoinInProgressPreview()
+	{
+		{
+			std::lock_guard _(joinPreview.mutex);
+
+			++joinPreview.generation;
+			joinPreview.isActive = false;
+			joinPreview.matchId.clear();
+			joinPreview.completedMatchId.clear();
+		}
+
+		isJoinInProgressSoundPending = false;
+
+		Scheduler::Once([]
+		{
+			if (!isActive)
+			{
+				return;
+			}
+
+			Dvar::Var("zwnet_join_preview_active").Set(false);
+			Dvar::Var("zwnet_join_preview_seconds").Set(0);
+		}, Scheduler::Pipeline::MAIN);
+	}
+
+	static bool IsCurrentJoinPreview(const std::uint64_t generation, const std::string& matchId)
+	{
+		std::lock_guard _(joinPreview.mutex);
+		return joinPreview.isActive && joinPreview.generation == generation && joinPreview.matchId == matchId;
+	}
+
+	void ZWNet::BeginJoinInProgressPreview(const nlohmann::json& status)
+	{
+		const auto matchId = JsonString(status, "match_id");
+
+		if (!IsOpaqueMatchId(matchId))
+		{
+			return;
+		}
+
+		std::uint64_t generation = 0;
+
+		{
+			std::lock_guard _(joinPreview.mutex);
+
+			if ((joinPreview.isActive && joinPreview.matchId == matchId) || joinPreview.completedMatchId == matchId)
+			{
+				return;
+			}
+
+			++joinPreview.generation;
+			generation = joinPreview.generation;
+			joinPreview.isActive = true;
+			joinPreview.matchId = matchId;
+			joinPreview.completedMatchId.clear();
+		}
+
+		const auto map = JsonString(status, "map");
+		std::string mapName;
+		std::string mapImage;
+
+		if (status.contains("selected_map") && status.at("selected_map").is_object())
+		{
+			mapName = JsonString(status.at("selected_map"), "name");
+			mapImage = JsonString(status.at("selected_map"), "image");
+		}
+
+		Scheduler::Once([generation, matchId, map, mapName, mapImage]
+		{
+			if (!isActive || !IsCurrentJoinPreview(generation, matchId))
+			{
+				return;
+			}
+
+			SetPresenceUiState("JOIN_PREVIEW");
+			Dvar::Var("ui_zwnet_state").Set("JOIN_PREVIEW");
+			Dvar::Var("ui_zwnet_state_text").Set("JOINING GAME IN PROGRESS");
+			Dvar::Var("zwnet_join_preview_active").Set(true);
+			Dvar::Var("zwnet_join_preview_seconds").Set(3);
+			Dvar::Var("zwnet_join_status").Set("PREVIEWING ACTIVE MATCH");
+
+			if (!map.empty())
+			{
+				SetDisplayText("ui_mapname", map);
+				SetDisplayText("zwnet_vote_winner_id", map);
+				SetDisplayText("zwnet_vote_winner_name", ResolveVoteMapDisplayName(map, mapName));
+				SetDisplayText("zwnet_vote_winner_image", ResolveVoteMapImage(map, mapImage));
+				Maps::SynchronizeMapDvars(map);
+			}
+
+			Game::SND_PlayLocalSoundAliasByName(0, "mp_player_join", 0);
+
+			Scheduler::Once([generation, matchId]
+			{
+				EnqueueAsync([generation, matchId]
+				{
+					if (!IsCurrentJoinPreview(generation, matchId))
+					{
+						return;
+					}
+
+					const auto current = Request("GET", "/zwnet/matchmaking/status");
+
+					const bool isStillJoinable = current && current->is_object() && !current->contains("error")
+						&& JsonString(*current, "match_id") == matchId && JsonString(*current, "state") == "CONNECTING"
+						&& current->value("join_in_progress", false);
+
+					if (!isStillJoinable)
+					{
+						Request("POST", "/zwnet/matchmaking/disconnect", { { "match_id", matchId } });
+						isSearching = false;
+						CancelJoinInProgressPreview();
+						SetState("ERROR", "ZWNET_SERVER_NOT_READY");
+						return;
+					}
+
+					{
+						std::lock_guard _(joinPreview.mutex);
+
+						if (!joinPreview.isActive || joinPreview.generation != generation || joinPreview.matchId != matchId)
+						{
+							return;
+						}
+
+						joinPreview.isActive = false;
+						joinPreview.completedMatchId = matchId;
+					}
+
+					Scheduler::Once([]
+					{
+						if (!isActive)
+						{
+							return;
+						}
+
+						Dvar::Var("zwnet_join_preview_active").Set(false);
+						Dvar::Var("zwnet_join_preview_seconds").Set(0);
+					}, Scheduler::Pipeline::MAIN);
+
+					ConnectMatch(matchId, false, false);
+				});
+			}, Scheduler::Pipeline::MAIN, 2500ms);
 		}, Scheduler::Pipeline::MAIN);
 	}
 
 	void ZWNet::UpdateVoteDvars(const nlohmann::json& status)
 	{
-		if (!status.contains("map_vote")) return;
+		if (!status.contains("map_vote"))
+		{
+			return;
+		}
+
 		const auto vote = status.at("map_vote");
 		const auto choices = vote.value("choices", nlohmann::json::array());
-		if (choices.size() != 3) return;
-		const auto allReady = status.value("all_ready", false);
+
+		if (choices.size() != 3)
 		{
-			std::lock_guard lock(StateMutex());
-			CurrentProposalIdState() = JsonString(vote, "proposal_id");
-			CurrentMatchIdState() = JsonString(status, "match_id");
+			return;
 		}
-		Scheduler::Once([vote, choices, allReady]
+
+		const auto isAllReady = status.value("all_ready", false);
+
 		{
-			if (!ActiveState()) return;
-			const auto selected = vote.contains("selected") && vote.at("selected").is_string() ? vote.at("selected").get<std::string>() : "";
-			Dvar::Var("zwnet_vote_active").set(true);
-			Dvar::Var("zwnet_all_ready").set(allReady);
-			Dvar::Var("zwnet_start_phase").set("");
-			Dvar::Var("zwnet_start_seconds").set(0);
-			Dvar::Var("zwnet_vote_proposal_id").set(JsonString(vote, "proposal_id"));
-			Dvar::Var("zwnet_vote_seconds").set(vote.value("seconds_remaining", 0));
-			Dvar::Var("zwnet_vote_selection").set(selected);
-			Dvar::Var("zwnet_vote_reveal_time").set(0);
-			Dvar::Var("zwnet_vote_winner_id").set("");
-			Dvar::Var("zwnet_vote_winner_name").set("");
-			Dvar::Var("zwnet_vote_winner_image").set("");
-			Dvar::Var("zwnet_server_status").set("WAITING FOR MAP VOTE");
-			Dvar::Var("zwnet_join_status").set("VOTE IN PROGRESS");
-			for (std::size_t i = 0; i < 2; ++i)
+			std::lock_guard _(stateMutex);
+			currentProposalId = JsonString(vote, "proposal_id");
+			currentMatchId = JsonString(status, "match_id");
+		}
+
+		Scheduler::Once([vote, choices, isAllReady]
+		{
+			if (!isActive)
 			{
-				const auto prefix = std::format("zwnet_vote_map_{}", i == 0 ? "a" : "b");
-				const auto mapId = JsonString(choices[i], "id");
-				Dvar::Var(prefix + "_id").set(mapId);
-				Dvar::Var(prefix + "_name").set(ResolveVoteMapDisplayName(mapId, JsonString(choices[i], "name")));
-				Dvar::Var(prefix + "_image").set(ResolveVoteMapImage(mapId, JsonString(choices[i], "image")));
-				Dvar::Var(prefix + "_votes").set(choices[i].value("votes", 0));
+				return;
 			}
-			Dvar::Var("zwnet_vote_random_votes").set(choices[2].value("votes", 0));
+
+			std::string selected;
+
+			if (vote.contains("selected") && vote.at("selected").is_string())
+			{
+				selected = vote.at("selected").get<std::string>();
+			}
+
+			Dvar::Var("zwnet_vote_active").Set(true);
+			Dvar::Var("zwnet_all_ready").Set(isAllReady);
+			Dvar::Var("zwnet_start_phase").Set("");
+			Dvar::Var("zwnet_start_seconds").Set(0);
+			SetDisplayText("zwnet_vote_proposal_id", JsonString(vote, "proposal_id"));
+			Dvar::Var("zwnet_vote_seconds").Set(JsonIntegerOr(vote, "seconds_remaining", 0));
+			SetDisplayText("zwnet_vote_selection", selected);
+			Dvar::Var("zwnet_vote_reveal_time").Set(0);
+			Dvar::Var("zwnet_vote_winner_id").Set("");
+			Dvar::Var("zwnet_vote_winner_name").Set("");
+			Dvar::Var("zwnet_vote_winner_image").Set("");
+			Dvar::Var("zwnet_server_status").Set("WAITING FOR MAP VOTE");
+			Dvar::Var("zwnet_join_status").Set("VOTE IN PROGRESS");
+
+			for (const auto& [index, letter] : { std::pair<std::size_t, const char*>{ 0, "a" }, std::pair<std::size_t, const char*>{ 1, "b" } })
+			{
+				const auto prefix = std::format("zwnet_vote_map_{}", letter);
+				const auto mapId = JsonString(choices[index], "id");
+
+				SetDisplayText(prefix + "_id", mapId);
+				SetDisplayText(prefix + "_name", ResolveVoteMapDisplayName(mapId, JsonString(choices[index], "name")));
+				SetDisplayText(prefix + "_image", ResolveVoteMapImage(mapId, JsonString(choices[index], "image")));
+				Dvar::Var(prefix + "_votes").Set(JsonIntegerOr(choices[index], "votes", 0));
+			}
+
+			Dvar::Var("zwnet_vote_random_votes").Set(JsonIntegerOr(choices[2], "votes", 0));
 		}, Scheduler::Pipeline::MAIN);
+	}
+
+	static void ServerStatusText(const std::string& state, const int joinCountdown, std::string& serverStatus, std::string& joinStatus)
+	{
+		serverStatus = "NOT ASSIGNED";
+		joinStatus = "WAITING IN LOBBY";
+
+		if (state == "WAITING_FOR_READY")
+		{
+			serverStatus = "START LOCKED";
+			joinStatus = "WAITING FOR ALL PLAYERS";
+		}
+		else if (state == "RESERVING_SERVER")
+		{
+			serverStatus = "ALLOCATING SERVER";
+			joinStatus = "MAP LOCKED";
+		}
+		else if (state == "SERVER_STARTING")
+		{
+			serverStatus = "SERVER STARTING";
+			joinStatus = "WAITING FOR SERVER";
+		}
+		else if (state == "RESETTING" || state == "POST_MATCH")
+		{
+			serverStatus = "MATCH COMPLETE";
+			joinStatus = "RETURNING TO LOBBY";
+		}
+		else if (state == "CONNECTING" && joinCountdown > 0)
+		{
+			serverStatus = "SERVER READY";
+			joinStatus = std::format("JOINING IN {}", joinCountdown);
+		}
+		else if (state == "CONNECTING")
+		{
+			serverStatus = "SERVER READY";
+			joinStatus = "JOIN AUTHORIZED";
+		}
 	}
 
 	void ZWNet::UpdateMatchmaking()
 	{
-		if (!ActiveState() || !SearchingState()) return;
+		if (!isActive || !isSearching)
+		{
+			return;
+		}
+
 		auto party = Request("GET", "/zwnet/parties/current");
-		if (party && party->is_object() && !party->contains("error"))
+		const bool isPartyValid = party && party->is_object() && !party->contains("error");
+
+		if (isPartyValid)
 		{
 			*party = PublishLocalRank(std::move(*party));
 		}
+
 		const auto status = Request("GET", "/zwnet/matchmaking/status");
+
+		if (isPartyValid)
+		{
+			UpdateLobbyDvars(*party);
+		}
+
 		if (!status)
 		{
-			if (party && !party->is_null() && !party->contains("error")) UpdateLobbyDvars(*party);
 			Logger::Print("ZWNET matchmaking status poll failed; current session preserved\n");
 			return;
 		}
+
 		if (status->contains("error"))
 		{
-			if (party && !party->is_null() && !party->contains("error")) UpdateLobbyDvars(*party);
 			return;
 		}
-		if (party && !party->is_null() && !party->contains("error")) UpdateLobbyDvars(*party);
-		if (status->contains("lobby") && status->at("lobby").is_object()) UpdateMatchLobbyDvars(*status);
+
+		if (status->contains("lobby") && status->at("lobby").is_object())
+		{
+			UpdateMatchLobbyDvars(*status);
+		}
+
 		const auto state = JsonString(*status, "state", "SEARCHING");
 		const auto joinCountdown = status->value("join_countdown_seconds", 0);
-		const auto allReady = status->value("all_ready", false);
+		const auto isAllReady = status->value("all_ready", false);
 		const auto startPhase = JsonString(*status, "start_phase");
 		const auto startSeconds = status->value("start_seconds", joinCountdown);
+
 		if (state == "ERROR" || state == "FAILED")
 		{
-			SearchingState() = false;
+			isSearching = false;
 			SetState("ERROR", "ZWNET_MATCH_FAILED");
 			return;
 		}
-		if (state == "IDLE" || state == "FINISHED" || state == "FAILED") SearchingState() = false;
-		SetState(state == "CONNECTING" && joinCountdown > 0 ? "COUNTDOWN" : state);
-		if (state == "MAP_VOTE") UpdateVoteDvars(*status);
+
+		if (state == "IDLE" || state == "FINISHED")
+		{
+			isSearching = false;
+		}
+
+		if (state == "CONNECTING" && joinCountdown > 0)
+		{
+			SetState("COUNTDOWN");
+		}
+		else
+		{
+			SetState(state);
+		}
+
+		if (state == "MAP_VOTE")
+		{
+			UpdateVoteDvars(*status);
+		}
 		else
 		{
 			const auto map = JsonString(*status, "map");
 			const auto matchId = JsonString(*status, "match_id");
+
 			if (!matchId.empty())
 			{
-				std::lock_guard lock(StateMutex());
-				CurrentMatchIdState() = matchId;
+				std::lock_guard _(stateMutex);
+				currentMatchId = matchId;
 			}
-			auto mapName = std::string{};
-			auto mapImage = std::string{};
+
+			std::string mapName;
+			std::string mapImage;
+
 			if (status->contains("selected_map") && status->at("selected_map").is_object())
 			{
 				mapName = JsonString(status->at("selected_map"), "name");
 				mapImage = JsonString(status->at("selected_map"), "image");
 			}
-			auto serverStatus = std::string{"NOT ASSIGNED"};
-			auto joinStatus = std::string{"WAITING IN LOBBY"};
-			if (state == "WAITING_FOR_READY") { serverStatus = "START LOCKED"; joinStatus = "WAITING FOR ALL PLAYERS"; }
-			else if (state == "RESERVING_SERVER") { serverStatus = "ALLOCATING SERVER"; joinStatus = "MAP LOCKED"; }
-			else if (state == "SERVER_STARTING") { serverStatus = "SERVER STARTING"; joinStatus = "WAITING FOR SERVER"; }
-			else if (state == "RESETTING" || state == "POST_MATCH") { serverStatus = "MATCH COMPLETE"; joinStatus = "RETURNING TO LOBBY"; }
-			else if (state == "CONNECTING")
+
+			std::string serverStatus;
+			std::string joinStatus;
+			ServerStatusText(state, joinCountdown, serverStatus, joinStatus);
+
+			Scheduler::Once([map, mapName, mapImage, matchId, serverStatus, joinStatus, joinCountdown, isAllReady, startPhase, startSeconds]
 			{
-				serverStatus = "SERVER READY";
-				joinStatus = joinCountdown > 0 ? std::format("JOINING IN {}", joinCountdown) : "JOIN AUTHORIZED";
-			}
-			Scheduler::Once([map, mapName, mapImage, matchId, serverStatus, joinStatus, joinCountdown, allReady, startPhase, startSeconds]
-			{
-				if (!ActiveState()) return;
-				const auto wasVoting = Dvar::Var("zwnet_vote_active").get<bool>();
-				Dvar::Var("zwnet_vote_active").set(false);
-				Dvar::Var("zwnet_all_ready").set(allReady);
-				Dvar::Var("zwnet_start_phase").set(startPhase);
-				Dvar::Var("zwnet_start_seconds").set(startSeconds);
-				Dvar::Var("zwnet_match_id").set(matchId);
-				Dvar::Var("zwnet_join_countdown").set(joinCountdown);
-				Dvar::Var("zwnet_server_status").set(serverStatus);
-				Dvar::Var("zwnet_join_status").set(joinStatus);
-				if (!map.empty())
+				if (!isActive)
 				{
-					const auto winnerDisplayName = ResolveVoteMapDisplayName(map, mapName);
-					const auto winnerImage = ResolveVoteMapImage(map, mapImage);
-					if (Dvar::Var("zwnet_vote_winner_id").get<std::string>() != map)
-					{
-						const auto mapA = Dvar::Var("zwnet_vote_map_a_id").get<std::string>();
-						const auto mapB = Dvar::Var("zwnet_vote_map_b_id").get<std::string>();
-						Dvar::Var("zwnet_vote_reveal_slot").set(map == mapA ? 0 : (map == mapB ? 1 : 2));
-						Dvar::Var("zwnet_vote_reveal_time").set(wasVoting ? Game::Sys_Milliseconds() : 0);
-					}
-					Dvar::Var("ui_mapname").set(map);
-					Dvar::Var("zwnet_vote_winner_id").set(map);
-					Dvar::Var("zwnet_vote_winner_name").set(winnerDisplayName);
-					Dvar::Var("zwnet_vote_winner_image").set(winnerImage);
-					Maps::SynchronizeMapDvars(map);
+					return;
 				}
+
+				const bool wasVoting = Dvar::Var("zwnet_vote_active").Get<bool>();
+
+				Dvar::Var("zwnet_vote_active").Set(false);
+				Dvar::Var("zwnet_all_ready").Set(isAllReady);
+				SetDisplayText("zwnet_start_phase", startPhase);
+				Dvar::Var("zwnet_start_seconds").Set(startSeconds);
+				SetDisplayText("zwnet_match_id", matchId);
+				Dvar::Var("zwnet_join_countdown").Set(joinCountdown);
+				Dvar::Var("zwnet_server_status").Set(serverStatus);
+				Dvar::Var("zwnet_join_status").Set(joinStatus);
+
+				if (map.empty())
+				{
+					return;
+				}
+
+				if (Dvar::Var("zwnet_vote_winner_id").Get<std::string>() != map)
+				{
+					int revealSlot = 2;
+
+					if (map == Dvar::Var("zwnet_vote_map_a_id").Get<std::string>())
+					{
+						revealSlot = 0;
+					}
+					else if (map == Dvar::Var("zwnet_vote_map_b_id").Get<std::string>())
+					{
+						revealSlot = 1;
+					}
+
+					int revealTimeMs = 0;
+
+					if (wasVoting)
+					{
+						revealTimeMs = Game::Sys_Milliseconds();
+					}
+
+					Dvar::Var("zwnet_vote_reveal_slot").Set(revealSlot);
+					Dvar::Var("zwnet_vote_reveal_time").Set(revealTimeMs);
+				}
+
+				SetDisplayText("ui_mapname", map);
+				SetDisplayText("zwnet_vote_winner_id", map);
+				SetDisplayText("zwnet_vote_winner_name", ResolveVoteMapDisplayName(map, mapName));
+				SetDisplayText("zwnet_vote_winner_image", ResolveVoteMapImage(map, mapImage));
+				Maps::SynchronizeMapDvars(map);
 			}, Scheduler::Pipeline::MAIN);
 		}
-		if (status->contains("match_id") && state == "CONNECTING" && joinCountdown <= 0 &&
-			!InGameState() && !ServerJoinTransitionState() && !EndpointJoinInFlight())
+
+		const bool isReadyToConnect = status->contains("match_id") && status->at("match_id").is_string() && state == "CONNECTING" && joinCountdown <= 0
+			&& !isInGame && !isServerJoinTransition && !isEndpointJoinInFlight;
+
+		if (!isReadyToConnect)
 		{
-			const auto matchId = status->at("match_id").get<std::string>();
-			if (status->value("join_in_progress", false)) BeginJoinInProgressPreview(*status);
-			else if (!RelayAlreadyUsedForMatch(matchId)) ConnectMatch(matchId, false);
+			return;
+		}
+
+		const auto matchId = status->at("match_id").get<std::string>();
+
+		if (status->value("join_in_progress", false))
+		{
+			BeginJoinInProgressPreview(*status);
+		}
+		else if (!IsRelayUsedForMatch(matchId))
+		{
+			ConnectMatch(matchId, false, false);
 		}
 	}
 
 	void ZWNet::RefreshNetworkMetrics()
 	{
-		if (!ActiveState() || !NetworkMetricsEnabled()) return;
-		static auto lastSuccess = std::chrono::steady_clock::time_point{};
-		const auto response = Request("GET", "/api/status");
-		if (response && response->is_object() && !response->contains("error") &&
-			response->contains("online_players") && response->at("online_players").is_number_integer() &&
-			response->contains("running_games") && response->at("running_games").is_number_integer())
+		if (!isActive || !isNetworkMetricsEnabled)
 		{
-			const auto online = std::max(0, response->at("online_players").get<int>());
-			const auto running = std::max(0, response->at("running_games").get<int>());
-			lastSuccess = std::chrono::steady_clock::now();
-			Scheduler::Once([online, running]
-			{
-				if (!ActiveState() || !NetworkMetricsEnabled()) return;
-				Dvar::Var("zwnet_online_players_known").set(true);
-				Dvar::Var("zwnet_online_players_text").set(std::format("{} {} ONLINE", online, online == 1 ? "PLAYER" : "PLAYERS"));
-				Dvar::Var("zwnet_running_games_known").set(true);
-				Dvar::Var("zwnet_running_games_text").set(std::format("{} RUNNING {}", running, running == 1 ? "GAME" : "GAMES"));
-			}, Scheduler::Pipeline::MAIN);
 			return;
 		}
 
-		if (lastSuccess.time_since_epoch().count() != 0 &&
-			std::chrono::steady_clock::now() - lastSuccess <= 30s) return;
+		const auto response = Request("GET", "/api/status");
+
+		const bool hasMetrics = response && response->is_object() && !response->contains("error")
+			&& response->contains("online_players") && response->at("online_players").is_number_integer()
+			&& response->contains("running_games") && response->at("running_games").is_number_integer();
+
+		if (hasMetrics)
+		{
+			const auto onlinePlayers = std::max(0, response->at("online_players").get<int>());
+			const auto runningGames = std::max(0, response->at("running_games").get<int>());
+
+			lastMetricsSuccess = std::chrono::steady_clock::now();
+
+			Scheduler::Once([onlinePlayers, runningGames]
+			{
+				if (!isActive || !isNetworkMetricsEnabled)
+				{
+					return;
+				}
+
+				const char* playerNoun = "PLAYERS";
+				const char* gameNoun = "GAMES";
+
+				if (onlinePlayers == 1)
+				{
+					playerNoun = "PLAYER";
+				}
+
+				if (runningGames == 1)
+				{
+					gameNoun = "GAME";
+				}
+
+				Dvar::Var("zwnet_online_players_known").Set(true);
+				Dvar::Var("zwnet_online_players_text").Set(std::format("{} {} ONLINE", onlinePlayers, playerNoun));
+				Dvar::Var("zwnet_running_games_known").Set(true);
+				Dvar::Var("zwnet_running_games_text").Set(std::format("{} RUNNING {}", runningGames, gameNoun));
+			}, Scheduler::Pipeline::MAIN);
+
+			return;
+		}
+
+		const bool hasRecentSuccess = lastMetricsSuccess.time_since_epoch().count() != 0
+			&& std::chrono::steady_clock::now() - lastMetricsSuccess <= 30s;
+
+		if (hasRecentSuccess)
+		{
+			return;
+		}
+
 		Scheduler::Once([]
 		{
-			if (!NetworkMetricsEnabled()) return;
-			Dvar::Var("zwnet_online_players_known").set(false);
-			Dvar::Var("zwnet_online_players_text").set("PLAYERS ONLINE UNAVAILABLE");
-			Dvar::Var("zwnet_running_games_known").set(false);
-			Dvar::Var("zwnet_running_games_text").set("RUNNING GAMES UNAVAILABLE");
+			if (!isActive || !isNetworkMetricsEnabled)
+			{
+				return;
+			}
+
+			Dvar::Var("zwnet_online_players_known").Set(false);
+			Dvar::Var("zwnet_online_players_text").Set("PLAYERS ONLINE UNAVAILABLE");
+			Dvar::Var("zwnet_running_games_known").Set(false);
+			Dvar::Var("zwnet_running_games_text").Set("RUNNING GAMES UNAVAILABLE");
 		}, Scheduler::Pipeline::MAIN);
+	}
+
+	static void RunSafely(void (*function)())
+	{
+		try
+		{
+			function();
+		}
+		catch (const std::exception&)
+		{
+			Logger::Print("ZWNET could not read a response from the online service\n");
+		}
+	}
+
+	static void RegisterStringDvars(const std::initializer_list<std::pair<const char*, const char*>> names, const char* description)
+	{
+		for (const auto& [name, value] : names)
+		{
+			Dvar::Register(name, value, Game::DVAR_NONE, description);
+		}
 	}
 
 	void ZWNet::InitializeDvars()
 	{
-		Dvar::Register<const char*>("ui_zwnet_state", "OFFLINE", Game::DVAR_NONE, "Localized ZWNET state key");
-		Dvar::Register<const char*>("ui_zwnet_state_text", "OFFLINE", Game::DVAR_NONE, "Readable ZWNET state text");
-		Dvar::Register<const char*>("ui_zwnet_error", "", Game::DVAR_NONE, "Stable ZWNET error key");
-		Dvar::Register<const char*>("ui_zwnet_error_text", "", Game::DVAR_NONE, "Readable ZWNET error text");
-		Dvar::Register<const char*>("ui_zwnet_guid", PublicGuidText(), Game::DVAR_ROM, "Public ZW3 GUID used for Stats account linking");
-		Dvar::Register<bool>("zwnet_managed_session", false, Game::DVAR_NONE, "Active ZWNET matchmaking session");
-		Dvar::Register<const char*>("zwnet_catalog_status", "LOADING", Game::DVAR_NONE, "Client-safe playlist catalog state");
-		Dvar::Register<bool>("zwnet_catalog_notice", false, Game::DVAR_NONE, "A relevant playlist update is available");
-		Dvar::Register<bool>("zwnet_catalog_can_select", false, Game::DVAR_NONE, "Local party leader can change playlist selection");
-		Dvar::Register<bool>("zwnet_catalog_can_search", false, Game::DVAR_NONE, "Selected playlist can be searched");
-		Dvar::Register<int>("zwnet_catalog_page", 1, 1, 100, Game::DVAR_NONE, "Playlist page");
-		Dvar::Register<int>("zwnet_catalog_pages", 1, 1, 100, Game::DVAR_NONE, "Playlist page count");
-		Dvar::Register<const char*>("zwnet_catalog_selected_name", "NO AVAILABLE PLAYLIST", Game::DVAR_NONE, "Selected playlist title");
-		Dvar::Register<const char*>("zwnet_catalog_selected_description", "", Game::DVAR_NONE, "Selected playlist description");
-		Dvar::Register<const char*>("zwnet_catalog_selected_audience", "", Game::DVAR_NONE, "Selected playlist audience");
-		Dvar::Register<const char*>("zwnet_catalog_selected_availability", "NO_SELECTION", Game::DVAR_NONE, "Selected playlist availability code");
-		Dvar::Register<const char*>("zwnet_catalog_selected_status", "Choose a playlist to continue.", Game::DVAR_NONE, "Selected playlist availability detail");
-		Dvar::Register<int>("zwnet_catalog_selected_revision", 0, 0, INT_MAX, Game::DVAR_NONE, "Selected playlist revision");
-		Dvar::Register<const char*>("zwnet_catalog_selected_rotation", "No map rotation is available.", Game::DVAR_NONE, "Selected playlist rotation summary");
-		Dvar::Register<const char*>("zwnet_catalog_selected_image", "", Game::DVAR_NONE, "Selected playlist preview material");
-		Dvar::Register<const char*>("zwnet_catalog_selected_players", "", Game::DVAR_NONE, "Selected playlist player range");
-		Dvar::Register<const char*>("zwnet_catalog_selected_zombie_settings", "", Game::DVAR_NONE, "Selected playlist zombie settings");
-		Dvar::Register<const char*>("zwnet_catalog_action_error", "", Game::DVAR_NONE, "Playlist activation feedback");
-		Dvar::Register<bool>("zwnet_catalog_busy", false, Game::DVAR_NONE, "Playlist activation is in flight");
-		Dvar::Register<const char*>("zwnet_search_playlist_id", "", Game::DVAR_NONE, "Authoritative matchmaking playlist ID");
-		Dvar::Register<const char*>("zwnet_search_playlist_name", "", Game::DVAR_NONE, "Authoritative matchmaking playlist name");
-		Dvar::Register<int>("zwnet_search_playlist_revision", 0, 0, INT_MAX, Game::DVAR_NONE, "Authoritative matchmaking playlist revision");
-		Dvar::Register<const char*>("zwnet_search_playlist_settings", "", Game::DVAR_NONE, "Authoritative matchmaking zombie settings");
-		constexpr std::array slotVisible{"zwnet_catalog_slot_0_visible", "zwnet_catalog_slot_1_visible", "zwnet_catalog_slot_2_visible", "zwnet_catalog_slot_3_visible", "zwnet_catalog_slot_4_visible"};
-		constexpr std::array slotSelected{"zwnet_catalog_slot_0_selected", "zwnet_catalog_slot_1_selected", "zwnet_catalog_slot_2_selected", "zwnet_catalog_slot_3_selected", "zwnet_catalog_slot_4_selected"};
-		constexpr std::array slotName{"zwnet_catalog_slot_0_name", "zwnet_catalog_slot_1_name", "zwnet_catalog_slot_2_name", "zwnet_catalog_slot_3_name", "zwnet_catalog_slot_4_name"};
-		constexpr std::array slotDescription{"zwnet_catalog_slot_0_description", "zwnet_catalog_slot_1_description", "zwnet_catalog_slot_2_description", "zwnet_catalog_slot_3_description", "zwnet_catalog_slot_4_description"};
-		constexpr std::array slotPreview{"zwnet_catalog_slot_0_preview", "zwnet_catalog_slot_1_preview", "zwnet_catalog_slot_2_preview", "zwnet_catalog_slot_3_preview", "zwnet_catalog_slot_4_preview"};
-		constexpr std::array slotImage{"zwnet_catalog_slot_0_image", "zwnet_catalog_slot_1_image", "zwnet_catalog_slot_2_image", "zwnet_catalog_slot_3_image", "zwnet_catalog_slot_4_image"};
-		constexpr std::array slotAudience{"zwnet_catalog_slot_0_audience", "zwnet_catalog_slot_1_audience", "zwnet_catalog_slot_2_audience", "zwnet_catalog_slot_3_audience", "zwnet_catalog_slot_4_audience"};
-		constexpr std::array slotAvailability{"zwnet_catalog_slot_0_availability", "zwnet_catalog_slot_1_availability", "zwnet_catalog_slot_2_availability", "zwnet_catalog_slot_3_availability", "zwnet_catalog_slot_4_availability"};
-		constexpr std::array slotStatus{"zwnet_catalog_slot_0_status", "zwnet_catalog_slot_1_status", "zwnet_catalog_slot_2_status", "zwnet_catalog_slot_3_status", "zwnet_catalog_slot_4_status"};
-		for (std::size_t slot = 0; slot < ZWNET_PLAYLIST_PAGE_SIZE; ++slot)
+		Dvar::Register("ui_zwnet_state", "OFFLINE", Game::DVAR_NONE, "Localized ZWNET state key");
+		Dvar::Register("ui_zwnet_state_text", "OFFLINE", Game::DVAR_NONE, "Readable ZWNET state text");
+		Dvar::Register("ui_zwnet_error", "", Game::DVAR_NONE, "Stable ZWNET error key");
+		Dvar::Register("ui_zwnet_error_text", "", Game::DVAR_NONE, "Readable ZWNET error text");
+		Dvar::Register("ui_zwnet_guid", PublicGuid().data(), Game::DVAR_ROM, "Public ZW3 GUID used for Stats account linking");
+		Dvar::Register("zwnet_managed_session", false, Game::DVAR_NONE, "Active ZWNET matchmaking session");
+		Dvar::Register("zwnet_catalog_status", "LOADING", Game::DVAR_NONE, "Client-safe playlist catalog state");
+		Dvar::Register("zwnet_catalog_notice", false, Game::DVAR_NONE, "A relevant playlist update is available");
+		Dvar::Register("zwnet_catalog_can_select", false, Game::DVAR_NONE, "Local party leader can change playlist selection");
+		Dvar::Register("zwnet_catalog_can_search", false, Game::DVAR_NONE, "Selected playlist can be searched");
+		Dvar::Register("zwnet_catalog_page", 1, 1, 100, Game::DVAR_NONE, "Playlist page");
+		Dvar::Register("zwnet_catalog_pages", 1, 1, 100, Game::DVAR_NONE, "Playlist page count");
+		Dvar::Register("zwnet_catalog_selected_name", "NO AVAILABLE PLAYLIST", Game::DVAR_NONE, "Selected playlist title");
+		Dvar::Register("zwnet_catalog_selected_description", "", Game::DVAR_NONE, "Selected playlist description");
+		Dvar::Register("zwnet_catalog_selected_audience", "", Game::DVAR_NONE, "Selected playlist audience");
+		Dvar::Register("zwnet_catalog_selected_availability", "NO_SELECTION", Game::DVAR_NONE, "Selected playlist availability code");
+		Dvar::Register("zwnet_catalog_selected_status", "Choose a playlist to continue.", Game::DVAR_NONE, "Selected playlist availability detail");
+		Dvar::Register("zwnet_catalog_selected_revision", 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Selected playlist revision");
+		Dvar::Register("zwnet_catalog_selected_rotation", "No map rotation is available.", Game::DVAR_NONE, "Selected playlist rotation summary");
+		Dvar::Register("zwnet_catalog_selected_image", "", Game::DVAR_NONE, "Selected playlist preview material");
+		Dvar::Register("zwnet_catalog_selected_players", "", Game::DVAR_NONE, "Selected playlist player range");
+		Dvar::Register("zwnet_catalog_selected_zombie_settings", "", Game::DVAR_NONE, "Selected playlist zombie settings");
+		Dvar::Register("zwnet_catalog_action_error", "", Game::DVAR_NONE, "Playlist activation feedback");
+		Dvar::Register("zwnet_catalog_busy", false, Game::DVAR_NONE, "Playlist activation is in flight");
+		Dvar::Register("zwnet_search_playlist_id", "", Game::DVAR_NONE, "Authoritative matchmaking playlist ID");
+		Dvar::Register("zwnet_search_playlist_name", "", Game::DVAR_NONE, "Authoritative matchmaking playlist name");
+		Dvar::Register("zwnet_search_playlist_revision", 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Authoritative matchmaking playlist revision");
+		Dvar::Register("zwnet_search_playlist_settings", "", Game::DVAR_NONE, "Authoritative matchmaking zombie settings");
+
+		for (std::size_t slot = 0; slot < playlistPageSize; ++slot)
 		{
-			Dvar::Register<bool>(slotVisible[slot], false, Game::DVAR_NONE, "Playlist slot is populated");
-			Dvar::Register<bool>(slotSelected[slot], false, Game::DVAR_NONE, "Playlist slot is selected");
-			Dvar::Register<const char*>(slotName[slot], "", Game::DVAR_NONE, "Playlist display name");
-			Dvar::Register<const char*>(slotDescription[slot], "", Game::DVAR_NONE, "Playlist description");
-			Dvar::Register<const char*>(slotPreview[slot], "", Game::DVAR_NONE, "Playlist map preview");
-			Dvar::Register<const char*>(slotImage[slot], "", Game::DVAR_NONE, "Playlist local map material");
-			Dvar::Register<const char*>(slotAudience[slot], "", Game::DVAR_NONE, "Playlist audience");
-			Dvar::Register<const char*>(slotAvailability[slot], "", Game::DVAR_NONE, "Playlist availability");
-			Dvar::Register<const char*>(slotStatus[slot], "", Game::DVAR_NONE, "Playlist availability detail");
+			Dvar::Register(playlistSlotVisibleDvars[slot], false, Game::DVAR_NONE, "Playlist slot is populated");
+			Dvar::Register(playlistSlotSelectedDvars[slot], false, Game::DVAR_NONE, "Playlist slot is selected");
+			Dvar::Register(playlistSlotNameDvars[slot], "", Game::DVAR_NONE, "Playlist display name");
+			Dvar::Register(playlistSlotDescriptionDvars[slot], "", Game::DVAR_NONE, "Playlist description");
+			Dvar::Register(playlistSlotPreviewDvars[slot], "", Game::DVAR_NONE, "Playlist map preview");
+			Dvar::Register(playlistSlotImageDvars[slot], "", Game::DVAR_NONE, "Playlist local map material");
+			Dvar::Register(playlistSlotAudienceDvars[slot], "", Game::DVAR_NONE, "Playlist audience");
+			Dvar::Register(playlistSlotAvailabilityDvars[slot], "", Game::DVAR_NONE, "Playlist availability");
+			Dvar::Register(playlistSlotStatusDvars[slot], "", Game::DVAR_NONE, "Playlist availability detail");
 		}
-		Dvar::Register<bool>("zwnet_lobby_active", false, Game::DVAR_NONE, "ZWNET party lobby is active");
-		Dvar::Register<const char*>("zwnet_lobby_party_id", "", Game::DVAR_NONE, "Current ZWNET party");
-		Dvar::Register<const char*>("zwnet_lobby_visibility", "OPEN", Game::DVAR_NONE, "Current ZWNET party visibility");
-		Dvar::Register<const char*>("zwnet_lobby_owner", "", Game::DVAR_NONE, "Current party owner");
-		Dvar::Register<int>("zwnet_lobby_member_count", 0, 0, 4, Game::DVAR_NONE, "Current party size");
-		Dvar::Register<const char*>("zwnet_lobby_status_text", "IDLE", Game::DVAR_NONE, "Current party state");
-		Dvar::Register<bool>("zwnet_lobby_can_start", false, Game::DVAR_NONE, "Private match can start");
-		Dvar::Register<bool>("zwnet_lobby_self_ready", false, Game::DVAR_NONE, "Local party ready state");
-		Dvar::Register<bool>("zwnet_ready_pending", false, Game::DVAR_NONE, "A ready-state update is in flight");
-		Dvar::Register<bool>("zwnet_all_ready", false, Game::DVAR_NONE, "All active match players are ready");
-		Dvar::Register<const char*>("zwnet_start_phase", "", Game::DVAR_NONE, "Server start phase");
-		Dvar::Register<int>("zwnet_start_seconds", 0, 0, 300, Game::DVAR_NONE, "Server start phase time remaining");
-		Dvar::Register<bool>("zwnet_join_preview_active", false, Game::DVAR_NONE, "Join-in-progress preview is visible");
-		Dvar::Register<int>("zwnet_join_preview_seconds", 0, 0, 3, Game::DVAR_NONE, "Join-in-progress preview duration");
-		Dvar::Register<bool>("zwnet_online_players_known", false, Game::DVAR_NONE, "Online-player metric is authoritative and fresh");
-		Dvar::Register<const char*>("zwnet_online_players_text", "PLAYERS ONLINE UNAVAILABLE", Game::DVAR_NONE, "Online-player metric label");
-		Dvar::Register<bool>("zwnet_running_games_known", false, Game::DVAR_NONE, "Running-game metric is authoritative and fresh");
-		Dvar::Register<const char*>("zwnet_running_games_text", "RUNNING GAMES UNAVAILABLE", Game::DVAR_NONE, "Running-game metric label");
-		constexpr std::array memberNames
+
+		Dvar::Register("zwnet_lobby_active", false, Game::DVAR_NONE, "ZWNET party lobby is active");
+		Dvar::Register("zwnet_lobby_party_id", "", Game::DVAR_NONE, "Current ZWNET party");
+		Dvar::Register("zwnet_lobby_visibility", "OPEN", Game::DVAR_NONE, "Current ZWNET party visibility");
+		Dvar::Register("zwnet_lobby_owner", "", Game::DVAR_NONE, "Current party owner");
+		Dvar::Register("zwnet_lobby_member_count", 0, 0, 4, Game::DVAR_NONE, "Current party size");
+		Dvar::Register("zwnet_lobby_status_text", "IDLE", Game::DVAR_NONE, "Current party state");
+		Dvar::Register("zwnet_lobby_can_start", false, Game::DVAR_NONE, "Private match can start");
+		Dvar::Register("zwnet_lobby_self_ready", false, Game::DVAR_NONE, "Local party ready state");
+		Dvar::Register("zwnet_ready_pending", false, Game::DVAR_NONE, "A ready-state update is in flight");
+		Dvar::Register("zwnet_all_ready", false, Game::DVAR_NONE, "All active match players are ready");
+		Dvar::Register("zwnet_start_phase", "", Game::DVAR_NONE, "Server start phase");
+		Dvar::Register("zwnet_start_seconds", 0, 0, 300, Game::DVAR_NONE, "Server start phase time remaining");
+		Dvar::Register("zwnet_join_preview_active", false, Game::DVAR_NONE, "Join-in-progress preview is visible");
+		Dvar::Register("zwnet_join_preview_seconds", 0, 0, 3, Game::DVAR_NONE, "Join-in-progress preview duration");
+		Dvar::Register("zwnet_online_players_known", false, Game::DVAR_NONE, "Online-player metric is authoritative and fresh");
+		Dvar::Register("zwnet_online_players_text", "PLAYERS ONLINE UNAVAILABLE", Game::DVAR_NONE, "Online-player metric label");
+		Dvar::Register("zwnet_running_games_known", false, Game::DVAR_NONE, "Running-game metric is authoritative and fresh");
+		Dvar::Register("zwnet_running_games_text", "RUNNING GAMES UNAVAILABLE", Game::DVAR_NONE, "Running-game metric label");
+
+		static std::deque<std::string> memberDvarNames;
+
+		const auto memberDvarName = [](const std::size_t member, const char* suffix) -> const char*
 		{
-			"zwnet_lobby_member_0_name", "zwnet_lobby_member_1_name", "zwnet_lobby_member_2_name", "zwnet_lobby_member_3_name"
+			memberDvarNames.emplace_back(std::format("zwnet_lobby_member_{}{}", member, suffix));
+			return memberDvarNames.back().data();
 		};
-		constexpr std::array memberRoles
+
+		for (std::size_t i = 0; i < 4; ++i)
 		{
-			"zwnet_lobby_member_0_role", "zwnet_lobby_member_1_role", "zwnet_lobby_member_2_role", "zwnet_lobby_member_3_role"
-		};
-		constexpr std::array memberGuids
-		{
-			"zwnet_lobby_member_0_guid", "zwnet_lobby_member_1_guid", "zwnet_lobby_member_2_guid", "zwnet_lobby_member_3_guid"
-		};
-		constexpr std::array memberReady
-		{
-			"zwnet_lobby_member_0_ready", "zwnet_lobby_member_1_ready", "zwnet_lobby_member_2_ready", "zwnet_lobby_member_3_ready"
-		};
-		constexpr std::array memberSelf
-		{
-			"zwnet_lobby_member_0_self", "zwnet_lobby_member_1_self", "zwnet_lobby_member_2_self", "zwnet_lobby_member_3_self"
-		};
-		constexpr std::array memberSharedRankKnown
-		{
-			"zwnet_lobby_member_0_shared_rank_known", "zwnet_lobby_member_1_shared_rank_known", "zwnet_lobby_member_2_shared_rank_known", "zwnet_lobby_member_3_shared_rank_known"
-		};
-		constexpr std::array memberSharedRankLevels
-		{
-			"zwnet_lobby_member_0_shared_rank_level", "zwnet_lobby_member_1_shared_rank_level", "zwnet_lobby_member_2_shared_rank_level", "zwnet_lobby_member_3_shared_rank_level"
-		};
-		constexpr std::array memberSharedRankPrestiges
-		{
-			"zwnet_lobby_member_0_shared_rank_prestige", "zwnet_lobby_member_1_shared_rank_prestige", "zwnet_lobby_member_2_shared_rank_prestige", "zwnet_lobby_member_3_shared_rank_prestige"
-		};
-		constexpr std::array memberRankIcons
-		{
-			"zwnet_lobby_member_0_rank_icon", "zwnet_lobby_member_1_rank_icon", "zwnet_lobby_member_2_rank_icon", "zwnet_lobby_member_3_rank_icon"
-		};
-		constexpr std::array memberRankLevels
-		{
-			"zwnet_lobby_member_0_rank_level", "zwnet_lobby_member_1_rank_level", "zwnet_lobby_member_2_rank_level", "zwnet_lobby_member_3_rank_level"
-		};
-		for (std::size_t i = 0; i < memberNames.size(); ++i)
-		{
-			Dvar::Register<const char*>(memberNames[i], "", Game::DVAR_NONE, "Party member name");
-			Dvar::Register<const char*>(memberGuids[i], "", Game::DVAR_NONE, "Public-lobby member GUID");
-			Dvar::Register<const char*>(memberRoles[i], "", Game::DVAR_NONE, "Party member role");
-			Dvar::Register<bool>(memberReady[i], false, Game::DVAR_NONE, "Party member ready state");
-			Dvar::Register<bool>(memberSelf[i], false, Game::DVAR_NONE, "Local public-lobby member slot");
-			Dvar::Register<bool>(memberSharedRankKnown[i], false, Game::DVAR_NONE, "Public-lobby member shared rank is available");
-			Dvar::Register<int>(memberSharedRankLevels[i], 1, 1, 54, Game::DVAR_NONE, "Public-lobby member shared rank level");
-			Dvar::Register<int>(memberSharedRankPrestiges[i], 0, 0, 255, Game::DVAR_NONE, "Public-lobby member shared rank prestige");
-			Dvar::Register<const char*>(memberRankIcons[i], "", Game::DVAR_NONE, "Public lobby member rank icon");
-			Dvar::Register<const char*>(memberRankLevels[i], "", Game::DVAR_NONE, "Public lobby member rank level");
+			Dvar::Register(memberDvarName(i, "_name"), "", Game::DVAR_NONE, "Party member name");
+			Dvar::Register(memberDvarName(i, "_guid"), "", Game::DVAR_NONE, "Public-lobby member GUID");
+			Dvar::Register(memberDvarName(i, "_role"), "", Game::DVAR_NONE, "Party member role");
+			Dvar::Register(memberDvarName(i, "_ready"), false, Game::DVAR_NONE, "Party member ready state");
+			Dvar::Register(memberDvarName(i, "_self"), false, Game::DVAR_NONE, "Local public-lobby member slot");
+			Dvar::Register(memberDvarName(i, "_shared_rank_known"), false, Game::DVAR_NONE, "Public-lobby member shared rank is available");
+			Dvar::Register(memberDvarName(i, "_shared_rank_level"), 1, 1, 54, Game::DVAR_NONE, "Public-lobby member shared rank level");
+			Dvar::Register(memberDvarName(i, "_shared_rank_prestige"), 0, 0, 255, Game::DVAR_NONE, "Public-lobby member shared rank prestige");
+			Dvar::Register(memberDvarName(i, "_rank_icon"), "", Game::DVAR_NONE, "Public lobby member rank icon");
+			Dvar::Register(memberDvarName(i, "_rank_level"), "", Game::DVAR_NONE, "Public lobby member rank level");
 		}
-		Dvar::Register<bool>("zwnet_vote_active", false, Game::DVAR_NONE, "Map vote is active");
-		Dvar::Register<const char*>("zwnet_vote_proposal_id", "", Game::DVAR_NONE, "Current map vote");
-		Dvar::Register<int>("zwnet_vote_seconds", 0, 0, 60, Game::DVAR_NONE, "Map vote time remaining");
-		Dvar::Register<const char*>("zwnet_vote_selection", "", Game::DVAR_NONE, "Local map vote selection");
-		constexpr std::array voteIds{"zwnet_vote_map_a_id", "zwnet_vote_map_b_id"};
-		constexpr std::array voteNames{"zwnet_vote_map_a_name", "zwnet_vote_map_b_name"};
-		constexpr std::array voteImages{"zwnet_vote_map_a_image", "zwnet_vote_map_b_image"};
-		constexpr std::array voteCounts{"zwnet_vote_map_a_votes", "zwnet_vote_map_b_votes"};
-		for (std::size_t i = 0; i < voteIds.size(); ++i)
+
+		Dvar::Register("zwnet_vote_active", false, Game::DVAR_NONE, "Map vote is active");
+		Dvar::Register("zwnet_vote_proposal_id", "", Game::DVAR_NONE, "Current map vote");
+		Dvar::Register("zwnet_vote_seconds", 0, 0, 60, Game::DVAR_NONE, "Map vote time remaining");
+		Dvar::Register("zwnet_vote_selection", "", Game::DVAR_NONE, "Local map vote selection");
+
+		RegisterStringDvars({ { "zwnet_vote_map_a_id", "" }, { "zwnet_vote_map_b_id", "" } }, "Map vote internal id");
+		RegisterStringDvars({ { "zwnet_vote_map_a_name", "" }, { "zwnet_vote_map_b_name", "" } }, "Map vote display name");
+		RegisterStringDvars({ { "zwnet_vote_map_a_image", "" }, { "zwnet_vote_map_b_image", "" } }, "Map vote preview material");
+		Dvar::Register("zwnet_vote_map_a_votes", 0, 0, 4, Game::DVAR_NONE, "Map vote count");
+		Dvar::Register("zwnet_vote_map_b_votes", 0, 0, 4, Game::DVAR_NONE, "Map vote count");
+
+		Dvar::Register("zwnet_vote_random_votes", 0, 0, 4, Game::DVAR_NONE, "Random map vote count");
+		Dvar::Register("zwnet_vote_reveal_time", 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Map result reveal start time");
+		Dvar::Register("zwnet_vote_reveal_slot", 0, 0, 2, Game::DVAR_NONE, "Map result source card: A, B or random");
+		Dvar::Register("zwnet_vote_winner_id", "", Game::DVAR_NONE, "Winning ZW3 map id");
+		Dvar::Register("zwnet_vote_winner_name", "", Game::DVAR_NONE, "Winning ZW3 map name");
+		Dvar::Register("zwnet_vote_winner_image", "", Game::DVAR_NONE, "Winning ZW3 map preview");
+		Dvar::Register("zwnet_match_id", "", Game::DVAR_NONE, "Current ZW3 match id");
+		Dvar::Register("zwnet_match_return", false, Game::DVAR_NONE, "Completed ZW3 match should return to its lobby");
+		Dvar::Register("zwnet_server_endpoint", "", Game::DVAR_NONE, "Assigned public ZW3 server endpoint");
+		Dvar::Register("zwnet_server_hostname", "", Game::DVAR_NONE, "Connected ZW3 server hostname");
+		Dvar::Register("zwnet_server_status", "NOT ASSIGNED", Game::DVAR_NONE, "ZW3 server assignment status");
+		Dvar::Register("zwnet_join_status", "WAITING IN LOBBY", Game::DVAR_NONE, "ZW3 join status");
+		Dvar::Register("zwnet_join_countdown", 0, 0, 30, Game::DVAR_NONE, "Synchronized ZW3 join countdown");
+		Dvar::Register("zwnet_selected_player_guid", "", Game::DVAR_NONE, "Selected public-lobby player GUID");
+		Dvar::Register("zwnet_selected_player_name", "", Game::DVAR_NONE, "Selected public-lobby player name");
+		Dvar::Register("zwnet_selected_player_role", "", Game::DVAR_NONE, "Selected public-lobby player role");
+		Dvar::Register("zwnet_selected_player_rank", 1, 1, 54, Game::DVAR_NONE, "Selected public-lobby player rank");
+		Dvar::Register("zwnet_selected_player_prestige", 0, 0, 255, Game::DVAR_NONE, "Selected public-lobby player prestige");
+		Dvar::Register("zwnet_selected_player_rank_icon", "prestige_1", Game::DVAR_NONE, "Selected public-lobby player prestige icon");
+		Dvar::Register("zwnet_selected_player_self", false, Game::DVAR_NONE, "Selected public-lobby player is local");
+		Dvar::Register("zwnet_selected_player_relationship", "UNAVAILABLE", Game::DVAR_NONE, "Selected public-lobby player friend state");
+		Dvar::Register("zwnet_barracks_compare_active", false, Game::DVAR_NONE, "Barracks was opened for a lobby comparison");
+		Dvar::Register("zw3_barracks_rank_known", false, Game::DVAR_NONE, "Local ZW3 Barracks rank data is available");
+		Dvar::Register("zw3_barracks_rank_level", 1, 1, 54, Game::DVAR_NONE, "Local ZW3 Barracks rank level");
+		Dvar::Register("zw3_barracks_rank_prestige", 0, 0, 255, Game::DVAR_NONE, "Local ZW3 Barracks prestige");
+		Dvar::Register("zw3_barracks_rank_experience", 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Local ZW3 Barracks experience");
+		Dvar::Register("zw3_barracks_rank_experience_target", 50, 1, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Current ZW3 Barracks level XP target");
+		Dvar::Register("zw3_barracks_rank_experience_percent", 0, 0, 100, Game::DVAR_NONE, "Current ZW3 Barracks level XP completion percent");
+		Dvar::Register("zw3_barracks_rank_icon", "prestige_1", Game::DVAR_NONE, "Local ZW3 Barracks prestige icon");
+		Dvar::Register("zw3_barracks_zombie_kills", 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Lifetime ZW3 zombie kills");
+		Dvar::Register("zw3_barracks_zombie_deaths", 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Lifetime ZW3 zombie deaths");
+		Dvar::Register("zw3_barracks_zombie_revives", 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Lifetime ZW3 teammate revives");
+
+		for (std::size_t slot = 0; slot < challengeSlotProgressDvars.size(); ++slot)
 		{
-			Dvar::Register<const char*>(voteIds[i], "", Game::DVAR_NONE, "Map vote internal id");
-			Dvar::Register<const char*>(voteNames[i], "", Game::DVAR_NONE, "Map vote display name");
-			Dvar::Register<const char*>(voteImages[i], "", Game::DVAR_NONE, "Map vote preview material");
-			Dvar::Register<int>(voteCounts[i], 0, 0, 4, Game::DVAR_NONE, "Map vote count");
+			Dvar::Register(challengeSlotProgressDvars[slot], 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Current ZW3 challenge progress");
+			Dvar::Register(challengeSlotTargetDvars[slot], 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Current ZW3 challenge target");
+			Dvar::Register(challengeSlotTierDvars[slot], 0, 0, 4, Game::DVAR_NONE, "Completed ZW3 challenge tiers");
+			Dvar::Register(challengeSlotTierCountDvars[slot], 0, 0, 4, Game::DVAR_NONE, "Available ZW3 challenge tiers");
+			Dvar::Register(challengeSlotRewardDvars[slot], 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Next ZW3 challenge XP reward");
+			Dvar::Register(challengeSlotPercentDvars[slot], 0, 0, 100, Game::DVAR_NONE, "Current ZW3 challenge completion percent");
+			Dvar::Register(challengeSlotCompleteDvars[slot], false, Game::DVAR_NONE, "ZW3 challenge is complete");
 		}
-		Dvar::Register<int>("zwnet_vote_random_votes", 0, 0, 4, Game::DVAR_NONE, "Random map vote count");
-		Dvar::Register<int>("zwnet_vote_reveal_time", 0, 0, INT_MAX, Game::DVAR_NONE, "Map result reveal start time");
-		Dvar::Register<int>("zwnet_vote_reveal_slot", 0, 0, 2, Game::DVAR_NONE, "Map result source card: A, B or random");
-		Dvar::Register<const char*>("zwnet_vote_winner_id", "", Game::DVAR_NONE, "Winning ZW3 map id");
-		Dvar::Register<const char*>("zwnet_vote_winner_name", "", Game::DVAR_NONE, "Winning ZW3 map name");
-		Dvar::Register<const char*>("zwnet_vote_winner_image", "", Game::DVAR_NONE, "Winning ZW3 map preview");
-		Dvar::Register<const char*>("zwnet_match_id", "", Game::DVAR_NONE, "Current ZW3 match id");
-		Dvar::Register<bool>("zwnet_match_return", false, Game::DVAR_NONE, "Completed ZW3 match should return to its lobby");
-		Dvar::Register<const char*>("zwnet_server_endpoint", "", Game::DVAR_NONE, "Assigned public ZW3 server endpoint");
-		Dvar::Register<const char*>("zwnet_server_hostname", "", Game::DVAR_NONE, "Connected ZW3 server hostname");
-		Dvar::Register<const char*>("zwnet_server_status", "NOT ASSIGNED", Game::DVAR_NONE, "ZW3 server assignment status");
-		Dvar::Register<const char*>("zwnet_join_status", "WAITING IN LOBBY", Game::DVAR_NONE, "ZW3 join status");
-		Dvar::Register<int>("zwnet_join_countdown", 0, 0, 30, Game::DVAR_NONE, "Synchronized ZW3 join countdown");
-		Dvar::Register<const char*>("zwnet_selected_player_guid", "", Game::DVAR_NONE, "Selected public-lobby player GUID");
-		Dvar::Register<const char*>("zwnet_selected_player_name", "", Game::DVAR_NONE, "Selected public-lobby player name");
-		Dvar::Register<const char*>("zwnet_selected_player_role", "", Game::DVAR_NONE, "Selected public-lobby player role");
-		Dvar::Register<int>("zwnet_selected_player_rank", 1, 1, 54, Game::DVAR_NONE, "Selected public-lobby player rank");
-		Dvar::Register<int>("zwnet_selected_player_prestige", 0, 0, 255, Game::DVAR_NONE, "Selected public-lobby player prestige");
-		Dvar::Register<const char*>("zwnet_selected_player_rank_icon", "prestige_1", Game::DVAR_NONE, "Selected public-lobby player prestige icon");
-		Dvar::Register<bool>("zwnet_selected_player_self", false, Game::DVAR_NONE, "Selected public-lobby player is local");
-		Dvar::Register<const char*>("zwnet_selected_player_relationship", "UNAVAILABLE", Game::DVAR_NONE, "Selected public-lobby player friend state");
-		Dvar::Register<bool>("zwnet_barracks_compare_active", false, Game::DVAR_NONE, "Barracks was opened for a lobby comparison");
-		Dvar::Register<bool>("zw3_barracks_rank_known", false, Game::DVAR_NONE, "Local ZW3 Barracks rank data is available");
-		Dvar::Register<int>("zw3_barracks_rank_level", 1, 1, 54, Game::DVAR_NONE, "Local ZW3 Barracks rank level");
-		Dvar::Register<int>("zw3_barracks_rank_prestige", 0, 0, 255, Game::DVAR_NONE, "Local ZW3 Barracks prestige");
-		Dvar::Register<int>("zw3_barracks_rank_experience", 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Local ZW3 Barracks experience");
-		Dvar::Register<int>("zw3_barracks_rank_experience_target", 50, 1, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Current ZW3 Barracks level XP target");
-		Dvar::Register<int>("zw3_barracks_rank_experience_percent", 0, 0, 100, Game::DVAR_NONE, "Current ZW3 Barracks level XP completion percent");
-		Dvar::Register<const char*>("zw3_barracks_rank_icon", "prestige_1", Game::DVAR_NONE, "Local ZW3 Barracks prestige icon");
-		Dvar::Register<int>("zw3_barracks_zombie_kills", 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Lifetime ZW3 zombie kills");
-		Dvar::Register<int>("zw3_barracks_zombie_deaths", 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Lifetime ZW3 zombie deaths");
-		Dvar::Register<int>("zw3_barracks_zombie_revives", 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Lifetime ZW3 teammate revives");
-		for (std::size_t slot = 0; slot < ChallengeSlotProgressDvars.size(); ++slot)
-		{
-			Dvar::Register<int>(ChallengeSlotProgressDvars[slot], 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Current ZW3 challenge progress");
-			Dvar::Register<int>(ChallengeSlotTargetDvars[slot], 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Current ZW3 challenge target");
-			Dvar::Register<int>(ChallengeSlotTierDvars[slot], 0, 0, 4, Game::DVAR_NONE, "Completed ZW3 challenge tiers");
-			Dvar::Register<int>(ChallengeSlotTierCountDvars[slot], 0, 0, 4, Game::DVAR_NONE, "Available ZW3 challenge tiers");
-			Dvar::Register<int>(ChallengeSlotRewardDvars[slot], 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Next ZW3 challenge XP reward");
-			Dvar::Register<int>(ChallengeSlotPercentDvars[slot], 0, 0, 100, Game::DVAR_NONE, "Current ZW3 challenge completion percent");
-			Dvar::Register<bool>(ChallengeSlotCompleteDvars[slot], false, Game::DVAR_NONE, "ZW3 challenge is complete");
-		}
-		constexpr std::array questChallengeDvars
+
+		constexpr const char* questChallengeDvars[] =
 		{
 			"zw3_quest_mp_factory_sh", "zw3_quest_mp_asylum_sh", "zw3_quest_mp_prototype_sh",
 			"zw3_quest_mp_sumpf_sh", "zw3_quest_mp_za_island", "zw3_quest_mp_deathmarch_chap4_a",
 			"zw3_quest_mp_deathmarch_chap4_b", "zw3_quest_mp_surv_town", "zw3_quest_mp_burg",
-			"zw3_quest_mp_lambeth"
+			"zw3_quest_mp_lambeth",
 		};
-		for (const auto* challengeDvar : questChallengeDvars)
+
+		for (const auto* questDvar : questChallengeDvars)
 		{
-			Dvar::Register<int>(challengeDvar, 0, 0, 10, Game::DVAR_ARCHIVE,
-				"Completed tiers for a repeatable ZW3 questline");
+			Dvar::Register(questDvar, 0, 0, 10, Game::DVAR_ARCHIVE, "Completed tiers for a repeatable ZW3 questline");
 		}
-		{
-			std::lock_guard lock(StateMutex());
-			// Reading an engine-owned string Dvar here also establishes that the
-			// Dvar critical sections are usable before the async login is released.
-			const auto localPlayerName = Dvar::Var("name").get<std::string>();
-			(void)localPlayerName;
-			// Construct all function-local state on the main game thread before the
-			// asynchronous worker can access the CRT-backed string objects.
-			(void)AccessTokenState();
-			(void)RefreshTokenState();
-			(void)CurrentPartyIdState();
-			(void)CurrentPlayerIdState();
-			(void)CurrentProposalIdState();
-			(void)CurrentMatchIdState();
-		}
-		ActiveState() = true;
+
+		isActive = true;
 		RefreshBarracksProfile();
 	}
 
 	ZWNet::ZWNet()
 	{
-		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled()) return;
-		PatchMaterialEnumerationScratch();
+		if (Dedicated::IsEnabled())
+		{
+			return;
+		}
+
 		Localization::Set("ZWNET_LOGIN_REQUIRED", "Sign in on the ZW3 Stats page.");
 		Localization::Set("ZWNET_SESSION_EXPIRED", "Your ZW3 session expired. Please sign in again.");
 		Localization::Set("ZWNET_SEARCH_FAILED", "Matchmaking could not be started.");
@@ -4370,7 +6186,6 @@ namespace Components
 		Localization::Set("ZWNET_PLAYLIST_REFRESH_REQUIRED", "This playlist changed or access ended. Refresh the list and choose again.");
 		Localization::Set("ZWNET_PLAYLIST_SELECTION_FAILED", "The party playlist could not be changed. Refresh and try again.");
 		Localization::Set("ZWNET_ROUTE_UNAVAILABLE", "No direct or relay route is available.");
-		Localization::Set("ZWNET_RELAY_TIMEOUT", "The relay did not confirm the connection. Return to the lobby and try again.");
 		Localization::Set("ZWNET_SERVER_NOT_READY", "The assigned ZW3 server is no longer available.");
 		Localization::Set("ZWNET_DESCRIPTOR_INVALID", "The connection response was invalid.");
 		Localization::Set("ZWNET_ACCOUNT_LINK_REQUIRED", "Link this GUID in ZW3 Stats Settings.");
@@ -4382,310 +6197,556 @@ namespace Components
 		Localization::Set("ZWNET_REQUEST_FAILED", "The ZW3 online service did not respond safely.");
 		Localization::Set("ZWNET_GUID_COPY_FAILED", "The ZW3 GUID could not be copied to the clipboard.");
 		Localization::Set("ZWNET_MANUAL_JOIN_DENIED", "Manual test access is unavailable. Check your invitation and sign in again.");
-		Network::OnClientPacket("zwnetRelayReady", [](Network::Address& address, const std::string& data)
+		Localization::Set("ZWNET_RELAY_TIMEOUT", "The relay did not confirm the connection. Return to the lobby and try again.");
+
+		Network::OnPacket("zwnetRelayReady", [](Network::Address& address, const std::string& data)
 		{
-			if (data.size() > 256) return;
+			if (data.size() > relayReadyLimit)
+			{
+				return;
+			}
+
 			const auto ready = nlohmann::json::parse(data, nullptr, false);
-			if (!ready.is_object() || ready.size() != 2 ||
-				!ready.contains("schema_version") || !ready.at("schema_version").is_number_integer() ||
-				ready.at("schema_version").get<int>() != 1 ||
-				!ready.contains("nonce") || !ready.at("nonce").is_string()) return;
+
+			const bool isReadyShaped = ready.is_object()
+				&& ready.size() == 2
+				&& ready.contains("schema_version") && ready.at("schema_version").is_number_integer()
+				&& ready.at("schema_version").get<int>() == 1
+				&& ready.contains("nonce") && ready.at("nonce").is_string();
+
+			if (!isReadyShaped)
+			{
+				return;
+			}
+
 			const auto nonce = ready.at("nonce").get<std::string>();
-			if (nonce.size() != 32 || !std::ranges::all_of(nonce, [](const unsigned char character)
-				{ return character >= '0' && character <= '9' || character >= 'a' && character <= 'f'; })) return;
+
+			const bool isNonceShaped = nonce.size() == 32 && std::ranges::all_of(nonce, [](const unsigned char character)
+			{
+				return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f');
+			});
+
+			if (!isNonceShaped)
+			{
+				return;
+			}
+
 			std::uint64_t generation = 0;
 			Network::Address target;
 			std::string matchId;
 			std::string playerId;
+
 			{
-				auto& pending = RelayState();
-				std::lock_guard lock(pending.mutex);
-				if (!pending.pending || std::chrono::steady_clock::now() >= pending.deadline ||
-					address != pending.target || nonce != pending.nonce) return;
-				pending.pending = false;
-				pending.ready = true;
-				std::ranges::fill(pending.hello, '\0');
-				pending.hello.clear();
-				generation = pending.generation;
-				target = pending.target;
-				matchId = pending.matchId;
-				playerId = pending.playerId;
+				std::lock_guard _(relayHandshake.mutex);
+
+				const bool isAwaited = relayHandshake.isPending
+					&& std::chrono::steady_clock::now() < relayHandshake.deadline
+					&& address == relayHandshake.target
+					&& nonce == relayHandshake.nonce;
+
+				if (!isAwaited)
+				{
+					return;
+				}
+
+				relayHandshake.isPending = false;
+				relayHandshake.isReady = true;
+				std::ranges::fill(relayHandshake.hello, '\0');
+				relayHandshake.hello.clear();
+				generation = relayHandshake.generation;
+				target = relayHandshake.target;
+				matchId = relayHandshake.matchId;
+				playerId = relayHandshake.playerId;
 			}
+
 			Scheduler::Once([generation, target, matchId, playerId]
 			{
-				if (!ActiveState()) return;
+				if (!isActive)
 				{
-					auto& pending = RelayState();
-					std::lock_guard lock(pending.mutex);
-					if (pending.generation != generation || !pending.ready) return;
-					pending.ready = false;
-					pending.nonce.clear();
-					pending.matchId.clear();
-					pending.playerId.clear();
+					return;
 				}
+
 				{
-					std::lock_guard lock(StateMutex());
-					if (CurrentPlayerIdState() != playerId || CurrentMatchIdState() != matchId)
+					std::lock_guard _(relayHandshake.mutex);
+
+					if (relayHandshake.generation != generation || !relayHandshake.isReady)
 					{
-						Auth::ClearManagedConnectTicket();
-						ManagedReconnectInFlight() = false;
-						++JoinTransitionGeneration();
-						ServerJoinTransitionState() = false;
 						return;
 					}
+
+					relayHandshake.isReady = false;
+					relayHandshake.nonce.clear();
+					relayHandshake.matchId.clear();
+					relayHandshake.playerId.clear();
 				}
-				Dvar::Var("ui_zwnet_state").set("CONNECTING");
-				Dvar::Var("ui_zwnet_error").set("");
-				Dvar::Var("zwnet_server_endpoint").set(target.getString());
-				Dvar::Var("zwnet_server_status").set("RELAY READY");
-				Dvar::Var("zwnet_join_status").set("JOINING SERVER");
-				Dvar::Var("zwnet_managed_session").set(true);
+
+				bool isSameSession = false;
+
+				{
+					std::lock_guard _(stateMutex);
+					isSameSession = currentPlayerId == playerId && currentMatchId == matchId;
+				}
+
+				if (!isSameSession)
+				{
+					Auth::ClearManagedConnectTicket();
+					isManagedReconnectInFlight = false;
+					++joinTransitionGeneration;
+					isServerJoinTransition = false;
+					return;
+				}
+
+				SetPresenceUiState("CONNECTING");
+				Dvar::Var("ui_zwnet_state").Set("CONNECTING");
+				Dvar::Var("ui_zwnet_error").Set("");
+				Dvar::Var("zwnet_server_endpoint").Set(target.GetString());
+				Dvar::Var("zwnet_server_status").Set("RELAY READY");
+				Dvar::Var("zwnet_join_status").Set("JOINING SERVER");
+				Dvar::Var("zwnet_managed_session").Set(true);
+
 				MarkJoinInProgressConnectionStarted(matchId);
-				const auto transitionGeneration = ++JoinTransitionGeneration();
-				ServerJoinTransitionState() = true;
+
+				const auto transitionGeneration = ++joinTransitionGeneration;
+				isServerJoinTransition = true;
+
 				Scheduler::Once([transitionGeneration]
 				{
-					if (JoinTransitionGeneration() == transitionGeneration)
-						ServerJoinTransitionState() = false;
-				},
-					Scheduler::Pipeline::MAIN, 12s);
+					if (joinTransitionGeneration == transitionGeneration)
+					{
+						isServerJoinTransition = false;
+					}
+				}, Scheduler::Pipeline::MAIN, 12s);
+
 				Party::Connect(target);
-				ManagedReconnectInFlight() = false;
+				isManagedReconnectInFlight = false;
 			}, Scheduler::Pipeline::MAIN);
 		});
+
 		Scheduler::Loop([]
 		{
-			if (!ActiveState()) return;
+			if (!isActive)
+			{
+				return;
+			}
+
 			Network::Address target;
 			std::string hello;
-			bool timedOut = false;
+			bool hasTimedOut = false;
+
 			{
-				auto& pending = RelayState();
-				std::lock_guard lock(pending.mutex);
-				if (!pending.pending) return;
-				if (std::chrono::steady_clock::now() >= pending.deadline)
+				std::lock_guard _(relayHandshake.mutex);
+
+				if (!relayHandshake.isPending)
 				{
-					++pending.generation;
-					pending.pending = false;
-					std::ranges::fill(pending.hello, '\0');
-					pending.hello.clear();
-					pending.nonce.clear();
-					pending.matchId.clear();
-					pending.playerId.clear();
-					timedOut = true;
+					return;
+				}
+
+				if (std::chrono::steady_clock::now() >= relayHandshake.deadline)
+				{
+					++relayHandshake.generation;
+					relayHandshake.isPending = false;
+					std::ranges::fill(relayHandshake.hello, '\0');
+					relayHandshake.hello.clear();
+					relayHandshake.nonce.clear();
+					relayHandshake.matchId.clear();
+					relayHandshake.playerId.clear();
+					hasTimedOut = true;
 				}
 				else
 				{
-					target = pending.target;
-					hello = pending.hello;
+					target = relayHandshake.target;
+					hello = relayHandshake.hello;
 				}
 			}
-			if (timedOut)
+
+			if (hasTimedOut)
 			{
 				Auth::ClearManagedConnectTicket();
-				ManagedReconnectInFlight() = false;
-				++JoinTransitionGeneration();
-				ServerJoinTransitionState() = false;
+				isManagedReconnectInFlight = false;
+				++joinTransitionGeneration;
+				isServerJoinTransition = false;
 				Command::Execute("closemenu popup_reconnectingtoparty", false);
 				SetState("ERROR", "ZWNET_RELAY_TIMEOUT");
 				return;
 			}
+
 			Network::SendCommand(target, "zwnetRelayHello", hello);
 			std::ranges::fill(hello, '\0');
 		}, Scheduler::Pipeline::MAIN, 1s);
-		Command::Add("zwnet_login", [] { Login(); });
-		Command::Add("zwnet_register", [] { EnqueueAsync([] { Register(); }); });
+
+		Command::Add("zwnet_login", []
+		{
+			Login();
+		});
+
+		Command::Add("zwnet_register", []
+		{
+			EnqueueAsync([]
+			{
+				Register();
+			});
+		});
+
 		Command::Add("zwnet_quickplay", []
 		{
 			CapturePartyPrivacy();
+
 			Scheduler::Once([]
 			{
-				if (ActiveState() && !SearchingState() && !InGameState())
+				if (isActive && !isSearching && !isInGame)
+				{
 					Command::Execute("openmenu popup_zwnet_playlists", false);
+				}
 			}, Scheduler::Pipeline::MAIN);
 		});
+
 		Command::Add("zwnet_manual_join", [](const Command::Params* params)
 		{
-			if (params->size() != 2 || !IsOpaqueMatchId(params->get(1)))
+			if (params->Size() != 2 || !IsOpaqueMatchId(params->Get(1)))
 			{
 				Logger::Print("Usage: zwnet_manual_join <manual match ID>\n");
 				return;
 			}
-			const std::string matchId = params->get(1);
+
+			const std::string matchId = params->Get(1);
+
 			EnqueueAsync([matchId]
 			{
-				const auto admitted = Request("POST", "/zwnet/manual/join", {{"match_id", matchId}});
+				const auto admitted = Request("POST", "/zwnet/manual/join", { { "match_id", matchId } });
+
 				if (!admitted || admitted->contains("error") || JsonString(*admitted, "match_id") != matchId)
 				{
 					SetState("ERROR", "ZWNET_MANUAL_JOIN_DENIED");
 					return;
 				}
+
 				{
-					std::lock_guard lock(StateMutex());
-					CurrentMatchIdState() = matchId;
+					std::lock_guard _(stateMutex);
+					currentMatchId = matchId;
 				}
-				ConnectMatch(matchId, false);
+
+				ConnectMatch(matchId, false, false);
 			});
 		});
-		Command::Add("zwnet_cancel", [] { EnqueueAsync([] { CancelSearch(); }); });
+
+		Command::Add("zwnet_cancel", []
+		{
+			EnqueueAsync([]
+			{
+				CancelSearch();
+			});
+		});
+
 		Command::Add("zwnet_terminal_disconnect", []
 		{
-			TerminalDisconnectRequested() = true;
-			Scheduler::Once([] { TerminalDisconnectRequested() = false; },
-				Scheduler::Pipeline::MAIN, 5s);
+			isTerminalDisconnectRequested = true;
+
+			Scheduler::Once([]
+			{
+				isTerminalDisconnectRequested = false;
+			}, Scheduler::Pipeline::MAIN, 5s);
 		});
+
 		Command::Add("zwnet_logout", []
 		{
 			EnqueueAsync([]
 			{
 				CloseOnlineSession(false, true);
 				Request("POST", "/social/client/logout");
-				if (!ActiveState()) return;
+
+				if (!isActive)
+				{
+					return;
+				}
+
 				ClearSession();
 				SetState("OFFLINE");
 			});
 		});
-		UIScript::Add("ZWNetQuickPlay", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { Command::Execute("zwnet_quickplay", false); });
-		UIScript::Add("ZWNET_BeginPlaylistSelection", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*)
+
+		UIScript::Add("ZWNetQuickPlay", [](const UIScript::Token&)
+		{
+			Command::Execute("zwnet_quickplay", false);
+		});
+
+		UIScript::Add("ZWNET_BeginPlaylistSelection", [](const UIScript::Token&)
 		{
 			BeginPlaylistSelection();
 		});
-		UIScript::Add("ZWNET_CancelPlaylistSelection", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*)
+
+		UIScript::Add("ZWNET_CancelPlaylistSelection", [](const UIScript::Token&)
 		{
 			CancelPlaylistSelection();
 		});
-		UIScript::Add("ZWNET_RefreshPlaylists", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*)
+
+		UIScript::Add("ZWNET_RefreshPlaylists", [](const UIScript::Token&)
 		{
-			EnqueueAsync([] { RefreshPlaylistCatalog(true); });
+			EnqueueAsync([]
+			{
+				RefreshPlaylistCatalog(true);
+			});
 		});
-		UIScript::Add("ZWNET_AcknowledgePlaylists", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*)
+
+		UIScript::Add("ZWNET_AcknowledgePlaylists", [](const UIScript::Token&)
 		{
 			AcknowledgePlaylistNotice();
 		});
-		UIScript::Add("ZWNET_HighlightPlaylist", [](const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s*)
+
+		UIScript::Add("ZWNET_HighlightPlaylist", [](const UIScript::Token& token)
 		{
-			HighlightPlaylistSlot(token.get<int>());
+			HighlightPlaylistSlot(token.Get<int>());
 		});
-		UIScript::Add("ZWNET_ActivatePlaylist", [](const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s*)
+
+		UIScript::Add("ZWNET_ActivatePlaylist", [](const UIScript::Token& token)
 		{
-			ActivatePlaylistSlot(token.get<int>());
+			ActivatePlaylistSlot(token.Get<int>());
 		});
-		UIScript::Add("ZWNET_PlaylistPage", [](const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s*)
+
+		UIScript::Add("ZWNET_PlaylistPage", [](const UIScript::Token& token)
 		{
-			ChangePlaylistPage(token.get<int>());
+			ChangePlaylistPage(token.Get<int>());
 		});
-		UIScript::Add("ZWNetCancel", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { Command::Execute("zwnet_cancel", false); });
-		UIScript::Add("ZWNET_CancelMatchmaking", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { EnqueueAsync([] { CancelMatchmaking(); }); });
-		UIScript::Add("ZWNET_SetMatchmakingMenuActive", [](const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s*)
+
+		UIScript::Add("ZWNetCancel", [](const UIScript::Token&)
 		{
-			const auto enabled = token.get<int>() != 0;
-			NetworkMetricsEnabled() = enabled;
-			if (enabled) EnqueueAsync([] { RefreshNetworkMetrics(); });
+			Command::Execute("zwnet_cancel", false);
 		});
-		UIScript::Add("ZWNET_QuitToMatchmaking", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*)
+
+		UIScript::Add("ZWNET_CancelMatchmaking", [](const UIScript::Token&)
 		{
-			TerminalDisconnectRequested() = true;
+			EnqueueAsync([]
+			{
+				CancelMatchmaking();
+			});
+		});
+
+		UIScript::Add("ZWNET_SetMatchmakingMenuActive", [](const UIScript::Token& token)
+		{
+			const bool isEnabled = token.Get<int>() != 0;
+			isNetworkMetricsEnabled = isEnabled;
+
+			if (isEnabled)
+			{
+				EnqueueAsync([]
+				{
+					RefreshNetworkMetrics();
+				});
+			}
+		});
+
+		UIScript::Add("ZWNET_QuitToMatchmaking", [](const UIScript::Token&)
+		{
+			isTerminalDisconnectRequested = true;
 			Command::Execute("disconnect", false);
 		});
-		UIScript::Add("ZWNET_CloseOnlineSession", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*)
+
+		UIScript::Add("ZWNET_CloseOnlineSession", [](const UIScript::Token&)
 		{
 			bool hasMatch = false;
+
 			{
-				std::lock_guard lock(StateMutex());
-				hasMatch = !CurrentMatchIdState().empty();
+				std::lock_guard _(stateMutex);
+				hasMatch = !currentMatchId.empty();
 			}
-			const bool wasMatch = Dvar::Var("zwnet_managed_session").get<bool>() || InGameState() || hasMatch;
-			EnqueueAsync([] { CloseOnlineSession(false, true); });
-			if (wasMatch && Game::CL_IsCgameInitialized()) ScheduleReturnToIdleMatchmakingMenu();
+
+			const bool wasMatch = Dvar::Var("zwnet_managed_session").Get<bool>() || isInGame || hasMatch;
+
+			EnqueueAsync([]
+			{
+				CloseOnlineSession(false, true);
+			});
+
+			if (wasMatch && Game::CL_IsCgameInitialized(0))
+			{
+				ScheduleReturnToIdleMenu();
+			}
 		});
-		UIScript::Add("ZWNetLogin", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { Command::Execute("zwnet_login", false); });
-		UIScript::Add("ZWNET_ConnectOnline", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { BeginOnlineEntry(); });
-		UIScript::Add("ZWNET_CancelOnlineEntry", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { OnlineEntryPendingState() = false; });
-		UIScript::Add("ZWNET_AbandonOnlineSession", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { AbandonOnlineSession(); });
-		UIScript::Add("ZWNetRegister", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { Command::Execute("zwnet_register", false); });
-		UIScript::Add("ZWNetCopyGuid", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*)
+
+		UIScript::Add("ZWNetLogin", [](const UIScript::Token&)
 		{
-			if (!CopyPublicGuidToClipboard()) SetState("ERROR", "ZWNET_GUID_COPY_FAILED");
+			Command::Execute("zwnet_login", false);
 		});
-		UIScript::Add("ZWNET_EnterPrivateLobby", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*)
+
+		UIScript::Add("ZWNET_ConnectOnline", [](const UIScript::Token&)
+		{
+			BeginOnlineEntry();
+		});
+
+		UIScript::Add("ZWNET_CancelOnlineEntry", [](const UIScript::Token&)
+		{
+			isOnlineEntryPending = false;
+		});
+
+		UIScript::Add("ZWNET_AbandonOnlineSession", [](const UIScript::Token&)
+		{
+			AbandonOnlineSession();
+		});
+
+		UIScript::Add("ZWNetRegister", [](const UIScript::Token&)
+		{
+			Command::Execute("zwnet_register", false);
+		});
+
+		UIScript::Add("ZWNetCopyGuid", [](const UIScript::Token&)
+		{
+			if (!TryCopyPublicGuidToClipboard())
+			{
+				SetState("ERROR", "ZWNET_GUID_COPY_FAILED");
+			}
+		});
+
+		UIScript::Add("ZWNET_EnterPrivateLobby", [](const UIScript::Token&)
 		{
 			CapturePartyPrivacy();
-			const auto map = Dvar::Var("ui_mapname").get<std::string>();
-			EnqueueAsync([map] { EnterLobby(map); });
+
+			const auto map = Dvar::Var("ui_mapname").Get<std::string>();
+
+			EnqueueAsync([map]
+			{
+				EnterLobby(map);
+			});
 		});
-		UIScript::Add("ZWNET_RefreshLobby", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { EnqueueAsync([] { RefreshLobby(); }); });
-		UIScript::Add("ZWNET_LeaveParty", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { EnqueueAsync([] { LeaveParty(); }); });
-		UIScript::Add("ZWNET_ToggleReady", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*)
+
+		UIScript::Add("ZWNET_RefreshLobby", [](const UIScript::Token&)
 		{
-			if (Dvar::Var("zwnet_ready_pending").get<bool>()) return;
-			const auto ready = Dvar::Var("zwnet_lobby_self_ready").get<bool>();
-			Dvar::Var("zwnet_ready_pending").set(true);
-			EnqueueAsync([ready] { ToggleReady(ready); });
+			EnqueueAsync([]
+			{
+				RefreshLobby();
+			});
 		});
-		UIScript::Add("ZWNET_SelectLobbyPlayer", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s*)
+
+		UIScript::Add("ZWNET_LeaveParty", [](const UIScript::Token&)
 		{
-			const auto index = token.get<int>();
-			if (index < 0 || index >= 4) return;
+			EnqueueAsync([]
+			{
+				LeaveParty();
+			});
+		});
+
+		UIScript::Add("ZWNET_ToggleReady", [](const UIScript::Token&)
+		{
+			if (Dvar::Var("zwnet_ready_pending").Get<bool>())
+			{
+				return;
+			}
+
+			const auto isReady = Dvar::Var("zwnet_lobby_self_ready").Get<bool>();
+			Dvar::Var("zwnet_ready_pending").Set(true);
+
+			EnqueueAsync([isReady]
+			{
+				ToggleReady(isReady);
+			});
+		});
+
+		UIScript::Add("ZWNET_SelectLobbyPlayer", [](const UIScript::Token& token)
+		{
+			const auto index = token.Get<int>();
+
+			if (index < 0 || index >= 4)
+			{
+				return;
+			}
+
 			const auto prefix = std::format("zwnet_lobby_member_{}", index);
-			auto guid = Dvar::Var(prefix + "_guid").get<std::string>();
-			const auto name = Dvar::Var(prefix + "_name").get<std::string>();
-			if (guid.empty() || name.empty()) return;
+			auto guid = Dvar::Var(prefix + "_guid").Get<std::string>();
+			const auto name = Dvar::Var(prefix + "_name").Get<std::string>();
+
+			if (guid.empty() || name.empty())
+			{
+				return;
+			}
+
 			std::ranges::transform(guid, guid.begin(), [](const unsigned char character)
 			{
 				return static_cast<char>(std::tolower(character));
 			});
-			Dvar::Var("zwnet_selected_player_guid").set(guid);
-			Dvar::Var("zwnet_selected_player_name").set(name);
-			Dvar::Var("zwnet_selected_player_role").set(Dvar::Var(prefix + "_role").get<std::string>());
-			Dvar::Var("zwnet_selected_player_rank").set(Dvar::Var(prefix + "_shared_rank_level").get<int>());
-			Dvar::Var("zwnet_selected_player_prestige").set(Dvar::Var(prefix + "_shared_rank_prestige").get<int>());
-			Dvar::Var("zwnet_selected_player_rank_icon").set(Dvar::Var(prefix + "_rank_icon").get<std::string>());
-			Dvar::Var("zwnet_selected_player_self").set(Dvar::Var(prefix + "_self").get<bool>());
-			Dvar::Var("zwnet_selected_player_relationship").set(Friends::GetLobbyPlayerRelationship(guid));
+
+			Dvar::Var("zwnet_selected_player_guid").Set(guid);
+			Dvar::Var("zwnet_selected_player_name").Set(name);
+			Dvar::Var("zwnet_selected_player_role").Set(Dvar::Var(prefix + "_role").Get<std::string>());
+			Dvar::Var("zwnet_selected_player_rank").Set(Dvar::Var(prefix + "_shared_rank_level").Get<int>());
+			Dvar::Var("zwnet_selected_player_prestige").Set(Dvar::Var(prefix + "_shared_rank_prestige").Get<int>());
+			Dvar::Var("zwnet_selected_player_rank_icon").Set(Dvar::Var(prefix + "_rank_icon").Get<std::string>());
+			Dvar::Var("zwnet_selected_player_self").Set(Dvar::Var(prefix + "_self").Get<bool>());
+			Dvar::Var("zwnet_selected_player_relationship").Set(Friends::GetLobbyPlayerRelationship(guid));
 		});
-		UIScript::Add("ZWNET_RefreshBarracksProfile", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*)
+
+		UIScript::Add("ZWNET_RefreshBarracksProfile", [](const UIScript::Token&)
 		{
 			RefreshBarracksProfile();
 		});
-		UIScript::Add("ZWNET_RefreshChallengeCategory", [](const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s*)
+
+		UIScript::Add("ZWNET_RefreshChallengeCategory", [](const UIScript::Token& token)
 		{
-			RefreshChallengeCategory(token.get<int>());
+			RefreshChallengeCategory(token.Get<int>());
 		});
-		UIScript::Add("ZWNET_StartPrivateMatch", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*)
+
+		UIScript::Add("ZWNET_StartPrivateMatch", [](const UIScript::Token&)
 		{
-			const auto map = Dvar::Var("ui_mapname").get<std::string>();
-			EnqueueAsync([map] { StartPrivateMatch(map); });
+			const auto map = Dvar::Var("ui_mapname").Get<std::string>();
+
+			EnqueueAsync([map]
+			{
+				StartPrivateMatch(map);
+			});
 		});
-		UIScript::Add("ZWNET_VoteMapA", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { EnqueueAsync([] { VoteMap("A"); }); });
-		UIScript::Add("ZWNET_VoteMapB", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { EnqueueAsync([] { VoteMap("B"); }); });
-		UIScript::Add("ZWNET_VoteRandom", []([[maybe_unused]] const UIScript::Token&, [[maybe_unused]] const Game::uiInfo_s*) { EnqueueAsync([] { VoteMap("RANDOM"); }); });
+
+		UIScript::Add("ZWNET_VoteMapA", [](const UIScript::Token&)
+		{
+			EnqueueAsync([]
+			{
+				VoteMap("A");
+			});
+		});
+
+		UIScript::Add("ZWNET_VoteMapB", [](const UIScript::Token&)
+		{
+			EnqueueAsync([]
+			{
+				VoteMap("B");
+			});
+		});
+
+		UIScript::Add("ZWNET_VoteRandom", [](const UIScript::Token&)
+		{
+			EnqueueAsync([]
+			{
+				VoteMap("RANDOM");
+			});
+		});
+
 		Events::OnCLDisconnected([](const bool wasConnected)
 		{
-			InGameState() = false;
-			Dvar::Var("zwnet_match_return").set(false);
-			// CL_ConnectFromParty performs an internal CL_Disconnect while moving
-			// from the ZWNET lobby into the assigned dedicated server. That planned
-			// transition must not revoke the match and reset the server underneath
-			// the in-flight connection.
-			if (ServerJoinTransitionState().exchange(false))
+			isInGame = false;
+			Dvar::Var("zwnet_match_return").Set(false);
+
+			if (isServerJoinTransition.exchange(false))
 			{
 				Logger::Print("ZWNET server join transition: preserving online session\n");
 				return;
 			}
-			JoinInProgressConnectionSoundPending() = false;
+
+			isJoinInProgressSoundPending = false;
+
 			bool hasMatch = false;
+
 			{
-				std::lock_guard lock(StateMutex());
-				hasMatch = !CurrentMatchIdState().empty();
+				std::lock_guard _(stateMutex);
+				hasMatch = !currentMatchId.empty();
 			}
-			const auto isManaged = Dvar::Var("zwnet_managed_session").get<bool>();
-			const auto wasMatchmaking = hasMatch || isManaged;
-			const auto isPrivateMatchClient = wasConnected && !wasMatchmaking &&
-				!Dvar::Var("party_host").get<bool>() && Dvar::Var("xblive_privatematch").get<bool>();
-			const auto terminal = TerminalDisconnectRequested().exchange(false);
+
+			const bool isManaged = Dvar::Var("zwnet_managed_session").Get<bool>();
+			const bool wasMatchmaking = hasMatch || isManaged;
+			const bool isPrivateMatchClient = wasConnected && !wasMatchmaking && Party::IsPrivateMatchClient();
+			const bool isTerminal = isTerminalDisconnectRequested.exchange(false);
+
 			if (wasMatchmaking)
 			{
-				EnqueueAsync([terminal, wasMatchmaking] { HandleServerDisconnect(terminal, wasMatchmaking); });
+				EnqueueAsync([isTerminal, wasMatchmaking]
+				{
+					HandleServerDisconnect(isTerminal, wasMatchmaking);
+				});
 			}
 			else if (isPrivateMatchClient)
 			{
@@ -4712,98 +6773,172 @@ namespace Components
 				}, Scheduler::Pipeline::MAIN, 250ms);
 			}
 		});
+
 		Events::OnCGameInit([]
 		{
 			CancelRelayHandshake();
 			MarkManagedRouteConnected();
 			Auth::ClearManagedConnectTicket();
-			EndpointJoinInFlight() = false;
-			ServerJoinTransitionState() = false;
+			isEndpointJoinInFlight = false;
+			isServerJoinTransition = false;
+
 			bool hasMatch = false;
+
 			{
-				std::lock_guard lock(StateMutex());
-				hasMatch = !CurrentMatchIdState().empty();
+				std::lock_guard _(stateMutex);
+				hasMatch = !currentMatchId.empty();
 			}
-			InGameState() = hasMatch;
-			if (hasMatch)
+
+			isInGame = hasMatch;
+
+			if (!hasMatch)
 			{
-				// `mouse_click` is a verified shipped UI alias. Delaying it until
-				// CGame initialization prevents failed or cancelled joins from
-				// producing a false successful-connection cue.
-				if (JoinInProgressConnectionSoundPending().exchange(false))
-					Command::Execute("snd_playLocal mouse_click", false);
-				Dvar::Var("zwnet_managed_session").set(true);
-				Dvar::Var("zwnet_server_hostname").set(Party::GetHostName());
-				SetState("IN_MATCH");
-				EnqueueAsync([] { UpdatePresence(); });
+				return;
 			}
+
+			if (isJoinInProgressSoundPending.exchange(false))
+			{
+				Game::SND_PlayLocalSoundAliasByName(0, "mouse_click", 0);
+			}
+
+			Dvar::Var("zwnet_managed_session").Set(true);
+			SetDisplayText("zwnet_server_hostname", Party::GetHostName());
+			SetState("IN_MATCH");
+
+			EnqueueAsync([]
+			{
+				UpdatePresence();
+			});
 		});
+
 		Scheduler::OnGameInitialized([]
 		{
 			Logger::Print("ZWNET initialization: registering dvars\n");
 			InitializeDvars();
 		}, Scheduler::Pipeline::MAIN);
+
 		Scheduler::OnGameInitialized([]
 		{
-			if (!ActiveState()) return;
-			Logger::Print("ZWNET initialization: checking saved session\n");
-			const auto hasSession = LoadSession();
-			Logger::Print("ZWNET initialization: starting {}\n", hasSession ? "refresh" : "login");
-			if (hasSession) EnqueueAsync([] { Refresh(); });
-			else Login();
-		}, Scheduler::Pipeline::MAIN, 2s);
-		Scheduler::Loop(ProcessAsyncTasks, Scheduler::Pipeline::ASYNC, 50ms);
-		// The backend owns all server-start and join deadlines. Poll at the same
-		// one-second resolution displayed by the lobby instead of free-running a
-		// second client countdown that can reach zero before connection begins.
-		Scheduler::Loop(UpdateMatchmaking, Scheduler::Pipeline::ASYNC, 1s);
-		Scheduler::Loop(RefreshActiveParty, Scheduler::Pipeline::ASYNC, 3s);
-		Scheduler::Loop([]
-		{
-			if (!ActiveState() || !Dvar::Var("zwnet_vote_active").get<bool>()) return;
-			const auto seconds = Dvar::Var("zwnet_vote_seconds").get<int>();
-			if (seconds > 0) Dvar::Var("zwnet_vote_seconds").set(seconds - 1);
-		}, Scheduler::Pipeline::MAIN, 1s);
-		Scheduler::Loop([] { RefreshPlaylistCatalog(false); }, Scheduler::Pipeline::ASYNC, 30s);
-		Scheduler::Loop(RefreshNetworkMetrics, Scheduler::Pipeline::ASYNC, 10s);
-		Scheduler::Loop([]
-		{
-			if (!ActiveState() || !InGameState() ||
-				!Dvar::Var("zwnet_match_return").get<bool>()) return;
-			std::string matchId;
+			if (!isActive)
 			{
-				std::lock_guard lock(StateMutex());
-				matchId = CurrentMatchIdState();
+				return;
 			}
-			Dvar::Var("zwnet_match_return").set(false);
-			if (matchId.empty()) return;
+
+			Logger::Print("ZWNET initialization: checking saved session\n");
+
+			if (LoadSession())
+			{
+				Logger::Print("ZWNET initialization: starting refresh\n");
+
+				EnqueueAsync([]
+				{
+					Refresh();
+				});
+			}
+			else
+			{
+				Logger::Print("ZWNET initialization: starting login\n");
+				Login();
+			}
+		}, Scheduler::Pipeline::MAIN, 2s);
+
+		Scheduler::Loop(ProcessAsyncTasks, Scheduler::Pipeline::ASYNC, 50ms);
+
+		Scheduler::Loop([]
+		{
+			RunSafely(UpdateMatchmaking);
+		}, Scheduler::Pipeline::ASYNC, 1s);
+
+		Scheduler::Loop([]
+		{
+			RunSafely(RefreshActiveParty);
+		}, Scheduler::Pipeline::ASYNC, 3s);
+
+		Scheduler::Loop([]
+		{
+			if (!isActive || !Dvar::Var("zwnet_vote_active").Get<bool>())
+			{
+				return;
+			}
+
+			const auto seconds = Dvar::Var("zwnet_vote_seconds").Get<int>();
+
+			if (seconds > 0)
+			{
+				Dvar::Var("zwnet_vote_seconds").Set(seconds - 1);
+			}
+		}, Scheduler::Pipeline::MAIN, 1s);
+
+		Scheduler::Loop([]
+		{
+			RunSafely([]
+			{
+				RefreshPlaylistCatalog(false);
+			});
+		}, Scheduler::Pipeline::ASYNC, 30s);
+
+		Scheduler::Loop([]
+		{
+			RunSafely(RefreshNetworkMetrics);
+		}, Scheduler::Pipeline::ASYNC, 10s);
+
+		Scheduler::Loop([]
+		{
+			if (!isActive || !isInGame || !Dvar::Var("zwnet_match_return").Get<bool>())
+			{
+				return;
+			}
+
+			std::string matchId;
+
+			{
+				std::lock_guard _(stateMutex);
+				matchId = currentMatchId;
+			}
+
+			Dvar::Var("zwnet_match_return").Set(false);
+
+			if (matchId.empty())
+			{
+				return;
+			}
+
 			Logger::Print("ZWNET match complete: leaving finished server before reset\n");
 			Command::Execute("disconnect", false);
 		}, Scheduler::Pipeline::MAIN, 100ms);
-		Scheduler::Loop(UpdatePresence, Scheduler::Pipeline::ASYNC, 30s);
-		Scheduler::Loop(CapturePartyPrivacy, Scheduler::Pipeline::MAIN, 1s);
-	}
 
-	void ZWNet::preDestroy()
-	{
-		NetworkMetricsEnabled() = false;
-		CancelJoinInProgressPreview();
-		if (ActiveState()) CloseOnlineSession(true, true);
-		ManagedReconnectInFlight() = false;
-		CancelRelayHandshake();
-		ClearManagedRouteAttempt();
-		ActiveState() = false;
-		SearchingState() = false;
-		ResetMatchLobbySoundSnapshot();
-		EndpointJoinInFlight() = false;
-		ServerJoinTransitionState() = false;
-		OnlineEntryPendingState() = false;
-		InGameState() = false;
+		Scheduler::Loop([]
 		{
-			std::lock_guard lock(StateMutex());
-			LoginInFlightState() = false;
-		}
-		std::lock_guard lock(AsyncTaskMutex());
-		AsyncTasks().clear();
+			RunSafely(UpdatePresence);
+		}, Scheduler::Pipeline::ASYNC, 30s);
+
+		Scheduler::Loop(CapturePartyPrivacy, Scheduler::Pipeline::MAIN, 1s);
+
+		Scheduler::OnShutdown([]
+		{
+			isNetworkMetricsEnabled = false;
+			CancelJoinInProgressPreview();
+
+			if (isActive)
+			{
+				CloseOnlineSession(true, true);
+			}
+
+			isActive = false;
+			isSearching = false;
+			ResetMatchLobbySoundSnapshot();
+			isEndpointJoinInFlight = false;
+			isServerJoinTransition = false;
+			isOnlineEntryPending = false;
+			isInGame = false;
+
+			{
+				std::lock_guard _(stateMutex);
+				isLoginInFlight = false;
+			}
+
+			std::lock_guard _(asyncTaskMutex);
+			asyncTasks.clear();
+		});
 	}
 }

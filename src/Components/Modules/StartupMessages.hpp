@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Dvar.hpp"
+
 namespace Components
 {
 	class StartupMessages : public Component
@@ -12,11 +14,11 @@ namespace Components
 		static void Show();
 
 	private:
-		static int TotalMessages;
-		static std::list<std::tuple<std::string, std::string>> MessageList;
+		static int totalMessages;
+		static std::list<std::tuple<std::string, std::string>> messageList;
 
-		static Dvar::Var UIStartupMessage;
-		static Dvar::Var UIStartupMessageTitle;
-		static Dvar::Var UIStartupNextButtonText;
+		static Dvar::Var ui_startupMessage;
+		static Dvar::Var ui_startupMessageTitle;
+		static Dvar::Var ui_startupNextButtonText;
 	};
 }

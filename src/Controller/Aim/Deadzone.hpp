@@ -1,25 +1,20 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "Types.hpp"
-#include "../Sample/Axis.hpp"
+#include "Controller/Aim/Types.hpp"
+#include "Controller/Sample/Axis.hpp"
 
-namespace Controller
+namespace Controller::Aim
 {
-  namespace aim
-  {
-    struct deadzone_params
-    {
-      magnitude inner {0.0f};
-      magnitude outer {0.0f};
-      magnitude anti {0.0f};
-    };
+	struct DeadzoneParams
+	{
+		Magnitude inner{ 0.0f };
+		Magnitude outer{ 0.0f };
+		Magnitude anti{ 0.0f };
+	};
 
-    bool
-    validate (const deadzone_params&, std::string& why) noexcept;
+	bool IsValid(const DeadzoneParams& params, std::string& why);
 
-    stick_vector
-    apply (const deadzone_params&, stick_vector) noexcept;
-  }
+	StickVector ApplyDeadzone(const DeadzoneParams& params, StickVector stick) noexcept;
 }

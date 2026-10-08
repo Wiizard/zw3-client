@@ -1,0 +1,275 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{36F6A20E-22AE-E45B-8BB5-BDB7778C7F4C}</ProjectGuid>
+    <IgnoreWarnCompileDuplicatedFilename>true</IgnoreWarnCompileDuplicatedFilename>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>libtommath</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <CharacterSet>NotSet</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <CharacterSet>NotSet</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>$(ProjectDir)..\build\bin\x64\Debug\</OutDir>
+    <IntDir>$(ProjectDir)..\build\obj\libtommath\x64\Debug\</IntDir>
+    <TargetName>libtommath</TargetName>
+    <TargetExt>.lib</TargetExt>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>$(ProjectDir)..\build\bin\x64\Release\</OutDir>
+    <IntDir>$(ProjectDir)..\build\obj\libtommath\x64\Release\</IntDir>
+    <TargetName>libtommath</TargetName>
+    <TargetExt>.lib</TargetExt>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <PreprocessorDefinitions>_WINDOWS;WIN32;_WIN64;DEBUG;_DEBUG;LTM_DESC;__STDC_IEC_559__;MP_NO_DEV_URANDOM;_LIB;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\deps\x64\libtommath;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <Optimization>Disabled</Optimization>
+      <MinimalRebuild>false</MinimalRebuild>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <ExternalWarningLevel>Level3</ExternalWarningLevel>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+    <Lib>
+      <AdditionalOptions>-IGNORE:4221 %(AdditionalOptions)</AdditionalOptions>
+    </Lib>
+    <ProjectReference>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <PreprocessorDefinitions>_WINDOWS;WIN32;_WIN64;NDEBUG;LTM_DESC;__STDC_IEC_559__;MP_NO_DEV_URANDOM;_LIB;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\deps\x64\libtommath;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <Optimization>MinSpace</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <MinimalRebuild>false</MinimalRebuild>
+      <StringPooling>true</StringPooling>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <RuntimeTypeInfo>false</RuntimeTypeInfo>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <ExternalWarningLevel>Level3</ExternalWarningLevel>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+    <Lib>
+      <AdditionalOptions>/IGNORE:4702 /LTCG -IGNORE:4221 %(AdditionalOptions)</AdditionalOptions>
+    </Lib>
+    <ProjectReference>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\deps\x64\libtommath\mp_2expt.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_abs.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_add.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_add_d.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_addmod.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_and.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_clamp.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_clear.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_clear_multi.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_cmp.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_cmp_d.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_cmp_mag.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_cnt_lsb.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_complement.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_copy.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_count_bits.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_cutoffs.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_div.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_div_2.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_div_2d.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_div_d.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_dr_is_modulus.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_dr_reduce.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_dr_setup.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_error_to_string.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_exch.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_expt_n.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_exptmod.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_exteuclid.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_fread.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_from_sbin.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_from_ubin.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_fwrite.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_gcd.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_get_double.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_get_i32.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_get_i64.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_get_l.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_get_mag_u32.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_get_mag_u64.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_get_mag_ul.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_grow.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_hash.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_init.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_init_copy.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_init_i32.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_init_i64.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_init_l.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_init_multi.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_init_set.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_init_size.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_init_u32.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_init_u64.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_init_ul.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_invmod.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_is_square.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_kronecker.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_lcm.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_log.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_log_n.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_lshd.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_mod.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_mod_2d.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_montgomery_calc_normalization.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_montgomery_reduce.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_montgomery_setup.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_mul.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_mul_2.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_mul_2d.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_mul_d.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_mulmod.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_neg.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_or.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_pack.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_pack_count.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_prime_fermat.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_prime_frobenius_underwood.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_prime_is_prime.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_prime_miller_rabin.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_prime_next_prime.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_prime_rabin_miller_trials.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_prime_rand.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_prime_strong_lucas_selfridge.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_radix_size.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_radix_size_overestimate.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_rand.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_rand_source.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_read_radix.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_reduce.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_reduce_2k.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_reduce_2k_l.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_reduce_2k_setup.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_reduce_2k_setup_l.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_reduce_is_2k.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_reduce_is_2k_l.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_reduce_setup.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_root_n.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_rshd.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_sbin_size.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_set.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_set_double.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_set_i32.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_set_i64.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_set_l.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_set_u32.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_set_u64.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_set_ul.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_shrink.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_signed_rsh.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_sqrmod.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_sqrt.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_sqrtmod_prime.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_sub.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_sub_d.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_submod.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_to_radix.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_to_sbin.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_to_ubin.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_ubin_size.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_unpack.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_warray_free.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_xor.c" />
+    <ClCompile Include="..\deps\x64\libtommath\mp_zero.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_add.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_copy_digs.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_div_3.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_div_recursive.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_div_school.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_div_small.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_exptmod.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_exptmod_fast.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_fp_log.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_fp_log_d.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_get_bit.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_invmod.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_invmod_odd.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_log_2expt.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_montgomery_reduce_comba.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_mul.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_mul_balance.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_mul_comba.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_mul_high.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_mul_high_comba.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_mul_karatsuba.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_mul_toom.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_prime_is_divisible.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_prime_tab.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_radix_map.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_radix_size_overestimate.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_rand_platform.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_rand_source.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_sqr.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_sqr_comba.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_sqr_karatsuba.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_sqr_toom.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_sub.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_warray.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_warray_get.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_warray_put.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_zero_buf.c" />
+    <ClCompile Include="..\deps\x64\libtommath\s_mp_zero_digs.c" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

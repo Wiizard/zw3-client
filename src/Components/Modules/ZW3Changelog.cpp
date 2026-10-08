@@ -1,15 +1,24 @@
 #include "STDInclude.hpp"
+
 #include "ZW3Changelog.hpp"
 #include "Changelog.hpp"
-#include "UIFeeder.hpp"
-#include <Utils/WebIO.hpp>
+#include "Dedicated.hpp"
 #include "Events.hpp"
+#include "UIFeeder.hpp"
 
-namespace
+namespace Components
 {
-	constexpr std::size_t MaxDetailLineChars = 100;
+	std::vector<ZW3Changelog::Entry> ZW3Changelog::entries;
+	std::size_t ZW3Changelog::selectedIndex = 0;
+	Dvar::Var ZW3Changelog::zw3_changelog_patch_title;
+	Dvar::Var ZW3Changelog::zw3_changelog_patch_date;
 
-	std::string ParseYamlValue(const std::string& line, const std::size_t prefixLength)
+	constexpr auto changelogUrl = "https://stats.zw3.eu/client/changelog.yaml";
+	constexpr float versionFeeder = 63.0f;
+	constexpr float detailFeeder = 64.0f;
+	constexpr std::size_t maxDetailLineChars = 100;
+
+	static std::string ParseYamlValue(const std::string& line, const std::size_t prefixLength)
 	{
 		auto value = line.substr(prefixLength);
 		Utils::String::Trim(value);
@@ -31,56 +40,34 @@ namespace
 		return value;
 	}
 
-	bool StartsWith(const std::string& value, const std::string& prefix)
-	{
-		return value.rfind(prefix, 0) == 0;
-	}
-
-	std::string StripLeadingBulletPrefixes(std::string text)
+	static std::string StripLeadingBulletPrefixes(std::string text)
 	{
 		Utils::String::Trim(text);
 
-		bool changed = true;
-		while (changed)
-		{
-			changed = false;
+		bool didStrip = true;
 
-			if (StartsWith(text, "- "))
+		while (didStrip)
+		{
+			didStrip = false;
+
+			for (const auto* prefix : { "- ", "* ", "-- " })
 			{
-				text = text.substr(2);
-				Utils::String::Trim(text);
-				changed = true;
-			}
-			else if (StartsWith(text, "* "))
-			{
-				text = text.substr(2);
-				Utils::String::Trim(text);
-				changed = true;
-			}
-			else if (StartsWith(text, "-- "))
-			{
-				text = text.substr(3);
-				Utils::String::Trim(text);
-				changed = true;
+				if (Utils::String::StartsWith(text, prefix))
+				{
+					text = text.substr(std::strlen(prefix));
+					Utils::String::Trim(text);
+					didStrip = true;
+					break;
+				}
 			}
 		}
 
 		return text;
 	}
 
-	std::string ToLower(std::string value)
+	static bool IsCategoryLine(const std::string& text)
 	{
-		std::transform(value.begin(), value.end(), value.begin(), [](const unsigned char c)
-			{
-				return static_cast<char>(std::tolower(c));
-			});
-
-		return value;
-	}
-
-	bool IsCategoryLine(const std::string& text)
-	{
-		const auto lower = ToLower(text);
+		const auto lower = Utils::String::ToLower(text);
 
 		return lower == "system"
 			|| lower == "new"
@@ -94,23 +81,11 @@ namespace
 			|| lower == "other";
 	}
 
-	std::string FormatNoteLine(std::string rawText)
+	static std::string FormatNoteLine(std::string rawText)
 	{
-		Utils::String::Trim(rawText);
-
-		if (rawText.empty())
-		{
-			return "";
-		}
-
 		rawText = StripLeadingBulletPrefixes(rawText);
 
-		if (rawText.empty())
-		{
-			return "";
-		}
-
-		if (IsCategoryLine(rawText))
+		if (rawText.empty() || IsCategoryLine(rawText))
 		{
 			return rawText;
 		}
@@ -118,32 +93,29 @@ namespace
 		return "  - " + rawText;
 	}
 
-	void AddWrappedLine(std::vector<std::string>& out, std::string line)
+	static void AddWrappedLine(std::vector<std::string>& lines, std::string line)
 	{
 		Utils::String::Trim(line);
 
-		if (line.empty())
+		if (line.size() <= maxDetailLineChars)
 		{
-			out.emplace_back("");
-			return;
-		}
-
-		if (line.size() <= MaxDetailLineChars)
-		{
-			out.emplace_back(line);
+			lines.emplace_back(line);
 			return;
 		}
 
 		const std::string continuationPrefix = "  ";
 
 		auto remaining = line;
-		bool firstLine = true;
+		bool isFirstLine = true;
 
-		while (remaining.size() > MaxDetailLineChars)
+		while (remaining.size() > maxDetailLineChars)
 		{
-			const auto limit = firstLine
-				? MaxDetailLineChars
-				: MaxDetailLineChars - continuationPrefix.size();
+			auto limit = maxDetailLineChars;
+
+			if (!isFirstLine)
+			{
+				limit -= continuationPrefix.size();
+			}
 
 			auto splitAt = remaining.rfind(' ', limit);
 
@@ -157,124 +129,134 @@ namespace
 
 			if (!part.empty())
 			{
-				if (firstLine)
+				if (isFirstLine)
 				{
-					out.emplace_back(part);
+					lines.emplace_back(part);
 				}
 				else
 				{
-					out.emplace_back(continuationPrefix + part);
+					lines.emplace_back(continuationPrefix + part);
 				}
 			}
 
 			remaining = remaining.substr(splitAt);
 			Utils::String::Trim(remaining);
-			firstLine = false;
+			isFirstLine = false;
 		}
 
-		if (!remaining.empty())
+		if (remaining.empty())
 		{
-			if (firstLine)
-			{
-				out.emplace_back(remaining);
-			}
-			else
-			{
-				out.emplace_back(continuationPrefix + remaining);
-			}
+			return;
+		}
+
+		if (isFirstLine)
+		{
+			lines.emplace_back(remaining);
+		}
+		else
+		{
+			lines.emplace_back(continuationPrefix + remaining);
 		}
 	}
-}
 
-namespace Components
-{
-	std::mutex ZW3Changelog::Mutex;
-	std::vector<ZW3Changelog::Entry> ZW3Changelog::Entries;
-	std::size_t ZW3Changelog::SelectedIndex = 0;
-	Dvar::Var ZW3Changelog::UIPatchTitle;
-	Dvar::Var ZW3Changelog::UIPatchDate;
+	static void AddNoteLine(std::vector<std::string>& lines, const std::string& rawText)
+	{
+		const auto text = FormatNoteLine(rawText);
+
+		if (text.empty())
+		{
+			lines.emplace_back("");
+			return;
+		}
+
+		if (IsCategoryLine(StripLeadingBulletPrefixes(text)) && !lines.empty())
+		{
+			lines.emplace_back("");
+		}
+
+		AddWrappedLine(lines, text);
+	}
 
 	std::vector<ZW3Changelog::Entry> ZW3Changelog::ParseYamlEntries(const std::string& yaml)
 	{
-		std::vector<Entry> entries;
+		std::vector<Entry> parsed;
 
 		if (yaml.empty())
 		{
-			return entries;
+			return parsed;
 		}
 
-		auto lines = Utils::String::Split(yaml, '\n');
+		auto yamlLines = Utils::String::Split(yaml, '\n');
 
-		for (auto& line : lines)
+		for (auto& line : yamlLines)
 		{
 			Utils::String::Replace(line, "\r", "");
 		}
 
 		Entry current{};
-		bool inNotes = false;
+		bool isInNotes = false;
 
-		auto flushEntry = [&]()
+		const auto flushEntry = [&]
+		{
+			if (!current.version.empty() || !current.title.empty() || !current.date.empty() || !current.lines.empty())
 			{
-				if (!current.Version.empty() || !current.Title.empty() || !current.Date.empty() || !current.Lines.empty())
+				while (!current.lines.empty() && current.lines.front().empty())
 				{
-					while (!current.Lines.empty() && current.Lines.front().empty())
-					{
-						current.Lines.erase(current.Lines.begin());
-					}
-
-					while (!current.Lines.empty() && current.Lines.back().empty())
-					{
-						current.Lines.pop_back();
-					}
-
-					if (current.Version.empty())
-					{
-						current.Version = "Unknown";
-					}
-
-					entries.emplace_back(current);
+					current.lines.erase(current.lines.begin());
 				}
 
-				current = {};
-				inNotes = false;
-			};
+				while (!current.lines.empty() && current.lines.back().empty())
+				{
+					current.lines.pop_back();
+				}
 
-		for (const auto& line : lines)
+				if (current.version.empty())
+				{
+					current.version = "Unknown";
+				}
+
+				parsed.emplace_back(current);
+			}
+
+			current = {};
+			isInNotes = false;
+		};
+
+		for (const auto& line : yamlLines)
 		{
-			if (line.rfind("version:", 0) == 0)
+			if (line.starts_with("version:"))
 			{
 				flushEntry();
-
-				current.Version = ParseYamlValue(line, 8);
+				current.version = ParseYamlValue(line, 8);
 				continue;
 			}
 
-			if (line.rfind("title:", 0) == 0)
+			if (line.starts_with("title:"))
 			{
-				current.Title = ParseYamlValue(line, 6);
+				current.title = ParseYamlValue(line, 6);
 				continue;
 			}
 
-			if (line.rfind("date:", 0) == 0)
+			if (line.starts_with("date:"))
 			{
-				current.Date = FormatDate(ParseYamlValue(line, 5));
+				current.date = FormatDate(ParseYamlValue(line, 5));
 				continue;
 			}
 
-			if (line.rfind("notes:", 0) == 0)
+			if (line.starts_with("notes:"))
 			{
-				inNotes = true;
+				isInNotes = true;
 				continue;
 			}
 
-			if (!inNotes)
+			if (!isInNotes)
 			{
 				continue;
 			}
 
 			if (!line.empty() && line[0] != ' ' && line[0] != '\t')
 			{
-				inNotes = false;
+				isInNotes = false;
 				continue;
 			}
 
@@ -282,256 +264,213 @@ namespace Components
 
 			if (start == std::string::npos)
 			{
-				current.Lines.emplace_back("");
+				current.lines.emplace_back("");
 				continue;
 			}
 
 			auto text = line.substr(start);
-
 			Utils::String::Replace(text, "\\n", "\n");
 
-			if (text.find('\n') != std::string::npos)
+			for (const auto& subLine : Utils::String::Split(text, '\n'))
 			{
-				auto subLines = Utils::String::Split(text, '\n');
-				for (auto& subLine : subLines)
-				{
-					subLine = FormatNoteLine(subLine);
-					if (!subLine.empty())
-					{
-						if (IsCategoryLine(StripLeadingBulletPrefixes(subLine)) && !current.Lines.empty())
-						{
-							current.Lines.emplace_back("");
-						}
-						AddWrappedLine(current.Lines, subLine);
-					}
-					else
-					{
-						current.Lines.emplace_back("");
-					}
-				}
-			}
-			else
-			{
-				text = FormatNoteLine(text);
-				if (!text.empty())
-				{
-					if (IsCategoryLine(StripLeadingBulletPrefixes(text)) && !current.Lines.empty())
-					{
-						current.Lines.emplace_back("");
-					}
-					AddWrappedLine(current.Lines, text);
-				}
+				AddNoteLine(current.lines, subLine);
 			}
 		}
 
 		flushEntry();
 
-		return entries;
+		return parsed;
 	}
 
 	std::string ZW3Changelog::FormatDate(const std::string& date)
 	{
-		std::tm tm = {};
+		std::tm time{};
+		std::istringstream stream(date);
+		stream >> std::get_time(&time, "%Y-%m-%d");
 
-		std::istringstream ss(date);
-		ss >> std::get_time(&tm, "%Y-%m-%d");
-
-		if (ss.fail())
+		if (stream.fail())
 		{
 			return date;
 		}
 
-		char buffer[64];
-		std::strftime(buffer, sizeof(buffer), "%d %B %Y", &tm);
+		char buffer[64]{};
+		std::strftime(buffer, sizeof(buffer), "%d %B %Y", &time);
 
 		return buffer;
 	}
 
-	void ZW3Changelog::SetEntries(std::vector<Entry> entries)
+	void ZW3Changelog::ShowSelectedTitle()
 	{
-		std::lock_guard _(Mutex);
-		Entries = std::move(entries);
-		SelectedIndex = 0;
+		zw3_changelog_patch_title.Set(entries[selectedIndex].title);
+		zw3_changelog_patch_date.Set(entries[selectedIndex].date);
+	}
 
-		if (!Entries.empty())
+	void ZW3Changelog::SetEntries(std::vector<Entry> newEntries)
+	{
+		entries = std::move(newEntries);
+		selectedIndex = 0;
+
+		if (entries.empty())
 		{
-			UIPatchTitle.set(Entries[SelectedIndex].Title.c_str());
-			UIPatchDate.set(Entries[SelectedIndex].Date.c_str());
+			zw3_changelog_patch_title.Set("");
+			zw3_changelog_patch_date.Set("");
 		}
 		else
 		{
-			UIPatchTitle.set("");
-			UIPatchDate.set("");
+			ShowSelectedTitle();
 		}
 
-		UIFeeder::Select(63.0f, 0, true);
-		UIFeeder::Select(64.0f, 0, true);
+		UIFeeder::Select(versionFeeder, 0, true);
+		UIFeeder::Select(detailFeeder, 0, true);
 	}
 
 	unsigned int ZW3Changelog::GetVersionCount()
 	{
-		std::lock_guard _(Mutex);
-		if (Entries.empty())
+		if (entries.empty())
 		{
 			return 0;
 		}
 
-		return static_cast<unsigned int>(Entries.size() + 1);
+		return static_cast<unsigned int>(entries.size() + 1);
 	}
 
-	const char* ZW3Changelog::GetVersionText(unsigned int item, [[maybe_unused]] int column)
+	const char* ZW3Changelog::GetVersionText(const unsigned int item, [[maybe_unused]] const int column)
 	{
-		std::lock_guard _(Mutex);
-		if (Entries.empty())
+		if (entries.empty())
 		{
 			return "";
 		}
 
 		if (item == 0)
 		{
-			return Utils::String::Format("{} (Latest)", Entries[0].Version);
+			return Utils::String::Format("{} (Latest)", entries[0].version);
 		}
+
 		if (item == 1)
 		{
 			return "--- Older Patches ---";
 		}
 
-		unsigned int realIndex = item - 1;
-		if (realIndex >= Entries.size())
+		const auto entryIndex = item - 1;
+
+		if (entryIndex >= entries.size())
 		{
 			return "";
 		}
 
-		return Utils::String::Format("{}", Entries[realIndex].Version);
+		return Utils::String::Format("{}", entries[entryIndex].version);
 	}
 
-	void ZW3Changelog::SelectVersion(unsigned int index)
+	void ZW3Changelog::SelectVersion(const unsigned int index)
 	{
-		std::lock_guard _(Mutex);
-		if (Entries.empty())
+		if (entries.empty())
 		{
 			return;
 		}
 
 		if (index == 0)
 		{
-			SelectedIndex = 0;
-			UIFeeder::Select(64.0f, 0, true);
-			UIPatchTitle.set(Entries[SelectedIndex].Title.c_str());
-			UIPatchDate.set(Entries[SelectedIndex].Date.c_str());
+			selectedIndex = 0;
+			UIFeeder::Select(detailFeeder, 0, true);
+			ShowSelectedTitle();
 			return;
 		}
 
 		if (index == 1)
 		{
-			if (SelectedIndex == 0)
+			if (selectedIndex == 0 && entries.size() > 1)
 			{
-				if (Entries.size() > 1)
-				{
-					SelectedIndex = 1;
-					UIFeeder::Select(63.0f, 2, true);
-					UIFeeder::Select(64.0f, 0, true);
-				}
-				else
-				{
-					SelectedIndex = 0;
-					UIFeeder::Select(63.0f, 0, true);
-					UIFeeder::Select(64.0f, 0, true);
-				}
+				selectedIndex = 1;
+				UIFeeder::Select(versionFeeder, 2, true);
 			}
 			else
 			{
-				SelectedIndex = 0;
-				UIFeeder::Select(63.0f, 0, true);
-				UIFeeder::Select(64.0f, 0, true);
+				selectedIndex = 0;
+				UIFeeder::Select(versionFeeder, 0, true);
 			}
 
-			UIPatchTitle.set(Entries[SelectedIndex].Title.c_str());
-			UIPatchDate.set(Entries[SelectedIndex].Date.c_str());
+			UIFeeder::Select(detailFeeder, 0, true);
+			ShowSelectedTitle();
 			return;
 		}
 
-		unsigned int realIndex = index - 1;
-		if (realIndex < Entries.size())
+		const auto entryIndex = index - 1;
+
+		if (entryIndex < entries.size())
 		{
-			SelectedIndex = realIndex;
-			UIFeeder::Select(64.0f, 0, true);
-			UIPatchTitle.set(Entries[SelectedIndex].Title.c_str());
-			UIPatchDate.set(Entries[SelectedIndex].Date.c_str());
+			selectedIndex = entryIndex;
+			UIFeeder::Select(detailFeeder, 0, true);
+			ShowSelectedTitle();
 		}
 	}
 
 	unsigned int ZW3Changelog::GetDetailCount()
 	{
-		std::lock_guard _(Mutex);
-
-		if (Entries.empty() || SelectedIndex >= Entries.size())
+		if (selectedIndex >= entries.size())
 		{
 			return 0;
 		}
 
-		const auto& entry = Entries[SelectedIndex];
+		const auto& entry = entries[selectedIndex];
 
-		if (entry.Lines.empty())
+		if (entry.lines.empty())
 		{
 			return 1;
 		}
 
-		return static_cast<unsigned int>(entry.Lines.size());
+		return static_cast<unsigned int>(entry.lines.size());
 	}
 
-	const char* ZW3Changelog::GetDetailText(unsigned int item, [[maybe_unused]] int column)
+	const char* ZW3Changelog::GetDetailText(const unsigned int item, const int column)
 	{
-		std::lock_guard _(Mutex);
-
-		if (Entries.empty() || SelectedIndex >= Entries.size())
+		if (selectedIndex >= entries.size())
 		{
 			return "";
 		}
 
-		const auto& entry = Entries[SelectedIndex];
+		const auto& entry = entries[selectedIndex];
 
-		if (entry.Lines.empty() && item == 0)
+		if (entry.lines.empty() && item == 0)
 		{
-			if (column != 0) return "";
+			if (column != 0)
+			{
+				return "";
+			}
+
 			return "No notes provided for this version.";
 		}
 
-		if (item < entry.Lines.size())
+		if (item >= entry.lines.size() || entry.lines[item].empty())
 		{
-			const std::string& line = entry.Lines[item];
-			
-			if (line.empty()) return "";
-
-			std::string cleanLine = line;
-			Utils::String::Trim(cleanLine);
-
-			if (IsCategoryLine(StripLeadingBulletPrefixes(cleanLine)))
-			{
-				return Utils::String::Format("^1{}", Utils::String::ToUpper(cleanLine));
-			}
-
-			return Utils::String::Format("             ^7{}", line);
+			return "";
 		}
 
-		return "";
+		const auto& line = entry.lines[item];
+
+		auto cleanLine = line;
+		Utils::String::Trim(cleanLine);
+
+		if (IsCategoryLine(StripLeadingBulletPrefixes(cleanLine)))
+		{
+			return Utils::String::Format("^1{}", Utils::String::ToUpper(cleanLine));
+		}
+
+		return Utils::String::Format("             ^7{}", line);
 	}
 
-	void ZW3Changelog::SelectDetail([[maybe_unused]] unsigned int index)
+	void ZW3Changelog::SelectDetail([[maybe_unused]] const unsigned int index)
 	{
 	}
 
-	void ZW3Changelog::Fetch([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+	void ZW3Changelog::Fetch([[maybe_unused]] const UIScript::Token& token)
 	{
-		const auto yaml = Utils::WebIO("Call of Duty: Zombie Warfare 3")
-			.setTimeout(5000)
-			->get(ChangelogUrl);
+		const auto yaml = Utils::WebIO("Call of Duty: Zombie Warfare 3", changelogUrl).SetTimeout(5000)->Get();
 
 		auto parsed = ParseYamlEntries(yaml);
 
 		if (parsed.empty())
 		{
-			parsed.push_back({ "Unavailable", "", "", {"Changelog not available."} });
+			parsed.push_back({ "Unavailable", "", "", { "Changelog not available." } });
 		}
 
 		SetEntries(std::move(parsed));
@@ -547,13 +486,13 @@ namespace Components
 
 		Events::OnDvarInit([]
 		{
-			UIPatchTitle = Dvar::Register<const char*>("zw3_changelog_patch_title", "", Game::DVAR_INIT, "Title of the selected patch");
-			UIPatchDate = Dvar::Register<const char*>("zw3_changelog_patch_date", "", Game::DVAR_INIT, "Date of the selected patch");
+			zw3_changelog_patch_title = Dvar::Register("zw3_changelog_patch_title", "", Game::DVAR_INIT, "Title of the selected patch");
+			zw3_changelog_patch_date = Dvar::Register("zw3_changelog_patch_date", "", Game::DVAR_INIT, "Date of the selected patch");
 		});
 
 		UIScript::Add("loadZW3Changelog", Fetch);
 
-		UIFeeder::Add(63.0f, GetVersionCount, GetVersionText, SelectVersion);
-		UIFeeder::Add(64.0f, GetDetailCount, GetDetailText, SelectDetail);
+		UIFeeder::Add(versionFeeder, GetVersionCount, GetVersionText, SelectVersion);
+		UIFeeder::Add(detailFeeder, GetDetailCount, GetDetailText, SelectDetail);
 	}
 }

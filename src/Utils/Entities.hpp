@@ -6,14 +6,14 @@ namespace Utils
 	{
 	public:
 		Entities() = default;
-		Entities(const std::string& buffer) : Entities() { this->parse(buffer); }
+		Entities(const std::string& buffer) : Entities() { this->Parse(buffer); }
 		Entities(const char* string, std::size_t lenPlusOne) : Entities(std::string(string, lenPlusOne - 1)) {}
 		Entities(const Entities& obj) = default;
 
-		[[nodiscard]] std::string build() const;
+		[[nodiscard]] std::string Build() const;
 
-		std::vector<std::string> getModels();
-		std::vector<std::string> getWeapons();
+		std::vector<std::string> GetModels();
+		std::vector<std::string> GetWeapons();
 
 	private:
 		enum
@@ -25,6 +25,6 @@ namespace Utils
 		};
 
 		std::vector<std::unordered_map<std::string, std::string>> entities;
-		void parse(const std::string& buffer);
+		void Parse(const std::string& buffer);
 	};
 }

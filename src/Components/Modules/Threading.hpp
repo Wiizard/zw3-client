@@ -6,9 +6,5 @@ namespace Components
 	{
 	public:
 		Threading();
-
-	private:
-		static void FrameEpilogueStub();
-		static void PacketEventStub();
 	};
 }

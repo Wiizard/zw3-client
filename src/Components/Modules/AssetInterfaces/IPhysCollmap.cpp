@@ -1,79 +1,89 @@
+#include "STDInclude.hpp"
+
+#include "Components/Modules/AssetHandler.hpp"
+#include "Components/Modules/Logger.hpp"
+
 #include "IPhysCollmap.hpp"
 
 namespace Assets
 {
-	void IPhysCollmap::saveBrushWrapper(Components::ZoneBuilder::Zone* builder, Game::BrushWrapper* brush)
+	void IPhysCollmap::SaveBrushWrapper(Components::ZoneBuilder::Zone* builder, const Game::BrushWrapper* brush)
 	{
-		AssertSize(Game::BrushWrapper, 68);
+		AssertSize(Game::X86::BrushWrapper, 68);
 
-		Utils::Stream* buffer = builder->getBuffer();
+		auto* const buffer = builder->GetBuffer();
 
-		Game::BrushWrapper* destBrush = buffer->dest<Game::BrushWrapper>();
-		buffer->save(brush);
+		auto* const destBrush = buffer->Dest<Game::X86::BrushWrapper>();
+		const auto brushRecord = Game::X86::Convert(*brush);
+		buffer->Save(&brushRecord);
 
-		// Save_cbrushWrapper_t
+		AssertSize(Game::X86::cbrush_t, 36);
+
+		if (brush->brush.sides)
 		{
-			AssertSize(Game::cbrush_t, 36);
+			AssertSize(Game::X86::cbrushside_t, 8);
 
-			if (brush->brush.sides)
+			buffer->Align(Utils::Stream::ALIGN_4);
+
+			auto* const destSides = buffer->Dest<Game::X86::cbrushside_t>();
+
+			for (unsigned short i = 0; i < brush->brush.numsides; ++i)
 			{
-				AssertSize(Game::cbrushside_t, 8);
+				const auto sideRecord = Game::X86::Convert(brush->brush.sides[i]);
+				buffer->Save(&sideRecord);
+			}
 
-				buffer->align(Utils::Stream::ALIGN_4);
+			for (unsigned short i = 0; i < brush->brush.numsides; ++i)
+			{
+				auto* const destSide = &destSides[i];
+				const auto* const side = &brush->brush.sides[i];
 
-				Game::cbrushside_t* destBrushSide = buffer->dest<Game::cbrushside_t>();
-				buffer->saveArray(brush->brush.sides, brush->brush.numsides);
-
-				// Save_cbrushside_tArray
-				for (unsigned short i = 0; i < brush->brush.numsides; ++i)
+				if (!side->plane)
 				{
-					Game::cbrushside_t* destSide = &destBrushSide[i];
-					Game::cbrushside_t* side = &brush->brush.sides[i];
-
-					if (side->plane)
-					{
-						if (builder->hasPointer(side->plane))
-						{
-							destSide->plane = builder->getPointer(side->plane);
-						}
-						else
-						{
-							buffer->align(Utils::Stream::ALIGN_4);
-							builder->storePointer(side->plane);
-
-							buffer->save(side->plane, sizeof(Game::cplane_s));
-							Utils::Stream::ClearPointer(&destSide->plane);
-						}
-					}
+					continue;
 				}
 
-				Utils::Stream::ClearPointer(&destBrush->brush.sides);
+				if (builder->HasPointer(side->plane))
+				{
+					destSide->plane = builder->GetPointer(side->plane);
+				}
+				else
+				{
+					buffer->Align(Utils::Stream::ALIGN_4);
+					builder->StorePointer(side->plane);
+
+					buffer->Save(side->plane, sizeof(Game::X86::cplane_s));
+					Utils::Stream::ClearPointer(&destSide->plane);
+				}
 			}
 
-			if (brush->brush.baseAdjacentSide)
-			{
-				buffer->save(brush->brush.baseAdjacentSide, brush->totalEdgeCount);
-				Utils::Stream::ClearPointer(&destBrush->brush.baseAdjacentSide);
-			}
+			Utils::Stream::ClearPointer(&destBrush->brush.sides);
+		}
+
+		if (brush->brush.baseAdjacentSide)
+		{
+			buffer->Save(brush->brush.baseAdjacentSide, brush->totalEdgeCount);
+			Utils::Stream::ClearPointer(&destBrush->brush.baseAdjacentSide);
 		}
 
 		if (brush->planes)
 		{
+			AssertSize(Game::X86::cplane_s, 20);
 			AssertSize(Game::cplane_s, 20);
 
-			if (builder->hasPointer(brush->planes))
+			if (builder->HasPointer(brush->planes))
 			{
 				Components::Logger::Print("Loading cplane pointer before the array has been written. Not sure if this is correct!\n");
-				destBrush->planes = builder->getPointer(brush->planes);
+				destBrush->planes = builder->GetPointer(brush->planes);
 			}
 			else
 			{
-				buffer->align(Utils::Stream::ALIGN_4);
+				buffer->Align(Utils::Stream::ALIGN_4);
 
 				for (unsigned short j = 0; j < brush->brush.numsides; ++j)
 				{
-					builder->storePointer(&brush->planes[j]);
-					buffer->save(&brush->planes[j]);
+					builder->StorePointer(&brush->planes[j]);
+					buffer->Save(&brush->planes[j]);
 				}
 
 				Utils::Stream::ClearPointer(&destBrush->planes);
@@ -81,55 +91,61 @@ namespace Assets
 		}
 	}
 
-	void IPhysCollmap::savePhysGeomInfoArray(Components::ZoneBuilder::Zone* builder, Game::PhysGeomInfo* geoms, unsigned int count)
+	void IPhysCollmap::SavePhysGeomInfoArray(Components::ZoneBuilder::Zone* builder, const Game::PhysGeomInfo* geoms, unsigned int count)
 	{
-		AssertSize(Game::PhysGeomInfo, 68);
+		AssertSize(Game::X86::PhysGeomInfo, 68);
 
-		Utils::Stream* buffer = builder->getBuffer();
+		auto* const buffer = builder->GetBuffer();
 
-		Game::PhysGeomInfo* destGeoms = buffer->dest<Game::PhysGeomInfo>();
-		buffer->saveArray(geoms, count);
+		auto* const destGeoms = buffer->Dest<Game::X86::PhysGeomInfo>();
 
 		for (unsigned int i = 0; i < count; ++i)
 		{
-			Game::PhysGeomInfo* destGeom = &destGeoms[i];
-			Game::PhysGeomInfo* geom = &geoms[i];
+			const auto geomRecord = Game::X86::Convert(geoms[i]);
+			buffer->Save(&geomRecord);
+		}
+
+		for (unsigned int i = 0; i < count; ++i)
+		{
+			auto* const destGeom = &destGeoms[i];
+			const auto* const geom = &geoms[i];
 
 			if (geom->brushWrapper)
 			{
-				buffer->align(Utils::Stream::ALIGN_4);
+				buffer->Align(Utils::Stream::ALIGN_4);
 
-				this->saveBrushWrapper(builder, geom->brushWrapper);
+				this->SaveBrushWrapper(builder, geom->brushWrapper);
 				Utils::Stream::ClearPointer(&destGeom->brushWrapper);
 			}
 		}
 	}
 
-	void IPhysCollmap::save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
+	void IPhysCollmap::Save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
 	{
-		AssertSize(Game::XModel, 304);
+		AssertSize(Game::X86::PhysCollmap, 72);
 
-		Utils::Stream* buffer = builder->getBuffer();
-		Game::PhysCollmap* asset = header.physCollmap;
-		Game::PhysCollmap* dest = buffer->dest<Game::PhysCollmap>();
-		buffer->save(asset, sizeof(Game::PhysCollmap));
+		auto* const buffer = builder->GetBuffer();
+		const auto* const asset = header.physCollmap;
+		auto* const dest = buffer->Dest<Game::X86::PhysCollmap>();
+		const auto record = Game::X86::Convert(*asset);
+		buffer->Save(&record);
 
-		buffer->pushBlock(Game::XFILE_BLOCK_VIRTUAL);
+		buffer->PushBlock(Game::XFILE_BLOCK_VIRTUAL);
 
 		if (asset->name)
 		{
-			buffer->saveString(builder->getAssetName(this->getType(), asset->name));
+			buffer->SaveString(builder->GetAssetName(this->GetType(), asset->name));
 			Utils::Stream::ClearPointer(&dest->name);
 		}
 
 		if (asset->geoms)
 		{
-			buffer->align(Utils::Stream::ALIGN_4);
+			buffer->Align(Utils::Stream::ALIGN_4);
 
-			this->savePhysGeomInfoArray(builder, asset->geoms, asset->count);
+			this->SavePhysGeomInfoArray(builder, asset->geoms, asset->count);
 			Utils::Stream::ClearPointer(&dest->geoms);
 		}
 
-		buffer->popBlock();
+		buffer->PopBlock();
 	}
 }

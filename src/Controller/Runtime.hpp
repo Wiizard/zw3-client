@@ -1,146 +1,137 @@
 #pragma once
 
-#include "Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "Clock.hpp"
-#include "Context.hpp"
-#include "Diagnostic.hpp"
-
-#include "Device/Id.hpp"
-#include "Device/Registry.hpp"
-#include "Device/Discovery.hpp"
-#include "Driver/Set.hpp"
-#include "Transport/XInputModule.hpp"
-#include "Sample/Frame.hpp"
-#include "Calibration/Store.hpp"
-#include "Engine/Dvar.hpp"
-#include "Engine/Key.hpp"
-#include "Engine/Bind.hpp"
-#include "Engine/View.hpp"
-#include "Engine/Feedback.hpp"
+#include "Controller/Clock.hpp"
+#include "Controller/Context.hpp"
+#include "Controller/Diagnostic.hpp"
+#include "Controller/Calibration/Store.hpp"
+#include "Controller/Device/Discovery.hpp"
+#include "Controller/Device/Id.hpp"
+#include "Controller/Device/Registry.hpp"
+#include "Controller/Driver/Set.hpp"
+#include "Controller/Engine/Bind.hpp"
+#include "Controller/Engine/Dvar.hpp"
+#include "Controller/Engine/Feedback.hpp"
+#include "Controller/Engine/Key.hpp"
+#include "Controller/Engine/View.hpp"
+#include "Controller/Sample/Frame.hpp"
+#include "Controller/Transport/XInputModule.hpp"
 
 namespace Controller
 {
-  class runtime
-  {
-  public:
-    explicit
-    runtime (bool developer);
+	class Runtime
+	{
+	public:
+		Runtime();
+		~Runtime();
 
-    ~runtime ();
+		Runtime(const Runtime&) = delete;
+		Runtime& operator=(const Runtime&) = delete;
+		Runtime(Runtime&&) = delete;
+		Runtime& operator=(Runtime&&) = delete;
 
-    runtime (const runtime&) = delete;
-    runtime& operator= (const runtime&) = delete;
-    runtime (runtime&&) = delete;
-    runtime& operator= (runtime&&) = delete;
+		const Context& GetContext() const noexcept
+		{
+			return this->context;
+		}
 
-    context
-    make_context () noexcept;
+		void EngineReady();
+		void Frame();
 
-    diagnostic_sink&
-    diagnostics () noexcept {return sink_;}
+		DeviceId Active() const noexcept
+		{
+			return this->active;
+		}
 
-    void
-    engine_ready ();
+		const InputFrame& Latest() const noexcept
+		{
+			return this->latest;
+		}
 
-    void
-    frame ();
+		Engine::KeyDispatcher& Keys() noexcept
+		{
+			return this->keys;
+		}
 
-    device_id
-    active () const noexcept {return active_;}
+		Engine::BindBridge& Binds() noexcept
+		{
+			return this->binds;
+		}
 
-    const input_frame&
-    latest () const noexcept {return latest_;}
+		Engine::ViewDriver& View() noexcept
+		{
+			return this->view;
+		}
 
-    engine::key_dispatcher&
-    keys () noexcept {return keys_;}
+		const Engine::Dvars& GetDvars() const noexcept
+		{
+			return this->dvars;
+		}
 
-    engine::bind_bridge&
-    binds () noexcept {return binds_;}
+		bool IsDriving() const noexcept
+		{
+			return this->active != noDevice && this->keys.IsInUse() && Engine::Read(this->dvars.enabled, true);
+		}
 
-    engine::view_driver&
-    view () noexcept {return view_;}
+		bool SupportsHaptics() const noexcept
+		{
+			return this->active != noDevice && this->latest.state.caps.Has(Capability::Haptics);
+		}
 
-    bool
-    driving () const noexcept
-    {
-      return active_ != no_device && keys_.in_use () &&
-             engine::read (dvars_.enabled, true);
-    }
+		bool TrySubmit(const Driver::OutputRequest& request);
 
-    const engine::dvars&
-    dvars () const noexcept {return dvars_;}
+		void StopHaptic(std::uint32_t tag);
 
-    bool
-    supports_haptics () const noexcept
-    {
-      return active_ != no_device &&
-             latest_.state.caps.has (capability::haptics);
-    }
+		std::string ActiveDiagnostics() const;
 
-    bool
-    submit (const driver::output_request&);
+		std::size_t DeviceCount() const noexcept
+		{
+			return this->drivers.Size();
+		}
 
-    void
-    stop_haptic (uint32_t tag);
+	private:
+		bool TryAdvance(Driver::Driver& source, const DeviceConnection& connection, InputFrame& out);
 
-    std::string
-    active_diagnostics () const;
+		const Calibration::Profile& ProfileFor(Controller::Family family);
 
-    size_t
-    device_count () const noexcept {return drivers_.size ();}
+		void ApplyOutputPolicy();
+		void ApplyLightBar();
+		void ApplyTriggerFeedback();
 
-  private:
-    bool
-    advance (driver::driver&, const device_connection&, input_frame& out);
+		void ForgetDevice();
 
-    const calibration::profile&
-    profile_for (Controller::family);
+		LoggingSink sink;
+		Context context;
 
-    void
-    apply_output_policy ();
+		Transport::XInputModule xinput;
+		Registry devices;
+		Discovery discovery;
+		Driver::DriverSet drivers;
+		Calibration::Store calibrationStore;
 
-    void
-    apply_light_bar ();
+		Engine::Dvars& dvars;
+		Engine::KeyDispatcher keys;
+		Engine::BindBridge binds;
+		Engine::ViewDriver view;
 
-    void
-    apply_trigger_feedback ();
+		bool isEngineReady = false;
 
-    logging_sink sink_;
-    bool developer_;
+		std::array<std::optional<Calibration::Profile>, familyCount> profiles;
 
-    context ctx_;
-    transport::xinput_module xinput_;
-    registry devices_;
-    discovery discovery_;
-    driver::set drivers_;
-    calibration::store calibration_;
+		DeviceId active{};
+		InputFrame latest{};
 
-    engine::dvars& dvars_ {engine::registered_dvars ()};
-    engine::key_dispatcher keys_;
-    engine::bind_bridge binds_;
-    engine::view_driver view_;
+		std::uint64_t sequence = 0;
+		std::uint64_t lastPublished = 0;
 
-    bool engine_ready_ {false};
+		bool hadDevice = false;
 
-    std::array<std::optional<calibration::profile>, 5> profiles_;
+		DeviceId litDevice{};
+		std::uint32_t litColour = 0;
 
-    static_assert (static_cast<size_t> (Controller::family::dualsense_edge) == 4,
-                   "profiles_ is indexed by family and must cover every one");
-
-    device_id active_ {};
-    input_frame latest_ {};
-
-    uint64_t sequence_ {0};
-    uint64_t last_published_ {0};
-
-    bool had_device_ {false};
-
-    device_id lit_device_ {};
-    uint32_t lit_colour_ {0};
-
-    device_id felt_device_ {};
-    driver::adaptive_trigger_request felt_left_ {};
-    driver::adaptive_trigger_request felt_right_ {};
-  };
+		DeviceId feltDevice{};
+		Driver::AdaptiveTriggerRequest feltLeft{};
+		Driver::AdaptiveTriggerRequest feltRight{};
+	};
 }

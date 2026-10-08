@@ -1,27 +1,29 @@
 #pragma once
 
+#include "Network.hpp"
+
 namespace Components
 {
 	class Playlist : public Component
 	{
 	public:
-		typedef void(*Callback)();
-
 		Playlist();
 
 		static void LoadPlaylist();
 
-		static std::string ReceivedPlaylistBuffer;
-
 	private:
-		static std::string CurrentPlaylistBuffer;
-		static std::unordered_map<const void*, std::string> MapRelocation;
+		static std::unordered_map<const void*, std::string> mapRelocation;
+		static std::string currentPlaylistBuffer;
+		static std::string receivedPlaylistBuffer;
 
-		static char* Com_ParseOnLine_Hk(const char** data_p);
+		static void PlaylistRequest(Network::Address& address, const std::string& data);
+		static void PlaylistResponse(Network::Address& address, const std::string& data);
+		static void PlaylistInvalidPassword(Network::Address& address, const std::string& data);
 
-		static void PlaylistRequest(const Network::Address& address, const std::string& data);
-		static void PlaylistResponse(const Network::Address& address, const std::string& data);
-		static void PlaylistInvalidPassword(const Network::Address& address, const std::string& data);
+		static Utils::Hook hooks[5];
+
+		static void Live_Init_Hook();
+		static char* Com_ParseOnLine_Hook(const char** data);
 
 		static void MapNameCopy(char* dest, const char* src, int destsize);
 		static void SetMapName(const char* dvarName, const char* value);

@@ -1,32 +1,33 @@
+#include "STDInclude.hpp"
 
 namespace Utils
 {
 	NamedMutex::NamedMutex(const std::string& name)
 	{
-		this->handle_ = CreateMutexA(nullptr, FALSE, name.data());
+		this->handle = CreateMutexA(nullptr, FALSE, name.data());
 	}
 
 	NamedMutex::~NamedMutex()
 	{
-		if (this->handle_)
+		if (this->handle)
 		{
-			CloseHandle(this->handle_);
+			CloseHandle(this->handle);
 		}
 	}
 
 	void NamedMutex::lock() const
 	{
-		if (this->handle_)
+		if (this->handle)
 		{
-			WaitForSingleObject(this->handle_, INFINITE);
+			WaitForSingleObject(this->handle, INFINITE);
 		}
 	}
 
 	bool NamedMutex::try_lock(const std::chrono::milliseconds timeout) const
 	{
-		if (this->handle_)
+		if (this->handle)
 		{
-			return WAIT_OBJECT_0 == WaitForSingleObject(this->handle_, static_cast<DWORD>(timeout.count()));
+			return WAIT_OBJECT_0 == WaitForSingleObject(this->handle, static_cast<DWORD>(timeout.count()));
 		}
 
 		return false;
@@ -34,9 +35,9 @@ namespace Utils
 
 	void NamedMutex::unlock() const noexcept
 	{
-		if (this->handle_)
+		if (this->handle)
 		{
-			ReleaseMutex(this->handle_);
+			ReleaseMutex(this->handle);
 		}
 	}
 }

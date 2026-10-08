@@ -1,137 +1,128 @@
-#include "Assist.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Aim/Assist.hpp"
 
-#include <cmath>
-#include <algorithm>
-
-namespace Controller
+namespace Controller::Aim
 {
-  namespace aim
-  {
-    namespace
-    {
-      deg_per_s
-      lerp_rate (deg_per_s a, deg_per_s b, float t) noexcept
-      {
-        return {std::lerp (a.value, b.value, t)};
-      }
-    }
+	static DegreesPerSecond LerpRate(DegreesPerSecond from, DegreesPerSecond to, float t) noexcept
+	{
+		return { std::lerp(from.value, to.value, t) };
+	}
 
-    aim_processor::
-    aim_processor (config c)
-      : cfg_ (std::move (c))
-    {
-    }
+	static float SignOf(float value) noexcept
+	{
+		if (value >= 0.0f)
+		{
+			return 1.0f;
+		}
 
-    void
-    aim_processor::
-    reset () noexcept
-    {
-      yaw_.reset ();
-      pitch_.reset ();
-    }
+		return -1.0f;
+	}
 
-    aim_frame_output
-    aim_processor::
-    process (const aim_frame_input& in) noexcept
-    {
-      const float t (std::clamp (in.ads_lerp, 0.0f, 1.0f));
+	AimProcessor::AimProcessor(Config config) : config(config)
+	{
+	}
 
-      const stick_vector v (in.look);
+	void AimProcessor::Reset() noexcept
+	{
+		this->yaw.Reset();
+		this->pitch.Reset();
+	}
 
-      const float deflection (
-        std::clamp (std::sqrt (v.x * v.x + v.y * v.y), 0.0f, 1.0f));
+	AimFrameOutput AimProcessor::Process(const AimFrameInput& input) noexcept
+	{
+		const float adsLerp = std::clamp(input.adsLerp, 0.0f, 1.0f);
 
-      const float response (cfg_.graph != nullptr
-                            ? cfg_.graph->evaluate (deflection)
-                            : 1.0f);
+		const StickVector look = input.look;
 
-      stick_vector adjusted {v.x * response, v.y * response};
+		const float deflection = std::clamp(std::sqrt(look.x * look.x + look.y * look.y), 0.0f, 1.0f);
 
-      if (in.scale_view_axis)
-        adjusted = scale_dominant_axis (adjusted);
+		float response = 1.0f;
 
-      const float eff_yaw (adjusted.x);
-      const float eff_pitch (adjusted.y);
+		if (this->config.graph != nullptr)
+		{
+			response = this->config.graph->Evaluate(deflection);
+		}
 
-      const float gain_yaw (in.fov_scale * in.sensitivity * in.slowdown_yaw);
-      const float gain_pitch (in.fov_scale * in.sensitivity * in.slowdown_pitch);
+		StickVector adjusted{ look.x * response, look.y * response };
 
-      deg_per_s yaw_rate (
-        lerp_rate (cfg_.hip.yaw_rate, cfg_.ads.yaw_rate, t) * gain_yaw);
-      deg_per_s pitch_rate (
-        lerp_rate (cfg_.hip.pitch_rate, cfg_.ads.pitch_rate, t) * gain_pitch);
+		if (input.shouldScaleViewAxis)
+		{
+			adjusted = ScaleDominantAxis(adjusted);
+		}
 
-      if (in.yaw_max && in.yaw_max->value < yaw_rate.value)
-        yaw_rate = *in.yaw_max;
-      if (in.pitch_max && in.pitch_max->value < pitch_rate.value)
-        pitch_rate = *in.pitch_max;
+		const float effectiveYaw = adjusted.x;
+		const float effectivePitch = adjusted.y;
 
-      const float yaw_sign (eff_yaw >= 0.0f ? 1.0f : -1.0f);
-      const float pitch_sign (eff_pitch >= 0.0f ? 1.0f : -1.0f);
+		const float gainYaw = input.fovScale * input.sensitivity * input.slowdownYaw;
+		const float gainPitch = input.fovScale * input.sensitivity * input.slowdownPitch;
 
-      const deg_per_s yaw_target {std::fabs (eff_yaw) * yaw_rate.value};
-      const deg_per_s pitch_target {std::fabs (eff_pitch) * pitch_rate.value};
+		DegreesPerSecond yawRate = LerpRate(this->config.hip.yawRate, this->config.ads.yawRate, adsLerp) * gainYaw;
+		DegreesPerSecond pitchRate = LerpRate(this->config.hip.pitchRate, this->config.ads.pitchRate, adsLerp) * gainPitch;
 
-      degrees yaw_delta (yaw_.advance (yaw_target, cfg_.accel, in.dt) * yaw_sign);
-      degrees pitch_delta (
-        pitch_.advance (pitch_target, cfg_.accel, in.dt) * pitch_sign);
+		if (input.yawMax && input.yawMax->value < yawRate.value)
+		{
+			yawRate = *input.yawMax;
+		}
 
-      if (in.invert_pitch)
-        pitch_delta = -pitch_delta;
+		if (input.pitchMax && input.pitchMax->value < pitchRate.value)
+		{
+			pitchRate = *input.pitchMax;
+		}
 
-      return {yaw_delta, pitch_delta};
-    }
+		const DegreesPerSecond yawTarget{ std::fabs(effectiveYaw) * yawRate.value };
+		const DegreesPerSecond pitchTarget{ std::fabs(effectivePitch) * pitchRate.value };
 
-    float
-    slowdown_scale (bool target_present,
-                    float hip_scale,
-                    float ads_scale,
-                    float ads_lerp) noexcept
-    {
-      if (!target_present)
-        return 1.0f;
+		const Degrees yawDelta = this->yaw.Advance(yawTarget, this->config.accel, input.deltaTime) * SignOf(effectiveYaw);
+		Degrees pitchDelta = this->pitch.Advance(pitchTarget, this->config.accel, input.deltaTime) * SignOf(effectivePitch);
 
-      return std::lerp (hip_scale, ads_scale, std::clamp (ads_lerp, 0.0f, 1.0f));
-    }
+		if (input.isPitchInverted)
+		{
+			pitchDelta = -pitchDelta;
+		}
 
-    stick_vector
-    scale_dominant_axis (stick_vector look) noexcept
-    {
-      const float ax (std::fabs (look.x));
-      const float ay (std::fabs (look.y));
+		return { yawDelta, pitchDelta };
+	}
 
-      if (ay <= ax)
-        look.y *= 1.0f - (ax - ay);
-      else
-        look.x *= 1.0f - (ay - ax);
+	float SlowdownScale(bool isTargetPresent, float hipScale, float adsScale, float adsLerp) noexcept
+	{
+		if (!isTargetPresent)
+		{
+			return 1.0f;
+		}
 
-      return look;
-    }
+		return std::lerp(hipScale, adsScale, std::clamp(adsLerp, 0.0f, 1.0f));
+	}
 
-    aim_frame_output
-    lock_on (const lock_on_target& target,
-             const lock_on_params& params,
-             seconds dt) noexcept
-    {
-      if (target.distance <= 0.0f)
-        return {};
+	StickVector ScaleDominantAxis(StickVector look) noexcept
+	{
+		const float absoluteX = std::fabs(look.x);
+		const float absoluteY = std::fabs(look.y);
 
-      const float arc (target.distance * pi);
+		if (absoluteY <= absoluteX)
+		{
+			look.y *= 1.0f - (absoluteX - absoluteY);
+		}
+		else
+		{
+			look.x *= 1.0f - (absoluteY - absoluteX);
+		}
 
-      const float pitch_rate (
-        (dot (target.target_velocity, target.view_pitch_axis) -
-         dot (target.player_velocity, target.view_pitch_axis)) /
-        arc * 180.0f * params.pitch_strength);
+		return look;
+	}
 
-      const float yaw_rate (
-        (dot (target.target_velocity, target.view_yaw_axis) -
-         dot (target.player_velocity, target.view_yaw_axis)) /
-        arc * 180.0f * params.yaw_strength);
+	AimFrameOutput LockOn(const LockOnTarget& target, const LockOnParams& params, Seconds deltaTime) noexcept
+	{
+		if (target.distance <= 0.0f)
+		{
+			return {};
+		}
 
-      return {degrees {yaw_rate * dt.count ()},
-              degrees {pitch_rate * dt.count ()}};
-    }
-  }
+		const float arc = target.distance * pi;
+
+		const float pitchRate = (Dot(target.targetVelocity, target.viewPitchAxis) - Dot(target.playerVelocity, target.viewPitchAxis)) / arc * 180.0f * params.pitchStrength;
+		const float yawRate = (Dot(target.targetVelocity, target.viewYawAxis) - Dot(target.playerVelocity, target.viewYawAxis)) / arc * 180.0f * params.yawStrength;
+
+		return { Degrees{ yawRate * deltaTime.count() }, Degrees{ pitchRate * deltaTime.count() } };
+	}
 }

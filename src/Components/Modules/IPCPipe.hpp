@@ -1,61 +1,51 @@
 #pragma once
 
-#define IPC_MAX_RECONNECTS 3
-#define IPC_COMMAND_SIZE 100
-#define IPC_BUFFER_SIZE 0x2000
-
-#define IPC_PIPE_NAME_SERVER "ZW3-Server"
-#define IPC_PIPE_NAME_CLIENT "ZW3-Client"
-
 namespace Components
 {
 	class Pipe
 	{
 	public:
+		static constexpr std::size_t commandSize = 100;
+		static constexpr std::size_t bufferSize = 0x2000;
+
 		struct Packet
 		{
-			char command[IPC_COMMAND_SIZE];
-			char buffer[IPC_BUFFER_SIZE];
+			char command[commandSize];
+			char buffer[bufferSize];
 		};
 
-		enum Type
+		enum class Type
 		{
-			IPCTYPE_NONE,
-			IPCTYPE_SERVER,
-			IPCTYPE_CLIENT
+			None,
+			Server,
+			Client,
 		};
 
-		typedef void(__cdecl PacketCallback)(const std::string& data);
-		typedef void(__cdecl Callback)();
+		using PacketCallback = std::function<void(const std::string& data)>;
 
-		Pipe();
+		Pipe() = default;
 		~Pipe();
 
-		bool connect(const std::string& name);
-		bool create(const std::string& name);
+		Pipe(const Pipe&) = delete;
+		Pipe& operator=(const Pipe&) = delete;
 
-		bool write(const std::string& command, const std::string& data);
-		void setCallback(const std::string& command, Utils::Slot<PacketCallback> callback);
-		void onConnect(Callback callback);
-
-		void destroy();
+		bool Connect(const std::string& name);
+		bool Create(const std::string& name);
+		bool Write(const std::string& command, const std::string& data);
+		void SetCallback(const std::string& command, const PacketCallback& callback);
+		void OnConnect(const std::function<void()>& callback);
+		void Destroy();
 
 	private:
-		Utils::Slot<void()> connectCallback;
-		std::map<std::string, Utils::Slot<PacketCallback>> packetCallbacks;
-
-		HANDLE pipe;
-		std::thread thread;
-		bool threadAttached;
-
-		Type type;
-		Packet packet;
-
-		char pipeName[MAX_PATH]{};
-		char pipeFile[MAX_PATH]{};
-		unsigned int reconnectAttempt;
-
-		void setName(const std::string& name);
+		std::function<void()> connectCallback;
+		std::map<std::string, PacketCallback> packetCallbacks;
+		HANDLE pipe = INVALID_HANDLE_VALUE;
+		std::jthread thread;
+		std::atomic<bool> isThreadAttached = false;
+		Type type = Type::None;
+		Packet packet{};
+		std::string pipeFile;
+		unsigned int reconnectAttempt = 0;
 
 		static void ReceiveThread(Pipe* pipe);
 	};
@@ -65,14 +55,12 @@ namespace Components
 	public:
 		IPCPipe();
 
-		void preDestroy() override;
-
 		static bool Write(const std::string& command, const std::string& data);
-		static void On(const std::string& command, const Utils::Slot<Pipe::PacketCallback>& callback);
+		static void On(const std::string& command, const Pipe::PacketCallback& callback);
 
 	private:
-		static Pipe ServerPipe;
-		static Pipe ClientPipe;
+		static Pipe serverPipe;
+		static Pipe clientPipe;
 
 		static void ConnectClient();
 	};

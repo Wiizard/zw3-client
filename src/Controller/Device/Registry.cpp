@@ -1,114 +1,81 @@
-#include "Registry.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
-
-#include <algorithm>
+#include "Controller/Device/Registry.hpp"
 
 namespace Controller
 {
-  registry::
-  registry (const context& ctx)
-    : ctx_ (ctx)
-  {
-  }
+	Registry::Registry(const Context& context) : context(context)
+	{
+	}
 
-  device_id
-  registry::
-  add (device_identity identity,
-       Controller::transport_kind t,
-       connection link,
-       capabilities caps,
-       transport_binding binding)
-  {
-    device_id id;
+	DeviceId Registry::Add(DeviceConnection connection)
+	{
+		DeviceId id;
 
-    {
-      std::scoped_lock l (mutex_);
+		{
+			std::scoped_lock lock(this->mutex);
 
-      for (device_connection& d: devices_)
-      {
-        if (same_binding (d.binding, binding))
-        {
-          d.identity = identity;
-          d.transport = t;
-          d.link = link;
-          d.caps = caps;
-          return d.id;
-        }
-      }
+			for (auto& device : this->devices)
+			{
+				if (!IsSameBinding(device.binding, connection.binding))
+				{
+					continue;
+				}
 
-      id = device_id (next_++);
-      devices_.push_back (
-        device_connection {id, identity, t, link, caps, std::move (binding)});
+				device.identity = connection.identity;
+				device.transport = connection.transport;
+				device.link = connection.link;
+				device.caps = connection.caps;
+				return device.id;
+			}
 
-      generation_.fetch_add (1);
-    }
+			id = DeviceId(this->nextId++);
+			connection.id = id;
+			this->devices.push_back(connection);
 
-    ctx_.report (severity::info, facility::discovery, errc::none, id,
-                 std::string ("device connected: ") + to_string (identity.family) +
-                 " over " + to_string (t) + '/' + to_string (link));
-    return id;
-  }
+			this->generation.fetch_add(1);
+		}
 
-  bool
-  registry::
-  remove (device_id id)
-  {
-    Controller::family family {Controller::family::unknown};
+		this->context.Report(Severity::Info, Facility::Discovery, ErrorCode::None, id,
+			std::format("device connected: {} over {}/{}", ToString(connection.identity.family), ToString(connection.transport), ToString(connection.link)));
 
-    {
-      std::scoped_lock l (mutex_);
+		return id;
+	}
 
-      auto i (std::find_if (devices_.begin (), devices_.end (),
-                            [id] (const device_connection& d)
-                            {
-                              return d.id == id;
-                            }));
+	bool Registry::Remove(DeviceId id)
+	{
+		Family family = Family::Unknown;
 
-      if (i == devices_.end ())
-        return false;
+		{
+			std::scoped_lock lock(this->mutex);
 
-      family = i->identity.family;
-      devices_.erase (i);
+			const auto device = std::find_if(this->devices.begin(), this->devices.end(), [id](const DeviceConnection& connection)
+			{
+				return connection.id == id;
+			});
 
-      generation_.fetch_add (1);
-    }
+			if (device == this->devices.end())
+			{
+				return false;
+			}
 
-    ctx_.report (severity::info, facility::discovery, errc::none, id,
-                 std::string ("device disconnected: ") + to_string (family));
-    return true;
-  }
+			family = device->identity.family;
+			this->devices.erase(device);
 
-  std::optional<device_connection>
-  registry::
-  find (device_id id) const
-  {
-    std::scoped_lock l (mutex_);
+			this->generation.fetch_add(1);
+		}
 
-    for (const device_connection& d: devices_)
-    {
-      if (d.id == id)
-        return d;
-    }
+		this->context.Report(Severity::Info, Facility::Discovery, ErrorCode::None, id, std::format("device disconnected: {}", ToString(family)));
+		return true;
+	}
 
-    return std::nullopt;
-  }
+	void Registry::ForEach(const std::function<void(const DeviceConnection&)>& visit) const
+	{
+		std::scoped_lock lock(this->mutex);
 
-  void
-  registry::
-  for_each (function_ref<void (const device_connection&)> fn) const
-  {
-    std::scoped_lock l (mutex_);
-
-    for (const device_connection& d: devices_)
-      fn (d);
-  }
-
-  size_t
-  registry::
-  size () const
-  {
-    std::scoped_lock l (mutex_);
-    return devices_.size ();
-  }
+		for (const auto& device : this->devices)
+		{
+			visit(device);
+		}
+	}
 }

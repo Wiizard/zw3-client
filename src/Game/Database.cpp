@@ -1,86 +1,74 @@
+#include "STDInclude.hpp"
 
 namespace Game
 {
-	DB_BeginRecoverLostDevice_t DB_BeginRecoverLostDevice = DB_BeginRecoverLostDevice_t(0x4BFF90);
-	DB_EndRecoverLostDevice_t DB_EndRecoverLostDevice = DB_EndRecoverLostDevice_t(0x46B660);
-	DB_EnumXAssets_t DB_EnumXAssets = DB_EnumXAssets_t(0x4B76D0);
-	DB_EnumXAssets_Internal_t DB_EnumXAssets_Internal = DB_EnumXAssets_Internal_t(0x5BB0A0);
-	DB_FindXAssetHeader_t DB_FindXAssetHeader = DB_FindXAssetHeader_t(0x407930);
-	DB_GetRawBuffer_t DB_GetRawBuffer = DB_GetRawBuffer_t(0x4CDC50);
-	DB_GetRawFileLen_t DB_GetRawFileLen = DB_GetRawFileLen_t(0x4DAA80);
-	DB_GetLoadedFraction_t DB_GetLoadedFraction = DB_GetLoadedFraction_t(0x468380);
-	DB_GetXAssetTypeName_t DB_GetXAssetTypeName = DB_GetXAssetTypeName_t(0x4CFCF0);
-	DB_IsXAssetDefault_t DB_IsXAssetDefault = DB_IsXAssetDefault_t(0x48E6A0);
-	DB_LoadXAssets_t DB_LoadXAssets = DB_LoadXAssets_t(0x4E5930);
-	DB_LoadXFileData_t DB_LoadXFileData = DB_LoadXFileData_t(0x445460);
-	DB_ReadXFile_t DB_ReadXFile = DB_ReadXFile_t(0x445460);
-	DB_ReadXFileUncompressed_t DB_ReadXFileUncompressed = DB_ReadXFileUncompressed_t(0x4705E0);
-	DB_SetXAssetName_t DB_SetXAssetName = DB_SetXAssetName_t(0x453580);
-	DB_XModelSurfsFixup_t DB_XModelSurfsFixup = DB_XModelSurfsFixup_t(0x5BAC50);
+	DB_BeginRecoverLostDevice_t DB_BeginRecoverLostDevice = nullptr;
+	DB_EndRecoverLostDevice_t DB_EndRecoverLostDevice = nullptr;
+	DB_EnumXAssets_FastFile_t DB_EnumXAssets_FastFile = nullptr;
+	DB_FindXAssetHeader_t DB_FindXAssetHeader = nullptr;
+	DB_IsXAssetDefault_t DB_IsXAssetDefault = nullptr;
+	DB_GetRawBuffer_t DB_GetRawBuffer = nullptr;
+	DB_GetRawFileLen_t DB_GetRawFileLen = nullptr;
+	DB_LoadXAssets_t DB_LoadXAssets = nullptr;
+	DB_SetXAssetName_t DB_SetXAssetName = nullptr;
+	RMsg_SendMessages_t RMsg_SendMessages = nullptr;
+	DB_GetXAssetName_t DB_GetXAssetName = nullptr;
+	DB_FindXAssetDefaultHeaderInternal_t DB_FindXAssetDefaultHeaderInternal = nullptr;
+	DB_FindXAssetEntry_t DB_FindXAssetEntry = nullptr;
 
-	DB_SetXAssetNameHandler_t* DB_SetXAssetNameHandlers = reinterpret_cast<DB_SetXAssetNameHandler_t*>(0x7993D8);
-	DB_GetXAssetNameHandler_t* DB_GetXAssetNameHandlers = reinterpret_cast<DB_GetXAssetNameHandler_t*>(0x799328);
-	DB_GetXAssetSizeHandler_t* DB_GetXAssetSizeHandlers = reinterpret_cast<DB_GetXAssetSizeHandler_t*>(0x799488);
-	DB_ReleaseXAssetHandler_t* DB_ReleaseXAssetHandlers = reinterpret_cast<DB_ReleaseXAssetHandler_t*>(0x799AB8);
-	DB_DynamicCloneXAssetHandler_t* DB_DynamicCloneXAssetHandler = reinterpret_cast<DB_DynamicCloneXAssetHandler_t*>(0x799A08);
+	void** DB_XAssetPool = nullptr;
+	unsigned int* g_poolSize = nullptr;
 
-	XAssetHeader* DB_XAssetPool = reinterpret_cast<XAssetHeader*>(0x7998A8);
-	unsigned int* g_poolSize = reinterpret_cast<unsigned int*>(0x7995E8);
-
-	XBlock** g_streamBlocks = reinterpret_cast<XBlock**>(0x16E554C);
-	int* g_streamPos = reinterpret_cast<int*>(0x16E5554);
-	int* g_streamPosIndex = reinterpret_cast<int*>(0x16E5578);
-
-	FastCriticalSection* db_hashCritSect = reinterpret_cast<FastCriticalSection*>(0x16B8A54);
-
-	XZone* g_zones = reinterpret_cast<XZone*>(0x14C0F80);
-	unsigned short* db_hashTable = reinterpret_cast<unsigned short*>(0x12412B0);
-
-	XAssetHeader ReallocateAssetPool(XAssetType type, unsigned int newSize)
+	void* ReallocateAssetPool(XAssetType type, unsigned int newSize)
 	{
-		const auto size = DB_GetXAssetSizeHandlers[type]();
-		XAssetHeader poolEntry = { Utils::Memory::GetAllocator()->allocate(newSize * size) };
-		DB_XAssetPool[type] = poolEntry;
+		const auto entrySize = static_cast<std::size_t>(DB_GetXAssetTypeSize(type));
+		void* const pool = Utils::Memory::GetAllocator()->Allocate(sizeof(void*) + newSize * entrySize);
+
+		DB_XAssetPool[type] = pool;
 		g_poolSize[type] = newSize;
-		return poolEntry;
+
+		return pool;
 	}
 
-	const char* DB_GetXAssetName(XAsset* asset)
+	const char* DB_GetXAssetTypeName(unsigned int type)
 	{
-		if (!asset) return "";
-
-		assert(asset->header.data);
-
-		return DB_GetXAssetNameHandlers[asset->type](&asset->header);
+		return g_assetNames[type];
 	}
 
 	XAssetType DB_GetXAssetNameType(const char* name)
 	{
-		for (int i = 0; i < ASSET_TYPE_COUNT; ++i)
+		for (unsigned int i = 0; i < ASSET_TYPE_COUNT; ++i)
 		{
-			XAssetType type = static_cast<XAssetType>(i);
-			if (!_stricmp(DB_GetXAssetTypeName(type), name))
+			if (_stricmp(DB_GetXAssetTypeName(i), name))
 			{
-				// Col map workaround!
-				if (type == Game::ASSET_TYPE_CLIPMAP_SP)
-				{
-					return Game::ASSET_TYPE_CLIPMAP_MP;
-				}
-
-				return type;
+				continue;
 			}
+
+			if (i == ASSET_TYPE_CLIPMAP_SP)
+			{
+				return ASSET_TYPE_CLIPMAP_MP;
+			}
+
+			return static_cast<XAssetType>(i);
 		}
 
-		return ASSET_TYPE_INVALID;
+		return ASSET_TYPE_COUNT;
 	}
 
 	int DB_GetZoneIndex(const std::string& name)
 	{
-		for (int i = 0; i < 32; ++i)
+		constexpr std::size_t zoneSize = 0xF8;
+		constexpr std::size_t zoneName = 8;
+
+		const int zoneCount = Utils::Hook::Get<int>(0x1415FC338);
+		const auto* const zoneHandles = reinterpret_cast<const std::uint8_t*>(Utils::Hook::Rebase(0x1415FC318));
+		const auto* const zones = reinterpret_cast<const char*>(Utils::Hook::Rebase(0x1415FA320));
+
+		for (int i = 0; i < zoneCount; ++i)
 		{
-			if (Game::g_zones[i].name == name)
+			if (name == zones + zoneSize * zoneHandles[i] + zoneName)
 			{
-				return i;
+				return zoneHandles[i];
 			}
 		}
 
@@ -89,15 +77,16 @@ namespace Game
 
 	bool DB_IsZoneLoaded(const char* zone)
 	{
-		auto zoneCount = Utils::Hook::Get<int>(0x1261BCC);
-		auto* zoneIndices = reinterpret_cast<char*>(0x16B8A34);
-		auto* zoneData = reinterpret_cast<char*>(0x14C0F80);
+		constexpr std::size_t zoneSize = 0xF8;
+		constexpr std::size_t zoneName = 8;
+
+		const int zoneCount = Utils::Hook::Get<int>(0x1415FC338);
+		const auto* const zoneHandles = reinterpret_cast<const std::uint8_t*>(Utils::Hook::Rebase(0x1415FC318));
+		const auto* const zones = reinterpret_cast<const char*>(Utils::Hook::Rebase(0x1415FA320));
 
 		for (int i = 0; i < zoneCount; ++i)
 		{
-			std::string name = zoneData + 4 + 0xA4 * (zoneIndices[i] & 0xFF);
-
-			if (name == zone)
+			if (!std::strcmp(zones + zoneSize * zoneHandles[i] + zoneName, zone))
 			{
 				return true;
 			}
@@ -106,81 +95,23 @@ namespace Game
 		return false;
 	}
 
-	void DB_EnumXAssetEntries(XAssetType type, std::function<void(XAssetEntry*)> callback, bool overrides)
+	void BindDatabase()
 	{
-		Sys_LockRead(db_hashCritSect);
+		DB_BeginRecoverLostDevice = BindFunction<DB_BeginRecoverLostDevice_t>(0x14012CF30);
+		DB_EndRecoverLostDevice = BindFunction<DB_EndRecoverLostDevice_t>(0x14012D1B0);
+		DB_EnumXAssets_FastFile = BindFunction<DB_EnumXAssets_FastFile_t>(0x14012D260);
+		DB_FindXAssetHeader = BindFunction<DB_FindXAssetHeader_t>(0x14012D6D0);
+		DB_IsXAssetDefault = BindFunction<DB_IsXAssetDefault_t>(0x14012E180);
+		DB_GetRawBuffer = BindFunction<DB_GetRawBuffer_t>(0x14012DD80);
+		DB_GetRawFileLen = BindFunction<DB_GetRawFileLen_t>(0x14012DEB0);
+		DB_LoadXAssets = BindFunction<DB_LoadXAssets_t>(0x14012EC40);
+		DB_SetXAssetName = BindFunction<DB_SetXAssetName_t>(0x140117640);
+		RMsg_SendMessages = BindFunction<RMsg_SendMessages_t>(0x14028DA10);
+		DB_GetXAssetName = BindFunction<DB_GetXAssetName_t>(0x140117610);
+		DB_FindXAssetDefaultHeaderInternal = BindFunction<DB_FindXAssetDefaultHeaderInternal_t>(0x14012D4F0);
+		DB_FindXAssetEntry = BindFunction<DB_FindXAssetEntry_t>(0x14012D600);
 
-		const auto pool = Components::Maps::GetAssetEntryPool();
-		for (auto hash = 0; hash < 37000; hash++)
-		{
-			auto hashIndex = db_hashTable[hash];
-			while (hashIndex)
-			{
-				auto* assetEntry = &pool[hashIndex];
-
-				if (assetEntry->asset.type == type)
-				{
-					callback(assetEntry);
-					if (overrides)
-					{
-						auto overrideIndex = assetEntry->nextOverride;
-						while (overrideIndex)
-						{
-							auto* overrideEntry = &pool[overrideIndex];
-							callback(overrideEntry);
-							overrideIndex = overrideEntry->nextOverride;
-						}
-					}
-				}
-
-				hashIndex = assetEntry->nextHash;
-			}
-		}
-
-		Sys_UnlockRead(db_hashCritSect);
-	}
-
-	__declspec(naked) XAssetHeader DB_FindXAssetDefaultHeaderInternal(XAssetType /*type*/)
-	{
-		__asm
-		{
-			push eax
-			pushad
-
-			mov eax, 5BB210h
-			mov edi, [esp + 28h]
-			call eax
-
-			mov [esp + 20h], eax
-			popad
-			pop eax
-
-			retn
-		}
-	}
-
-	__declspec(naked) XAssetEntry* DB_FindXAssetEntry(XAssetType /*type*/, const char* /*name*/)
-	{
-		__asm
-		{
-			push eax
-			pushad
-
-			mov edi, [esp + 2Ch] // name
-			push edi
-
-			mov edi, [esp + 2Ch] // type
-
-			mov eax, 5BB1B0h
-			call eax
-
-			add esp, 4h
-
-			mov [esp + 20h], eax
-			popad
-			pop eax
-
-			retn
-		}
+		DB_XAssetPool = reinterpret_cast<void**>(Utils::Hook::Rebase(0x140421D60));
+		g_poolSize = reinterpret_cast<unsigned int*>(Utils::Hook::Rebase(0x140421890));
 	}
 }

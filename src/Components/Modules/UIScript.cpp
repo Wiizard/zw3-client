@@ -1,136 +1,150 @@
+#include "STDInclude.hpp"
+
+#include "UIScript.hpp"
+#include "Dedicated.hpp"
+#include "Logger.hpp"
 
 namespace Components
 {
-	std::unordered_map<std::string, UIScript::UIScriptHandler> UIScript::UIScripts;
-	std::unordered_map<int, std::function<void()>> UIScript::UIOwnerDraws;
+	std::unordered_map<std::string, UIScript::Handler> UIScript::handlers;
+	std::unordered_map<int, std::function<void()>> UIScript::ownerDraws;
 
-	template<> int UIScript::Token::get() const
+	Utils::Hook UIScript::runMenuScriptHook;
+	Utils::Hook UIScript::ownerDrawHandleKeyHook;
+
+	static constexpr std::uintptr_t runMenuScriptCall = 0x14025EF99;
+	static constexpr std::uintptr_t ownerDrawHandleKeyCall = 0x14025F67B;
+
+	static constexpr int scriptNameSize = 1024;
+
+	static constexpr int tokenSize = 256;
+
+	static constexpr int mouseButton1 = 200;
+	static constexpr int mouseButton2 = 201;
+
+	UIScript::Token::Token(const char** args)
 	{
-		if (this->isValid())
+		if (!args)
 		{
-			return std::strtol(this->token, nullptr, 0);
+			return;
 		}
 
-		return 0;
+		char buffer[tokenSize]{};
+
+		if (Game::String_Parse(args, buffer, tokenSize))
+		{
+			this->token = buffer;
+		}
 	}
 
-	template<> const char* UIScript::Token::get() const
+	template <> int UIScript::Token::Get() const
 	{
-		if (this->isValid())
+		if (!this->IsValid())
 		{
-			return this->token;
+			return 0;
 		}
 
-		return "";
+		return std::strtol(this->token.data(), nullptr, 0);
 	}
 
-	template<> std::string UIScript::Token::get() const
+	template <> const char* UIScript::Token::Get() const
 	{
-		return {this->get<const char*>()};
+		return this->token.data();
 	}
 
-	bool UIScript::Token::isValid() const
+	template <> std::string UIScript::Token::Get() const
 	{
-		return (this->token && this->token[0]);
+		return this->token;
 	}
 
-	void UIScript::Token::parse(const char** args)
+	bool UIScript::Token::IsValid() const
 	{
+		return !this->token.empty();
+	}
+
+	void UIScript::Add(const std::string& name, const Handler& callback)
+	{
+		handlers[Utils::String::ToLower(name)] = callback;
+	}
+
+	void UIScript::AddOwnerDraw(int ownerDraw, const std::function<void()>& callback)
+	{
+		ownerDraws[ownerDraw] = callback;
+	}
+
+	bool UIScript::RunMenuScript(const char** args)
+	{
+		char name[scriptNameSize]{};
+
+		if (!Game::String_Parse(args, name, scriptNameSize))
+		{
+			return false;
+		}
+
+		const auto handler = handlers.find(Utils::String::ToLower(name));
+
+		if (handler == handlers.end())
+		{
+			return false;
+		}
+
+		handler->second(Token(args));
+		return true;
+	}
+
+	void UIScript::UI_RunMenuScript_Hook(int localClientNum, const char** args, const char** rest)
+	{
+		const char* const restore = args ? *args : nullptr;
+
+		if (args && RunMenuScript(args))
+		{
+			return;
+		}
+
 		if (args)
 		{
-			this->token = Game::Com_Parse(args);
-		}
-	}
-
-	Game::uiInfo_s* UIScript::UI_GetClientInfo(int localClientNum)
-	{
-		AssertIn(localClientNum, Game::STATIC_MAX_LOCAL_CLIENTS);
-		return &Game::uiInfoArray[localClientNum];
-	}
-
-	void UIScript::Add(const std::string& name, const UIScriptHandler& callback)
-	{
-		UIScripts[name] = callback;
-	}
-
-	void UIScript::AddOwnerDraw(int ownerdraw, const std::function<void()>& callback)
-	{
-		UIOwnerDraws[ownerdraw] = callback;
-	}
-
-	bool UIScript::RunMenuScript(const char* name, const char** args)
-	{
-		if (const auto itr = UIScripts.find(name); itr != UIScripts.end())
-		{
-			const auto* info = UI_GetClientInfo(0);
-			itr->second(Token(args), info);
-			return true;
+			*args = restore;
 		}
 
-		return false;
+		reinterpret_cast<void(*)(int, const char**, const char**)>(
+			runMenuScriptHook.GetOriginal())(localClientNum, args, rest);
 	}
 
-	void UIScript::OwnerDrawHandleKeyStub(int ownerDraw, int flags, float *special, int key)
+	void UIScript::UI_OwnerDrawHandleKey_Hook(int ownerDraw, int flags, float* special, int key)
 	{
-		if (key == 200 || key == 201) // mouse buttons
+		if (key == mouseButton1 || key == mouseButton2)
 		{
-			for (auto i = UIOwnerDraws.begin(); i != UIOwnerDraws.end(); ++i)
+			const auto handler = ownerDraws.find(ownerDraw);
+
+			if (handler != ownerDraws.end())
 			{
-				if (i->first == ownerDraw)
-				{
-					i->second();
-				}
+				handler->second();
 			}
 		}
 
-		Utils::Hook::Call<void(int, int, float*, int)>(0x4F58A0)(ownerDraw, flags, special, key);
-	}
-
-	__declspec(naked) void UIScript::RunMenuScriptStub()
-	{
-		__asm
-		{
-			mov eax, esp
-			add eax, 8h
-			mov edx, eax // UIScript name
-			mov eax, [esp + 0C10h] // UIScript args
-
-			push eax
-			push edx
-			call RunMenuScript
-			add esp, 8h
-
-			test al, al
-			jz continue
-
-			// if returned
-			pop edi
-			pop esi
-			add esp, 0C00h
-			retn
-
-		continue:
-			mov eax, 45ED00h
-			jmp eax
-		}
+		reinterpret_cast<void(*)(int, int, float*, int)>(
+			ownerDrawHandleKeyHook.GetOriginal())(ownerDraw, flags, special, key);
 	}
 
 	UIScript::UIScript()
 	{
-		AssertSize(Game::uiInfo_s, 0x22FC);
+		if (Dedicated::IsEnabled())
+		{
+			return;
+		}
 
-		if (Dedicated::IsEnabled()) return;
+		runMenuScriptHook.Initialize(runMenuScriptCall, UI_RunMenuScript_Hook, HOOK_CALL)->Install();
+		ownerDrawHandleKeyHook.Initialize(ownerDrawHandleKeyCall, UI_OwnerDrawHandleKey_Hook, HOOK_CALL)->Install();
 
-		// Install handler
-		Utils::Hook::RedirectJump(0x45EC59, RunMenuScriptStub);
+		const bool isSeated = runMenuScriptHook.IsInstalled() && ownerDrawHandleKeyHook.IsInstalled();
 
-		// Install ownerdraw handler
-		Utils::Hook(0x63D233, OwnerDrawHandleKeyStub, HOOK_CALL).install()->quick();
-	}
+		if (!isSeated)
+		{
+			Logger::Error("uiscript: a menu script call site could not be redirected, menu buttons will not reach us\n");
+			return;
+		}
 
-	UIScript::~UIScript()
-	{
-		UIScripts.clear();
-		UIOwnerDraws.clear();
+		runMenuScriptHook.Quick();
+		ownerDrawHandleKeyHook.Quick();
 	}
 }

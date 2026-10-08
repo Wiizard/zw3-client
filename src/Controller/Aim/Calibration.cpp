@@ -1,72 +1,55 @@
-#include "Calibration.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Aim/Calibration.hpp"
 
-#include <cmath>
-
-namespace Controller
+namespace Controller::Aim
 {
-  namespace aim
-  {
-    float
-    fov_scale (degrees fov, degrees reference_fov) noexcept
-    {
-      const float f (std::tan (to_radians (fov).value * 0.5f));
-      const float r (std::tan (to_radians (reference_fov).value * 0.5f));
+	std::optional<AimCalibration> AimCalibration::TryMake(const AimSettings& settings, std::string& why)
+	{
+		std::string reason;
 
-      if (!(r > 0.0f) || !std::isfinite (f))
-        return 1.0f;
+		if (!IsValid(settings.hip.deadzone, reason))
+		{
+			why = "hip deadzone: " + reason;
+			return std::nullopt;
+		}
 
-      return f / r;
-    }
+		if (!IsValid(settings.ads.deadzone, reason))
+		{
+			why = "ADS deadzone: " + reason;
+			return std::nullopt;
+		}
 
-    std::optional<aim_calibration>
-    aim_calibration::
-    make (const aim_settings& s, std::string& why)
-    {
-      std::string w;
+		std::optional<AimGraph> built;
 
-      if (!validate (s.hip.deadzone, w))
-      {
-        why = "hip deadzone: " + w;
-        return std::nullopt;
-      }
+		if (settings.graphKnots)
+		{
+			built = AimGraph::TryMake(std::span<const Knot>(settings.graphKnots->data(), settings.graphKnots->size()), settings.isGraphMonotonic, reason);
 
-      if (!validate (s.ads.deadzone, w))
-      {
-        why = "ADS deadzone: " + w;
-        return std::nullopt;
-      }
+			if (!built)
+			{
+				why = "aim graph: " + reason;
+				return std::nullopt;
+			}
+		}
 
-      std::optional<aim_graph> graph;
-      if (s.graph_knots)
-      {
-        std::optional<aim_graph> built (
-          aim_graph::make (std::span<const knot> (s.graph_knots->data (),
-                                             s.graph_knots->size ()),
-                           s.graph_monotonic, w));
-        if (!built)
-        {
-          why = "aim graph: " + w;
-          return std::nullopt;
-        }
+		AimCalibration calibration;
+		calibration.hip = settings.hip;
+		calibration.ads = settings.ads;
+		calibration.accel = settings.accel;
+		calibration.graph = built;
+		return calibration;
+	}
 
-        graph = std::move (built);
-      }
+	AimProcessor::Config AimCalibration::ProcessorConfig() const noexcept
+	{
+		const AimGraph* graphPointer = nullptr;
 
-      aim_calibration c;
-      c.hip_ = s.hip;
-      c.ads_ = s.ads;
-      c.accel_ = s.accel;
-      c.graph_ = std::move (graph);
-      return c;
-    }
+		if (this->graph)
+		{
+			graphPointer = &*this->graph;
+		}
 
-    aim_processor::config
-    aim_calibration::
-    processor_config () const noexcept
-    {
-      return {hip_, ads_, accel_, graph_ ? &*graph_ : nullptr};
-    }
-  }
+		return { this->hip, this->ads, this->accel, graphPointer };
+	}
 }

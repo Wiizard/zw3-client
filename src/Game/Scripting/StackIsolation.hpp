@@ -1,6 +1,6 @@
 #pragma once
 
-namespace Scripting
+namespace Game::Scripting
 {
 	class StackIsolation final
 	{
@@ -14,11 +14,10 @@ namespace Scripting
 		StackIsolation& operator=(const StackIsolation&) = delete;
 
 	private:
-		Game::VariableValue stack_[512]{};
-
-		Game::VariableValue* maxStack_;
-		Game::VariableValue* top_;
-		unsigned int inParamCount_;
-		unsigned int outParamCount_;
+		VariableValue stack[512]{};
+		VariableValue* maxStack;
+		VariableValue* top;
+		unsigned int inParamCount;
+		unsigned int outParamCount;
 	};
 }

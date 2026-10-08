@@ -1,63 +1,85 @@
+#include "STDInclude.hpp"
+
 #include "Command.hpp"
+#include "Logger.hpp"
 
 namespace Components
 {
-	std::unordered_map<std::string, Command::commandCallback> Command::FunctionMap;
-	std::unordered_map<std::string, Command::commandCallback> Command::FunctionMapSV;
+	std::unordered_map<std::string, Command::Callback> Command::clientCallbacks;
+	std::unordered_map<std::string, Command::Callback> Command::serverCallbacks;
 
-	std::string Command::Params::join(const int index) const
+	std::string Command::Params::Join(int index) const
 	{
 		std::string result;
 
-		for (auto i = index; i < this->size(); i++)
+		for (int i = index; i < this->Size(); ++i)
 		{
-			if (i > index) result.append(" ");
-			result.append(this->get(i));
+			if (i > index)
+			{
+				result.append(" ");
+			}
+
+			result.append(this->Get(i));
 		}
 
 		return result;
 	}
 
-	Command::ClientParams::ClientParams()
-		: nesting_(Game::cmd_args->nesting)
+	Command::ClientParams::ClientParams() : nesting(Game::cmd_args->nesting)
 	{
-		assert(Game::cmd_args->nesting < Game::CMD_MAX_NESTING);
 	}
 
-	int Command::ClientParams::size() const noexcept
+	int Command::ClientParams::Size() const
 	{
-		return Game::cmd_args->argc[this->nesting_];
+		return Game::cmd_args->argc[this->nesting];
 	}
 
-	const char* Command::ClientParams::get(const int index) const noexcept
+	const char* Command::ClientParams::Get(int index) const
 	{
-		if (index >= this->size())
+		if (index >= this->Size())
 		{
 			return "";
 		}
 
-		return Game::cmd_args->argv[this->nesting_][index];
+		return Game::cmd_args->argv[this->nesting][index];
 	}
 
-	Command::ServerParams::ServerParams()
-		: nesting_(Game::sv_cmd_args->nesting)
+	Command::ServerParams::ServerParams() : nesting(Game::sv_cmd_args->nesting)
 	{
-		assert(Game::sv_cmd_args->nesting < Game::CMD_MAX_NESTING);
 	}
 
-	int Command::ServerParams::size() const noexcept
+	int Command::ServerParams::Size() const
 	{
-		return Game::sv_cmd_args->argc[this->nesting_];
+		return Game::sv_cmd_args->argc[this->nesting];
 	}
 
-	const char* Command::ServerParams::get(const int index) const noexcept
+	const char* Command::ServerParams::Get(int index) const
 	{
-		if (index >= this->size())
+		if (index >= this->Size())
 		{
 			return "";
 		}
 
-		return Game::sv_cmd_args->argv[this->nesting_][index];
+		return Game::sv_cmd_args->argv[this->nesting][index];
+	}
+
+	Game::cmd_function_s* Command::Allocate()
+	{
+		return Utils::Memory::GetAllocator()->Allocate<Game::cmd_function_s>();
+	}
+
+	void Command::AddRaw(const char* name, void(*callback)())
+	{
+		Game::Cmd_AddCommandInternal(name, callback, Allocate());
+	}
+
+	constexpr std::uintptr_t Cbuf_AddServerText_f = 0x140080E50;
+
+	void Command::AddRawSV(const char* name, void(*callback)())
+	{
+		Game::Cmd_AddServerCommandInternal(name, callback, Allocate());
+
+		AddRaw(name, reinterpret_cast<void(*)()>(Utils::Hook::Rebase(Cbuf_AddServerText_f)));
 	}
 
 	void Command::Add(const char* name, const std::function<void()>& callback)
@@ -68,180 +90,265 @@ namespace Components
 		});
 	}
 
-	void Command::Add(const char* name, const commandCallback& callback)
+	void Command::Add(const char* name, const Callback& callback)
 	{
-		const auto command = Utils::String::ToLower(name);
+		const auto lowered = Utils::String::ToLower(name);
 
-		if (!FunctionMap.contains(command))
+		if (!clientCallbacks.contains(lowered))
 		{
 			AddRaw(name, MainCallback);
 		}
 
-		FunctionMap.insert_or_assign(command, callback);
+		clientCallbacks[lowered] = callback;
 	}
 
-	void Command::AddSV(const char* name, const commandCallback& callback)
+	void Command::AddSV(const char* name, const Callback& callback)
 	{
-		if (Loader::IsPregame())
-		{
-			MessageBoxA(nullptr, "Registering server commands in pregame state is illegal!", nullptr, MB_ICONERROR);
-#ifdef _DEBUG
-			__debugbreak();
-#endif
-			return;
-		}
+		const auto lowered = Utils::String::ToLower(name);
 
-		const auto command = Utils::String::ToLower(name);
-
-		if (!FunctionMapSV.contains(command))
+		if (!serverCallbacks.contains(lowered))
 		{
 			AddRawSV(name, MainCallbackSV);
 		}
 
-		FunctionMapSV.insert_or_assign(command, callback);
-	}
-
-	void Command::AddRaw(const char* name, void(*callback)(), bool key)
-	{
-		Game::Cmd_AddCommand(name, callback, Allocate(), key);
-	}
-
-	void Command::AddRawSV(const char* name, void(*callback)())
-	{
-		Game::Cmd_AddServerCommand(name, callback, Allocate());
-
-		// If the main command is registered as Cbuf_AddServerText, the command will be redirected to the SV handler
-		AddRaw(name, Game::Cbuf_AddServerText_f, false);
+		serverCallbacks[lowered] = callback;
 	}
 
 	void Command::Execute(std::string command, bool sync)
 	{
-		if (command.empty())
-		{
-			return;
-		}
-
-		command.push_back('\n'); // Make sure it's terminated
-
-		assert(command.size() < Game::MAX_CMD_LINE);
+		command.append("\n");
 
 		if (sync)
 		{
 			Game::Cmd_ExecuteSingleCommand(0, 0, command.data());
+			return;
 		}
-		else
-		{
-			Game::Cbuf_AddText(0, command.data());
-		}
+
+		Game::Cbuf_AddText(0, command.data());
 	}
 
 	Game::cmd_function_s* Command::Find(const std::string& command)
 	{
-		auto* cmdFunction = *Game::cmd_functions;
-
-		while (cmdFunction)
+		for (auto* entry = *Game::cmd_functions; entry; entry = entry->next)
 		{
-			if (cmdFunction->name && Utils::String::Compare(cmdFunction->name, command))
+			if (entry->name && Utils::String::Compare(entry->name, command))
 			{
-				return cmdFunction;
+				return entry;
 			}
-
-			cmdFunction = cmdFunction->next;
 		}
 
 		return nullptr;
 	}
 
-	Game::cmd_function_s* Command::Allocate()
-	{
-		return Utils::Memory::GetAllocator()->allocate<Game::cmd_function_s>();
-	}
-
 	void Command::MainCallback()
 	{
 		ClientParams params;
-		const auto command = Utils::String::ToLower(params[0]);
 
-		if (const auto itr = FunctionMap.find(command); itr != FunctionMap.end())
+		if (params.Size() < 1)
 		{
-			itr->second(&params);
+			return;
 		}
+
+		const auto name = Utils::String::ToLower(params.Get(0));
+		const auto callback = clientCallbacks.find(name);
+
+		if (callback == clientCallbacks.end())
+		{
+			return;
+		}
+
+		callback->second(&params);
 	}
 
 	void Command::MainCallbackSV()
 	{
 		ServerParams params;
-		const auto command = Utils::String::ToLower(params[0]);
 
-		if (const auto itr = FunctionMapSV.find(command); itr != FunctionMapSV.end())
+		if (params.Size() < 1)
 		{
-			itr->second(&params);
+			return;
 		}
-	}
 
-	const std::vector<std::string>& Command::GetExceptions()
-	{
-		static const auto exceptions = []() -> std::vector<std::string>
+		const auto name = Utils::String::ToLower(params.Get(0));
+		const auto callback = serverCallbacks.find(name);
+
+		if (callback == serverCallbacks.end())
 		{
-			std::vector<std::string> values =
-			{
-				"cmd",
-				"exec",
-				"map",
-			};
+			return;
+		}
 
-			if (Flags::HasFlag("disable-notifies"))
-			{
-				values.emplace_back("vstr");
-				values.emplace_back("wait");
-			}
-
-			return values;
-		}();
-
-		return exceptions;
+		callback->second(&params);
 	}
 
-	bool Command::CL_ShouldSendNotify_Hk(const char* cmd)
+	constexpr std::uintptr_t g_bindCommands = 0x140420C90;
+	constexpr int stockBindCommandCount = 78;
+	constexpr int addedBindCommandLimit = 32;
+	constexpr std::uintptr_t Key_GetBindingForCmd_CountCompare = 0x1400EF655;
+
+	static const std::uint8_t countCompare[] = { 0x83, 0xFB, 0x4E };
+
+	static const Utils::Hook::LeaSite bindCommandLeas[] =
 	{
-		if (!cmd)
+		{ 0x1400EF632, { 0x48, 0x8D, 0x3D }, g_bindCommands },
+		{ 0x1400EFD0E, { 0x4C, 0x8D, 0x2D }, g_bindCommands },
+	};
+
+	constexpr std::uintptr_t Key_ExecBinding = 0x1400F5EE0;
+	constexpr std::uintptr_t Key_ExecBindingPressCalls[] = { 0x1400EEAF8, 0x14026509C };
+
+	static const char** bindCommands = nullptr;
+	static int bindCommandCount = stockBindCommandCount;
+	static Utils::Hook execBindingHooks[std::size(Key_ExecBindingPressCalls)];
+
+	bool Command::TryExtendBindCommands()
+	{
+		if (!Utils::Hook::MatchesBytes(Key_GetBindingForCmd_CountCompare, countCompare, sizeof(countCompare)))
 		{
 			return false;
 		}
 
-		const auto& exceptions = GetExceptions();
-		for (const auto& entry : exceptions)
+		for (const auto& lea : bindCommandLeas)
 		{
-			if (Utils::String::Compare(cmd, entry))
+			if (!Utils::Hook::IsLeaIntact(lea))
 			{
 				return false;
 			}
 		}
 
+		for (const auto call : Key_ExecBindingPressCalls)
+		{
+			if (!Utils::Hook::BranchesTo(call, Key_ExecBinding, false))
+			{
+				return false;
+			}
+		}
+
+		auto* const table = static_cast<const char**>(Utils::Hook::AllocateDataNear(g_bindCommands, (stockBindCommandCount + addedBindCommandLimit) * sizeof(const char*)));
+
+		if (!table)
+		{
+			return false;
+		}
+
+		std::memcpy(table, reinterpret_cast<const void*>(Utils::Hook::Rebase(g_bindCommands)), stockBindCommandCount * sizeof(const char*));
+
+		for (const auto& lea : bindCommandLeas)
+		{
+			if (!Utils::Hook::CanLeaReach(lea, table))
+			{
+				return false;
+			}
+		}
+
+		bool isSeated = true;
+
+		for (std::size_t i = 0; i < std::size(Key_ExecBindingPressCalls); ++i)
+		{
+			isSeated = execBindingHooks[i].Initialize(Key_ExecBindingPressCalls[i], reinterpret_cast<void*>(Key_ExecBinding_Hook), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+		}
+
+		if (!isSeated)
+		{
+			for (auto& hook : execBindingHooks)
+			{
+				hook.Uninstall();
+			}
+
+			return false;
+		}
+
+		for (auto& hook : execBindingHooks)
+		{
+			hook.Quick();
+		}
+
+		for (const auto& lea : bindCommandLeas)
+		{
+			Utils::Hook::PointLeaAt(lea, table);
+		}
+
+		bindCommands = table;
 		return true;
+	}
+
+	bool Command::AddBindable(const char* name)
+	{
+		if (!bindCommands || bindCommandCount >= stockBindCommandCount + addedBindCommandLimit)
+		{
+			return false;
+		}
+
+		bindCommands[bindCommandCount] = name;
+		++bindCommandCount;
+
+		Utils::Hook::Set<std::uint8_t>(Key_GetBindingForCmd_CountCompare + 2, static_cast<std::uint8_t>(bindCommandCount));
+		return true;
+	}
+
+	int Command::GetBinding(const char* name)
+	{
+		for (int binding = stockBindCommandCount; binding < bindCommandCount; ++binding)
+		{
+			if (!_stricmp(bindCommands[binding], name))
+			{
+				return binding;
+			}
+		}
+
+		return -1;
+	}
+
+	void Command::ExecBinding(int localClientNum, int binding, int key)
+	{
+		Key_ExecBinding_Hook(localClientNum, binding, key);
+	}
+
+	void Command::Key_ExecBinding_Hook(int localClientNum, int binding, int key)
+	{
+		if (binding < stockBindCommandCount)
+		{
+			reinterpret_cast<void(*)(int, int, int)>(Utils::Hook::Rebase(Key_ExecBinding))(localClientNum, binding, key);
+			return;
+		}
+
+		if (binding >= bindCommandCount)
+		{
+			return;
+		}
+
+		const char* const name = bindCommands[binding];
+
+		if (name[0] == '+' || name[0] == '-')
+		{
+			return;
+		}
+
+		Game::Cbuf_AddText(localClientNum, Utils::String::VA("%s\n", name));
 	}
 
 	Command::Command()
 	{
-		AssertSize(Game::cmd_function_s, 24);
-
-		Command::Add("openLink", [](const Command::Params* params)
+		if (!TryExtendBindCommands())
 		{
-			if (params->size() > 1)
+			Logger::Error("command: g_bindCommands does not read as expected, no command of ours can be bound to a key\n");
+		}
+
+		Add("openLink", [](const Params* params)
+		{
+			if (params->Size() < 2)
 			{
-				std::string url = params->get(1);
-				Utils::String::Trim(url);
-
-				if(!url.empty() && url.find("http://") != 0 && url.find("https://") != 0)
-				{
-					url = "http://" + url;
-				}
-
-				Utils::OpenUrl(url);
+				return;
 			}
-		});
 
-		// Protect players from invasive servers
-		Utils::Hook(0x434BD4, CL_ShouldSendNotify_Hk, HOOK_CALL).install()->quick();  // CL_CheckNotify
+			std::string url = params->Get(1);
+			Utils::String::Trim(url);
+
+			if (!url.empty() && !url.starts_with("http://") && !url.starts_with("https://"))
+			{
+				url = "http://" + url;
+			}
+
+			Utils::OpenUrl(url);
+		});
 	}
 }

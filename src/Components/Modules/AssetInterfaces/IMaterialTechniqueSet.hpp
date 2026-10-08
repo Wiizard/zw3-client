@@ -1,18 +1,29 @@
 #pragma once
 
+#include "../AssetHandler.hpp"
+
 namespace Assets
 {
 	class IMaterialTechniqueSet : public Components::AssetHandler::IAsset
 	{
 	public:
-		Game::XAssetType getType() override { return Game::XAssetType::ASSET_TYPE_TECHNIQUE_SET; }
+		Game::XAssetType GetType() override
+		{
+			return Game::ASSET_TYPE_TECHNIQUE_SET;
+		}
 
-		void save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder) override;
-		void mark(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder) override;
-		void load(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder) override;
+		void Save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder) override;
+		void Mark(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder) override;
+		bool HasDump() override
+		{
+			return true;
+		}
 
-		void loadNative(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder);
-		void loadFromDisk(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder);
+		void Dump(Game::XAssetHeader header) override;
+		void Load(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder) override;
+
+		void LoadNative(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder);
+		void LoadFromDisk(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder);
 
 		IMaterialTechniqueSet();
 	};

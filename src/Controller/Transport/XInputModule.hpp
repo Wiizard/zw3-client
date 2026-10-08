@@ -1,64 +1,47 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Context.hpp"
+#include "Controller/Context.hpp"
 
-#include <windows.h>
-#include <xinput.h>
-
-namespace Controller
+namespace Controller::Transport
 {
-  namespace transport
-  {
-    class xinput_module
-    {
-    public:
-      explicit
-      xinput_module (const context&);
+	class XInputModule
+	{
+	public:
+		explicit XInputModule(const Context& context);
 
-      ~xinput_module ();
+		XInputModule(const XInputModule&) = delete;
+		XInputModule& operator=(const XInputModule&) = delete;
+		XInputModule(XInputModule&&) = delete;
+		XInputModule& operator=(XInputModule&&) = delete;
 
-      xinput_module (const xinput_module&) = delete;
-      xinput_module& operator= (const xinput_module&) = delete;
-      xinput_module (xinput_module&&) = delete;
-      xinput_module& operator= (xinput_module&&) = delete;
+		bool IsLoaded() const noexcept
+		{
+			return this->library != nullptr;
+		}
 
-      bool
-      loaded () const noexcept {return handle_ != nullptr;}
+		bool HasGuideButton() const noexcept
+		{
+			return this->getStateEx != nullptr;
+		}
 
-      const char*
-      dll_name () const noexcept {return name_;}
+		DWORD GetState(DWORD userIndex, XINPUT_STATE& state) const noexcept;
+		DWORD GetCapabilities(DWORD userIndex, DWORD flags, XINPUT_CAPABILITIES& capabilities) const noexcept;
+		DWORD SetState(DWORD userIndex, XINPUT_VIBRATION& vibration) const noexcept;
 
-      bool
-      has_guide_button () const noexcept {return get_state_ex_ != nullptr;}
+	private:
+		using GetStateFunction = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
+		using GetCapabilitiesFunction = DWORD(WINAPI*)(DWORD, DWORD, XINPUT_CAPABILITIES*);
+		using SetStateFunction = DWORD(WINAPI*)(DWORD, XINPUT_VIBRATION*);
 
-      DWORD
-      get_state (DWORD user_index, XINPUT_STATE& out) const noexcept;
+		void Load(const Context& context);
 
-      DWORD
-      get_capabilities (DWORD user_index,
-                        DWORD flags,
-                        XINPUT_CAPABILITIES& out) const noexcept;
+		HMODULE library = nullptr;
 
-      DWORD
-      set_state (DWORD user_index, XINPUT_VIBRATION& vibration) const noexcept;
-
-    private:
-      using get_state_fn = DWORD (WINAPI*) (DWORD, XINPUT_STATE*);
-      using get_caps_fn  = DWORD (WINAPI*) (DWORD, DWORD, XINPUT_CAPABILITIES*);
-      using set_state_fn = DWORD (WINAPI*) (DWORD, XINPUT_VIBRATION*);
-
-      void
-      load (const context&);
-
-      HMODULE handle_ {nullptr};
-      const char* name_ {"none"};
-
-      get_state_fn get_state_ {nullptr};
-      get_state_fn get_state_ex_ {nullptr};
-      get_caps_fn get_capabilities_ {nullptr};
-      set_state_fn set_state_ {nullptr};
-    };
-  }
+		GetStateFunction getState = nullptr;
+		GetStateFunction getStateEx = nullptr;
+		GetCapabilitiesFunction getCapabilities = nullptr;
+		SetStateFunction setState = nullptr;
+	};
 }

@@ -1,44 +1,38 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Device/Id.hpp"
-#include "../Device/Identity.hpp"
-#include "../Sample/Sample.hpp"
-#include "Output.hpp"
+#include "Controller/Device/Id.hpp"
+#include "Controller/Device/Identity.hpp"
+#include "Controller/Driver/Output.hpp"
+#include "Controller/Sample/Sample.hpp"
 
-namespace Controller
+namespace Controller::Driver
 {
-  namespace driver
-  {
-    inline constexpr size_t max_reports_per_poll {32};
+	inline constexpr std::size_t maxReportsPerPoll = 32;
 
-    class driver
-    {
-    public:
-      virtual
-      ~driver () = default;
+	class Driver
+	{
+	public:
+		virtual ~Driver() = default;
 
-      virtual Controller::family
-      family () const noexcept = 0;
+		virtual Controller::Family Family() const noexcept = 0;
+		virtual DeviceId Device() const noexcept = 0;
 
-      virtual device_id
-      device () const noexcept = 0;
+		virtual bool TryPoll(RawSample& raw, CanonicalSample& canonical) = 0;
+		virtual void Submit(const OutputRequest& request) = 0;
 
-      virtual bool
-      poll (raw_sample& raw, canonical_sample& canonical) noexcept = 0;
+		virtual void Configure([[maybe_unused]] const OutputPolicy& policy)
+		{
+		}
 
-      virtual void
-      submit (const output_request&) noexcept = 0;
+		virtual void StopHaptic([[maybe_unused]] std::uint32_t tag)
+		{
+		}
 
-      virtual void
-      configure (const output_policy&) noexcept {}
-
-      virtual void
-      stop_haptic (uint32_t) noexcept {}
-
-      virtual std::string
-      diagnostics () const {return {};}
-    };
-  }
+		virtual std::string Diagnostics() const
+		{
+			return {};
+		}
+	};
 }

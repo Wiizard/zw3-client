@@ -18,17 +18,15 @@ namespace Components
 
 		Scheduler();
 
-		void preDestroy() override;
-
 		static void Schedule(const std::function<bool()>& callback, Pipeline type,
-			std::chrono::milliseconds delay = 0ms);
+			std::chrono::milliseconds delay = std::chrono::milliseconds(0));
 		static void Loop(const std::function<void()>& callback, Pipeline type,
-			std::chrono::milliseconds delay = 0ms);
+			std::chrono::milliseconds delay = std::chrono::milliseconds(0));
 		static void Once(const std::function<void()>& callback, Pipeline type,
-			std::chrono::milliseconds delay = 0ms);
+			std::chrono::milliseconds delay = std::chrono::milliseconds(0));
 		static void OnGameInitialized(const std::function<void()>& callback, Pipeline type,
-			std::chrono::milliseconds delay = 0ms);
-		static void OnGameShutdown(const std::function<void()>& callback);
+			std::chrono::milliseconds delay = std::chrono::milliseconds(0));
+		static void OnShutdown(const std::function<void()>& callback);
 
 	private:
 		struct Task
@@ -38,31 +36,37 @@ namespace Components
 			std::chrono::high_resolution_clock::time_point lastCall{};
 		};
 
-		using taskList = std::vector<Task>;
+		using TaskList = std::vector<Task>;
 
 		class TaskPipeline
 		{
 		public:
-			void add(Task&& task);
-			void execute();
+			void Add(Task&& task);
+			void Execute();
 
 		private:
-			Utils::Concurrency::Container<taskList> newCallbacks_;
-			Utils::Concurrency::Container<taskList, std::recursive_mutex> callbacks_;
+			Utils::Concurrency::Container<TaskList> newCallbacks;
+			Utils::Concurrency::Container<TaskList, std::recursive_mutex> callbacks;
 
-			void mergeCallbacks();
+			void MergeCallbacks();
 		};
 
-		static volatile bool Kill;
-		static std::thread Thread;
-		static TaskPipeline Pipelines[];
+		static volatile bool kill;
+		static std::jthread thread;
+		static TaskPipeline pipelines[];
+
+		static Utils::Hook mainFrameHook;
+		static Utils::Hook clientFrameHook;
+		static Utils::Hook serverFrameHook;
+		static Utils::Hook rendererFrameHook;
+		static Utils::Hook quitHook;
 
 		static void Execute(Pipeline type);
 
-		static void ScrPlace_EndFrame_Hk();
-		static void ServerFrame_Hk();
-		static void ClientFrame_Hk(int localClientNum);
-		static void MainFrame_Hk();
-		static void SysSetBlockSystemHotkeys_Hk(int block);
+		static void MainFrame_Hook();
+		static void CL_Frame_Hook(int localClientNum);
+		static void G_Glass_Update_Hook(int a1, int a2, const float* a3, const float* a4);
+		static void ScrPlace_EndFrame_Hook();
+		static void Sys_SetBlockSystemHotkeys_Hook(int block);
 	};
 }

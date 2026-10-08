@@ -14,11 +14,10 @@ namespace Utils
 		NamedMutex& operator=(const NamedMutex&) = delete;
 
 		void lock() const;
-		// Lockable requirements
 		[[nodiscard]] bool try_lock(std::chrono::milliseconds timeout = std::chrono::milliseconds{0}) const;
 		void unlock() const noexcept;
 
 	private:
-		void* handle_{};
+		void* handle{};
 	};
 }

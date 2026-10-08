@@ -1,118 +1,85 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Context.hpp"
-#include "Dvar.hpp"
-#include "../Mapping/Key.hpp"
-#include "../Sample/Sample.hpp"
+#include "Controller/Context.hpp"
+#include "Controller/Engine/Dvar.hpp"
+#include "Controller/Mapping/Key.hpp"
+#include "Controller/Sample/Sample.hpp"
 
-namespace Controller
+namespace Controller::Engine
 {
-  namespace engine
-  {
-    inline constexpr int local_client {0};
+	class KeyDispatcher
+	{
+	public:
+		KeyDispatcher(const Context& context, const Dvars& dvars);
 
-    class key_dispatcher
-    {
-    public:
-      key_dispatcher (const context&, const dvars&);
+		void Dispatch(const CanonicalSample& sample);
+		void Tick();
+		void ReleaseAll();
 
-      void
-      dispatch (const canonical_sample&) noexcept;
+		bool IsInUse() const noexcept
+		{
+			return this->isInUse;
+		}
 
-      void
-      tick () noexcept;
+		void NoteOtherInput();
 
-      void
-      release_all () noexcept;
+		void SetTriggerEngage(float left, float right) noexcept;
 
-      bool
-      in_use () const noexcept {return in_use_;}
+	private:
+		enum class KeyEvent : std::uint8_t
+		{
+			Pressed,
+			Repeated,
+			Released,
+		};
 
-      void
-      note_other_input () noexcept;
+		static constexpr std::size_t buttonStateCount = static_cast<std::size_t>(Button::Count);
+		static constexpr std::size_t axisCount = 4;
+		static constexpr float defaultTriggerReleaseMargin = 0.05f;
 
-      void
-      set_trigger_engage (float left, float right) noexcept;
+		void SetInUse(bool isNowInUse);
 
-    private:
-      enum class key_event : uint8_t
-      {
-        pressed,
-        repeated,
-        released,
-      };
+		unsigned int ReleaseDelay() const noexcept;
+		bool DefersRelease(Mapping::EngineKey key) const noexcept;
 
-      void
-      set_in_use (bool) noexcept;
+		void EmitButton(Mapping::EngineKey key, KeyEvent event, unsigned int time);
+		void Emit(Mapping::EngineKey key, KeyEvent event, unsigned int time);
 
-      unsigned
-      release_delay () const noexcept;
+		void DispatchApad(unsigned int time);
+		void UpdateAds() noexcept;
+		void DispatchButtons(const ButtonSet& current, unsigned int time);
 
-      bool
-      defers_release (mapping::engine_key) const noexcept;
+		bool ShouldIgnoreRepeat(Mapping::EngineKey key, int repeats, unsigned int time);
+		void ResetScroll(Mapping::EngineKey key, bool isDown, unsigned int time);
 
-      void
-      emit_button (mapping::engine_key, key_event, unsigned time) noexcept;
+		void MenuKeyEvent(Mapping::EngineKey key, bool isDown);
+		bool TryScoreboardKeyEvent(Mapping::EngineKey key);
 
-      void
-      emit (mapping::engine_key, key_event, unsigned time) noexcept;
+		const Context& context;
+		const Dvars& dvars;
 
-      void
-      dispatch_apad (unsigned time) noexcept;
+		bool isInUse = false;
+		bool hasReportedDeadzone = false;
 
-      void
-      update_ads () noexcept;
+		std::array<float, triggerCount> engage{};
+		std::array<bool, triggerCount> isTriggerHeld{};
 
-      void
-      dispatch_buttons (const button_set& current, unsigned time) noexcept;
+		ButtonSet buttons;
+		ButtonSet deferred;
 
-      bool
-      ignore_repeat (mapping::engine_key, int repeats, unsigned time) noexcept;
+		float adsLerp = 0.0f;
+		bool isAdsLowering = false;
 
-      void
-      reset_scroll (mapping::engine_key, bool down, unsigned time) noexcept;
+		std::array<unsigned int, buttonStateCount> pressedAt{};
+		std::array<unsigned int, buttonStateCount> releasedAt{};
 
-      void
-      menu_key_event (mapping::engine_key, bool down) noexcept;
+		std::array<std::array<bool, 2>, axisCount> isDeflected{};
+		std::array<std::array<bool, 2>, axisCount> wasDeflected{};
 
-      bool
-      scoreboard_key_event (mapping::engine_key) noexcept;
-
-      const context& ctx_;
-      const dvars& dvars_;
-
-      bool in_use_ {false};
-
-      bool reported_deadzone_ {false};
-
-      static constexpr float default_trigger_release_margin {0.05f};
-
-      std::array<float, trigger_count> engage_ {};
-      std::array<bool, trigger_count> trigger_held_ {};
-
-      button_set buttons_;
-
-      static constexpr size_t button_state_count {
-        static_cast<size_t> (button::count)};
-
-      button_set deferred_;
-
-      float ads_lerp_ {0.0f};
-      bool ads_lowering_ {false};
-
-      std::array<unsigned, button_state_count> pressed_at_ {};
-      std::array<unsigned, button_state_count> released_at_ {};
-
-      static constexpr size_t axis_count {4};
-
-      std::array<std::array<bool, 2>, axis_count> deflected_ {};
-      std::array<std::array<bool, 2>, axis_count> was_deflected_ {};
-
-      unsigned next_scroll_ {0};
-      unsigned scroll_hold_start_ {0};
-      std::optional<mapping::engine_key> scroll_hold_key_;
-    };
-  }
+		unsigned int nextScroll = 0;
+		unsigned int scrollHoldStart = 0;
+		std::optional<Mapping::EngineKey> scrollHoldKey;
+	};
 }

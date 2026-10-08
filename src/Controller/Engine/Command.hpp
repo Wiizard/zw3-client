@@ -1,19 +1,15 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Context.hpp"
+#include "Controller/Context.hpp"
 
 namespace Controller
 {
-  class runtime;
+	class Runtime;
 }
 
-namespace Controller
+namespace Controller::Engine
 {
-  namespace engine
-  {
-    void
-    register_commands (const context&, runtime&);
-  }
+	void RegisterCommands(const Context& context, Runtime& runtime);
 }

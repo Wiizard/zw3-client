@@ -1,18 +1,23 @@
 #pragma once
 
+#include "Components/Modules/AssetHandler.hpp"
+
 namespace Assets
 {
 	class IGameWorldSp : public Components::AssetHandler::IAsset
 	{
 	public:
-		Game::XAssetType getType() override { return Game::XAssetType::ASSET_TYPE_GAMEWORLD_SP; }
+		Game::XAssetType GetType() override
+		{
+			return Game::ASSET_TYPE_GAMEWORLD_SP;
+		}
 
-		void save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder) override;
-		void mark(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder) override;
+		void Save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder) override;
+		void Mark(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder) override;
 
 	private:
-		void savepathnode_tree_info_t(Game::pathnode_tree_t* nodeTree, Game::pathnode_tree_t* destNodeTree, Components::ZoneBuilder::Zone* builder);
-		void saveVehicleTrackSegment(Game::VehicleTrackSegment* trackSegment, Game::VehicleTrackSegment* destTrackSegment, Components::ZoneBuilder::Zone* builder);
-		void saveVehicleTrackSegment_ptrArray(Game::VehicleTrackSegment** trackSegmentPtrs, int count, Components::ZoneBuilder::Zone* builder);
+		void Savepathnode_tree_info_t(const Game::pathnode_tree_t* nodeTree, Game::X86::pathnode_tree_t* destNodeTree, Components::ZoneBuilder::Zone* builder);
+		void SaveVehicleTrackSegment(const Game::VehicleTrackSegment* trackSegment, Game::X86::VehicleTrackSegment* destTrackSegment, Components::ZoneBuilder::Zone* builder);
+		void SaveVehicleTrackSegment_ptrArray(Game::VehicleTrackSegment* const* trackSegmentPtrs, unsigned int count, Components::ZoneBuilder::Zone* builder);
 	};
 }

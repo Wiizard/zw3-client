@@ -1,47 +1,33 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Support/FunctionRef.hpp"
-
-#include "../Context.hpp"
-#include "Connection.hpp"
+#include "Controller/Context.hpp"
+#include "Controller/Device/Connection.hpp"
 
 namespace Controller
 {
-  class registry
-  {
-  public:
-    explicit
-    registry (const context&);
+	class Registry
+	{
+	public:
+		explicit Registry(const Context& context);
 
-    device_id
-    add (device_identity,
-         Controller::transport_kind,
-         connection link,
-         capabilities,
-         transport_binding);
+		DeviceId Add(DeviceConnection connection);
+		bool Remove(DeviceId id);
 
-    bool
-    remove (device_id);
+		void ForEach(const std::function<void(const DeviceConnection&)>& visit) const;
 
-    std::optional<device_connection>
-    find (device_id) const;
+		std::uint64_t Generation() const noexcept
+		{
+			return this->generation.load();
+		}
 
-    void
-    for_each (function_ref<void (const device_connection&)>) const;
+	private:
+		const Context& context;
 
-    size_t
-    size () const;
-
-    uint64_t
-    generation () const noexcept {return generation_.load ();}
-
-  private:
-    const context& ctx_;
-    mutable std::mutex mutex_;
-    uint32_t next_ {1};
-    std::atomic<uint64_t> generation_ {0};
-    std::vector<device_connection> devices_;
-  };
+		mutable std::mutex mutex;
+		std::uint32_t nextId = 1;
+		std::atomic<std::uint64_t> generation{ 0 };
+		std::vector<DeviceConnection> devices;
+	};
 }

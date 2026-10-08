@@ -1,309 +1,311 @@
-#include "Feedback.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Engine/Feedback.hpp"
+#include "Controller/Engine/Engine.hpp"
+#include "Controller/Mapping/Key.hpp"
 
-#include <cstring>
-
-#include "Key.hpp"
-#include "../Mapping/Key.hpp"
-
-namespace Controller
+namespace Controller::Engine
 {
-  namespace engine
-  {
-    namespace
-    {
-      using driver::adaptive_trigger_request;
-      using driver::trigger_effect;
+	using Driver::AdaptiveTriggerRequest;
+	using Driver::TriggerEffect;
 
-      enum class trigger_role : uint8_t
-      {
-        none,
-        firing,
-        aiming,
-        primary_offhand,
-        secondary_offhand,
-      };
+	enum class TriggerRole : std::uint8_t
+	{
+		None,
+		Firing,
+		Aiming,
+		PrimaryOffhand,
+		SecondaryOffhand,
+	};
 
-      trigger_role
-      role_for (mapping::engine_key k) noexcept
-      {
-        const char* const b (
-          playerKeys[local_client].keys[static_cast<int> (k)].binding);
+	struct TriggerTuning
+	{
+		std::uint8_t light = 0;
+		std::uint8_t heavy = 0;
 
-        if (b == nullptr)
-          return trigger_role::none;
+		std::uint8_t lightStart = 0;
+		std::uint8_t lightEnd = 0;
+		std::uint8_t hardStart = 0;
+		std::uint8_t hardEnd = 0;
 
-        if (std::strcmp (b, "+attack") == 0)
-          return trigger_role::firing;
+		std::uint8_t ads = 0;
+	};
 
-        if (std::strcmp (b, "+speed_throw") == 0 ||
-            std::strcmp (b, "+toggleads_throw") == 0)
-          return trigger_role::aiming;
+	static constexpr std::uint8_t slightStrength = 7;
+	static constexpr std::uint8_t heavyStrength = 8;
 
-        if (std::strcmp (b, "+frag") == 0)
-          return trigger_role::primary_offhand;
+	static constexpr std::uint8_t lightBreakStart = 2;
+	static constexpr std::uint8_t lightBreakEnd = 5;
+	static constexpr std::uint8_t hardBreakStart = 3;
+	static constexpr std::uint8_t hardBreakEnd = 7;
 
-        if (std::strcmp (b, "+smoke") == 0)
-          return trigger_role::secondary_offhand;
+	static constexpr std::uint8_t maxStrength = 8;
+	static constexpr auto maxPosition = static_cast<std::uint8_t>(Driver::triggerZoneCount - 1);
 
-        return trigger_role::none;
-      }
+	static TriggerRole RoleFor(Mapping::EngineKey key)
+	{
+		static const int attackBinding = Game::Key_GetBindingForCmd("+attack");
+		static const int speedThrowBinding = Game::Key_GetBindingForCmd("+speed_throw");
+		static const int toggleAdsThrowBinding = Game::Key_GetBindingForCmd("+toggleads_throw");
+		static const int fragBinding = Game::Key_GetBindingForCmd("+frag");
+		static const int smokeBinding = Game::Key_GetBindingForCmd("+smoke");
 
-      adaptive_trigger_request
-      released (trigger_side side) noexcept
-      {
-        adaptive_trigger_request r;
-        r.side = side;
-        r.effect = trigger_effect::off;
-        return r;
-      }
+		const int binding = Game::playerKeys[localClient].keys[static_cast<int>(key)].binding;
 
-      adaptive_trigger_request
-      profile (trigger_side side, const driver::trigger_profile& zones) noexcept
-      {
-        adaptive_trigger_request r;
-        r.side = side;
-        r.effect = trigger_effect::feedback;
-        r.zones = zones;
-        return r;
-      }
+		if (binding == 0)
+		{
+			return TriggerRole::None;
+		}
 
-      driver::trigger_profile
-      ramp (uint8_t from, uint8_t to) noexcept
-      {
-        driver::trigger_profile z {};
+		if (binding == attackBinding)
+		{
+			return TriggerRole::Firing;
+		}
 
-        constexpr size_t last (driver::trigger_zone_count - 1);
+		if (binding == speedThrowBinding || binding == toggleAdsThrowBinding)
+		{
+			return TriggerRole::Aiming;
+		}
 
-        for (size_t i (0); i != driver::trigger_zone_count; ++i)
-          z[i] = static_cast<uint8_t> (
-            from + (static_cast<int> (to) - from) * static_cast<int> (i) / last);
+		if (binding == fragBinding)
+		{
+			return TriggerRole::PrimaryOffhand;
+		}
 
-        return z;
-      }
+		if (binding == smokeBinding)
+		{
+			return TriggerRole::SecondaryOffhand;
+		}
 
-      driver::trigger_profile
-      flat (uint8_t strength) noexcept
-      {
-        driver::trigger_profile z {};
-        z.fill (strength);
-        return z;
-      }
+		return TriggerRole::None;
+	}
 
-      adaptive_trigger_request
-      section (trigger_side side,
-               uint8_t start,
-               uint8_t end,
-               uint8_t strength) noexcept
-      {
-        adaptive_trigger_request r;
-        r.side = side;
-        r.effect = trigger_effect::weapon;
-        r.start_position = start;
-        r.end_position = end;
-        r.strength = strength;
-        return r;
-      }
+	static AdaptiveTriggerRequest Released(TriggerSide side) noexcept
+	{
+		AdaptiveTriggerRequest request;
+		request.side = side;
+		request.effect = TriggerEffect::Off;
+		return request;
+	}
 
-      constexpr uint8_t slight {7};
-      constexpr uint8_t heavy {8};
+	static AdaptiveTriggerRequest ProfileRequest(TriggerSide side, const Driver::TriggerProfile& zones) noexcept
+	{
+		AdaptiveTriggerRequest request;
+		request.side = side;
+		request.effect = TriggerEffect::Feedback;
+		request.zones = zones;
+		return request;
+	}
 
-      constexpr uint8_t light_break_start {2};
-      constexpr uint8_t light_break_end {5};
-      constexpr uint8_t hard_break_start {3};
-      constexpr uint8_t hard_break_end {7};
+	static Driver::TriggerProfile Ramp(std::uint8_t from, std::uint8_t to) noexcept
+	{
+		Driver::TriggerProfile zones{};
 
-      constexpr uint8_t max_strength {8};
-      constexpr uint8_t max_position {
-        static_cast<uint8_t> (driver::trigger_zone_count - 1)};
+		constexpr int last = static_cast<int>(Driver::triggerZoneCount - 1);
 
-      struct tuning
-      {
-        uint8_t light {0};
-        uint8_t heavy {0};
+		for (std::size_t i = 0; i != Driver::triggerZoneCount; ++i)
+		{
+			zones[i] = static_cast<std::uint8_t>(from + (static_cast<int>(to) - from) * static_cast<int>(i) / last);
+		}
 
-        uint8_t light_start {0};
-        uint8_t light_end {0};
-        uint8_t hard_start {0};
-        uint8_t hard_end {0};
+		return zones;
+	}
 
-        uint8_t ads {0};
-      };
+	static Driver::TriggerProfile Flat(std::uint8_t strength) noexcept
+	{
+		Driver::TriggerProfile zones{};
+		zones.fill(strength);
+		return zones;
+	}
 
-      uint8_t
-      clamp_to (int v, uint8_t limit) noexcept
-      {
-        return static_cast<uint8_t> (v < 0 ? 0 : (v > limit ? limit : v));
-      }
+	static AdaptiveTriggerRequest Section(TriggerSide side, std::uint8_t start, std::uint8_t end, std::uint8_t strength) noexcept
+	{
+		AdaptiveTriggerRequest request;
+		request.side = side;
+		request.effect = TriggerEffect::Weapon;
+		request.startPosition = start;
+		request.endPosition = end;
+		request.strength = strength;
+		return request;
+	}
 
-      uint8_t
-      scaled_strength (int configured, float scale) noexcept
-      {
-        const float v (static_cast<float> (clamp_to (configured, max_strength)) *
-                       (scale < 0.0f ? 0.0f : (scale > 1.0f ? 1.0f : scale)));
+	static std::uint8_t ClampTo(int value, std::uint8_t limit) noexcept
+	{
+		if (value < 0)
+		{
+			return 0;
+		}
 
-        return clamp_to (static_cast<int> (v + 0.5f), max_strength);
-      }
+		if (value > limit)
+		{
+			return limit;
+		}
 
-      tuning
-      read_tuning (const dvars& d) noexcept
-      {
-        const float scale (read (d.adaptive_trigger_strength, 1.0f));
+		return static_cast<std::uint8_t>(value);
+	}
 
-        tuning t;
+	static std::uint8_t ScaledStrength(int configured, float scale) noexcept
+	{
+		const float clampedScale = std::clamp(scale, 0.0f, 1.0f);
+		const float strength = static_cast<float>(ClampTo(configured, maxStrength)) * clampedScale;
 
-        t.light = scaled_strength (
-          read (d.adaptive_trigger_light, static_cast<int> (slight)), scale);
-        t.heavy = scaled_strength (
-          read (d.adaptive_trigger_heavy, static_cast<int> (heavy)), scale);
-        t.ads = scaled_strength (read (d.adaptive_trigger_ads, 0), scale);
+		return ClampTo(static_cast<int>(strength + 0.5f), maxStrength);
+	}
 
-        t.light_start = clamp_to (
-          read (d.adaptive_trigger_light_start,
-                static_cast<int> (light_break_start)), max_position);
-        t.light_end = clamp_to (
-          read (d.adaptive_trigger_light_end,
-                static_cast<int> (light_break_end)), max_position);
-        t.hard_start = clamp_to (
-          read (d.adaptive_trigger_heavy_start,
-                static_cast<int> (hard_break_start)), max_position);
-        t.hard_end = clamp_to (
-          read (d.adaptive_trigger_heavy_end,
-                static_cast<int> (hard_break_end)), max_position);
+	static TriggerTuning ReadTuning(const Dvars& dvars) noexcept
+	{
+		const float scale = Read(dvars.adaptiveTriggerStrength, 1.0f);
 
-        t.light_end = std::max (t.light_end, t.light_start);
-        t.hard_end = std::max (t.hard_end, t.hard_start);
+		TriggerTuning tuning;
 
-        return t;
-      }
+		tuning.light = ScaledStrength(Read(dvars.adaptiveTriggerLight, static_cast<int>(slightStrength)), scale);
+		tuning.heavy = ScaledStrength(Read(dvars.adaptiveTriggerHeavy, static_cast<int>(heavyStrength)), scale);
+		tuning.ads = ScaledStrength(Read(dvars.adaptiveTriggerAds, 0), scale);
 
-      adaptive_trigger_request
-      firing_feedback (trigger_side side,
-                       const playerState_s& ps,
-                       const tuning& t) noexcept
-      {
-        const int index (BG_GetViewModelWeaponIndex (&ps));
+		tuning.lightStart = ClampTo(Read(dvars.adaptiveTriggerLightStart, static_cast<int>(lightBreakStart)), maxPosition);
+		tuning.lightEnd = ClampTo(Read(dvars.adaptiveTriggerLightEnd, static_cast<int>(lightBreakEnd)), maxPosition);
+		tuning.hardStart = ClampTo(Read(dvars.adaptiveTriggerHeavyStart, static_cast<int>(hardBreakStart)), maxPosition);
+		tuning.hardEnd = ClampTo(Read(dvars.adaptiveTriggerHeavyEnd, static_cast<int>(hardBreakEnd)), maxPosition);
 
-        if (index == 0)
-          return released (side);
+		tuning.lightEnd = std::max(tuning.lightEnd, tuning.lightStart);
+		tuning.hardEnd = std::max(tuning.hardEnd, tuning.hardStart);
 
-        const WeaponDef* const w (
-          BG_GetWeaponDef (static_cast<unsigned> (index)));
+		return tuning;
+	}
 
-        if (w == nullptr)
-          return released (side);
+	static AdaptiveTriggerRequest FiringFeedback(TriggerSide side, const Game::playerState_s& playerState, const TriggerTuning& tuning)
+	{
+		const unsigned int weaponIndex = Game::BG_GetViewmodelWeaponIndex(&playerState);
 
-        switch (w->weapClass)
-        {
-          case Game::WEAPCLASS_MG:
-          case Game::WEAPCLASS_RIFLE:
-          case Game::WEAPCLASS_TURRET:
-            return profile (side, flat (t.heavy));
+		if (weaponIndex == 0)
+		{
+			return Released(side);
+		}
 
-          case Game::WEAPCLASS_SMG:
-            return profile (side, ramp (t.light, t.heavy));
+		const auto* weaponDef = Game::BG_GetWeaponDef(weaponIndex);
 
-          case Game::WEAPCLASS_PISTOL:
-            return section (side, t.light_start, t.light_end, t.light);
+		if (weaponDef == nullptr)
+		{
+			return Released(side);
+		}
 
-          case Game::WEAPCLASS_SPREAD:
-          case Game::WEAPCLASS_SNIPER:
-          case Game::WEAPCLASS_ROCKETLAUNCHER:
-            return section (side, t.hard_start, t.hard_end, t.heavy);
+		switch (weaponDef->weapClass)
+		{
+		case Game::WEAPCLASS_MG:
+		case Game::WEAPCLASS_RIFLE:
+		case Game::WEAPCLASS_TURRET:
+			return ProfileRequest(side, Flat(tuning.heavy));
 
-          default:
-            return released (side);
-        }
-      }
+		case Game::WEAPCLASS_SMG:
+			return ProfileRequest(side, Ramp(tuning.light, tuning.heavy));
 
-      adaptive_trigger_request
-      offhand_feedback (trigger_side side,
-                        const playerState_s& ps,
-                        bool primary,
-                        const tuning& t) noexcept
-      {
-        const int held (primary ? ps.weapCommon.offhandPrimary
-                                : ps.weapCommon.offhandSecondary);
+		case Game::WEAPCLASS_PISTOL:
+			return Section(side, tuning.lightStart, tuning.lightEnd, tuning.light);
 
-        return held != Game::OFFHAND_CLASS_NONE
-          ? section (side, t.light_start, t.light_end, t.light)
-          : released (side);
-      }
+		case Game::WEAPCLASS_SPREAD:
+		case Game::WEAPCLASS_SNIPER:
+		case Game::WEAPCLASS_ROCKETLAUNCHER:
+			return Section(side, tuning.hardStart, tuning.hardEnd, tuning.heavy);
 
-      adaptive_trigger_request
-      aiming_feedback (trigger_side side, const tuning& t) noexcept
-      {
-        return t.ads != 0 ? profile (side, flat (t.ads)) : released (side);
-      }
-    }
+		default:
+			return Released(side);
+		}
+	}
 
-    bool
-    evaluate_trigger_feedback (const dvars& d,
-                               int client,
-                               adaptive_trigger_request& left,
-                               adaptive_trigger_request& right) noexcept
-    {
-      if (!read (d.adaptive_triggers, false))
-        return false;
+	static AdaptiveTriggerRequest OffhandFeedback(TriggerSide side, const Game::playerState_s& playerState, bool isPrimary, const TriggerTuning& tuning)
+	{
+		auto held = playerState.weapCommon.offhandSecondary;
 
-      Game::cg_s* const cg (Game::CL_GetLocalClientGlobals (client));
+		if (isPrimary)
+		{
+			held = playerState.weapCommon.offhandPrimary;
+		}
 
-      if (cg == nullptr || cg->snap == nullptr)
-        return false;
+		if (held == Game::OFFHAND_CLASS_NONE)
+		{
+			return Released(side);
+		}
 
-      const playerState_s& ps (cg->snap->ps);
+		return Section(side, tuning.lightStart, tuning.lightEnd, tuning.light);
+	}
 
-      const trigger_role l (role_for (mapping::engine_key::button_ltrig));
-      const trigger_role r (role_for (mapping::engine_key::button_rtrig));
+	static AdaptiveTriggerRequest AimingFeedback(TriggerSide side, const TriggerTuning& tuning)
+	{
+		if (tuning.ads == 0)
+		{
+			return Released(side);
+		}
 
-      const tuning t (read_tuning (d));
+		return ProfileRequest(side, Flat(tuning.ads));
+	}
 
-      const auto effect_for = [&ps, &t] (trigger_side side, trigger_role role)
-      {
-        switch (role)
-        {
-          case trigger_role::firing:
-            return firing_feedback (side, ps, t);
+	static AdaptiveTriggerRequest EffectFor(TriggerSide side, TriggerRole role, const Game::playerState_s& playerState, const TriggerTuning& tuning)
+	{
+		switch (role)
+		{
+		case TriggerRole::Firing:
+			return FiringFeedback(side, playerState, tuning);
 
-          case trigger_role::aiming:
-            return aiming_feedback (side, t);
+		case TriggerRole::Aiming:
+			return AimingFeedback(side, tuning);
 
-          case trigger_role::none:
-            return released (side);
+		case TriggerRole::None:
+			return Released(side);
 
-          case trigger_role::primary_offhand:
-            return offhand_feedback (side, ps, true, t);
+		case TriggerRole::PrimaryOffhand:
+			return OffhandFeedback(side, playerState, true, tuning);
 
-          case trigger_role::secondary_offhand:
-            return offhand_feedback (side, ps, false, t);
-        }
+		case TriggerRole::SecondaryOffhand:
+			return OffhandFeedback(side, playerState, false, tuning);
+		}
 
-        return released (side);
-      };
+		return Released(side);
+	}
 
-      left = effect_for (trigger_side::left, l);
-      right = effect_for (trigger_side::right, r);
+	bool TryEvaluateTriggerFeedback(const Dvars& dvars, int client, AdaptiveTriggerRequest& left, AdaptiveTriggerRequest& right)
+	{
+		if (!Read(dvars.adaptiveTriggers, false))
+		{
+			return false;
+		}
 
-      if (l == trigger_role::firing && r == trigger_role::firing)
-      {
-        const int index (BG_GetViewModelWeaponIndex (&ps));
+		const auto* cg = Game::CL_GetLocalClientGlobals(client);
 
-        if (index != 0)
-        {
-          const PlayerEquippedWeaponState* const e (
-            BG_GetEquippedWeaponState (const_cast<playerState_s*> (&ps),
-                                       static_cast<unsigned> (index)));
+		if (cg == nullptr || cg->snap == nullptr)
+		{
+			return false;
+		}
 
-          if (e != nullptr && e->dualWielding)
-          {
-            right = left;
-            right.side = trigger_side::right;
-          }
-        }
-      }
+		const auto& playerState = cg->snap->ps;
 
-      return true;
-    }
-  }
+		const TriggerRole leftRole = RoleFor(Mapping::EngineKey::ButtonLTrigger);
+		const TriggerRole rightRole = RoleFor(Mapping::EngineKey::ButtonRTrigger);
+
+		const TriggerTuning tuning = ReadTuning(dvars);
+
+		left = EffectFor(TriggerSide::Left, leftRole, playerState, tuning);
+		right = EffectFor(TriggerSide::Right, rightRole, playerState, tuning);
+
+		if (leftRole != TriggerRole::Firing || rightRole != TriggerRole::Firing)
+		{
+			return true;
+		}
+
+		const unsigned int weaponIndex = Game::BG_GetViewmodelWeaponIndex(&playerState);
+
+		if (weaponIndex == 0)
+		{
+			return true;
+		}
+
+		const auto* equipped = Game::BG_GetEquippedWeaponState(const_cast<Game::playerState_s*>(&playerState), weaponIndex);
+
+		if (equipped != nullptr && equipped->dualWielding)
+		{
+			right = left;
+			right.side = TriggerSide::Right;
+		}
+
+		return true;
+	}
 }

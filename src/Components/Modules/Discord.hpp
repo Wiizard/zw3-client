@@ -11,12 +11,7 @@ namespace Components
 
 		static std::string GetDiscordServerLink() { return "https://discord.gg/QqnF2NFNVV"; }
 
-		void preDestroy() override;
-
 	private:
-		static std::atomic_bool Initialized_;
-		static std::atomic_bool GameInitialized_;
-
 		static void InitializeDiscord();
 
 		static void UpdateDiscord();
@@ -24,19 +19,11 @@ namespace Components
 		static void JoinRequest(const DiscordUser* request);
 
 		static bool IsPrivateMatchOpen();
-
 		static bool IsServerListOpen();
-
 		static bool IsMainMenuOpen();
-
 		static bool IsPartyLobbyOpen();
-
 		static bool IsZWNetMatchmakingOpen();
-
 		static bool IsZWNetPreGameState(const std::string& state);
-
 		static bool IsConnectMenuOpen();
-
-		static const char* GetHostDiscordInviteIP();
 	};
 }

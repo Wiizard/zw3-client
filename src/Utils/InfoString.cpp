@@ -1,78 +1,79 @@
-#include "InfoString.hpp"
+#include "STDInclude.hpp"
 
 namespace Utils
 {
 	InfoString::InfoString(const std::string& buffer)
 	{
-		this->parse(buffer);
+		this->Parse(buffer);
 	}
 
-	void InfoString::set(const std::string& key, const std::string& value)
+	void InfoString::Set(const std::string& key, const std::string& value)
 	{
-		this->keyValuePairs_[key] = value;
+		this->pairs[key] = value;
 	}
 
-	void InfoString::remove(const std::string& key)
+	void InfoString::Remove(const std::string& key)
 	{
-		this->keyValuePairs_.erase(key);
+		this->pairs.erase(key);
 	}
 
-	std::string InfoString::get(const std::string& key) const
+	std::string InfoString::Get(const std::string& key) const
 	{
-		if (const auto value = this->keyValuePairs_.find(key); value != this->keyValuePairs_.end())
+		const auto pair = this->pairs.find(key);
+
+		if (pair == this->pairs.end())
 		{
-			return value->second;
+			return {};
 		}
 
-		return {};
+		return pair->second;
 	}
 
-	void InfoString::parse(std::string buffer)
+	bool InfoString::Has(const std::string& key) const
 	{
-		if (!buffer.empty() && buffer[0] == '\\')
+		return this->pairs.contains(key);
+	}
+
+	void InfoString::Parse(std::string buffer)
+	{
+		if (buffer.empty())
 		{
-			buffer = buffer.substr(1);
+			return;
 		}
 
-		const auto keyValues = String::Split(buffer, '\\');
-		for (std::size_t i = 0; !keyValues.empty() && i < (keyValues.size() - 1); i += 2)
+		if (buffer.front() == '\\')
 		{
-			const auto& key = keyValues[i];
-			const auto& value = keyValues[i + 1];
+			buffer.erase(buffer.begin());
+		}
 
-			if (!this->keyValuePairs_.contains(key))
+		const auto tokens = String::Split(buffer, '\\');
+
+		for (std::size_t i = 0; i + 1 < tokens.size(); i += 2)
+		{
+			if (!this->pairs.contains(tokens[i]))
 			{
-				this->keyValuePairs_[key] = value;
+				this->pairs[tokens[i]] = tokens[i + 1];
 			}
 		}
 	}
 
-	std::string InfoString::build() const
+	nlohmann::json InfoString::ToJson() const
 	{
-		std::string infoString;
-		for (const auto& [key, value] : this->keyValuePairs_)
-		{
-			infoString.append("\\");
-			infoString.append(key);
-			infoString.append("\\");
-			infoString.append(value);
-		}
-
-		return infoString;
+		return this->pairs;
 	}
 
-#ifdef _DEBUG
-	void InfoString::dump()
+	std::string InfoString::Build() const
 	{
-		for (const auto& [key, value] : this->keyValuePairs_)
-		{
-			OutputDebugStringA(String::VA("%s: %s\n", key.data(), value.data()));
-		}
-	}
-#endif
+		std::string result;
 
-	nlohmann::json InfoString::to_json() const
-	{
-		return this->keyValuePairs_;
+		for (const auto& [key, value] : this->pairs)
+		{
+			result.append("\\");
+			result.append(key);
+			result.append("\\");
+			result.append(value);
+		}
+
+		return result;
 	}
 }

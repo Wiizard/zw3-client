@@ -1,25 +1,19 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "Key.hpp"
-#include "../Device/Identity.hpp"
+#include "Controller/Device/Identity.hpp"
+#include "Controller/Mapping/Key.hpp"
 
-namespace Controller
+namespace Controller::Mapping
 {
-  namespace mapping
-  {
-    enum class glyph_family : uint8_t
-    {
-      xbox,
-      playstation,
-    };
+	enum class GlyphFamily : std::uint8_t
+	{
+		Xbox,
+		PlayStation,
+	};
 
-    glyph_family
-    glyph_family_for (Controller::family device,
-                      std::optional<glyph_family> user_override) noexcept;
+	GlyphFamily GlyphFamilyFor(Controller::Family device, std::optional<GlyphFamily> userOverride) noexcept;
 
-    const char*
-    glyph_for (engine_key, glyph_family) noexcept;
-  }
+	const char* GlyphFor(EngineKey key, GlyphFamily family) noexcept;
 }

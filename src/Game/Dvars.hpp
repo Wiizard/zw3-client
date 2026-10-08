@@ -1,43 +1,34 @@
 #pragma once
 
-// Put game dvars here
 namespace Game
 {
-	typedef dvar_t*(*Dvar_RegisterBool_t)(const char* dvarName, bool value, unsigned __int16 flags, const char* description);
+	typedef dvar_t*(*Dvar_RegisterBool_t)(const char* name, bool value, unsigned int flags, const char* description);
 	extern Dvar_RegisterBool_t Dvar_RegisterBool;
 
-	typedef dvar_t*(*Dvar_RegisterFloat_t)(const char* dvarName, float value, float min, float max, unsigned __int16 flags, const char* description);
+	typedef dvar_t*(*Dvar_RegisterFloat_t)(const char* name, float value, float min, float max, unsigned int flags, const char* description);
 	extern Dvar_RegisterFloat_t Dvar_RegisterFloat;
 
-	typedef dvar_t*(*Dvar_RegisterVec2_t)(const char* dvarName, float x, float y, float min, float max, unsigned __int16 flags, const char* description);
+	typedef dvar_t*(*Dvar_RegisterVec2_t)(const char* name, float x, float y, float min, float max, unsigned int flags, const char* description);
 	extern Dvar_RegisterVec2_t Dvar_RegisterVec2;
 
-	typedef dvar_t*(*Dvar_RegisterVec3_t)(const char* dvarName, float x, float y, float z, float min, float max, unsigned __int16 flags, const char* description);
+	typedef dvar_t*(*Dvar_RegisterVec3_t)(const char* name, float x, float y, float z, float min, float max, unsigned int flags, const char* description);
 	extern Dvar_RegisterVec3_t Dvar_RegisterVec3;
 
-	typedef dvar_t*(*Dvar_RegisterVec4_t)(const char* dvarName, float x, float y, float z, float w, float min, float max, unsigned __int16 flags, const char* description);
+	typedef dvar_t*(*Dvar_RegisterVec4_t)(const char* name, float x, float y, float z, float w, float min, float max, unsigned int flags, const char* description);
 	extern Dvar_RegisterVec4_t Dvar_RegisterVec4;
 
-	typedef dvar_t*(*Dvar_RegisterInt_t)(const char* dvarName, int value, int min, int max, unsigned __int16 flags, const char* description);
+	typedef dvar_t*(*Dvar_RegisterInt_t)(const char* name, int value, int minValue, int maxValue,
+		unsigned int flags, const char* description);
 	extern Dvar_RegisterInt_t Dvar_RegisterInt;
 
-	typedef dvar_t*(*Dvar_RegisterEnum_t)(const char* dvarName, const char** valueList, int defaultIndex, unsigned __int16 flags, const char* description);
+	typedef dvar_t*(*Dvar_RegisterEnum_t)(const char* name, const char** valueList, int defaultIndex, unsigned int flags, const char* description);
 	extern Dvar_RegisterEnum_t Dvar_RegisterEnum;
 
-	typedef dvar_t*(*Dvar_RegisterString_t)(const char* dvarName, const char* value, unsigned __int16 flags, const char* description);
+	typedef dvar_t*(*Dvar_RegisterString_t)(const char* name, const char* value, unsigned int flags, const char* description);
 	extern Dvar_RegisterString_t Dvar_RegisterString;
 
-	typedef dvar_t*(*Dvar_RegisterColor_t)(const char* dvarName, float r, float g, float b, float a, unsigned __int16 flags, const char* description);
-	extern Dvar_RegisterColor_t Dvar_RegisterColor;
-
-	typedef dvar_t*(*Dvar_RegisterVec3Color_t)(const char* dvarName, float x, float y, float z, float max, unsigned __int16 flags, const char* description);
-	extern Dvar_RegisterVec3Color_t Dvar_RegisterVec3Color;
-
-	typedef void(*Dvar_SetFromStringByName_t)(const char* dvarName, const char* string);
+	typedef void(*Dvar_SetFromStringByName_t)(const char* name, const char* value);
 	extern Dvar_SetFromStringByName_t Dvar_SetFromStringByName;
-
-	typedef const dvar_t*(*Dvar_SetFromStringByNameFromSource_t)(const char* dvarName, const char* string, DvarSetSource source);
-	extern Dvar_SetFromStringByNameFromSource_t Dvar_SetFromStringByNameFromSource;
 
 	typedef void(*Dvar_SetStringByName_t)(const char* dvarName, const char* value);
 	extern Dvar_SetStringByName_t Dvar_SetStringByName;
@@ -45,116 +36,53 @@ namespace Game
 	typedef void(*Dvar_SetString_t)(const dvar_t* dvar, const char* value);
 	extern Dvar_SetString_t Dvar_SetString;
 
-	typedef void(*Dvar_SetBool_t)(const dvar_t* dvar, bool enabled);
+	typedef void(*Dvar_SetBool_t)(const dvar_t* dvar, bool value);
 	extern Dvar_SetBool_t Dvar_SetBool;
-
-	typedef void(*Dvar_SetBoolByName_t)(const char* dvarName, bool value);
-	extern Dvar_SetBoolByName_t Dvar_SetBoolByName;
 
 	typedef void(*Dvar_SetFloat_t)(const dvar_t* dvar, float value);
 	extern Dvar_SetFloat_t Dvar_SetFloat;
 
-	typedef void(*Dvar_SetFloatByName_t)(const char* dvarName, float value);
-	extern Dvar_SetFloatByName_t Dvar_SetFloatByName;
-
-	typedef void(*Dvar_SetInt_t)(const dvar_t* dvar, int integer);
+	typedef void(*Dvar_SetInt_t)(const dvar_t* dvar, int value);
 	extern Dvar_SetInt_t Dvar_SetInt;
 
-	typedef void(*Dvar_GetUnpackedColorByName_t)(const char* dvarName, float* expandedColor);
-	extern Dvar_GetUnpackedColorByName_t Dvar_GetUnpackedColorByName;
-
-	typedef char*(*Dvar_GetString_t)(const char* dvarName);
+	typedef const char*(*Dvar_GetString_t)(const char* name);
 	extern Dvar_GetString_t Dvar_GetString;
 
-	typedef char*(*Dvar_GetVariantString_t)(const char* dvarName);
-	extern Dvar_GetVariantString_t Dvar_GetVariantString;
-
-	typedef dvar_t*(*Dvar_FindVar_t)(const char* dvarName);
+	typedef dvar_t*(*Dvar_FindVar_t)(const char* name);
 	extern Dvar_FindVar_t Dvar_FindVar;
 
-	typedef char*(*Dvar_InfoString_Big_t)(int bit);
+	typedef const char*(*Dvar_InfoString_Big_t)(unsigned int flag);
 	extern Dvar_InfoString_Big_t Dvar_InfoString_Big;
 
-	typedef void(*Dvar_SetCommand_t)(const char* dvarName, const char* string);
-	extern Dvar_SetCommand_t Dvar_SetCommand;
+	extern dvar_t** com_developer;
+	extern dvar_t** com_sv_running;
+	extern dvar_t** com_masterServerName;
+	extern dvar_t** com_masterPort;
 
-	typedef const char*(*Dvar_DisplayableValue_t)(const dvar_t* dvar);
-	extern Dvar_DisplayableValue_t Dvar_DisplayableValue;
+	extern dvar_t** r_displayMode;
 
-	typedef void(*Dvar_Reset_t)(const dvar_t* dvar, DvarSetSource setSource);
-	extern Dvar_Reset_t Dvar_Reset;
+	extern dvar_t** fs_basepath;
+	extern dvar_t** fs_gameDirVar;
 
-	extern const dvar_t** com_developer;
-	extern const dvar_t** com_developer_script;
-	extern const dvar_t** com_timescale;
-	extern const dvar_t** com_maxFrameTime;
-	extern const dvar_t** sv_running;
-	extern const dvar_t** com_masterServerName;
-	extern const dvar_t** com_masterPort;
+	extern dvar_t** sv_privatePassword;
+	extern dvar_t** sv_privateClients;
+	extern dvar_t** sv_maxclients;
 
-	extern const dvar_t** dev_timescale;
+	extern dvar_t** cl_voice;
+	extern dvar_t** cl_ingame;
 
-	extern const dvar_t** dvar_cheats;
+	extern dvar_t** g_deadChat;
 
-	extern const dvar_t** fs_cdpath;
-	extern const dvar_t** fs_basepath;
-	extern const dvar_t** fs_gameDirVar;
-	extern const dvar_t** fs_homepath;
+	extern dvar_t** ui_joinGametype;
+	extern dvar_t** ui_netSource;
 
-	extern const dvar_t** sv_privatePassword;
-	extern const dvar_t** sv_hostname;
-	extern const dvar_t** sv_gametype;
-	extern const dvar_t** sv_mapname;
-	extern const dvar_t** sv_mapRotation;
-	extern const dvar_t** sv_mapRotationCurrent;
-	extern const dvar_t** sv_maxclients;
-	extern const dvar_t** sv_cheats;
-	extern const dvar_t** sv_voiceQuality;
+	extern dvar_t** port;
 
-	extern const dvar_t** nextmap;
+	typedef void(*Dvar_SetVariant_t)(dvar_t* dvar, DvarValue value, int source);
+	extern Dvar_SetVariant_t Dvar_SetVariant;
 
-	extern const dvar_t** cl_showSend;
-	extern const dvar_t** cl_voice;
-	extern const dvar_t** cl_ingame;
-	extern const dvar_t** cl_shownet;
+	typedef void(*Dvar_SetFromStringFromSource_t)(const dvar_t* dvar, const char* string, DvarSetSource source);
+	extern Dvar_SetFromStringFromSource_t Dvar_SetFromStringFromSource;
 
-	extern const dvar_t** g_cheats;
-	extern const dvar_t** g_deadChat;
-	extern const dvar_t** g_allowVote;
-	extern const dvar_t** g_oldVoting;
-	extern const dvar_t** g_gametype;
-	extern const dvar_t** g_password;
-	extern const dvar_t** g_log;
-
-	extern const dvar_t** cg_chatHeight;
-	extern const dvar_t** cg_chatTime;
-	extern const dvar_t** cg_scoreboardHeight;
-	extern const dvar_t** cg_scoreboardWidth;
-
-	extern const dvar_t** version;
-	/// <summary>
-	/// Client Revision
-	/// </summary>
-	extern const dvar_t** shortversion;
-
-	extern const dvar_t** viewposNow;
-
-	extern const dvar_t** ui_currentMap;
-	extern const dvar_t** ui_gametype;
-	extern const dvar_t** ui_mapname;
-	extern const dvar_t** ui_joinGametype;
-	extern const dvar_t** ui_netGameType;
-	extern const dvar_t** ui_netSource;
-
-	extern const dvar_t** loc_warnings;
-	extern const dvar_t** loc_warningsAsErrors;
-
-	extern const dvar_t** party_minplayers;
-	extern const dvar_t** party_maxplayers;
-
-	extern const dvar_t** ip;
-	extern const dvar_t** port;
-
-	extern void Dvar_SetVariant(dvar_t* dvar, DvarValue value, DvarSetSource source);
-	extern void Dvar_SetFromStringFromSource(const dvar_t* dvar, const char* string, DvarSetSource source);
+	void BindDvars();
 }

@@ -1,52 +1,49 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "Axis.hpp"
-#include "Button.hpp"
-#include "Trigger.hpp"
-#include "Touch.hpp"
-#include "Motion.hpp"
+#include "Controller/Sample/Axis.hpp"
+#include "Controller/Sample/Button.hpp"
+#include "Controller/Sample/Motion.hpp"
+#include "Controller/Sample/Touch.hpp"
+#include "Controller/Sample/Trigger.hpp"
 
-#include "../Device/Capability.hpp"
+#include "Controller/Device/Capability.hpp"
 
 namespace Controller
 {
-  struct battery_state
-  {
-    enum class status : uint8_t
-    {
-      unknown,
-      discharging,
-      charging,
-      full,
-    };
+	struct BatteryState
+	{
+		enum class Status : std::uint8_t
+		{
+			Unknown,
+			Discharging,
+			Charging,
+			Full,
+		};
 
-    status state {status::unknown};
-    std::optional<uint8_t> percent;
-  };
+		Status state = Status::Unknown;
+		std::optional<std::uint8_t> percent;
+	};
 
-  const char*
-  to_string (battery_state::status) noexcept;
+	struct RawSample
+	{
+		std::array<StickRaw, stickCount> sticks{};
+		std::array<std::uint16_t, triggerCount> triggers{};
+		std::uint32_t buttons = 0;
+		std::optional<MotionSample> motion;
+		std::optional<Touchpad> touch;
+		std::optional<BatteryState> battery;
+	};
 
-  struct raw_sample
-  {
-    std::array<stick_raw, stick_count> sticks {};
-    std::array<uint16_t, trigger_count> triggers {};
-    uint32_t buttons {0};
-    std::optional<motion_sample> motion;
-    std::optional<touchpad> touch;
-    std::optional<battery_state> battery;
-  };
-
-  struct canonical_sample
-  {
-    button_set buttons {};
-    std::array<stick_sample, stick_count> sticks {};
-    std::array<trigger_sample, trigger_count> triggers {};
-    std::optional<touchpad> touch;
-    std::optional<motion_sample> motion;
-    std::optional<battery_state> battery;
-    capabilities caps {};
-  };
+	struct CanonicalSample
+	{
+		ButtonSet buttons{};
+		std::array<StickSample, stickCount> sticks{};
+		std::array<TriggerSample, triggerCount> triggers{};
+		std::optional<Touchpad> touch;
+		std::optional<MotionSample> motion;
+		std::optional<BatteryState> battery;
+		Capabilities caps{};
+	};
 }

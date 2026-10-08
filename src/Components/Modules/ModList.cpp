@@ -1,23 +1,39 @@
+#include "STDInclude.hpp"
 
+#include "ModList.hpp"
+#include "Command.hpp"
+#include "Dedicated.hpp"
 #include "Events.hpp"
 #include "FastFiles.hpp"
-#include "ModList.hpp"
+#include "FileSystem.hpp"
+#include "Flags.hpp"
+#include "Logger.hpp"
 #include "UIFeeder.hpp"
 
 namespace Components
 {
-	static std::unordered_map<unsigned int, CHAR*> customClassesPrefixedNames{};
+	static std::unordered_map<unsigned int, char*> customClassesPrefixedNames{};
 
-	std::vector<std::string> ModList::Mods;
-	unsigned int ModList::CurrentMod;
+	std::vector<std::string> ModList::mods;
+	unsigned int ModList::currentMod;
 
 	Dvar::Var ModList::cl_modVidRestart;
 
+	constexpr std::uintptr_t GetPlayerData_GetStringCall = 0x140251EB5;
+	constexpr std::uintptr_t StructuredData_GetString_Engine = 0x140281690;
+
+	constexpr std::uintptr_t LiveStorage_DownloadStats_Core_ThrottleJl = 0x1401FAA90;
+	static const std::uint8_t throttleJl[] = { 0x0F, 0x8C, 0xD9, 0x00, 0x00, 0x00 };
+
+	constexpr std::uintptr_t cgs_localServer = 0x14058752C;
+
+	static Utils::Hook getStringHook;
+
 	bool ModList::HasMod(const std::string& modName)
 	{
-		auto list = FileSystem::GetSysFileList(Dvar::Var("fs_basepath").get<std::string>() + "\\mods", "", true);
+		const auto list = FileSystem::GetSysFileList(Dvar::Var("fs_basepath").Get<std::string>() + "\\mods", "", true);
 
-		for (auto mod : list)
+		for (const auto& mod : list)
 		{
 			if (mod == modName)
 			{
@@ -30,16 +46,16 @@ namespace Components
 
 	void ModList::ClearMods()
 	{
-		// Clear mod sequence (make sure fs_game is actually set)
 		if (*Game::fs_gameDirVar == nullptr || *(*Game::fs_gameDirVar)->current.string == '\0')
 		{
 			return;
 		}
 
 		Game::Dvar_SetString(*Game::fs_gameDirVar, "");
+
 		FastFiles::PrefetchZone("mod");
 
-		if (cl_modVidRestart.get<bool>())
+		if (cl_modVidRestart.Get<bool>())
 		{
 			Command::Execute("vid_restart", false);
 		}
@@ -51,14 +67,14 @@ namespace Components
 
 	unsigned int ModList::GetItemCount()
 	{
-		return ModList::Mods.size();
+		return static_cast<unsigned int>(mods.size());
 	}
 
-	const char* ModList::GetItemText(unsigned int index, int /*column*/)
+	const char* ModList::GetItemText(unsigned int index, [[maybe_unused]] int column)
 	{
-		if (index < ModList::Mods.size())
+		if (index < mods.size())
 		{
-			return ModList::Mods[index].data();
+			return mods[index].data();
 		}
 
 		return "...";
@@ -66,26 +82,26 @@ namespace Components
 
 	void ModList::Select(unsigned int index)
 	{
-		ModList::CurrentMod = index;
+		currentMod = index;
 	}
 
-	void ModList::UIScript_LoadMods([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+	void ModList::UIScript_LoadMods([[maybe_unused]] const UIScript::Token& token)
 	{
-		auto folder = (*Game::fs_basepath)->current.string + "\\mods"s;
+		const auto folder = (*Game::fs_basepath)->current.string + "\\mods"s;
 		Logger::Debug("Searching for mods in {}...", folder);
-		ModList::Mods = FileSystem::GetSysFileList(folder, "", true);
-		Logger::Debug("Found {} mods!", ModList::Mods.size());
+		mods = FileSystem::GetSysFileList(folder, "", true);
+		Logger::Debug("Found {} mods!", mods.size());
 	}
 
-	void ModList::UIScript_RunMod([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+	void ModList::UIScript_RunMod([[maybe_unused]] const UIScript::Token& token)
 	{
-		if (ModList::CurrentMod < ModList::Mods.size())
+		if (currentMod < mods.size())
 		{
-			ModList::RunMod(ModList::Mods[ModList::CurrentMod]);
+			RunMod(mods[currentMod]);
 		}
 	}
 
-	void ModList::UIScript_ClearMods([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
+	void ModList::UIScript_ClearMods([[maybe_unused]] const UIScript::Token& token)
 	{
 		ClearMods();
 	}
@@ -95,7 +111,7 @@ namespace Components
 		Game::Dvar_SetString(*Game::fs_gameDirVar, Utils::String::Format("mods/{}", mod));
 		FastFiles::PrefetchZone("mod");
 
-		if (cl_modVidRestart.get<bool>())
+		if (cl_modVidRestart.Get<bool>())
 		{
 			Command::Execute("vid_restart", false);
 		}
@@ -105,44 +121,42 @@ namespace Components
 		}
 	}
 
-	CHAR * ModList::StructuredData_GetString(Game::StructuredDataLookup *lookup, Game::StructuredDataBuffer *buffer)
+	char* ModList::StructuredData_GetString(Game::StructuredDataLookup* lookup, Game::StructuredDataBuffer* buffer)
 	{
-		CHAR* result = Utils::Hook::Call<CHAR*(Game::StructuredDataLookup*, Game::StructuredDataBuffer*)>(0x4D1CE0)(lookup, buffer);
+		auto* result = reinterpret_cast<char*(*)(Game::StructuredDataLookup*, Game::StructuredDataBuffer*)>(Utils::Hook::Rebase(StructuredData_GetString_Engine))(lookup, buffer);
 
 		if (lookup->error == Game::LOOKUP_ERROR_NONE &&
 			lookup->type->type == Game::StructuredDataTypeCategory::DATA_STRING &&
 			lookup->type->u.stringDataLength == 21)
 		{
-			// This is a custom class name
 			if (*Game::fs_gameDirVar != nullptr && *(*Game::fs_gameDirVar)->current.string != '\0')
 			{
-				std::string currentName = result;
+				const std::string currentName = result;
+
 				if (currentName.empty())
 				{
 					return result;
 				}
 
-				// We're in a modded section - let's prefix that string
-				constexpr char PREFIX[] = "* ";
-				constexpr auto PREFIX_LENGTH = ARRAYSIZE(PREFIX)-1; // Null-terminated to we have to remove 1
+				constexpr char prefix[] = "* ";
+				constexpr auto prefixLength = std::size(prefix) - 1;
 
-				if (currentName.starts_with(PREFIX))
+				if (currentName.starts_with(prefix))
 				{
-					return result; // Already prefixed
+					return result;
 				}
 
-				const auto prefixedNameLength = lookup->type->u.stringDataLength + PREFIX_LENGTH;
+				const auto prefixedNameLength = lookup->type->u.stringDataLength + prefixLength;
 
-				// Create string if we had not done it before
 				if (!customClassesPrefixedNames.contains(lookup->offset))
 				{
-					customClassesPrefixedNames[lookup->offset] = Utils::Memory::AllocateArray<CHAR>(prefixedNameLength);
+					customClassesPrefixedNames[lookup->offset] = Utils::Memory::AllocateArray<char>(prefixedNameLength);
 				}
 
-				CHAR* namePtr = customClassesPrefixedNames[lookup->offset];
+				auto* namePtr = customClassesPrefixedNames[lookup->offset];
 
-				std::memcpy(&namePtr[PREFIX_LENGTH], result, lookup->type->u.stringDataLength);
-				std::memcpy(namePtr, PREFIX, PREFIX_LENGTH);
+				std::memcpy(&namePtr[prefixLength], result, lookup->type->u.stringDataLength);
+				std::memcpy(namePtr, prefix, prefixLength);
 
 				return namePtr;
 			}
@@ -153,46 +167,58 @@ namespace Components
 
 	ModList::ModList()
 	{
-		if (Dedicated::IsEnabled()) return;
+		if (Dedicated::IsEnabled())
+		{
+			return;
+		}
 
-		Utils::Hook(0x62C1A1, StructuredData_GetString, HOOK_CALL).install()->quick();
+		if (!Utils::Hook::BranchesTo(GetPlayerData_GetStringCall, StructuredData_GetString_Engine, false)
+			|| !Utils::Hook::MatchesBytes(LiveStorage_DownloadStats_Core_ThrottleJl, throttleJl, sizeof(throttleJl)))
+		{
+			Logger::Error("modlist: GetPlayerData or LiveStorage_DownloadStats_Core does not read as expected, no mod list\n");
+			return;
+		}
 
-		// The "IWNET storage" system has a "caching" system that, just assumes any file requested twice
-		//	is identical between the two accesses if less than 500ms elapsed between them
-		// This destroys everything of course, if you mod reload then join a server again
-		// Stats get reloaded except if you do it too fast (<500ms) the new stats file never gets read and loaded
-		//	because IWNet Storage simply assumes it didn't move!
-		// Breaking with a debugger (for more than 500ms) makes the bug disappear.... nasty!
-		// This Nop removes that caching mechanism.
-		Utils::Hook::Nop(0x60A6DB, 6);
+		if (!getStringHook.Initialize(GetPlayerData_GetStringCall, reinterpret_cast<void*>(StructuredData_GetString), HOOK_CALL)->Install()->IsInstalled())
+		{
+			getStringHook.Uninstall();
+			Logger::Error("modlist: could not seat the StructuredData_GetString hook, no mod list\n");
+			return;
+		}
 
+		Utils::Hook::Nop(LiveStorage_DownloadStats_Core_ThrottleJl, sizeof(throttleJl));
 
-		ModList::CurrentMod = 0;
-		cl_modVidRestart = Dvar::Register("cl_modVidRestart", true, Game::DVAR_ARCHIVE, "Perform a vid_restart when loading a mod.");
+		currentMod = 0;
 
-		UIScript::Add("LoadMods", ModList::UIScript_LoadMods);
-		UIScript::Add("RunMod", ModList::UIScript_RunMod);
-		UIScript::Add("ClearMods", ModList::UIScript_ClearMods);
+		Events::OnDvarInit([]
+		{
+			cl_modVidRestart = Dvar::Register("cl_modVidRestart", true, Game::DVAR_ARCHIVE, "Perform a vid_restart when loading a mod.");
+		});
 
-		UIFeeder::Add(9.0f, ModList::GetItemCount, ModList::GetItemText, ModList::Select);
+		UIScript::Add("LoadMods", UIScript_LoadMods);
+		UIScript::Add("RunMod", UIScript_RunMod);
+		UIScript::Add("ClearMods", UIScript_ClearMods);
+
+		UIFeeder::Add(9.0f, GetItemCount, GetItemText, Select);
 
 		Events::OnCLDisconnected([](bool wasConnected) -> void
 		{
-			if (Game::cgsArray->localServer)
+			if (*reinterpret_cast<const int*>(Utils::Hook::Rebase(cgs_localServer)))
 			{
-				// Do not unload when exiting a private match because GH-70
-				// Might be okay to do when that PR and related issues are sorted out
 				return;
 			}
 
 			if (!wasConnected)
 			{
-				// That means we exited from the main menu - we don't need to clear mods
-				// If the server we joined has mods, the Download handler will set them
 				return;
 			}
 
-			if (Components::Flags::HasFlag("disable-mod-unloading"))
+			if (Flags::HasFlag("disable-mod-unloading"))
+			{
+				return;
+			}
+
+			if (*Game::fs_gameDirVar != nullptr && *(*Game::fs_gameDirVar)->current.string != '\0')
 			{
 				return;
 			}

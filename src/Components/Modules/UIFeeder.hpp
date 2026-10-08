@@ -1,65 +1,85 @@
 #pragma once
 
+#include "Dvar.hpp"
+#include "UIScript.hpp"
+
 namespace Components
 {
 	class UIFeeder : public Component
 	{
 	public:
-		typedef Utils::Slot<unsigned int()> GetItemCount_t;
-		typedef Utils::Slot<const char*(unsigned int /*index*/, int /*column*/)> GetItemText_t;
-		typedef Utils::Slot<void(unsigned int /*index*/)> Select_t;
+		using GetItemCount = std::function<unsigned int()>;
+		using GetItemText = std::function<const char*(unsigned int index, int column)>;
+		using SelectItem = std::function<void(unsigned int index)>;
 
 		struct Callbacks
 		{
-			GetItemCount_t getItemCount;
-			GetItemText_t getItemText;
-			Select_t select;
+			GetItemCount getItemCount;
+			GetItemText getItemText;
+			SelectItem select;
+		};
+
+		struct EngineCallbacks
+		{
+			Game::UI_FeederCount_t count;
+			Game::UI_FeederItemText_t text;
+			Game::UI_FeederItemColor_t color;
+			Game::UI_FeederDoubleClick_t doubleClick;
 		};
 
 		UIFeeder();
-		~UIFeeder();
 
-		static void Add(float feeder, GetItemCount_t itemCountCb, GetItemText_t itemTextCb, Select_t selectCb);
+		static void Add(float feeder, GetItemCount count, GetItemText text, SelectItem select);
+
+		static void Extend(float feeder, const EngineCallbacks& callbacks);
+
+		static bool Has(float feeder);
+
 		static void Select(float feeder, unsigned int index, bool resetScroll = false);
 
 	private:
-		struct Container
-		{
-			float feeder;
-			int index;
-			int column;
-		};
+		static std::unordered_map<float, Callbacks> feeders;
+		static std::unordered_map<float, EngineCallbacks> extensions;
 
-		static Container Current;
-
-		static Dvar::Var UIMapLong;
-		static Dvar::Var UIMapName;
-		static Dvar::Var UIMapDesc;
-
-		static void GetItemCountStub();
-		static unsigned int GetItemCount();
-
-		static void GetItemTextStub();
-		static const char* GetItemText();
-
-		static void SetItemSelectionStub();
-		static bool SetItemSelection();
-
-		static bool CheckFeeder();
-		static int CheckSelection(int feeder);
-		static void CheckSelectionStub();
-
-		static void MouseEnterStub();
-		static void MouseSelectStub();
-		static void HandleKeyStub();
-		static void PlaySoundStub();
-
-		static std::unordered_map<float, Callbacks> Feeders;
+		static Dvar::Var ui_map_long;
+		static Dvar::Var ui_map_name;
+		static Dvar::Var ui_map_desc;
 
 		static unsigned int GetMapCount();
 		static const char* GetMapText(unsigned int index, int column);
 		static void SelectMap(unsigned int index);
-		static void ApplyMap([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
-		static void ApplyInitialMap([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
+		static void ApplyMap(const UIScript::Token& token);
+		static void ApplyInitialMap(const UIScript::Token& token);
+
+		static Callbacks* Find(float feeder);
+		static EngineCallbacks* FindExtension(float feeder);
+
+		static bool ShouldOverride(float feeder);
+
+		static int FeederCount(int localClientNum, float feeder);
+
+		static const char* FeederItemText(int localClientNum, Game::itemDef_s* item, float feeder,
+			int index, int column, float* a6, float* a7, float* a8, float* a9, Game::Material** material);
+
+		static void FeederSelection(int localClientNum, float feeder, int index);
+
+		static void ListBoxMouseMove(int localClientNum, Game::itemDef_s* item, float x, float y);
+
+		static void HoverSelection(int localClientNum, float feeder, int index);
+
+		static int MouseOverSound(int localClientNum, const char* alias, int system);
+
+		static void HandleKeyItem(int localClientNum, Game::itemDef_s* item);
+		static int FeederDoubleClick(int localClientNum, float feeder, int index);
+
+		static void OverrideCursorPos(int localClientNum, Game::itemDef_s* item);
+		static void PaintCursorPos(int localClientNum, Game::itemDef_s* item);
+		static void FollowStackedList(int localClientNum, Game::itemDef_s* item);
+		static int HoverRowCount();
+		static int ListBoxHandleKey(Game::UiContext* context, Game::itemDef_s* item, int key, int down, int force);
+		static void ItemColor(int localClientNum, Game::itemDef_s* item, float feeder,
+			int index, int column, float* color);
+
+		static void BlinkColor(Game::UiContext* context, const float* color, float* out);
 	};
 }

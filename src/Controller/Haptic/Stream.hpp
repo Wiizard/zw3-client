@@ -1,81 +1,65 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Context.hpp"
-#include "../Device/Id.hpp"
-#include "../Transport/Audio.hpp"
-#include "../Transport/Hid.hpp"
-#include "../Transport/ReportStream.hpp"
+#include "Controller/Context.hpp"
+#include "Controller/Device/Id.hpp"
+#include "Controller/Haptic/Effect.hpp"
+#include "Controller/Haptic/Mixer.hpp"
+#include "Controller/Transport/Audio.hpp"
+#include "Controller/Transport/Hid.hpp"
+#include "Controller/Transport/ReportStream.hpp"
 
-#include "Effect.hpp"
-#include "Mixer.hpp"
-
-namespace Controller
+namespace Controller::Haptic
 {
-  namespace haptic
-  {
-    class stream
-    {
-    public:
-      stream (const context&,
-              device_id,
-              connection link,
-              transport::hid_device&);
+	class Stream
+	{
+	public:
+		Stream(const Context& context, DeviceId device, Connection link, Transport::HidDevice& hid);
 
-      void
-      poll_diagnostics ();
+		Stream(const Stream&) = delete;
+		Stream& operator=(const Stream&) = delete;
 
-      stream (const stream&) = delete;
-      stream& operator= (const stream&) = delete;
+		void PollDiagnostics();
 
-      bool
-      running () noexcept;
+		bool IsRunning();
 
-      bool
-      play (const haptic::effect& e) noexcept {return mixer_.play (e);}
+		bool TryPlay(const Effect& effect) noexcept
+		{
+			return this->mixer.TryPlay(effect);
+		}
 
-      void
-      stop (uint32_t tag) noexcept {mixer_.stop (tag);}
+		void Stop(std::uint32_t tag) noexcept
+		{
+			this->mixer.Stop(tag);
+		}
 
-      void
-      set_rumble (float low_frequency, float high_frequency) noexcept
-      {
-        mixer_.set_rumble (low_frequency, high_frequency);
-      }
+		void SetRumble(float lowFrequency, float highFrequency) noexcept
+		{
+			this->mixer.SetRumble(lowFrequency, highFrequency);
+		}
 
-      void
-      silence () noexcept {mixer_.stop_all ();}
+		std::string Status() const;
 
-      std::string
-      status () const;
+	private:
+		void StartReports();
+		void StartAudio();
 
-    private:
-      void
-      start_reports ();
+		std::optional<std::size_t> Produce(std::span<std::byte> out) noexcept;
 
-      void
-      start_audio ();
+		const Context& context;
+		DeviceId device;
+		Connection link;
+		Transport::HidDevice& hid;
 
-      std::optional<size_t>
-      produce (std::span<std::byte>) noexcept;
+		std::uint64_t reportedDrops = 0;
 
-      const context& ctx_;
-      device_id device_;
-      connection link_;
-      transport::hid_device& hid_;
+		Mixer mixer;
 
-      uint64_t reported_drops_ {0};
+		std::vector<Frame> block;
+		std::uint8_t counter = 0;
 
-      mixer mixer_;
-
-      uint32_t rate_ {0};
-
-      std::vector<frame> block_;
-      uint8_t counter_ {0};
-
-      std::unique_ptr<transport::audio_endpoint> audio_;
-      std::unique_ptr<transport::report_stream> reports_;
-    };
-  }
+		std::unique_ptr<Transport::AudioEndpoint> audio;
+		std::unique_ptr<Transport::ReportStream> reports;
+	};
 }

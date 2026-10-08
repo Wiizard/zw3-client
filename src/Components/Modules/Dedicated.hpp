@@ -1,5 +1,9 @@
 #pragma once
 
+#include "Dvar.hpp"
+
+#include "Steam/Steam.hpp"
+
 namespace Components
 {
 	class Dedicated : public Component
@@ -7,14 +11,15 @@ namespace Components
 	public:
 		Dedicated();
 
-		static SteamID PlayerGuids[18][2];
-		static Dvar::Var SVLanOnly;
-		static Dvar::Var ZWNetShowInServerBrowser;
-		static Dvar::Var ZWNetMatchEnded;
-		static Dvar::Var ZWNetMatchId;
-		static Dvar::Var ZWNetSelectedMap;
-		static Dvar::Var SVMOTD;
-		static Dvar::Var COMLogFilter;
+		static ::Steam::SteamID playerGuids[Game::MAX_CLIENTS][2];
+		static Dvar::Var sv_lanOnly;
+		static Dvar::Var sv_motd;
+		static Dvar::Var com_logFilter;
+
+		static Dvar::Var zwnet_show_in_server_browser;
+		static Dvar::Var zwnet_match_ended;
+		static Dvar::Var zwnet_match_id;
+		static Dvar::Var zwnet_selected_map;
 
 		static const Game::dvar_t* com_dedicated;
 
@@ -24,16 +29,12 @@ namespace Components
 		static void Heartbeat();
 
 	private:
-		static void InitDedicatedServer();
-
-		static void PostInitialization();
-		static void PostInitializationStub();
-
-		static void Com_ClampMsec(int msec);
-		static void Com_ClampMsec_Stub();
-
 		static void TransmitGuids();
 
-		static void TimeWrapStub(Game::errorParm_t code, const char* message);
+		static bool ApplyEnginePatches();
+		static void InitDedicatedServer();
+		static void PostInitialization();
+		static void Com_EventLoop_Hk();
+		static void TimeWrapStub(int code, const char* message);
 	};
 }

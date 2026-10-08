@@ -1,236 +1,216 @@
-#include "Mixer.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Haptic/Mixer.hpp"
 
-#include <cmath>
-#include <algorithm>
-
-namespace Controller
+namespace Controller::Haptic
 {
-  namespace haptic
-  {
-    namespace
-    {
-      constexpr float two_pi {6.28318530717958647692f};
+	static constexpr float twoPi = 6.28318530717958647692f;
 
-      constexpr float rumble_low_hertz {60.0f};
-      constexpr float rumble_high_hertz {180.0f};
+	static constexpr float rumbleLowHertz = 60.0f;
+	static constexpr float rumbleHighHertz = 180.0f;
 
-      constexpr float rumble_ramp_seconds {0.004f};
+	static constexpr float rumbleRampSeconds = 0.004f;
 
-      void
-      advance (float& phase, float increment) noexcept
-      {
-        phase += increment;
+	static void Advance(float& phase, float increment) noexcept
+	{
+		phase += increment;
 
-        while (phase >= 1.0f)
-          phase -= 1.0f;
-      }
+		while (phase >= 1.0f)
+		{
+			phase -= 1.0f;
+		}
+	}
 
-      float
-      approach (float current, float target, float coefficient) noexcept
-      {
-        return current + (target - current) * coefficient;
-      }
-    }
+	static float Approach(float current, float target, float coefficient) noexcept
+	{
+		return current + (target - current) * coefficient;
+	}
 
-    bool
-    mixer::
-    play (const effect& e) noexcept
-    {
-      for (voice& v: voices_)
-      {
-        state expected (state::free);
+	bool Mixer::TryPlay(const Effect& effect) noexcept
+	{
+		for (auto& voice : this->voices)
+		{
+			auto expected = VoiceState::Free;
 
-        if (!v.phase.compare_exchange_strong (expected,
-                                              state::filling,
-                                              std::memory_order_acquire,
-                                              std::memory_order_relaxed))
-          continue;
+			if (!voice.phase.compare_exchange_strong(expected, VoiceState::Filling, std::memory_order_acquire, std::memory_order_relaxed))
+			{
+				continue;
+			}
 
-        v.what = e;
-        v.stopping.store (false, std::memory_order_relaxed);
+			voice.effect = effect;
+			voice.isStopping.store(false, std::memory_order_relaxed);
 
-        v.phase.store (state::ready, std::memory_order_release);
-        return true;
-      }
+			voice.phase.store(VoiceState::Ready, std::memory_order_release);
+			return true;
+		}
 
-      dropped_.fetch_add (1, std::memory_order_relaxed);
-      return false;
-    }
+		this->dropped.fetch_add(1, std::memory_order_relaxed);
+		return false;
+	}
 
-    void
-    mixer::
-    stop (uint32_t tag) noexcept
-    {
-      if (tag == 0)
-        return;
+	void Mixer::Stop(std::uint32_t tag) noexcept
+	{
+		if (tag == 0)
+		{
+			return;
+		}
 
-      for (voice& v: voices_)
-      {
-        const state phase (v.phase.load (std::memory_order_acquire));
+		for (auto& voice : this->voices)
+		{
+			const auto phase = voice.phase.load(std::memory_order_acquire);
 
-        if (phase != state::ready && phase != state::playing)
-          continue;
+			if (phase != VoiceState::Ready && phase != VoiceState::Playing)
+			{
+				continue;
+			}
 
-        if (v.what.tag == tag)
-          v.stopping.store (true, std::memory_order_relaxed);
-      }
-    }
+			if (voice.effect.tag == tag)
+			{
+				voice.isStopping.store(true, std::memory_order_relaxed);
+			}
+		}
+	}
 
-    void
-    mixer::
-    stop_all () noexcept
-    {
-      for (voice& v: voices_)
-        v.stopping.store (true, std::memory_order_relaxed);
+	void Mixer::SetRumble(float lowFrequency, float highFrequency) noexcept
+	{
+		this->rumbleLow.store(std::clamp(lowFrequency, 0.0f, 1.0f), std::memory_order_relaxed);
+		this->rumbleHigh.store(std::clamp(highFrequency, 0.0f, 1.0f), std::memory_order_relaxed);
+	}
 
-      rumble_low_.store (0.0f, std::memory_order_relaxed);
-      rumble_high_.store (0.0f, std::memory_order_relaxed);
-    }
+	void Mixer::RenderRumble(std::span<Frame> out, float step, float scale) noexcept
+	{
+		const float targetLow = this->rumbleLow.load(std::memory_order_relaxed) * scale;
+		const float targetHigh = this->rumbleHigh.load(std::memory_order_relaxed) * scale;
 
-    void
-    mixer::
-    set_rumble (float low_frequency, float high_frequency) noexcept
-    {
-      rumble_low_.store (std::clamp (low_frequency, 0.0f, 1.0f),
-                         std::memory_order_relaxed);
-      rumble_high_.store (std::clamp (high_frequency, 0.0f, 1.0f),
-                          std::memory_order_relaxed);
-    }
+		const float coefficient = std::min(step / rumbleRampSeconds, 1.0f);
 
-    void
-    mixer::
-    render_rumble (std::span<frame> out, float step, float scale) noexcept
-    {
-      const float target_low (rumble_low_.load (std::memory_order_relaxed) * scale);
-      const float target_high (rumble_high_.load (std::memory_order_relaxed) * scale);
+		const float lowIncrement = rumbleLowHertz * step;
+		const float highIncrement = rumbleHighHertz * step;
 
-      const float coefficient (std::min (step / rumble_ramp_seconds, 1.0f));
+		for (auto& frame : out)
+		{
+			this->rumbleLowLevel = Approach(this->rumbleLowLevel, targetLow, coefficient);
+			this->rumbleHighLevel = Approach(this->rumbleHighLevel, targetHigh, coefficient);
 
-      const float low_increment (rumble_low_hertz * step);
-      const float high_increment (rumble_high_hertz * step);
+			frame.left += this->rumbleLowLevel * std::sin(this->rumbleLowPhase * twoPi);
+			frame.right += this->rumbleHighLevel * std::sin(this->rumbleHighPhase * twoPi);
 
-      for (frame& f: out)
-      {
-        rumble_low_level_ = approach (rumble_low_level_, target_low, coefficient);
-        rumble_high_level_ = approach (rumble_high_level_, target_high, coefficient);
+			Advance(this->rumbleLowPhase, lowIncrement);
+			Advance(this->rumbleHighPhase, highIncrement);
+		}
+	}
 
-        f.left += rumble_low_level_ * std::sin (rumble_low_phase_ * two_pi);
-        f.right += rumble_high_level_ * std::sin (rumble_high_phase_ * two_pi);
+	bool Mixer::RenderVoice(Voice& voice, std::span<Frame> out, float step) noexcept
+	{
+		const auto& effect = voice.effect;
 
-        advance (rumble_low_phase_, low_increment);
-        advance (rumble_high_phase_, high_increment);
-      }
-    }
+		const float duration = effect.duration.count();
 
-    bool
-    mixer::
-    render_voice (voice& v, std::span<frame> out, float step) noexcept
-    {
-      const effect& e (v.what);
+		if (!(duration > 0.0f))
+		{
+			return true;
+		}
 
-      const float duration (e.duration.count ());
+		const bool isLooping = effect.shouldLoop && !voice.isStopping.load(std::memory_order_relaxed);
 
-      if (!(duration > 0.0f))
-        return true;
+		const float deepIncrement = HertzFor(effect.deepSharpness) * step;
+		const float crispIncrement = HertzFor(effect.crispSharpness) * step;
 
-      const bool looping (e.loop && !v.stopping.load (std::memory_order_relaxed));
+		for (auto& frame : out)
+		{
+			if (voice.elapsed >= duration)
+			{
+				if (!isLooping)
+				{
+					return true;
+				}
 
-      const float deep_increment (hertz_for (e.deep_sharpness) * step);
-      const float crisp_increment (hertz_for (e.crisp_sharpness) * step);
+				voice.elapsed -= duration;
+			}
 
-      for (frame& f: out)
-      {
-        if (v.elapsed >= duration)
-        {
-          if (!looping)
-            return true;
+			const float t = voice.elapsed / duration;
 
-          v.elapsed -= duration;
-        }
+			const float deep = effect.deep.Evaluate(t) * effect.intensity * std::sin(voice.deepPhase * twoPi);
+			const float crisp = effect.crisp.Evaluate(t) * effect.intensity * std::sin(voice.crispPhase * twoPi);
 
-        const float t (v.elapsed / duration);
+			switch (effect.where)
+			{
+			case Actuator::Both:
+				frame.left += deep;
+				frame.right += crisp;
+				break;
 
-        const float deep (e.deep.evaluate (t) * e.intensity *
-                          std::sin (v.deep_phase * two_pi));
-        const float crisp (e.crisp.evaluate (t) * e.intensity *
-                           std::sin (v.crisp_phase * two_pi));
+			case Actuator::Left:
+				frame.left += deep + crisp;
+				break;
 
-        switch (e.where)
-        {
-          case actuator::both:
-            {
-              f.left += deep;
-              f.right += crisp;
-              break;
-            }
+			case Actuator::Right:
+				frame.right += deep + crisp;
+				break;
+			}
 
-          case actuator::left:
-            {
-              f.left += deep + crisp;
-              break;
-            }
+			Advance(voice.deepPhase, deepIncrement);
+			Advance(voice.crispPhase, crispIncrement);
 
-          case actuator::right:
-            {
-              f.right += deep + crisp;
-              break;
-            }
-        }
+			voice.elapsed += step;
+		}
 
-        advance (v.deep_phase, deep_increment);
-        advance (v.crisp_phase, crisp_increment);
+		return false;
+	}
 
-        v.elapsed += step;
-      }
+	void Mixer::Render(std::span<Frame> out, std::uint32_t rate) noexcept
+	{
+		if (rate == 0)
+		{
+			return;
+		}
 
-      return false;
-    }
+		const float step = 1.0f / static_cast<float>(rate);
 
-    void
-    mixer::
-    render (std::span<frame> out, uint32_t rate) noexcept
-    {
-      if (rate == 0)
-        return;
+		std::fill(out.begin(), out.end(), Frame{});
 
-      const float step (1.0f / static_cast<float> (rate));
+		bool hasEffects = false;
 
-      std::fill (out.begin (), out.end (), frame {});
+		for (auto& voice : this->voices)
+		{
+			auto phase = voice.phase.load(std::memory_order_acquire);
 
-      bool effects (false);
+			if (phase == VoiceState::Ready)
+			{
+				voice.elapsed = 0.0f;
+				voice.deepPhase = 0.0f;
+				voice.crispPhase = 0.0f;
 
-      for (voice& v: voices_)
-      {
-        state phase (v.phase.load (std::memory_order_acquire));
+				voice.phase.store(VoiceState::Playing, std::memory_order_relaxed);
+				phase = VoiceState::Playing;
+			}
 
-        if (phase == state::ready)
-        {
-          v.elapsed = 0.0f;
-          v.deep_phase = 0.0f;
-          v.crisp_phase = 0.0f;
+			if (phase != VoiceState::Playing)
+			{
+				continue;
+			}
 
-          v.phase.store (state::playing, std::memory_order_relaxed);
-          phase = state::playing;
-        }
+			hasEffects = true;
 
-        if (phase != state::playing)
-          continue;
+			if (RenderVoice(voice, out, step))
+			{
+				voice.phase.store(VoiceState::Free, std::memory_order_release);
+			}
+		}
 
-        effects = true;
+		float rumbleScale = 1.0f;
 
-        if (render_voice (v, out, step))
-          v.phase.store (state::free, std::memory_order_release);
-      }
+		if (hasEffects)
+		{
+			rumbleScale = 0.0f;
+		}
 
-      render_rumble (out, step, effects ? 0.0f : 1.0f);
+		this->RenderRumble(out, step, rumbleScale);
 
-      for (frame& f: out)
-      {
-        f.left = std::clamp (f.left, -1.0f, 1.0f);
-        f.right = std::clamp (f.right, -1.0f, 1.0f);
-      }
-    }
-  }
+		for (auto& frame : out)
+		{
+			frame.left = std::clamp(frame.left, -1.0f, 1.0f);
+			frame.right = std::clamp(frame.right, -1.0f, 1.0f);
+		}
+	}
 }

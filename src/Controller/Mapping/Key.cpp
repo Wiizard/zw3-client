@@ -1,142 +1,90 @@
-#include "Key.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Mapping/Key.hpp"
 
-#include <cctype>
-
-namespace Controller
+namespace Controller::Mapping
 {
-  namespace mapping
-  {
-    namespace
-    {
-      struct named_key
-      {
-        engine_key key;
-        const char* name;
-      };
+	struct NamedKey
+	{
+		EngineKey key;
+		const char* name;
+	};
 
-      constexpr named_key key_names[]
-      {
-        {engine_key::button_a,      "BUTTON_A"},
-        {engine_key::button_b,      "BUTTON_B"},
-        {engine_key::button_x,      "BUTTON_X"},
-        {engine_key::button_y,      "BUTTON_Y"},
-        {engine_key::button_lshldr, "BUTTON_LSHLDR"},
-        {engine_key::button_rshldr, "BUTTON_RSHLDR"},
-        {engine_key::button_start,  "BUTTON_START"},
-        {engine_key::button_back,   "BUTTON_BACK"},
-        {engine_key::button_lstick, "BUTTON_LSTICK"},
-        {engine_key::button_rstick, "BUTTON_RSTICK"},
-        {engine_key::button_ltrig,  "BUTTON_LTRIG"},
-        {engine_key::button_rtrig,  "BUTTON_RTRIG"},
-        {engine_key::dpad_up,       "DPAD_UP"},
-        {engine_key::dpad_down,     "DPAD_DOWN"},
-        {engine_key::dpad_left,     "DPAD_LEFT"},
-        {engine_key::dpad_right,    "DPAD_RIGHT"},
-        {engine_key::apad_up,       "APAD_UP"},
-        {engine_key::apad_down,     "APAD_DOWN"},
-        {engine_key::apad_left,     "APAD_LEFT"},
-        {engine_key::apad_right,    "APAD_RIGHT"},
-        {engine_key::rstick_up,     "RSTICK_UP"},
-        {engine_key::rstick_down,   "RSTICK_DOWN"},
-        {engine_key::rstick_left,   "RSTICK_LEFT"},
-        {engine_key::rstick_right,  "RSTICK_RIGHT"},
-      };
+	static constexpr NamedKey keyNames[] =
+	{
+		{ EngineKey::ButtonA, "BUTTON_A" },
+		{ EngineKey::ButtonB, "BUTTON_B" },
+		{ EngineKey::ButtonX, "BUTTON_X" },
+		{ EngineKey::ButtonY, "BUTTON_Y" },
+		{ EngineKey::ButtonLShoulder, "BUTTON_LSHLDR" },
+		{ EngineKey::ButtonRShoulder, "BUTTON_RSHLDR" },
+		{ EngineKey::ButtonStart, "BUTTON_START" },
+		{ EngineKey::ButtonBack, "BUTTON_BACK" },
+		{ EngineKey::ButtonLStick, "BUTTON_LSTICK" },
+		{ EngineKey::ButtonRStick, "BUTTON_RSTICK" },
+		{ EngineKey::ButtonLTrigger, "BUTTON_LTRIG" },
+		{ EngineKey::ButtonRTrigger, "BUTTON_RTRIG" },
+		{ EngineKey::DpadUp, "DPAD_UP" },
+		{ EngineKey::DpadDown, "DPAD_DOWN" },
+		{ EngineKey::DpadLeft, "DPAD_LEFT" },
+		{ EngineKey::DpadRight, "DPAD_RIGHT" },
+		{ EngineKey::ApadUp, "APAD_UP" },
+		{ EngineKey::ApadDown, "APAD_DOWN" },
+		{ EngineKey::ApadLeft, "APAD_LEFT" },
+		{ EngineKey::ApadRight, "APAD_RIGHT" },
+		{ EngineKey::RStickUp, "RSTICK_UP" },
+		{ EngineKey::RStickDown, "RSTICK_DOWN" },
+		{ EngineKey::RStickLeft, "RSTICK_LEFT" },
+		{ EngineKey::RStickRight, "RSTICK_RIGHT" },
+	};
 
-      static_assert (sizeof (key_names) / sizeof (key_names[0]) == engine_key_count,
-                     "the key name table must cover every controller key");
+	static_assert(std::size(keyNames) == engineKeyCount, "the key name table must cover every controller key");
 
-      constexpr std::array<engine_key, engine_key_count>
-      make_key_list () noexcept
-      {
-        std::array<engine_key, engine_key_count> r {};
+	static constexpr std::array<EngineKey, engineKeyCount> MakeKeyList() noexcept
+	{
+		std::array<EngineKey, engineKeyCount> list{};
 
-        for (size_t i (0); i != engine_key_count; ++i)
-          r[i] = key_names[i].key;
+		for (std::size_t i = 0; i != engineKeyCount; ++i)
+		{
+			list[i] = keyNames[i].key;
+		}
 
-        return r;
-      }
+		return list;
+	}
 
-      constexpr std::array<engine_key, engine_key_count> key_list {make_key_list ()};
+	static constexpr std::array<EngineKey, engineKeyCount> keyList = MakeKeyList();
 
-      bool
-      iequals (std::string_view a, std::string_view b) noexcept
-      {
-        if (a.size () != b.size ())
-          return false;
+	std::span<const EngineKey> Keys() noexcept
+	{
+		return { keyList.data(), keyList.size() };
+	}
 
-        for (size_t i (0); i < a.size (); ++i)
-        {
-          if (std::tolower (static_cast<unsigned char> (a[i])) !=
-              std::tolower (static_cast<unsigned char> (b[i])))
-            return false;
-        }
+	std::size_t KeyIndex(EngineKey key) noexcept
+	{
+		for (std::size_t i = 0; i != engineKeyCount; ++i)
+		{
+			if (keyList[i] == key)
+			{
+				return i;
+			}
+		}
 
-        return true;
-      }
-    }
+		assert(false);
+		return 0;
+	}
 
-    std::span<const engine_key>
-    keys () noexcept
-    {
-      return {key_list.data (), key_list.size ()};
-    }
+	bool IsControllerKey(int keyNum) noexcept
+	{
+		const bool isFirstRange = keyNum >= 0x01 && keyNum <= 0x06;
+		const bool isSecondRange = keyNum >= 0x0E && keyNum <= 0x19;
+		const bool isThirdRange = keyNum >= 0x1C && keyNum <= 0x1F;
+		const bool isRightStick = keyNum >= static_cast<int>(EngineKey::RStickUp) && keyNum <= static_cast<int>(EngineKey::RStickRight);
 
-    size_t
-    key_index (engine_key k) noexcept
-    {
-      for (size_t i (0); i != engine_key_count; ++i)
-      {
-        if (key_list[i] == k)
-          return i;
-      }
+		return isFirstRange || isSecondRange || isThirdRange || isRightStick;
+	}
 
-      assert (false);
-      return 0;
-    }
-
-    bool
-    is_controller_key (int keynum) noexcept
-    {
-      return (keynum >= 0x01 && keynum <= 0x06) ||
-             (keynum >= 0x0E && keynum <= 0x19) ||
-             (keynum >= 0x1C && keynum <= 0x1F) ||
-             (keynum >= static_cast<int> (engine_key::rstick_up) &&
-              keynum <= static_cast<int> (engine_key::rstick_right));
-    }
-
-    const char*
-    key_name (engine_key k) noexcept
-    {
-      return key_names[key_index (k)].name;
-    }
-
-    std::optional<engine_key>
-    key_from_name (std::string_view name) noexcept
-    {
-      for (const named_key& e: key_names)
-      {
-        if (iequals (name, e.name))
-          return e.key;
-      }
-
-      return std::nullopt;
-    }
-
-    std::optional<engine_key>
-    key_from_keynum (int keynum) noexcept
-    {
-      for (const engine_key k: key_list)
-      {
-        if (static_cast<int> (k) == keynum)
-          return k;
-      }
-
-      if (!is_controller_key (keynum))
-        return std::nullopt;
-
-      return static_cast<engine_key> (keynum);
-    }
-  }
+	const char* KeyName(EngineKey key) noexcept
+	{
+		return keyNames[KeyIndex(key)].name;
+	}
 }

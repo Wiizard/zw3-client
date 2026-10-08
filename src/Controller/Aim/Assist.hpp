@@ -1,97 +1,85 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Clock.hpp"
-#include "Types.hpp"
-#include "Deadzone.hpp"
-#include "Graph.hpp"
-#include "Integrator.hpp"
-#include "../Sample/Axis.hpp"
+#include "Controller/Clock.hpp"
+#include "Controller/Aim/Deadzone.hpp"
+#include "Controller/Aim/Graph.hpp"
+#include "Controller/Aim/Integrator.hpp"
+#include "Controller/Aim/Types.hpp"
+#include "Controller/Sample/Axis.hpp"
 
-namespace Controller
+namespace Controller::Aim
 {
-  namespace aim
-  {
-    struct aim_profile
-    {
-      deg_per_s yaw_rate {0.0f};
-      deg_per_s pitch_rate {0.0f};
-      deadzone_params deadzone;
-    };
+	struct AimProfile
+	{
+		DegreesPerSecond yawRate{ 0.0f };
+		DegreesPerSecond pitchRate{ 0.0f };
+		DeadzoneParams deadzone;
+	};
 
-    struct aim_frame_input
-    {
-      stick_vector look;
-      float ads_lerp {0.0f};
-      float fov_scale {1.0f};
-      float sensitivity {1.0f};
-      float slowdown_yaw {1.0f};
-      float slowdown_pitch {1.0f};
-      bool scale_view_axis {true};
-      bool invert_pitch {false};
-      std::optional<deg_per_s> yaw_max;
-      std::optional<deg_per_s> pitch_max;
-      seconds dt {0.0f};
-    };
+	struct AimFrameInput
+	{
+		StickVector look;
+		float adsLerp = 0.0f;
+		float fovScale = 1.0f;
+		float sensitivity = 1.0f;
+		float slowdownYaw = 1.0f;
+		float slowdownPitch = 1.0f;
+		bool shouldScaleViewAxis = true;
+		bool isPitchInverted = false;
+		std::optional<DegreesPerSecond> yawMax;
+		std::optional<DegreesPerSecond> pitchMax;
+		Seconds deltaTime{ 0.0f };
+	};
 
-    struct aim_frame_output
-    {
-      degrees yaw_delta {0.0f};
-      degrees pitch_delta {0.0f};
-    };
+	struct AimFrameOutput
+	{
+		Degrees yawDelta{ 0.0f };
+		Degrees pitchDelta{ 0.0f };
+	};
 
-    class aim_processor
-    {
-    public:
-      struct config
-      {
-        aim_profile hip;
-        aim_profile ads;
-        turn_integrator::limits accel;
-        const aim_graph* graph {nullptr};
-      };
+	class AimProcessor
+	{
+	public:
+		struct Config
+		{
+			AimProfile hip;
+			AimProfile ads;
+			TurnIntegrator::Limits accel;
+			const AimGraph* graph = nullptr;
+		};
 
-      explicit
-      aim_processor (config);
+		explicit AimProcessor(Config config);
 
-      aim_frame_output
-      process (const aim_frame_input&) noexcept;
+		AimFrameOutput Process(const AimFrameInput& input) noexcept;
 
-      void
-      reset () noexcept;
+		void Reset() noexcept;
 
-    private:
-      config cfg_;
-      turn_integrator yaw_;
-      turn_integrator pitch_;
-    };
+	private:
+		Config config;
+		TurnIntegrator yaw;
+		TurnIntegrator pitch;
+	};
 
-    float
-    slowdown_scale (bool target_present,
-                    float hip_scale,
-                    float ads_scale,
-                    float ads_lerp) noexcept;
+	float SlowdownScale(bool isTargetPresent, float hipScale, float adsScale, float adsLerp) noexcept;
 
-    stick_vector
-    scale_dominant_axis (stick_vector look) noexcept;
+	StickVector ScaleDominantAxis(StickVector look) noexcept;
 
-    struct lock_on_target
-    {
-      world_vector target_velocity;
-      world_vector player_velocity;
-      world_vector view_pitch_axis;
-      world_vector view_yaw_axis;
-      float distance {0.0f};
-    };
+	struct LockOnTarget
+	{
+		WorldVector targetVelocity;
+		WorldVector playerVelocity;
+		WorldVector viewPitchAxis;
+		WorldVector viewYawAxis;
+		float distance = 0.0f;
+	};
 
-    struct lock_on_params
-    {
-      float yaw_strength {0.0f};
-      float pitch_strength {0.0f};
-    };
+	struct LockOnParams
+	{
+		float yawStrength = 0.0f;
+		float pitchStrength = 0.0f;
+	};
 
-    aim_frame_output
-    lock_on (const lock_on_target&, const lock_on_params&, seconds dt) noexcept;
-  }
+	AimFrameOutput LockOn(const LockOnTarget& target, const LockOnParams& params, Seconds deltaTime) noexcept;
 }

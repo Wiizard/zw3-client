@@ -1,32 +1,21 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "DualSense.hpp"
+#include "Controller/Driver/DualSense.hpp"
 
-namespace Controller
+namespace Controller::Driver
 {
-  namespace driver
-  {
-    bool
-    decode_dualsense_edge (std::span<const std::byte> report,
-                           connection link,
-                           raw_sample& raw,
-                           canonical_sample& canonical) noexcept;
+	class DualSenseEdgeDriver : public DualSenseDriver
+	{
+	public:
+		using DualSenseDriver::DualSenseDriver;
 
-    class dualsense_edge_driver: public dualsense_driver
-    {
-    public:
-      using dualsense_driver::dualsense_driver;
+		Controller::Family Family() const noexcept override
+		{
+			return Controller::Family::DualSenseEdge;
+		}
 
-      Controller::family
-      family () const noexcept override
-      {
-        return Controller::family::dualsense_edge;
-      }
-
-      bool
-      poll (raw_sample&, canonical_sample&) noexcept override;
-    };
-  }
+		bool TryPoll(RawSample& raw, CanonicalSample& canonical) override;
+	};
 }

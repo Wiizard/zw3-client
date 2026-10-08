@@ -1,28 +1,38 @@
+#include "STDInclude.hpp"
 
 namespace Utils
 {
-	Memory::Allocator Memory::MemAllocator;
+	Memory::Allocator Memory::allocator;
 
 	void* Memory::AllocateAlign(std::size_t length, std::size_t alignment)
 	{
-		auto* data = _aligned_malloc(length, alignment);
+		void* const data = _aligned_malloc(length, alignment);
+
 		assert(data);
-		if (data) ZeroMemory(data, length);
+
+		if (data)
+		{
+			std::memset(data, 0, length);
+		}
+
 		return data;
 	}
 
 	void* Memory::Allocate(std::size_t length)
 	{
-		auto* data = std::calloc(length, 1);
+		void* const data = std::calloc(length, 1);
+
 		assert(data);
+
 		return data;
 	}
 
 	char* Memory::DuplicateString(const std::string& string)
 	{
-		auto* newString = AllocateArray<char>(string.size() + 1);
-		std::memcpy(newString, string.data(), string.size());
-		return newString;
+		char* const copy = AllocateArray<char>(string.size() + 1);
+		std::memcpy(copy, string.data(), string.size());
+
+		return copy;
 	}
 
 	void Memory::Free(void* data)
@@ -48,14 +58,13 @@ namespace Utils
 		FreeAlign(const_cast<void*>(data));
 	}
 
-	// Complementary function for memset, which checks if memory is filled with a char
-	bool Memory::IsSet(void* mem, char chr, std::size_t length)
+	bool Memory::IsSet(void* memory, char value, std::size_t length)
 	{
-		auto* memArr = static_cast<char*>(mem);
+		const auto* const bytes = static_cast<const char*>(memory);
 
 		for (std::size_t i = 0; i < length; ++i)
 		{
-			if (memArr[i] != chr)
+			if (bytes[i] != value)
 			{
 				return false;
 			}
@@ -64,38 +73,47 @@ namespace Utils
 		return true;
 	}
 
-	bool Memory::IsBadReadPtr(const void* ptr)
+	bool Memory::IsBadReadPtr(const void* pointer)
 	{
-		MEMORY_BASIC_INFORMATION mbi = { nullptr };
-		if (VirtualQuery(ptr, &mbi, sizeof(mbi)))
-		{
-			DWORD mask = (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY);
-			bool b = !(mbi.Protect & mask);
-			// check the page is not a guard page
-			if (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) b = true;
+		MEMORY_BASIC_INFORMATION information{};
 
-			return b;
+		if (!VirtualQuery(pointer, &information, sizeof(information)))
+		{
+			return true;
 		}
-		return true;
+
+		constexpr DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY
+			| PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+
+		if (information.Protect & (PAGE_GUARD | PAGE_NOACCESS))
+		{
+			return true;
+		}
+
+		return (information.Protect & readable) == 0;
 	}
 
-	bool Memory::IsBadCodePtr(const void* ptr)
+	bool Memory::IsBadCodePtr(const void* pointer)
 	{
-		MEMORY_BASIC_INFORMATION mbi = { nullptr };
-		if (VirtualQuery(ptr, &mbi, sizeof(mbi)))
-		{
-			DWORD mask = (PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY);
-			bool b = !(mbi.Protect & mask);
-			// check the page is not a guard page
-			if (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) b = true;
+		MEMORY_BASIC_INFORMATION information{};
 
-			return b;
+		if (!VirtualQuery(pointer, &information, sizeof(information)))
+		{
+			return true;
 		}
-		return true;
+
+		constexpr DWORD executable = PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+
+		if (information.Protect & (PAGE_GUARD | PAGE_NOACCESS))
+		{
+			return true;
+		}
+
+		return (information.Protect & executable) == 0;
 	}
 
 	Memory::Allocator* Memory::GetAllocator()
 	{
-		return &Memory::MemAllocator;
+		return &allocator;
 	}
 }

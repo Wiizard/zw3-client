@@ -1,198 +1,147 @@
-#include "Store.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Calibration/Store.hpp"
+#include "Controller/Calibration/Validate.hpp"
 
-#include "Validate.hpp"
-
-#include <fstream>
-#include <format>
-#include <string>
-#include <system_error>
-
-namespace Controller
+namespace Controller::Calibration
 {
-  namespace calibration
-  {
-    namespace
-    {
-      constexpr const char* magic {"iw4x-controller-calibration"};
+	static constexpr const char* magic = "iw4x-controller-calibration";
 
-      constexpr int family_max {
-        static_cast<int> (Controller::family::dualsense_edge)};
+	static constexpr int familyMax = static_cast<int>(Family::DualSenseEdge);
+	static constexpr int sourceMax = static_cast<int>(ValueSource::User);
 
-      constexpr int source_max {static_cast<int> (value_source::user)};
-    }
+	Store::Store(const Context& context, std::filesystem::path directory)
+		: context(context),
+		directory(std::move(directory))
+	{
+	}
 
-    store::
-    store (const context& ctx, std::filesystem::path directory)
-      : ctx_ (ctx), dir_ (std::move (directory))
-    {
-    }
+	std::filesystem::path Store::FileFor(Controller::Family family, std::optional<std::uint64_t> deviceKey) const
+	{
+		if (deviceKey)
+		{
+			return this->directory / std::format("controller-{}-{:016x}.cal", ToString(family), *deviceKey);
+		}
 
-    std::filesystem::path
-    store::
-    file_for (Controller::family family, std::optional<uint64_t> device_key) const
-    {
-      std::string name (device_key
-        ? std::format ("controller-{}-{:016x}.cal",
-                       to_string (family), *device_key)
-        : std::format ("controller-{}.cal", to_string (family)));
+		return this->directory / std::format("controller-{}.cal", ToString(family));
+	}
 
-      return dir_ / name;
-    }
+	std::optional<Profile> Store::Reject(const char* why) const
+	{
+		this->context.Report(Severity::Warning, Facility::Calibration, ErrorCode::CalibrationInvalid, std::format("calibration profile rejected: {}", why));
+		return std::nullopt;
+	}
 
-    bool
-    store::
-    save (const profile& p) const
-    {
-      std::string why;
-      if (!validate (p, why))
-      {
-        ctx_.report (severity::warning, facility::calibration,
-                     errc::calibration_invalid,
-                     "refusing to save an invalid calibration profile: " + why);
-        return false;
-      }
+	std::optional<Profile> Store::TryLoad(Controller::Family family, std::optional<std::uint64_t> deviceKey) const
+	{
+		std::ifstream stream(this->FileFor(family, deviceKey));
 
-      std::error_code ec;
-      std::filesystem::create_directories (dir_, ec);
+		if (!stream)
+		{
+			return std::nullopt;
+		}
 
-      const std::filesystem::path file (file_for (p.family, p.device_key));
-      std::ofstream os (file, std::ios::trunc);
-      if (!os)
-      {
-        ctx_.report (severity::warning, facility::calibration,
-                     errc::transport_failure,
-                     "could not open calibration profile for writing");
-        return false;
-      }
+		std::string token;
+		unsigned int version = 0;
 
-      os.precision (9);
+		if (!(stream >> token >> version) || token != magic)
+		{
+			return this->Reject("bad header");
+		}
 
-      os << magic << ' ' << p.version << '\n';
-      os << "family " << static_cast<int> (p.family) << '\n';
-      os << "source " << static_cast<int> (p.source) << '\n';
-      os << "device_key " << (p.device_key ? 1 : 0) << ' '
-         << (p.device_key ? *p.device_key : uint64_t {0}) << '\n';
+		if (version == 0 || version > Profile::currentVersion)
+		{
+			return this->Reject("unsupported version");
+		}
 
-      for (size_t i (0); i < stick_count; ++i)
-      {
-        const stick_calibration& s (p.sticks[i]);
-        os << "stick " << i << ' '
-           << s.center_x << ' ' << s.center_y << ' '
-           << s.range_x << ' ' << s.range_y << ' '
-           << s.drift_threshold << '\n';
-      }
+		Profile profile;
+		profile.version = static_cast<std::uint16_t>(version);
 
-      for (size_t i (0); i < trigger_count; ++i)
-      {
-        const trigger_calibration& t (p.triggers[i]);
-        os << "trigger " << i << ' ' << t.min << ' ' << t.max << '\n';
-      }
+		int familyIndex = 0;
+		int sourceIndex = 0;
+		int hasKey = 0;
+		std::uint64_t keyValue = 0;
 
-      os << "motion "
-         << p.motion.gyro_bias.x << ' ' << p.motion.gyro_bias.y << ' '
-         << p.motion.gyro_bias.z << ' '
-         << p.motion.accel_bias.x << ' ' << p.motion.accel_bias.y << ' '
-         << p.motion.accel_bias.z << ' '
-         << p.motion.gyro_scale << ' ' << p.motion.accel_scale << '\n';
+		if (!(stream >> token >> familyIndex) || token != "family" || familyIndex < 0 || familyIndex > familyMax)
+		{
+			return this->Reject("bad family");
+		}
 
-      os << "smoothing " << p.smoothing << '\n';
+		if (!(stream >> token >> sourceIndex) || token != "source" || sourceIndex < 0 || sourceIndex > sourceMax)
+		{
+			return this->Reject("bad source");
+		}
 
-      return static_cast<bool> (os);
-    }
+		if (!(stream >> token >> hasKey >> keyValue) || token != "device_key")
+		{
+			return this->Reject("bad device key");
+		}
 
-    std::optional<profile>
-    store::
-    load (Controller::family family, std::optional<uint64_t> device_key) const
-    {
-      const std::filesystem::path file (file_for (family, device_key));
+		profile.family = static_cast<Controller::Family>(familyIndex);
+		profile.source = static_cast<ValueSource>(sourceIndex);
 
-      std::ifstream is (file);
-      if (!is)
-        return std::nullopt;
+		if (hasKey != 0)
+		{
+			profile.deviceKey = keyValue;
+		}
 
-      auto reject = [this] (const char* why) -> std::optional<profile>
-      {
-        ctx_.report (severity::warning, facility::calibration,
-                     errc::calibration_invalid,
-                     std::string ("calibration profile rejected: ") + why);
-        return std::nullopt;
-      };
+		for (std::size_t i = 0; i < stickCount; ++i)
+		{
+			std::size_t index = 0;
+			StickCalibration stick;
 
-      std::string token;
-      unsigned version (0);
-      if (!(is >> token >> version) || token != magic)
-        return reject ("bad header");
+			const bool isRead = static_cast<bool>(stream >> token >> index >> stick.centerX >> stick.centerY >> stick.rangeX >> stick.rangeY >> stick.driftThreshold);
 
-      if (version == 0 || version > profile::current_version)
-        return reject ("unsupported version");
+			if (!isRead || token != "stick" || index != i)
+			{
+				return this->Reject("bad stick record");
+			}
 
-      profile p;
-      p.version = static_cast<uint16_t> (version);
+			profile.sticks[i] = stick;
+		}
 
-      int family_i (0);
-      int source_i (0);
-      int has_key (0);
-      uint64_t key_value (0);
+		for (std::size_t i = 0; i < triggerCount; ++i)
+		{
+			std::size_t index = 0;
+			TriggerCalibration trigger;
 
-      if (!(is >> token >> family_i) || token != "family" ||
-          family_i < 0 || family_i > family_max)
-        return reject ("bad family");
+			const bool isRead = static_cast<bool>(stream >> token >> index >> trigger.min >> trigger.max);
 
-      if (!(is >> token >> source_i) || token != "source" ||
-          source_i < 0 || source_i > source_max)
-        return reject ("bad source");
+			if (!isRead || token != "trigger" || index != i)
+			{
+				return this->Reject("bad trigger record");
+			}
 
-      if (!(is >> token >> has_key >> key_value) || token != "device_key")
-        return reject ("bad device key");
+			profile.triggers[i] = trigger;
+		}
 
-      p.family = static_cast<Controller::family> (family_i);
-      p.source = static_cast<value_source> (source_i);
-      if (has_key != 0)
-        p.device_key = key_value;
+		auto& motion = profile.motion;
 
-      for (size_t i (0); i < stick_count; ++i)
-      {
-        size_t idx (0);
-        stick_calibration s;
-        if (!(is >> token >> idx >> s.center_x >> s.center_y >>
-              s.range_x >> s.range_y >> s.drift_threshold) ||
-            token != "stick" || idx != i)
-          return reject ("bad stick record");
+		const bool isMotionRead = static_cast<bool>(stream >> token >> motion.gyroBias.x >> motion.gyroBias.y >> motion.gyroBias.z
+			>> motion.accelBias.x >> motion.accelBias.y >> motion.accelBias.z >> motion.gyroScale >> motion.accelScale);
 
-        p.sticks[i] = s;
-      }
+		if (!isMotionRead || token != "motion")
+		{
+			return this->Reject("bad motion record");
+		}
 
-      for (size_t i (0); i < trigger_count; ++i)
-      {
-        size_t idx (0);
-        trigger_calibration t;
-        if (!(is >> token >> idx >> t.min >> t.max) ||
-            token != "trigger" || idx != i)
-          return reject ("bad trigger record");
+		if (!(stream >> token >> profile.smoothing) || token != "smoothing")
+		{
+			return this->Reject("bad smoothing record");
+		}
 
-        p.triggers[i] = t;
-      }
+		if (profile.family != family || profile.deviceKey != deviceKey)
+		{
+			return this->Reject("family or device key mismatch");
+		}
 
-      if (!(is >> token >> p.motion.gyro_bias.x >> p.motion.gyro_bias.y >>
-            p.motion.gyro_bias.z >> p.motion.accel_bias.x >>
-            p.motion.accel_bias.y >> p.motion.accel_bias.z >>
-            p.motion.gyro_scale >> p.motion.accel_scale) ||
-          token != "motion")
-        return reject ("bad motion record");
+		std::string why;
 
-      if (!(is >> token >> p.smoothing) || token != "smoothing")
-        return reject ("bad smoothing record");
+		if (!IsValid(profile, why))
+		{
+			return this->Reject(why.c_str());
+		}
 
-      if (p.family != family || p.device_key != device_key)
-        return reject ("family or device key mismatch");
-
-      std::string why;
-      if (!validate (p, why))
-        return reject (why.c_str ());
-
-      return p;
-    }
-  }
+		return profile;
+	}
 }

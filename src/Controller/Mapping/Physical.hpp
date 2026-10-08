@@ -1,47 +1,33 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Sample/Axis.hpp"
-#include "../Sample/Button.hpp"
-#include "Key.hpp"
+#include "Controller/Mapping/Key.hpp"
+#include "Controller/Sample/Axis.hpp"
 
-#include <variant>
-
-namespace Controller
+namespace Controller::Mapping
 {
-  namespace mapping
-  {
-    enum class stick_direction : uint8_t
-    {
-      up,
-      down,
-      left,
-      right,
-    };
+	enum class StickDirection : std::uint8_t
+	{
+		Up,
+		Down,
+		Left,
+		Right,
+	};
 
-    struct apad_input
-    {
-      stick which {stick::left};
-      stick_direction direction {stick_direction::up};
-    };
+	struct ApadInput
+	{
+		Stick which = Stick::Left;
+		StickDirection direction = StickDirection::Up;
+	};
 
-    using physical_input = std::variant<button, apad_input>;
+	EngineKey ToEngineKey(const ApadInput& input) noexcept;
 
-    std::optional<engine_key>
-    to_engine_key (button) noexcept;
+	struct AxisThreshold
+	{
+		float pressed;
+		float hysteresis;
+	};
 
-    engine_key
-    to_engine_key (const apad_input&) noexcept;
-
-    std::optional<engine_key>
-    to_engine_key (const physical_input&) noexcept;
-
-    bool
-    axis_deflected (float value,
-                    bool positive,
-                    bool was_down,
-                    float pressed,
-                    float hysteresis) noexcept;
-  }
+	bool IsAxisDeflected(float value, bool isPositive, bool wasDown, const AxisThreshold& threshold) noexcept;
 }

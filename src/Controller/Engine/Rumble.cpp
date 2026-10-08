@@ -1,64 +1,58 @@
-#include "Rumble.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Engine/Rumble.hpp"
 
-#include <algorithm>
-
-namespace Controller
+namespace Controller::Engine
 {
-  namespace engine
-  {
-    namespace
-    {
-      constexpr float milliseconds_per_second {1000.0f};
+	static constexpr float millisecondsPerSecond = 1000.0f;
 
-      constexpr float deep_sharpness {0.0f};
-      constexpr float crisp_sharpness {0.7f};
+	static constexpr float deepSharpness = 0.0f;
+	static constexpr float crispSharpness = 0.7f;
 
-      haptic::envelope
-      envelope_from (const Game::RumbleGraph* graph) noexcept
-      {
-        if (graph == nullptr || graph->knotCount == 0)
-          return {};
+	static Haptic::Envelope EnvelopeFrom(const Game::RumbleGraph* graph) noexcept
+	{
+		if (graph == nullptr || graph->knotCount == 0)
+		{
+			return {};
+		}
 
-        const size_t count (std::min (static_cast<size_t> (graph->knotCount),
-                                      haptic::envelope::max_knots));
+		const std::size_t count = std::min(static_cast<std::size_t>(graph->knotCount), Haptic::Envelope::maxKnots);
 
-        std::array<haptic::envelope::knot, haptic::envelope::max_knots> knots {};
+		std::array<Haptic::Envelope::Knot, Haptic::Envelope::maxKnots> knots{};
 
-        for (size_t i (0); i != count; ++i)
-          knots[i] = {graph->knots[i][0], graph->knots[i][1]};
+		for (std::size_t i = 0; i != count; ++i)
+		{
+			knots[i] = { graph->knots[i][0], graph->knots[i][1] };
+		}
 
-        return haptic::envelope::from ({knots.data (), count});
-      }
-    }
+		return Haptic::Envelope::From({ knots.data(), count });
+	}
 
-    bool
-    effect_from_rumble (const Game::RumbleInfo& info,
-                        float scale,
-                        bool loop,
-                        haptic::effect& out) noexcept
-    {
-      if (!(info.duration > 0.0f))
-        return false;
+	bool TryEffectFromRumble(const Game::RumbleInfo& info, float scale, bool shouldLoop, Haptic::Effect& out) noexcept
+	{
+		if (!(info.duration > 0.0f))
+		{
+			return false;
+		}
 
-      haptic::effect e;
-      e.deep = envelope_from (info.lowRumbleGraph);
-      e.crisp = envelope_from (info.highRumbleGraph);
+		Haptic::Effect effect;
+		effect.deep = EnvelopeFrom(info.lowRumbleGraph);
+		effect.crisp = EnvelopeFrom(info.highRumbleGraph);
 
-      if (e.deep.empty () && e.crisp.empty ())
-        return false;
+		if (effect.deep.IsEmpty() && effect.crisp.IsEmpty())
+		{
+			return false;
+		}
 
-      e.deep_sharpness = deep_sharpness;
-      e.crisp_sharpness = crisp_sharpness;
-      e.intensity = std::clamp (scale, 0.0f, 1.0f);
-      e.duration = seconds {info.duration / milliseconds_per_second};
-      e.loop = loop;
+		effect.deepSharpness = deepSharpness;
+		effect.crispSharpness = crispSharpness;
+		effect.intensity = std::clamp(scale, 0.0f, 1.0f);
+		effect.duration = Seconds{ info.duration / millisecondsPerSecond };
+		effect.shouldLoop = shouldLoop;
 
-      e.tag = static_cast<uint32_t> (info.rumbleNameIndex + 1);
+		effect.tag = static_cast<std::uint32_t>(info.rumbleNameIndex + 1);
 
-      out = e;
-      return true;
-    }
-  }
+		out = effect;
+		return true;
+	}
 }

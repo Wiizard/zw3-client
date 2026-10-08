@@ -1,54 +1,43 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
-#include "../Context.hpp"
-#include "Driver.hpp"
-#include "../Transport/XInputModule.hpp"
+#include "Controller/Context.hpp"
+#include "Controller/Driver/Driver.hpp"
+#include "Controller/Transport/XInputModule.hpp"
 
-namespace Controller
+namespace Controller::Driver
 {
-  namespace driver
-  {
-    void
-    decode_xinput (const XINPUT_GAMEPAD&,
-                   bool has_guide,
-                   raw_sample&,
-                   canonical_sample&) noexcept;
+	void DecodeXInput(const XINPUT_GAMEPAD& gamepad, bool hasGuide, RawSample& raw, CanonicalSample& canonical) noexcept;
 
-    class xinput_driver: public driver
-    {
-    public:
-      xinput_driver (const context&,
-                     const transport::xinput_module&,
-                     device_id,
-                     user_index);
+	class XInputDriver : public Driver
+	{
+	public:
+		XInputDriver(const Context& context, const Transport::XInputModule& xinput, DeviceId device, UserIndex index);
 
-      Controller::family
-      family () const noexcept override {return Controller::family::xbox;}
+		Controller::Family Family() const noexcept override
+		{
+			return Controller::Family::Xbox;
+		}
 
-      device_id
-      device () const noexcept override {return device_;}
+		DeviceId Device() const noexcept override
+		{
+			return this->device;
+		}
 
-      bool
-      poll (raw_sample&, canonical_sample&) noexcept override;
+		bool TryPoll(RawSample& raw, CanonicalSample& canonical) override;
+		void Submit(const OutputRequest& request) override;
+		std::string Diagnostics() const override;
 
-      void
-      submit (const output_request&) noexcept override;
+	private:
+		const Context& context;
+		const Transport::XInputModule& xinput;
+		DeviceId device;
+		UserIndex index;
 
-      std::string
-      diagnostics () const override;
+		DWORD lastPacket = 0;
+		bool hasPacket = false;
 
-    private:
-      const context& ctx_;
-      const transport::xinput_module& module_;
-      device_id device_;
-      user_index index_;
-
-      uint32_t last_packet_ {0};
-      bool have_packet_ {false};
-
-      bool unsupported_reported_ {false};
-    };
-  }
+		bool hasReportedUnsupported = false;
+	};
 }

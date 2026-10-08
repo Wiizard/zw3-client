@@ -14,66 +14,49 @@
 #include <shellapi.h>
 #include <wininet.h>
 #include <d3d9.h>
-#include <aclapi.h>
 #include <psapi.h>
 #include <tlhelp32.h>
 #include <shlwapi.h>
-
 #include <dbghelp.h>
+#include <iphlpapi.h>
+#include <XInput.h>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
+#include <cassert>
 #include <cctype>
 #include <chrono>
 #include <cinttypes>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <filesystem>
 #include <format>
 #include <fstream>
-#include <future>
+#include <functional>
 #include <limits>
+#include <map>
+#include <memory>
 #include <optional>
 #include <queue>
 #include <random>
 #include <ranges>
 #include <regex>
-#include <source_location>
-#include <sstream>
-#include <thread>
-#include <type_traits>
-#include <map>
 #include <set>
+#include <sstream>
+#include <string>
+#include <thread>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
-#include <d3dx9tex.h>
-#pragma comment(lib, "D3dx9.lib")
-
-#include <XInput.h>
-#pragma comment (lib, "xinput.lib")
-
-#include <dwmapi.h>
-#pragma comment (lib, "dwmapi.lib")
-
-#include <iphlpapi.h>
-#pragma comment (lib, "iphlpapi.lib")
-
-#include <SetupAPI.h>
-#pragma comment(lib, "Setupapi.lib")
-
-#include <hidsdi.h>
-#pragma comment(lib, "Hid.lib")
-
-#include <CommCtrl.h>
-#pragma comment(lib, "Comctl32.lib")
-
-// Ignore the warnings
 #pragma warning(push)
 #pragma warning(disable: 4100)
 #pragma warning(disable: 26812)
 
-// Enable additional literals
 using namespace std::literals;
 
 #ifdef max
@@ -100,22 +83,25 @@ using namespace std::literals;
 
 #define AssertUnreachable assert(0 && "unreachable")
 
-#include <gsl/gsl>
 #include <json.hpp>
-#include <tomcrypt.h>
 
 #pragma warning(pop)
 
-#include "Utils/Memory.hpp" // Breaks order on purpose
+#include <tomcrypt.h>
+
+#include "Utils/Memory.hpp"
 
 #include "Utils/Cache.hpp"
 #include "Utils/Chain.hpp"
 #include "Utils/Concurrency.hpp"
+#include "Utils/CrashMarker.hpp"
 #include "Utils/Cryptography.hpp"
 #include "Utils/CSV.hpp"
 #include "Utils/Entities.hpp"
 #include "Utils/Hooking.hpp"
 #include "Utils/Huffman.hpp"
+#include "Utils/Utils.hpp"
+#include "Utils/InfoString.hpp"
 #include "Utils/IO.hpp"
 #include "Utils/Library.hpp"
 #include "Utils/Maths.hpp"
@@ -123,21 +109,19 @@ using namespace std::literals;
 #include "Utils/String.hpp"
 #include "Utils/Thread.hpp"
 #include "Utils/Time.hpp"
-#include "Utils/Utils.hpp"
-
-#include "Steam/Steam.hpp" // Some definitions are used in functions and structs
+#include "Utils/WebIO.hpp"
 
 #include "Game/Structs.hpp"
+#include "Game/StructsX86.hpp"
 #include "Game/Game.hpp"
 
-#include <Game/Scripting/Function.hpp>
-#include <Game/Scripting/StackIsolation.hpp>
+#include "Game/Scripting/Function.hpp"
+#include "Game/Scripting/StackIsolation.hpp"
 
-#include "Utils/Stream.hpp" // Breaks order on purpose
+#include "Utils/Stream.hpp"
 
 #include "Components/Loader.hpp"
 
-// Libraries
 #pragma comment(lib, "Winmm.lib")
 #pragma comment(lib, "Crypt32.lib")
 #pragma comment(lib, "Ws2_32.lib")
@@ -149,30 +133,24 @@ using namespace std::literals;
 #pragma comment(lib, "rpcrt4.lib")
 #pragma comment(lib, "dbghelp.lib")
 #pragma comment(lib, "ntdll.lib")
+#pragma comment(lib, "iphlpapi.lib")
+
+#pragma comment(lib, "xinput.lib")
+#pragma comment(lib, "Setupapi.lib")
+#pragma comment(lib, "Hid.lib")
 
 #endif
 
-#define BASEGAME "main/zw3/x86"
-#define BASEGAME_LEGACY "iw4x"
-#define BASEGAME_NAME "iw4mp_ceg.exe"
+#define BASEGAME "iw4x64"
 #define CLIENT_CONFIG "iw4x_config.cfg"
+
+#define GAME_IMAGEBASE 0x140000000
 
 #define XFILE_MAGIC_UNSIGNED 0x3030317566665749
 #define XFILE_VERSION 276
 
-#define XFILE_HEADER_IW4X 0x78345749 // 'IW4x'
+#define XFILE_HEADER_IW4X 0x78345749
 #define XFILE_VERSION_IW4X 3
 
-#define XFILE_HEADER_ZW3 0x4633575A // 'ZW3F'
+#define XFILE_HEADER_ZW3 0x4633575A
 #define XFILE_VERSION_ZW3 1
-
-// Resource stuff
-#ifdef APSTUDIO_INVOKED
-#ifndef APSTUDIO_READONLY_SYMBOLS
-// Defines below make accessing the resources from the code easier.
-#define _APS_NEXT_RESOURCE_VALUE        102
-#define _APS_NEXT_COMMAND_VALUE         40001
-#define _APS_NEXT_CONTROL_VALUE         1001
-#define _APS_NEXT_SYMED_VALUE           101
-#endif
-#endif

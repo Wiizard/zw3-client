@@ -1,27 +1,13 @@
-#include "DualSenseEdge.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Driver/DualSenseEdge.hpp"
 
-namespace Controller
+namespace Controller::Driver
 {
-  namespace driver
-  {
-    bool
-    decode_dualsense_edge (std::span<const std::byte> report,
-                           connection link,
-                           raw_sample& raw,
-                           canonical_sample& canonical) noexcept
-    {
-      return decode_dualsense (report, link, raw, canonical, true);
-    }
+	bool DualSenseEdgeDriver::TryPoll(RawSample& raw, CanonicalSample& canonical)
+	{
+		this->FlushRumble();
 
-    bool
-    dualsense_edge_driver::
-    poll (raw_sample& raw, canonical_sample& canonical) noexcept
-    {
-      flush_rumble ();
-
-      return read_and_decode (raw, canonical, true);
-    }
-  }
+		return this->TryReadAndDecode(raw, canonical, true);
+	}
 }

@@ -1,77 +1,77 @@
-#include "Normalize.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Calibration/Normalize.hpp"
 
-#include <cmath>
-#include <algorithm>
-
-namespace Controller
+namespace Controller::Calibration
 {
-  namespace calibration
-  {
-    void
-    apply (const profile& p,
-           const raw_sample& raw,
-           canonical_sample& canonical) noexcept
-    {
-      for (size_t i (0); i < stick_count; ++i)
-      {
-        const stick_calibration& c (p.sticks[i]);
-        stick_sample& s (canonical.sticks[i]);
+	void ApplyProfile(const Profile& profile, const RawSample& raw, CanonicalSample& canonical) noexcept
+	{
+		for (std::size_t i = 0; i < stickCount; ++i)
+		{
+			const auto& stickCalibration = profile.sticks[i];
+			auto& stick = canonical.sticks[i];
 
-        float cx ((s.normalized.x - c.center_x) / c.range_x);
-        float cy ((s.normalized.y - c.center_y) / c.range_y);
+			float x = std::clamp((stick.normalized.x - stickCalibration.centerX) / stickCalibration.rangeX, -1.0f, 1.0f);
+			float y = std::clamp((stick.normalized.y - stickCalibration.centerY) / stickCalibration.rangeY, -1.0f, 1.0f);
 
-        cx = std::clamp (cx, -1.0f, 1.0f);
-        cy = std::clamp (cy, -1.0f, 1.0f);
+			float magnitude = std::sqrt(x * x + y * y);
 
-        float m (std::sqrt (cx * cx + cy * cy));
-        if (m > 1.0f)
-        {
-          cx /= m;
-          cy /= m;
-          m = 1.0f;
-        }
+			if (magnitude > 1.0f)
+			{
+				x /= magnitude;
+				y /= magnitude;
+				magnitude = 1.0f;
+			}
 
-        if (m <= c.drift_threshold)
-        {
-          cx = 0.0f;
-          cy = 0.0f;
-        }
+			if (magnitude <= stickCalibration.driftThreshold)
+			{
+				x = 0.0f;
+				y = 0.0f;
+			}
 
-        s.calibrated = {cx, cy};
-      }
+			stick.calibrated = { x, y };
+		}
 
-      for (size_t i (0); i < trigger_count; ++i)
-      {
-        const trigger_calibration& tc (p.triggers[i]);
-        trigger_sample& t (canonical.triggers[i]);
+		for (std::size_t i = 0; i < triggerCount; ++i)
+		{
+			const auto& triggerCalibration = profile.triggers[i];
+			auto& trigger = canonical.triggers[i];
 
-        const float denom (tc.max - tc.min);
-        const float v (denom > 0.0f ? (t.normalized - tc.min) / denom
-                                    : t.normalized);
-        t.normalized = std::clamp (v, 0.0f, 1.0f);
-      }
+			const float range = triggerCalibration.max - triggerCalibration.min;
+			float value = trigger.normalized;
 
-      if (raw.motion)
-      {
-        const motion_calibration& mc (p.motion);
-        motion_sample out (*raw.motion);
+			if (range > 0.0f)
+			{
+				value = (trigger.normalized - triggerCalibration.min) / range;
+			}
 
-        const sensor_vec3 g (out.gyro.angular_velocity);
-        out.gyro.angular_velocity =
-          {(g.x - mc.gyro_bias.x) * mc.gyro_scale,
-           (g.y - mc.gyro_bias.y) * mc.gyro_scale,
-           (g.z - mc.gyro_bias.z) * mc.gyro_scale};
+			trigger.normalized = std::clamp(value, 0.0f, 1.0f);
+		}
 
-        const sensor_vec3 a (out.accel.acceleration);
-        out.accel.acceleration =
-          {(a.x - mc.accel_bias.x) * mc.accel_scale,
-           (a.y - mc.accel_bias.y) * mc.accel_scale,
-           (a.z - mc.accel_bias.z) * mc.accel_scale};
+		if (!raw.motion)
+		{
+			return;
+		}
 
-        canonical.motion = out;
-      }
-    }
-  }
+		const auto& motionCalibration = profile.motion;
+		MotionSample motion = *raw.motion;
+
+		const SensorVector gyro = motion.gyro.angularVelocity;
+		motion.gyro.angularVelocity =
+		{
+			(gyro.x - motionCalibration.gyroBias.x) * motionCalibration.gyroScale,
+			(gyro.y - motionCalibration.gyroBias.y) * motionCalibration.gyroScale,
+			(gyro.z - motionCalibration.gyroBias.z) * motionCalibration.gyroScale,
+		};
+
+		const SensorVector accel = motion.accel.acceleration;
+		motion.accel.acceleration =
+		{
+			(accel.x - motionCalibration.accelBias.x) * motionCalibration.accelScale,
+			(accel.y - motionCalibration.accelBias.y) * motionCalibration.accelScale,
+			(accel.z - motionCalibration.accelBias.z) * motionCalibration.accelScale,
+		};
+
+		canonical.motion = motion;
+	}
 }

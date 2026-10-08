@@ -1,59 +1,60 @@
+#include "STDInclude.hpp"
 
 namespace Utils
 {
 	CSV::CSV(const std::string& file, const bool isFile, const bool allowComments)
 	{
-		this->parse(file, isFile, allowComments);
+		this->Parse(file, isFile, allowComments);
 	}
 
-	std::size_t CSV::getRows() const
+	std::size_t CSV::GetRows() const
 	{
-		return this->dataMap_.size();
+		return this->rows.size();
 	}
 
-	std::size_t CSV::getColumns() const
+	std::size_t CSV::GetColumns() const
 	{
 		std::size_t count = 0;
 
-		for (std::size_t i = 0; i < this->getRows(); ++i)
+		for (std::size_t i = 0; i < this->GetRows(); ++i)
 		{
-			count = std::max(this->getColumns(i), count);
+			count = std::max(this->GetColumns(i), count);
 		}
 
 		return count;
 	}
 
-	std::size_t CSV::getColumns(const std::size_t row) const
+	std::size_t CSV::GetColumns(const std::size_t row) const
 	{
-		if (this->dataMap_.size() > row)
+		if (this->rows.size() > row)
 		{
-			return this->dataMap_[row].size();
+			return this->rows[row].size();
 		}
 
 		return 0;
 	}
 
-	std::string CSV::getElementAt(const std::size_t row, const std::size_t column) const
+	std::string CSV::GetElementAt(const std::size_t row, const std::size_t column) const
 	{
-		if (this->dataMap_.size() > row)
+		if (this->rows.size() > row)
 		{
-			auto& _row = this->dataMap_[row];
+			const auto& cells = this->rows[row];
 
-			if (_row.size() > column)
+			if (cells.size() > column)
 			{
-				return _row[column];
+				return cells[column];
 			}
 		}
 
 		return {};
 	}
 
-	bool CSV::isValid() const
+	bool CSV::IsValid() const
 	{
-		return this->valid_;
+		return this->isValid;
 	}
 
-	void CSV::parse(const std::string& file, const bool isFile, const bool allowComments)
+	void CSV::Parse(const std::string& file, const bool isFile, const bool allowComments)
 	{
 		std::string buffer;
 
@@ -65,78 +66,78 @@ namespace Utils
 			}
 
 			buffer = IO::ReadFile(file);
-			this->valid_ = true;
+			this->isValid = true;
 		}
 		else
 		{
 			buffer = file;
 		}
 
-		if (!buffer.empty())
+		if (buffer.empty())
 		{
-			const auto rows = String::Split(buffer, '\n');
+			return;
+		}
 
-			for (auto& row : rows)
-			{
-				this->parseRow(row, allowComments);
-			}
+		for (const auto& row : String::Split(buffer, '\n'))
+		{
+			this->ParseRow(row, allowComments);
 		}
 	}
 
-	void CSV::parseRow(const std::string& row, const bool allowComments)
+	void CSV::ParseRow(const std::string& row, const bool allowComments)
 	{
 		bool isString = false;
 		std::string element;
-		std::vector<std::string> _row;
-		char tempStr = 0;
+		std::vector<std::string> cells;
+		char character = 0;
 
 		for (std::size_t i = 0; i < row.size(); ++i)
 		{
-			if (row[i] == ',' && !isString) // Flush entry
+			if (row[i] == ',' && !isString)
 			{
-				_row.push_back(element);
+				cells.push_back(element);
 				element.clear();
 				continue;
 			}
 
-			if (row[i] == '"') // Start/Terminate string
+			if (row[i] == '"')
 			{
 				isString = !isString;
 				continue;
 			}
 
-			if (i < (row.size() - 1) && row[i] == '\\' &&row[i + 1] == '"' && isString) // Handle quotes in strings as \"
+			const bool isEscapedQuote = i < (row.size() - 1) && row[i] == '\\' && row[i + 1] == '"' && isString;
+			const bool isDropped = !isString && (row[i] == '\n' || row[i] == '\r' || row[i] == '\t');
+			const bool isComment = !isString && (row[i] == '#' || (row[i] == '/' && (i + 1) < row.size() && row[i + 1] == '/'));
+
+			if (isEscapedQuote)
 			{
-				tempStr = '"';
+				character = '"';
 				++i;
 			}
-
-			else if (!isString && (row[i] == '\n' || row[i] == '\x0D' || row[i] == '\x0A' || row[i] == '\t'))
+			else if (isDropped)
 			{
 				continue;
 			}
-
-			else if (!isString && (row[i] == '#' || (row[i] == '/' && (i + 1) < row.size() && row[i + 1] == '/') ) && allowComments) // Skip comments. I know CSVs usually don't have comments, but in this case it's useful
+			else if (isComment && allowComments)
 			{
 				return;
 			}
-
 			else
 			{
-				tempStr = row[i];
+				character = row[i];
 			}
 
-			element.append(&tempStr, 1);
+			element.append(&character, 1);
 		}
 
-		// Push last element
-		_row.push_back(element);
+		cells.push_back(element);
 
-		if (_row.empty() || (_row.size() == 1 && _row[0].empty())) // Skip empty rows
+		if (cells.size() == 1 && cells[0].empty())
 		{
 			return;
 		}
 
-		this->dataMap_.push_back(_row);
+		this->rows.push_back(cells);
 	}
 }

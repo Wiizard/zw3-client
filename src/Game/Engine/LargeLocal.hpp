@@ -22,10 +22,10 @@ namespace Game::Engine
 		int size;
 	};
 
-	extern void LargeLocalEnd(int startPos);
-	extern void LargeLocalEndRight(int startPos);
+	void LargeLocalEnd(int startPos);
+	void LargeLocalEndRight(int startPos);
 
-	extern void* LargeLocalGetBuf(int startPos, int size);
+	void* LargeLocalGetBuf(int startPos, int size);
 
-	extern int CanUseServerLargeLocal();
+	int CanUseServerLargeLocal();
 }

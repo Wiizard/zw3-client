@@ -1,38 +1,15 @@
+#include "STDInclude.hpp"
+
 #include "NetworkDebug.hpp"
+#include "Logger.hpp"
 
 namespace Components
 {
-	void NetworkDebug::CL_ParseServerMessage_Hk(Game::msg_t* msg)
-	{
-		auto file = Game::FS_FOpenFileWrite("badpacket.dat");
-		if (file)
-		{
-			Game::FS_Write(msg->data, msg->cursize, file);
-			Game::FS_FCloseFile(file);
-		}
-		Game::MSG_Discard(msg);
-	}
+	constexpr std::uintptr_t I_stricmp = 0x14028C0F0;
 
-	void NetworkDebug::CL_ParseBadPacket_f()
-	{
-		Game::msg_t msg;
-		unsigned char* file;
+	constexpr std::uintptr_t Cmd_ExecuteSingleCommand_NameCompareCalls[] = { 0x1401E77E7, 0x1401E79A7 };
 
-		auto fileSize = Game::FS_ReadFile("badpacket.dat", reinterpret_cast<char**>(&file));
-		if (fileSize < 0)
-		{
-			return;
-		}
-
-		ZeroMemory(&msg, sizeof(msg));
-		msg.cursize = fileSize;
-		msg.data = file;
-		Game::MSG_ReadLong(&msg);
-		Game::MSG_ReadLong(&msg);
-		assert(0 && "Time to debug this packet, baby!");
-		Game::CL_ParseServerMessage(0, &msg);
-		Game::FS_FreeFile(file);
-	}
+	static Utils::Hook hooks[std::size(Cmd_ExecuteSingleCommand_NameCompareCalls)];
 
 	int NetworkDebug::I_stricmp_Stub(const char* s0, const char* s1)
 	{
@@ -49,21 +26,39 @@ namespace Components
 			return 1;
 		}
 
-		return Utils::Hook::Call<int(const char*, const char*, int)>(0x426080)(s0, s1, std::numeric_limits<int>::max()); // I_strnicmp
+		return reinterpret_cast<int(*)(const char*, const char*)>(Utils::Hook::Rebase(I_stricmp))(s0, s1);
 	}
 
 	NetworkDebug::NetworkDebug()
 	{
-#ifdef _DEBUG
-		Utils::Hook(0x4AA06A, CL_ParseServerMessage_Hk, HOOK_CALL).install()->quick();
-		Command::Add("parseBadPacket", CL_ParseBadPacket_f);
-#endif
+		bool isExpected = true;
 
-		// Address "race" condition where commands received from RCon can be null
-		Utils::Hook(0x6094DA, I_stricmp_Stub, HOOK_CALL).install()->quick(); // Cmd_ExecuteServerString
-		Utils::Hook(0x6095D7, I_stricmp_Stub, HOOK_CALL).install()->quick(); // Cmd_ExecuteSingleCommand
+		for (const auto call : Cmd_ExecuteSingleCommand_NameCompareCalls)
+		{
+			isExpected = isExpected && Utils::Hook::BranchesTo(call, I_stricmp, false);
+		}
 
-		// Backport updates from IW5
-		Utils::Hook::Set<const char*>(0x45D112, "CL_PacketEvent - ignoring illegible message\n");
+		if (!isExpected)
+		{
+			Logger::Error("networkdebug: Cmd_ExecuteSingleCommand does not read as expected, command names stay unchecked\n");
+			return;
+		}
+
+		bool isSeated = true;
+
+		for (std::size_t i = 0; i < std::size(Cmd_ExecuteSingleCommand_NameCompareCalls); ++i)
+		{
+			isSeated = hooks[i].Initialize(Cmd_ExecuteSingleCommand_NameCompareCalls[i], reinterpret_cast<void*>(I_stricmp_Stub), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+		}
+
+		if (!isSeated)
+		{
+			for (auto& hook : hooks)
+			{
+				hook.Uninstall();
+			}
+
+			Logger::Error("networkdebug: could not seat every hook, command names stay unchecked\n");
+		}
 	}
 }

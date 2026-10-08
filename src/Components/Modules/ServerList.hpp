@@ -1,12 +1,14 @@
 #pragma once
 
+#include "Network.hpp"
+#include "UIScript.hpp"
+#include "Dvar.hpp"
+
 namespace Components
 {
 	class ServerList : public Component
 	{
 	public:
-		typedef int(SortCallback)(const void*, const void*);
-
 		struct ServerInfo
 		{
 			Network::Address addr;
@@ -33,16 +35,12 @@ namespace Components
 
 		ServerList();
 
-		//void preDestroy() override;
-
 		static void Refresh();
-		static void RefreshVisibleList([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
-		static void RefreshVisibleListInternal([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info, bool refresh = false);
-		static void UpdateVisibleList([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
-		static void InsertRequest(Network::Address address);
+		static void RefreshVisibleList(const UIScript::Token& token);
+		static void RefreshVisibleListInternal();
+		static void UpdateVisibleList(const UIScript::Token& token);
+		static void InsertRequest(const Network::Address& address);
 		static void Insert(const Network::Address& address, const Utils::InfoString& info);
-
-		static void DisableQuickRefresh([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
 
 		static ServerInfo* GetCurrentServer();
 
@@ -50,20 +48,21 @@ namespace Components
 		static bool IsOfflineList();
 		static bool IsOnlineList();
 
+		static void StoreFavourite(const std::string& server);
+		static void RemoveFavourite(const std::string& server);
+		static void LoadFavourites();
+
 		static void Frame();
 		static std::vector<ServerInfo>* GetList();
 
 		static void UpdateVisibleInfo();
 
-		static bool UseMasterServer;
+		static void FetchMasterList();
 
-		static bool GetMasterServer(const char* ip, int port, Game::netadr_t& address);
+		static bool useMasterServer;
 
-		static Dvar::Var UIServerSelected;
-		static Dvar::Var UIServerSelectedMap;
-		static Dvar::Var NETServerQueryLimit;
-		static Dvar::Var NETServerFrames;
-		static Dvar::Var NETServerDeadTimeout;
+		static Dvar::Var netServerQueryLimit;
+		static Dvar::Var netServerFrames;
 
 	private:
 		enum class Column : int
@@ -82,32 +81,6 @@ namespace Components
 			Count
 		};
 
-		static constexpr auto* FavouriteFile = "zw3/players/favourites.json";
-		static constexpr auto* ServerCacheFile = "zw3/players/server_cache.json";
-
-#pragma pack(push, 1)
-		union MasterEntry
-		{
-			char token[7];
-			struct
-			{
-				uint32_t ip;
-				uint16_t port;
-			};
-
-			[[nodiscard]] bool IsEndToken() const noexcept
-			{
-				// End of transmission or file token
-				return (token[0] == 'E' && token[1] == 'O' && (token[2] == 'T' || token[2] == 'F'));
-			}
-
-			[[nodiscard]] bool HasSeparator() const noexcept
-			{
-				return (token[6] == '\\');
-			}
-		};
-#pragma pack(pop)
-
 		class Container
 		{
 		public:
@@ -121,17 +94,10 @@ namespace Components
 				int sourceList;
 			};
 
-			bool awaitingList;
-			int awaitTime;
 			bool needsInitialRefresh;
-			bool loadingCache;
-
-			Network::Address host;
 			std::vector<ServerContainer> servers;
 			std::recursive_mutex mutex;
 		};
-
-		static void ParseNewMasterServerResponse(const std::string& servers);
 
 		static unsigned int GetServerCount();
 		static const char* GetServerText(unsigned int index, int column);
@@ -143,47 +109,47 @@ namespace Components
 
 		static void SortList();
 
-		static void LoadFavourties();
-		static void StoreFavourite(const std::string& server);
-		static void RemoveFavourite(const std::string& server);
-
-		static void LoadServerCache();
-		static void SaveServerCache();
 		static void RemoveDeadServers();
 		static void HeartbeatServers();
 
+		static void LoadServerCache();
+		static void SaveServerCache();
+
 		static ServerInfo* GetServer(unsigned int index);
-		static bool CompareVersion(const std::string& version1, const std::string& version2);
 		static bool IsServerDuplicate(const std::vector<ServerInfo>* list, const ServerInfo& server);
 
-		static int SortKey;
-		static bool SortAsc;
-
-		static unsigned int CurrentServer;
-		static Container RefreshContainer;
-
-		static std::vector<ServerInfo> OnlineList;
-		static std::vector<ServerInfo> OfflineList;
-		static std::vector<ServerInfo> FavouriteList;
-
-		static std::vector<unsigned int> VisibleList;
-
 		static bool IsServerListOpen();
+
+		static int sortKey;
+		static bool sortAsc;
+
+		static unsigned int currentServer;
+		static Container refreshContainer;
+
+		static std::vector<ServerInfo> onlineList;
+		static std::vector<ServerInfo> offlineList;
+		static std::vector<ServerInfo> favouriteList;
+
+		static std::vector<unsigned int> visibleList;
+
+		static Dvar::Var uiServerSelected;
+		static Dvar::Var uiServerSelectedMap;
+		static Dvar::Var netServerDeadTimeout;
 	};
 }
 
 template <>
 struct std::hash<Components::ServerList::ServerInfo>
 {
-	std::size_t operator()(const Components::ServerList::ServerInfo& x) const noexcept
+	std::size_t operator()(const Components::ServerList::ServerInfo& server) const noexcept
 	{
 		std::size_t hash = 0;
 
-		hash ^= std::hash<std::string>()(x.hostname);
-		hash ^= std::hash<std::string>()(x.mapname);
-		hash ^= std::hash<std::string>()(x.mod);
-		hash ^= std::hash<std::uint32_t>()(*reinterpret_cast<const std::uint32_t*>(x.addr.getIP().bytes));
-		hash ^= x.clients;
+		hash ^= std::hash<std::string>()(server.hostname);
+		hash ^= std::hash<std::string>()(server.mapname);
+		hash ^= std::hash<std::string>()(server.mod);
+		hash ^= std::hash<std::uint32_t>()(server.addr.GetIP());
+		hash ^= server.clients;
 
 		return hash;
 	}

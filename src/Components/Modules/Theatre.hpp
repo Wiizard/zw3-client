@@ -1,5 +1,8 @@
 #pragma once
 
+#include "Dvar.hpp"
+#include "UIScript.hpp"
+
 namespace Components
 {
 	class Theatre : public Component
@@ -23,43 +26,45 @@ namespace Components
 			[[nodiscard]] nlohmann::json to_json() const;
 		};
 
-		static DemoInfo CurrentInfo;
-		static unsigned int CurrentSelection;
-		static std::vector<DemoInfo> Demos;
+		static DemoInfo currentInfo;
+		static unsigned int currentSelection;
+		static std::vector<DemoInfo> demos;
 
-		static Dvar::Var CLAutoRecord;
-		static Dvar::Var CLDemosKeep;
+		static Dvar::Var cl_autoRecord;
+		static Dvar::Var cl_demosKeep;
 
-		static char BaselineSnapshot[131072];
-		static int BaselineSnapshotMsgLen;
-		static int BaselineSnapshotMsgOff;
+		static char baselineSnapshot[131072];
+		static int baselineSnapshotMsgLen;
+		static int baselineSnapshotMsgOff;
 
 		static void WriteBaseline();
-		static void StoreBaseline(PBYTE snapshotMsg);
 
-		static void LoadDemos([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
-		static void DeleteDemo([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
-		static void PlayDemo([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info);
+		static void LoadDemos(const UIScript::Token& token);
+		static void DeleteDemo(const UIScript::Token& token);
+		static void PlayDemo(const UIScript::Token& token);
 
 		static unsigned int GetDemoCount();
 		static const char* GetDemoText(unsigned int item, int column);
 		static void SelectDemo(unsigned int index);
 
-		static void GamestateWriteStub(Game::msg_t* msg, char byte);
-		static void RecordGamestateStub();
-		static void BaselineStoreStub();
-		static void BaselineToFileStub();
-		static void AdjustTimeDeltaStub();
-		static void ServerTimedOutStub();
-		static void UISetActiveMenuStub();
+		static int CL_GetSnapshot_Hk(int localClientNum, int snapshotNumber, Game::snapshot_s* snapshot);
+		static void CL_ParseServerMessage_Hk(int localClientNum, Game::msg_t* msg);
+		static void GamestateWrite_Hk(Game::msg_t* msg, int byte);
+		static void RecordGamestate_Hk(const void* buffer, int length, Game::fileHandle_t file);
+		static void BaselineToFile_Hk();
+		static bool CL_ServerTimedOut_Hk();
 
-		static int CL_FirstSnapshot_Stub();
-		static void SV_SpawnServer_Stub();
+		static int CL_FirstSnapshot_Hk();
+		static void SV_SpawnServer_Hk();
 
-		static void CG_CompassDrawPlayerMapLocationSelector_Stub(int localClientNum, Game::CompassType compassType, const Game::rectDef_s* parentRect, const Game::rectDef_s* rect, Game::Material* material, float* color);
+		static void CG_CompassDrawPlayerMapLocationSelector_Hk(int localClientNum, Game::CompassType compassType, const Game::rectDef_s* parentRect, const Game::rectDef_s* rect, Game::Material* material, float* color);
 		static void CL_WriteDemoClientArchive_Hk(void(*write)(const void* buffer, int len, int localClientNum), const Game::playerState_s* ps, const float* viewangles, const float* selectedLocation, float selectedLocationAngle, int localClientNum, int index);
 
-		static void RecordStub(int channel, char* message, char* file);
-		static void StopRecordStub(int channel, char* message);
+		static Game::fileHandle_t RecordStub(const char* file);
+		static void StopRecordStub(Game::fileHandle_t file);
+
+	public:
+		static void StoreBaseline(Game::msg_t* snapshotMsg);
+		static bool AdjustTimeDelta();
 	};
 }

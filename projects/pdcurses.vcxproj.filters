@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="pdcurses">
+      <UniqueIdentifier>{EE8AB4D9-DA57-0FE5-0371-FD8CEF9C4473}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="wincon">
+      <UniqueIdentifier>{13FA1E25-FF9B-49FB-E856-5D4FD497D04B}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\deps\x64\pdcurses\wincon\pdcwin.h">
+      <Filter>wincon</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\addch.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\addchstr.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\addstr.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\attr.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\beep.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\bkgd.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\border.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\clear.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\color.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\debug.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\delch.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\deleteln.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\getch.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\getstr.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\getyx.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\inch.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\inchstr.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\initscr.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\inopts.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\insch.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\insstr.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\instr.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\kernel.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\keyname.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\mouse.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\move.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\outopts.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\overlay.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\pad.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\panel.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\printw.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\refresh.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\scanw.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\scr_dump.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\scroll.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\slk.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\termattr.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\touch.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\util.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\pdcurses\window.c">
+      <Filter>pdcurses</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\wincon\pdcclip.c">
+      <Filter>wincon</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\wincon\pdcdisp.c">
+      <Filter>wincon</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\wincon\pdcgetsc.c">
+      <Filter>wincon</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\wincon\pdckbd.c">
+      <Filter>wincon</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\wincon\pdcscrn.c">
+      <Filter>wincon</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\wincon\pdcsetsc.c">
+      <Filter>wincon</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\pdcurses\wincon\pdcutil.c">
+      <Filter>wincon</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>

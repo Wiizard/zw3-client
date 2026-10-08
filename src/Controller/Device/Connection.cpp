@@ -1,23 +1,26 @@
-#include "Connection.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
-
-#include <variant>
+#include "Controller/Device/Connection.hpp"
 
 namespace Controller
 {
-  bool
-  same_binding (const transport_binding& a, const transport_binding& b) noexcept
-  {
-    if (a.index () != b.index ())
-      return false;
+	bool IsSameBinding(const TransportBinding& left, const TransportBinding& right) noexcept
+	{
+		if (left.index() != right.index())
+		{
+			return false;
+		}
 
-    if (const auto* xa = std::get_if<xinput_binding> (&a))
-      return xa->index == std::get<xinput_binding> (b).index;
+		if (const auto* xinput = std::get_if<XInputBinding>(&left))
+		{
+			return xinput->index == std::get<XInputBinding>(right).index;
+		}
 
-    if (const auto* ha = std::get_if<hid_binding> (&a))
-      return ha->path == std::get<hid_binding> (b).path;
+		if (const auto* hid = std::get_if<HidBinding>(&left))
+		{
+			return hid->path == std::get<HidBinding>(right).path;
+		}
 
-    return false;
-  }
+		return false;
+	}
 }

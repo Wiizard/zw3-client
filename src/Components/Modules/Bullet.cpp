@@ -1,53 +1,38 @@
+#include "STDInclude.hpp"
+
 #include "Bullet.hpp"
+#include "Events.hpp"
+#include "Logger.hpp"
 
 namespace Components
 {
-	Dvar::Var Bullet::BGSurfacePenetration;
-	Game::dvar_t* Bullet::BGBulletRange;
+	Dvar::Var Bullet::bg_surfacePenetration;
+	Game::dvar_t* Bullet::bg_bulletRange;
 
-	float Bullet::ContactPointSave[3];
-	float Bullet::VCSave[3];
-	float Bullet::CalcRicochetSave[3];
+	constexpr std::uintptr_t BG_GetSurfacePenetrationDepth = 0x14009C840;
+	constexpr std::uintptr_t penetrationDepthCalls[] = { 0x1400C6A16, 0x1400C6E73, 0x1400C6E90, 0x1401620C8, 0x140162427, 0x140162442 };
 
-	float Bullet::ColorYellow[] = {1.0f, 1.0f, 0.0f, 1.0f};
-	float Bullet::ColorBlue[] = {0.0f, 0.0f, 1.0f, 1.0f};
-	float Bullet::ColorOrange[] = {1.0f, 0.7f, 0.0f, 1.0f};
+	constexpr std::uintptr_t Bullet_Fire_RangeLoad = 0x140161BE5;
+	static const std::uint8_t rangeLoad[] = { 0xF3, 0x0F, 0x10, 0x35, 0x7F, 0xDE, 0x20, 0x00 };
+	constexpr std::size_t rangeLoadLength = sizeof(rangeLoad);
 
-	float Bullet::BG_GetSurfacePenetrationDepthStub(const Game::WeaponDef* weapDef, int surfaceType)
+	constexpr std::uintptr_t Bullet_Fire_SrandCall = 0x140161C12;
+	constexpr std::uintptr_t BG_srand = 0x14008E280;
+
+	static Utils::Hook hooks[std::size(penetrationDepthCalls) + 1];
+
+	float Bullet::BG_GetSurfacePenetrationDepth_Hk(const Game::WeaponDef* weapDef, int surfaceType)
 	{
 		assert(weapDef);
-		assert(weapDef->penetrateType != Game::PENETRATE_TYPE_NONE);
-		AssertIn(weapDef->penetrateType, Game::PENETRATE_TYPE_COUNT);
-		AssertIn(surfaceType, Game::SURF_TYPE_COUNT);
 
-		const auto penetrationDepth = BGSurfacePenetration.get<float>();
+		const auto penetrationDepth = bg_surfacePenetration.Get<float>();
+
 		if (penetrationDepth > 0.0f)
 		{
-			// Custom depth
 			return penetrationDepth;
 		}
 
-		// Game's code
-		if (surfaceType != Game::SURF_TYPE_DEFAULT)
-		{
-			return (*Game::penetrationDepthTable)[weapDef->penetrateType][surfaceType];
-		}
-
-		return 0.0f;
-	}
-
-	__declspec(naked) void Bullet::Bullet_FireStub()
-	{
-		__asm
-		{
-			push eax
-			mov eax, BGBulletRange
-			fld dword ptr [eax + 0x10] // dvar_t.current.value
-			pop eax
-
-			push 0x440346
-			retn
-		}
+		return reinterpret_cast<float(*)(const Game::WeaponDef*, int)>(Utils::Hook::Rebase(BG_GetSurfacePenetrationDepth))(weapDef, surfaceType);
 	}
 
 	void Bullet::BG_srand_Hk(unsigned int* pHoldrand)
@@ -55,88 +40,57 @@ namespace Components
 		*pHoldrand = static_cast<unsigned int>(std::rand());
 	}
 
-	void Bullet::BulletRicochet_Save(const float* contactPoint)
-	{
-		std::memcpy(ContactPointSave, contactPoint, sizeof(float[3]));
-	}
-
-	__declspec(naked) void Bullet::BulletRicochet_Stub()
-	{
-		__asm
-		{
-			pushad
-			push [esp + 0x20 + 0xC]
-			call BulletRicochet_Save
-			add esp, 0x4
-			popad
-
-			// Game's code
-			sub esp, 0x4C
-			push ebp
-			mov ebp, dword ptr [esp + 0x60]
-
-			push 0x5D5B08
-			ret
-		}
-	}
-
-	void Bullet::_VectorMA_Stub(float* va, float scale, float* vb, float* vc)
-	{
-		vc[0] = va[0] + scale * vb[0];
-		vc[1] = va[1] + scale * vb[1];
-		vc[2] = va[2] + scale * vb[2];
-
-		std::memcpy(VCSave, vc, sizeof(float[3]));
-	}
-
-	void Bullet::CalcRicochet_Stub(const float* incoming, const float* normal, float* result)
-	{
-		Utils::Hook::Call<void(const float*, const float*, float*)>(0x5D59F0)(incoming, normal, result);
-		std::memcpy(CalcRicochetSave, result, sizeof(float[3]));
-	}
-
-	int Bullet::Bullet_Fire_Stub(Game::gentity_s* attacker, [[maybe_unused]] float spread, Game::weaponParms* wp, Game::gentity_s* weaponEnt, Game::PlayerHandIndex hand, int gameTime)
-	{
-		float tmp[3];
-
-		Game::G_DebugStar(ContactPointSave, ColorYellow);
-
-		tmp[0] = (CalcRicochetSave[0] * 100.0f) + VCSave[0];
-		tmp[1] = (CalcRicochetSave[1] * 100.0f) + VCSave[1];
-		tmp[2] = (CalcRicochetSave[2] * 100.0f) + VCSave[1];
-
-		Game::G_DebugLineWithDuration(VCSave, tmp, ColorOrange, 1, 100);
-		Game::G_DebugStar(tmp, ColorBlue);
-
-		// Set the spread to 0 when drawing
-		return Game::Bullet_Fire(attacker, 0.0f, wp, weaponEnt, hand, gameTime);
-	}
-
 	Bullet::Bullet()
 	{
-		BGSurfacePenetration = Dvar::Register<float>("bg_surfacePenetration", 0.0f,
-			0.0f, std::numeric_limits<float>::max(), Game::DVAR_CODINFO, "Set to a value greater than 0 to override the surface penetration depth");
-		BGBulletRange = Game::Dvar_RegisterFloat("bg_bulletRange", 8192.0f,
-			0.0f, std::numeric_limits<float>::max(), Game::DVAR_CODINFO, "Max range used when calculating the bullet end position");
+		bool isExpected = Utils::Hook::MatchesBytes(Bullet_Fire_RangeLoad, rangeLoad, sizeof(rangeLoad))
+			&& Utils::Hook::BranchesTo(Bullet_Fire_SrandCall, BG_srand, false);
 
-		Utils::Hook(0x4F6980, BG_GetSurfacePenetrationDepthStub, HOOK_JUMP).install()->quick();
-		Utils::Hook(0x440340, Bullet_FireStub, HOOK_JUMP).install()->quick();
+		for (const auto call : penetrationDepthCalls)
+		{
+			isExpected = isExpected && Utils::Hook::BranchesTo(call, BG_GetSurfacePenetrationDepth, false);
+		}
 
-		Utils::Hook(0x440368, BG_srand_Hk, HOOK_CALL).install()->quick();
+		if (!isExpected)
+		{
+			Logger::Error("bullet: Bullet_Fire does not read as expected, no bullet dvars\n");
+			return;
+		}
 
-		std::memset(ContactPointSave, 0, sizeof(float[3]));
-		std::memset(VCSave, 0, sizeof(float[3]));
-		std::memset(CalcRicochetSave, 0, sizeof(float[3]));
+		bool isSeated = true;
 
-#ifdef DEBUG_RIOT_SHIELD
-		Utils::Hook(0x5D5B00, BulletRicochet_Stub, HOOK_JUMP).install()->quick();
-		Utils::Hook::Nop(0x5D5B00 + 5, 3);
+		for (std::size_t i = 0; i < std::size(penetrationDepthCalls); ++i)
+		{
+			isSeated = hooks[i].Initialize(penetrationDepthCalls[i], reinterpret_cast<void*>(BG_GetSurfacePenetrationDepth_Hk), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+		}
 
-		Utils::Hook(0x5D5BBA, CalcRicochet_Stub, HOOK_CALL).install()->quick();
+		isSeated = hooks[std::size(penetrationDepthCalls)].Initialize(Bullet_Fire_SrandCall, reinterpret_cast<void*>(BG_srand_Hk), HOOK_CALL)->Install()->IsInstalled() && isSeated;
 
-		Utils::Hook(0x5D5BD7, _VectorMA_Stub, HOOK_CALL).install()->quick();
+		if (!isSeated)
+		{
+			for (auto& hook : hooks)
+			{
+				hook.Uninstall();
+			}
 
-		Utils::Hook(0x5D5C0B, Bullet_Fire_Stub, HOOK_CALL).install()->quick();
-#endif
+			Logger::Error("bullet: could not seat every hook, no bullet dvars\n");
+			return;
+		}
+
+		Events::OnDvarInit([]
+		{
+			bg_surfacePenetration = Dvar::Register("bg_surfacePenetration", 0.0f, 0.0f, std::numeric_limits<float>::max(), Game::DVAR_CODINFO, "Set to a value greater than 0 to override the surface penetration depth");
+			bg_bulletRange = Dvar::Register("bg_bulletRange", 8192.0f, 0.0f, std::numeric_limits<float>::max(), Game::DVAR_CODINFO, "Max range used when calculating the bullet end position").Get();
+
+			const auto loadEnd = Utils::Hook::Rebase(Bullet_Fire_RangeLoad) + rangeLoadLength;
+			const auto distance = reinterpret_cast<std::int64_t>(&bg_bulletRange->current.value) - static_cast<std::int64_t>(loadEnd);
+
+			if (distance < std::numeric_limits<std::int32_t>::min() || distance > std::numeric_limits<std::int32_t>::max())
+			{
+				Logger::Error("bullet: bg_bulletRange is out of Bullet_Fire's reach, the range stays 8192\n");
+				return;
+			}
+
+			Utils::Hook::Set<std::int32_t>(Bullet_Fire_RangeLoad + 4, static_cast<std::int32_t>(distance));
+		});
 	}
 }

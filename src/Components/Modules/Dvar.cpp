@@ -1,241 +1,278 @@
+#include "STDInclude.hpp"
+
 #include "Dvar.hpp"
+#include "Dedicated.hpp"
+#include "Flags.hpp"
 #include "Friends.hpp"
+#include "Logger.hpp"
+#include "Scheduler.hpp"
 #include "TextRenderer.hpp"
+
+#include "Steam/Proxy.hpp"
 
 namespace Components
 {
 	Dvar::Var Dvar::Name;
 
-	Dvar::Var::Var(const std::string& dvarName)
-		: dvar_(Game::Dvar_FindVar(dvarName.data()))
+	constexpr std::uintptr_t CL_InitOnceForAllClients_NameRegisterCall = 0x1400FB605;
+
+	static const std::uint8_t nameRegisterCall[] = { 0xE8, 0x16, 0xAF, 0x18, 0x00 };
+
+	constexpr int dvarSourceInternal = 0;
+	constexpr int dvarSourceExternal = 1;
+	constexpr unsigned int dvarRom = 0x2000;
+	constexpr unsigned int dvarInit = 0x800;
+
+	constexpr std::uintptr_t Dvar_SetFromStringByNameFromSource = 0x140287560;
+
+	struct FlagPatch
 	{
-		// If the dvar can't be found it will be registered as an empty string dvar
-		if (!this->dvar_)
-		{
-			this->dvar_ = const_cast<Game::dvar_t*>(Game::Dvar_SetFromStringByNameFromSource(dvarName.data(), "", Game::DVAR_SOURCE_INTERNAL));
-		}
+		std::uintptr_t instruction;
+		std::uint8_t bytes[8];
+		std::size_t length;
+		std::size_t flagsOffset;
+		std::size_t flagsSize;
+		std::uint32_t flipped;
+	};
+
+	static const FlagPatch flagPatches[] =
+	{
+		{ 0x14008B3FD, { 0xC7, 0x44, 0x24, 0x20, 0x04, 0x00, 0x00, 0x00 }, 8, 4, 4, Game::DVAR_CHEAT | Game::DVAR_ARCHIVE },
+		{ 0x1400D7653, { 0xC7, 0x44, 0x24, 0x20, 0x44, 0x00, 0x00, 0x00 }, 8, 4, 4, Game::DVAR_CHEAT | Game::DVAR_ARCHIVE },
+		{ 0x1400D769C, { 0xC7, 0x44, 0x24, 0x20, 0x04, 0x00, 0x00, 0x00 }, 8, 4, 4, Game::DVAR_CHEAT | Game::DVAR_ARCHIVE },
+		{ 0x1400D76D3, { 0xC7, 0x44, 0x24, 0x20, 0x04, 0x00, 0x00, 0x00 }, 8, 4, 4, Game::DVAR_CHEAT | Game::DVAR_ARCHIVE },
+		{ 0x1400D756A, { 0x41, 0xB8, 0x04, 0x00, 0x00, 0x00 }, 6, 2, 4, Game::DVAR_CHEAT },
+		{ 0x1400D7720, { 0x41, 0xB8, 0x04, 0x00, 0x00, 0x00 }, 6, 2, 4, Game::DVAR_CHEAT },
+		{ 0x1400D9304, { 0xC7, 0x44, 0x24, 0x20, 0x04, 0x00, 0x00, 0x00 }, 8, 4, 4, Game::DVAR_CHEAT },
+		{ 0x1400D9339, { 0xC7, 0x44, 0x24, 0x20, 0x04, 0x00, 0x00, 0x00 }, 8, 4, 4, Game::DVAR_CHEAT },
+		{ 0x1400D936E, { 0xC7, 0x44, 0x24, 0x20, 0x04, 0x00, 0x00, 0x00 }, 8, 4, 4, Game::DVAR_CHEAT },
+		{ 0x1400D9392, { 0xC7, 0x44, 0x24, 0x20, 0x04, 0x00, 0x00, 0x00 }, 8, 4, 4, Game::DVAR_CHEAT },
+		{ 0x1400D93D2, { 0xC7, 0x44, 0x24, 0x20, 0x04, 0x00, 0x00, 0x00 }, 8, 4, 4, Game::DVAR_CHEAT },
+		{ 0x1400D93FF, { 0xC7, 0x44, 0x24, 0x28, 0x04, 0x00, 0x00, 0x00 }, 8, 4, 4, Game::DVAR_CHEAT },
+		{ 0x1400D836C, { 0xC7, 0x44, 0x24, 0x28, 0x01, 0x00, 0x00, 0x00 }, 8, 4, 4, Game::DVAR_ARCHIVE },
+		{ 0x14023A444, { 0x41, 0xB8, 0x01, 0x04, 0x00, 0x00 }, 6, 2, 4, Game::DVAR_ARCHIVE },
+		{ 0x140277E90, { 0x41, 0xB8, 0x08, 0x0C, 0x00, 0x00 }, 6, 2, 4, dvarInit },
+		{ 0x1402715B7, { 0x44, 0x8D, 0x43, 0x04 }, 4, 3, 1, Game::DVAR_CHEAT },
+		{ 0x140271838, { 0x44, 0x8D, 0x43, 0x04 }, 4, 3, 1, Game::DVAR_CHEAT },
+		{ 0x14008BDAB, { 0xC7, 0x44, 0x24, 0x20, 0x8C, 0x00, 0x00, 0x00 }, 8, 4, 4, Game::DVAR_CHEAT },
+		{ 0x14008BDDB, { 0xC7, 0x44, 0x24, 0x20, 0x8C, 0x00, 0x00, 0x00 }, 8, 4, 4, Game::DVAR_CHEAT },
+		{ 0x14008BE0D, { 0xC7, 0x44, 0x24, 0x20, 0x8C, 0x00, 0x00, 0x00 }, 8, 4, 4, Game::DVAR_CHEAT },
+		{ 0x14008BE79, { 0xC7, 0x44, 0x24, 0x20, 0x8C, 0x00, 0x00, 0x00 }, 8, 4, 4, Game::DVAR_CHEAT },
+		{ 0x1400F2C87, { 0xC7, 0x44, 0x24, 0x20, 0x00, 0x20, 0x00, 0x00 }, 8, 4, 4, dvarRom | Game::DVAR_ARCHIVE },
+		{ 0x1400F2CB7, { 0xC7, 0x44, 0x24, 0x20, 0x00, 0x20, 0x00, 0x00 }, 8, 4, 4, dvarRom | Game::DVAR_ARCHIVE },
+		{ 0x1400F2C22, { 0xC7, 0x44, 0x24, 0x20, 0x04, 0x00, 0x00, 0x00 }, 8, 4, 4, Game::DVAR_CHEAT | Game::DVAR_ARCHIVE },
+		{ 0x1400F2C57, { 0xC7, 0x44, 0x24, 0x20, 0x04, 0x00, 0x00, 0x00 }, 8, 4, 4, Game::DVAR_CHEAT | Game::DVAR_ARCHIVE },
+	};
+
+	struct RegisterCall
+	{
+		std::uintptr_t call;
+		std::uint8_t bytes[5];
+		void* replacement;
+	};
+
+	constexpr std::uintptr_t UI_Dvar_SetFromStringByNameCalls[] =
+	{
+		0x14025F45A,
+		0x14025F5B5,
+		0x140263555,
+		0x14026373D,
+		0x140263ADE,
+		0x140269374,
+	};
+
+	static const std::uint8_t uiSetCallBytes[][5] =
+	{
+		{ 0xE8, 0xA1, 0x80, 0x02, 0x00 },
+		{ 0xE8, 0x46, 0x7F, 0x02, 0x00 },
+		{ 0xE8, 0xA6, 0x3F, 0x02, 0x00 },
+		{ 0xE8, 0xBE, 0x3D, 0x02, 0x00 },
+		{ 0xE8, 0x1D, 0x3A, 0x02, 0x00 },
+		{ 0xE8, 0x87, 0xE1, 0x01, 0x00 },
+	};
+
+	constexpr std::uintptr_t Script_SetDvar_Dvar_SetFromStringByNameCall = 0x14025DABA;
+
+	static const std::uint8_t scriptSetCall[] = { 0xE8, 0x41, 0x9A, 0x02, 0x00 };
+
+	constexpr std::uintptr_t CG_ServerCommand_Dvar_SetFromStringByNameCall = 0x1400E6EFC;
+
+	static const std::uint8_t serverSetCall[] = { 0xE8, 0xFF, 0x05, 0x1A, 0x00 };
+
+	constexpr std::uintptr_t CG_ServerCommand_DvarTableMiss = 0x1400E6EF2;
+
+	static const std::uint8_t dvarTableMissJump[] = { 0xEB, 0x0D };
+
+	constexpr std::uintptr_t Dvar_EnumToString = 0x140284F90;
+
+	static const std::uint8_t enumToStringEntry[] = { 0x83, 0x79, 0x40, 0x00, 0x48, 0x8B, 0xC1 };
+
+	static Utils::Hook nameHook;
+	static Utils::Hook registerHooks[5];
+	static Utils::Hook uiSetHooks[std::size(UI_Dvar_SetFromStringByNameCalls)];
+	static Utils::Hook scriptSetHook;
+	static Utils::Hook serverSetHook;
+	static Utils::Hook enumToStringHook;
+
+	Dvar::Var::Var(const std::string& name)
+		: dvar(reinterpret_cast<Game::dvar_t*>(Game::Dvar_FindVar(name.data())))
+	{
 	}
 
-	template <> Game::dvar_t* Dvar::Var::get()
+	template <> bool Dvar::Var::Get() const
 	{
-		return this->dvar_;
-	}
-
-	template <> const char* Dvar::Var::get()
-	{
-		if (!this->dvar_)
-		{
-			return "";
-		}
-
-		if (this->dvar_->type == Game::DVAR_TYPE_STRING || this->dvar_->type == Game::DVAR_TYPE_ENUM)
-		{
-			if (this->dvar_->current.string)
-			{
-				return this->dvar_->current.string;
-			}
-		}
-
-		return "";
-	}
-
-	template <> int Dvar::Var::get()
-	{
-		if (!this->dvar_)
-		{
-			return 0;
-		}
-
-		if (this->dvar_->type == Game::DVAR_TYPE_INT || this->dvar_->type == Game::DVAR_TYPE_ENUM)
-		{
-			return this->dvar_->current.integer;
-		}
-
-		return 0;
-	}
-
-	template <> unsigned int Dvar::Var::get()
-	{
-		if (!this->dvar_)
-		{
-			return 0;
-		}
-
-		if (this->dvar_->type == Game::DVAR_TYPE_INT)
-		{
-			return this->dvar_->current.unsignedInt;
-		}
-
-		return 0;
-	}
-
-	template <> float Dvar::Var::get()
-	{
-		if (!this->dvar_)
-		{
-			return 0.f;
-		}
-
-		if (this->dvar_->type == Game::DVAR_TYPE_FLOAT)
-		{
-			return this->dvar_->current.value;
-		}
-
-		return 0.f;
-	}
-
-	template <> bool Dvar::Var::get()
-	{
-		if (!this->dvar_)
+		if (!this->dvar)
 		{
 			return false;
 		}
 
-		if (this->dvar_->type == Game::DVAR_TYPE_BOOL)
+		return this->dvar->current.enabled;
+	}
+
+	template <> int Dvar::Var::Get() const
+	{
+		if (!this->dvar)
 		{
-			return this->dvar_->current.enabled;
+			return 0;
 		}
 
-		return false;
+		return this->dvar->current.integer;
 	}
 
-	template <> std::string Dvar::Var::get()
+	template <> unsigned int Dvar::Var::Get() const
 	{
-		return this->get<const char*>();
-	}
-
-	void Dvar::Var::set(const char* string)
-	{
-		assert(string);
-		assert(this->dvar_->type == Game::DVAR_TYPE_STRING);
-
-		if (this->dvar_)
+		if (!this->dvar)
 		{
-			Game::Dvar_SetString(this->dvar_, string);
+			return 0;
 		}
+
+		return this->dvar->current.unsignedInt;
 	}
 
-	void Dvar::Var::set(const std::string& string)
+	template <> float Dvar::Var::Get() const
 	{
-		this->set(string.data());
-	}
-
-	void Dvar::Var::set(int integer)
-	{
-		assert(this->dvar_->type == Game::DVAR_TYPE_INT);
-
-		if (this->dvar_)
+		if (!this->dvar)
 		{
-			Game::Dvar_SetInt(this->dvar_, integer);
+			return 0.0f;
 		}
+
+		return this->dvar->current.value;
 	}
 
-	void Dvar::Var::set(float value)
+	template <> const char* Dvar::Var::Get() const
 	{
-		assert(this->dvar_->type == Game::DVAR_TYPE_FLOAT);
-
-		if (this->dvar_)
+		if (!this->dvar || this->dvar->type != Game::DVAR_TYPE_STRING)
 		{
-			Game::Dvar_SetFloat(this->dvar_, value);
+			return "";
 		}
+
+		const char* const value = this->dvar->current.string;
+
+		return value ? value : "";
 	}
 
-	void Dvar::Var::set(bool enabled)
+	template <> std::string Dvar::Var::Get() const
 	{
-		assert(this->dvar_->type == Game::DVAR_TYPE_BOOL);
-
-		if (this->dvar_)
-		{
-			Game::Dvar_SetBool(this->dvar_, enabled);
-		}
+		return this->Get<const char*>();
 	}
 
-	void Dvar::Var::setRaw(int integer)
+	void Dvar::Var::Set(bool value) const
 	{
-		assert(this->dvar_->type == Game::DVAR_TYPE_INT);
-
-		if (this->dvar_)
+		if (this->dvar)
 		{
-			this->dvar_->current.integer = integer;
-			this->dvar_->latched.integer = integer;
+			Game::Dvar_SetBool(this->dvar, value);
 		}
 	}
 
-	void Dvar::Var::setRaw(float value)
+	void Dvar::Var::Set(int value) const
 	{
-		assert(this->dvar_->type == Game::DVAR_TYPE_FLOAT);
-
-		if (this->dvar_)
+		if (this->dvar)
 		{
-			this->dvar_->current.value = value;
-			this->dvar_->latched.value = value;
+			Game::Dvar_SetInt(this->dvar, value);
 		}
 	}
 
-	void Dvar::Var::setRaw(bool enabled)
+	void Dvar::Var::Set(float value) const
 	{
-		assert(this->dvar_->type == Game::DVAR_TYPE_BOOL);
-
-		if (this->dvar_)
+		if (this->dvar)
 		{
-			this->dvar_->current.enabled = enabled;
-			this->dvar_->latched.enabled = enabled;
+			Game::Dvar_SetFloat(this->dvar, value);
 		}
 	}
 
-	template<> Dvar::Var Dvar::Register(const char* dvarName, bool value, std::uint16_t flag, const char* description)
+	void Dvar::Var::Set(const char* value) const
 	{
-		return Game::Dvar_RegisterBool(dvarName, value, flag, description);
+		if (this->dvar)
+		{
+			Game::Dvar_SetString(this->dvar, value);
+		}
 	}
 
-	template<> Dvar::Var Dvar::Register(const char* dvarName, const char* value, std::uint16_t flag, const char* description)
+	void Dvar::Var::Set(const std::string& value) const
 	{
-		return Game::Dvar_RegisterString(dvarName, value, flag, description);
+		this->Set(value.data());
 	}
 
-	template<> Dvar::Var Dvar::Register(const char* dvarName, int value, int min, int max, std::uint16_t flag, const char* description)
+	Dvar::Var Dvar::Register(const char* name, bool value, unsigned int flags, const char* description)
 	{
-		return Game::Dvar_RegisterInt(dvarName, value, min, max, flag, description);
+		return Var(Game::Dvar_RegisterBool(name, value, flags, description));
 	}
 
-	template<> Dvar::Var Dvar::Register(const char* dvarName, float value, float min, float max, std::uint16_t flag, const char* description)
+	Dvar::Var Dvar::Register(const char* name, int value, int min, int max, unsigned int flags, const char* description)
 	{
-		return Game::Dvar_RegisterFloat(dvarName, value, min, max, flag, description);
+		return Var(Game::Dvar_RegisterInt(name, value, min, max, flags, description));
 	}
 
-	const Game::dvar_t* Dvar::Dvar_RegisterName(const char* dvarName, const char* /*value*/, std::uint16_t flags, const char* description)
+	Dvar::Var Dvar::Register(const char* name, float value, float min, float max, unsigned int flags, const char* description)
 	{
-		// Name watcher
-		if (!Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled())
+		return Var(Game::Dvar_RegisterFloat(name, value, min, max, flags, description));
+	}
+
+	Dvar::Var Dvar::Register(const char* name, const char* value, unsigned int flags, const char* description)
+	{
+		return Var(Game::Dvar_RegisterString(name, value, flags, description));
+	}
+
+	Dvar::Var Dvar::Find(const std::string& name)
+	{
+		return Var(name);
+	}
+
+	Game::dvar_t* Dvar::Dvar_RegisterName(const char* dvarName, [[maybe_unused]] const char* value, unsigned int flags, const char* description)
+	{
+		if (!Dedicated::IsEnabled())
 		{
 			Scheduler::Loop([]
 			{
 				static std::string lastValidName = "Unknown Soldier";
-				auto name = Name.get<std::string>();
+				auto name = Name.Get<std::string>();
 
-				// Don't perform any checks if name didn't change
-				if (name == lastValidName) return;
+				if (name == lastValidName)
+				{
+					return;
+				}
 
 				Utils::String::Trim(name);
-				auto saneName = TextRenderer::StripAllTextIcons(TextRenderer::StripColors(name));
+				const auto saneName = TextRenderer::StripAllTextIcons(TextRenderer::StripColors(name));
+
 				if (saneName.size() < 3 || (saneName[0] == '[' && saneName[1] == '{'))
 				{
-					Logger::PrintError(Game::CON_CHANNEL_ERROR, "Username '{}' is invalid. It must at least be 3 characters long and not appear empty!\n", name);
-					Name.set(lastValidName);
+					Logger::Error("Username '{}' is invalid. It must at least be 3 characters long and not appear empty!\n", name);
+					Name.Set(lastValidName);
 				}
 				else
 				{
 					lastValidName = name;
 					Friends::UpdateName();
 				}
-			}, Scheduler::Pipeline::CLIENT, 3s); // Don't need to do this every frame
+			}, Scheduler::Pipeline::CLIENT, 3s);
 		}
 
 		std::string username = "Unknown Soldier";
 
-		if (Steam::Proxy::SteamFriends)
+		if (::Steam::Proxy::SteamFriends)
 		{
-			const char* steamName = Steam::Proxy::SteamFriends->GetPersonaName();
+			const char* const steamName = ::Steam::Proxy::SteamFriends->GetPersonaName();
 
 			if (steamName && *steamName)
 			{
@@ -243,29 +280,47 @@ namespace Components
 			}
 		}
 
-		Name = Register<const char*>(dvarName, username.data(), flags | Game::DVAR_ARCHIVE, description);
-		return Name.get<Game::dvar_t*>();
+		Name = Register(dvarName, username.data(), flags | Game::DVAR_ARCHIVE, description);
+		return Name.Get();
 	}
 
-	const Game::dvar_t* Dvar::Dvar_RegisterSVNetworkFps(const char* dvarName, int value, int min, int /*max*/, std::uint16_t /*flags*/, const char* description)
+	Game::dvar_t* Dvar::Dvar_RegisterSVNetworkFps(const char* dvarName, int value, int min, [[maybe_unused]] int max, [[maybe_unused]] unsigned int flags, const char* description)
 	{
-		// bump limit up to 1000
-		return Game::Dvar_RegisterInt(dvarName, Dedicated::IsEnabled() ? 1000 : value, min, 1000, Game::DVAR_NONE, description);
+		constexpr int networkFpsMax = 1000;
+
+		int defaultValue = value;
+
+		if (Dedicated::IsEnabled())
+		{
+			defaultValue = networkFpsMax;
+		}
+
+		return Game::Dvar_RegisterInt(dvarName, defaultValue, min, networkFpsMax, Game::DVAR_NONE, description);
 	}
 
-	const Game::dvar_t* Dvar::Dvar_RegisterPerkExtendedMeleeRange(const char* dvarName, float value, float min, float /*max*/, std::uint16_t flags, const char* description)
+	Game::dvar_t* Dvar::Dvar_Register_cg_drawFPS(const char* dvarName, const char** valueList, int defaultIndex, unsigned int flags, const char* description)
 	{
-		return Game::Dvar_RegisterFloat(dvarName, value, min, 10000.0f, flags, description);
+		return Game::Dvar_RegisterEnum(dvarName, valueList, defaultIndex, flags | Game::DVAR_ARCHIVE, description);
 	}
 
-	const Game::dvar_t* Dvar::Dvar_RegisterAimLockonStrength(const char* dvarName, float value, float min, float max, std::uint16_t flags, const char* /*description*/)
+	Game::dvar_t* Dvar::Dvar_Register_cg_fov(const char* dvarName, float value, float min, [[maybe_unused]] float max, unsigned int flags, const char* description)
 	{
-		return Game::Dvar_RegisterFloat(dvarName, value, min, max, flags, "The amount of aim assistance given by the target lock on (yaw)");
+		return Game::Dvar_RegisterFloat(dvarName, value, min, 160.0f, flags, description);
+	}
+
+	Game::dvar_t* Dvar::Dvar_Register_com_maxfps(const char* dvarName, int value, int min, [[maybe_unused]] int max, unsigned int flags, const char* description)
+	{
+		return Game::Dvar_RegisterInt(dvarName, value, min, 1000, flags | Game::DVAR_ARCHIVE, description);
+	}
+
+	Game::dvar_t* Dvar::Dvar_Register_profileMenuOption_volume(const char* dvarName, [[maybe_unused]] float value, float min, [[maybe_unused]] float max, unsigned int flags, const char* description)
+	{
+		return Game::Dvar_RegisterFloat(dvarName, 1.0f, min, 1.0f, flags, description);
 	}
 
 	void Dvar::SetFromStringByNameSafeExternal(const char* dvarName, const char* string)
 	{
-		static std::array exceptions =
+		static const char* const exceptions[] =
 		{
 			"ui_showEndOfGame",
 			"systemlink",
@@ -277,11 +332,12 @@ namespace Components
 			"ui_mptype",
 		};
 
-		for (const auto& entry : exceptions)
+		for (const auto* const entry : exceptions)
 		{
-			if (!_stricmp(dvarName, entry))
+			if (_stricmp(dvarName, entry) == 0)
 			{
-				Game::Dvar_SetFromStringByNameFromSource(dvarName, string, Game::DVAR_SOURCE_INTERNAL);
+				reinterpret_cast<Game::dvar_t*(*)(const char*, const char*, int)>(Utils::Hook::Rebase(Dvar_SetFromStringByNameFromSource))(
+					dvarName, string, dvarSourceInternal);
 				return;
 			}
 		}
@@ -291,110 +347,56 @@ namespace Components
 
 	void Dvar::SetFromStringByNameExternal(const char* dvarName, const char* string)
 	{
-		Game::Dvar_SetFromStringByNameFromSource(dvarName, string, Game::DVAR_SOURCE_EXTERNAL);
+		reinterpret_cast<Game::dvar_t*(*)(const char*, const char*, int)>(Utils::Hook::Rebase(Dvar_SetFromStringByNameFromSource))(
+			dvarName, string, dvarSourceExternal);
 	}
 
 	bool Dvar::AreArchiveDvarsUnprotected()
 	{
-		static std::optional<bool> flag;
+		static const bool isUnprotected = Flags::HasFlag("unprotect-dvars");
 
-		if (!flag.has_value())
-		{
-			flag.emplace(Flags::HasFlag("unprotect-dvars"));
-		}
-
-		return flag.value();
+		return isUnprotected;
 	}
 
 	bool Dvar::IsSettingDvarsDisabled()
 	{
-		static std::optional<bool> flag;
+		static const bool isDisabled = Flags::HasFlag("protect-dvars");
 
-		if (!flag.has_value())
-		{
-			flag.emplace(Flags::HasFlag("protect-dvars"));
-		}
-
-		return flag.value();
+		return isDisabled;
 	}
 
 	void Dvar::DvarSetFromStringByName_Stub(const char* dvarName, const char* value)
 	{
-		/*if (dvarName && std::strcmp(dvarName, "intro") == 0)
-		{
-			value = "1";
-		}*/
-
 		if (IsSettingDvarsDisabled())
 		{
-			Logger::Debug("Not allowing server to set '{}'", dvarName);
+			Logger::Debug("not allowing the server to set {}\n", dvarName);
 			return;
 		}
 
-		// Save the dvar original value if it has the archive flag
-		const auto* dvar = Game::Dvar_FindVar(dvarName);
-		if (dvar && dvar->flags & Game::DVAR_ARCHIVE)
+		const auto* const dvar = Game::Dvar_FindVar(dvarName);
+
+		if (dvar && (dvar->flags & Game::DVAR_ARCHIVE))
 		{
 			if (!AreArchiveDvarsUnprotected())
 			{
-				Logger::Print(Game::CON_CHANNEL_CONSOLEONLY, "Not allowing server to override saved dvar '{}'\n", dvar->name);
+				Logger::Print("not allowing the server to override saved dvar {}\n", dvar->name);
 				return;
 			}
 
-			Logger::Print(Game::CON_CHANNEL_CONSOLEONLY, "Server is overriding saved dvar '{}'\n", dvarName);
+			Logger::Print("the server is overriding saved dvar {}\n", dvarName);
 		}
 
 		if (dvar && std::strcmp(dvar->name, "com_errorResolveCommand") == 0)
 		{
-			Logger::Print(Game::CON_CHANNEL_CONSOLEONLY, "Not allowing server to set '{}'\n", dvar->name);
+			Logger::Print("not allowing the server to set {}\n", dvar->name);
 			return;
 		}
 
-		Utils::Hook::Call<void(const char*, const char*)>(0x4F52E0)(dvarName, value);
-	}
-
-	void Dvar::OnRegisterVariant([[maybe_unused]] Game::dvar_t* dvar)
-	{
-#ifdef _DEBUG
-		dvar->flags &= ~Game::DVAR_CHEAT;
-#endif
-		/*if (dvar && dvar->name && std::strcmp(dvar->name, "intro") == 0)
-		{
-			Game::Dvar_SetBool(dvar, true);
-			dvar->flags |= Game::DVAR_ROM;
-		}*/
-	}
-
-	__declspec(naked) void Dvar::Dvar_RegisterVariant_Stub()
-	{
-		__asm
-		{
-			pushad
-
-			push eax
-			call OnRegisterVariant
-			add esp, 0x4
-
-			popad
-
-			// Game's code
-			pop edi
-			pop esi
-			pop ebp
-			pop ebx
-			ret
-		}
+		reinterpret_cast<void(*)(const char*, const char*)>(serverSetHook.GetOriginal())(dvarName, value);
 	}
 
 	const char* Dvar::Dvar_EnumToString_Stub(const Game::dvar_t* dvar)
 	{
-		assert(dvar);
-		assert(dvar->name);
-		assert(dvar->type == Game::DVAR_TYPE_ENUM);
-		assert(dvar->domain.enumeration.strings);
-		assert(dvar->current.integer >= 0 && dvar->current.integer < dvar->domain.enumeration.stringCount || dvar->current.integer == 0);
-
-		// Fix nullptr crash
 		if (!dvar || dvar->domain.enumeration.stringCount == 0)
 		{
 			return "";
@@ -405,134 +407,110 @@ namespace Components
 
 	Dvar::Dvar()
 	{
-		// set flags of cg_drawFPS to archive
-		Utils::Hook::Or<std::uint8_t>(0x4F8F69, Game::DVAR_ARCHIVE);
+		const RegisterCall registerCalls[] =
+		{
+			{ 0x1400D77E3, { 0xE8, 0x68, 0xE7, 0x1A, 0x00 }, reinterpret_cast<void*>(Dvar_Register_cg_drawFPS) },
+			{ 0x1400D765B, { 0xE8, 0xF0, 0xE9, 0x1A, 0x00 }, reinterpret_cast<void*>(Dvar_Register_cg_fov) },
+			{ 0x14023A853, { 0xE8, 0x28, 0xB9, 0x04, 0x00 }, reinterpret_cast<void*>(Dvar_RegisterSVNetworkFps) },
+			{ 0x1400F112D, { 0xE8, 0x1E, 0x4F, 0x19, 0x00 }, reinterpret_cast<void*>(Dvar_Register_profileMenuOption_volume) },
+			{ 0x1401F4CA3, { 0xE8, 0xD8, 0x14, 0x09, 0x00 }, reinterpret_cast<void*>(Dvar_Register_com_maxfps) },
+		};
 
-		// un-cheat camera_thirdPersonCrosshairOffset and add archive flags
-		Utils::Hook::Xor<std::uint8_t>(0x447B41, Game::DVAR_CHEAT | Game::DVAR_ARCHIVE);
+		static_assert(std::extent_v<decltype(registerCalls)> == std::extent_v<decltype(registerHooks)>);
 
-		// un-cheat cg_fov and add archive flags
-		Utils::Hook::Xor<std::uint8_t>(0x4F8E35, Game::DVAR_CHEAT | Game::DVAR_ARCHIVE);
+		bool isExpected = Utils::Hook::MatchesBytes(CL_InitOnceForAllClients_NameRegisterCall, nameRegisterCall, sizeof(nameRegisterCall))
+			&& Utils::Hook::MatchesBytes(Script_SetDvar_Dvar_SetFromStringByNameCall, scriptSetCall, sizeof(scriptSetCall))
+			&& Utils::Hook::MatchesBytes(CG_ServerCommand_Dvar_SetFromStringByNameCall, serverSetCall, sizeof(serverSetCall))
+			&& Utils::Hook::MatchesBytes(CG_ServerCommand_DvarTableMiss, dvarTableMissJump, sizeof(dvarTableMissJump))
+			&& Utils::Hook::MatchesBytes(Dvar_EnumToString, enumToStringEntry, sizeof(enumToStringEntry));
 
-		// un-cheat cg_fovscale and add archive flags
-		Utils::Hook::Xor<std::uint8_t>(0x4F8E68, Game::DVAR_CHEAT | Game::DVAR_ARCHIVE);
+		for (const auto& site : registerCalls)
+		{
+			isExpected = isExpected && Utils::Hook::MatchesBytes(site.call, site.bytes, sizeof(site.bytes));
+		}
 
-		// un-cheat cg_fovMin and add archive flags
-		Utils::Hook::Xor<std::uint8_t>(0x4F8E9D, Game::DVAR_CHEAT | Game::DVAR_ARCHIVE);
+		for (std::size_t i = 0; i < std::size(UI_Dvar_SetFromStringByNameCalls); ++i)
+		{
+			isExpected = isExpected && Utils::Hook::MatchesBytes(UI_Dvar_SetFromStringByNameCalls[i], uiSetCallBytes[i], sizeof(uiSetCallBytes[i]));
+		}
 
-		// un-cheat cg_debugInfoCornerOffset and add archive flags
-		Utils::Hook::Xor<std::uint8_t>(0x4F8FC2, Game::DVAR_CHEAT | Game::DVAR_ARCHIVE);
+		for (const auto& patch : flagPatches)
+		{
+			isExpected = isExpected && Utils::Hook::MatchesBytes(patch.instruction, patch.bytes, patch.length);
+		}
 
-		// un-cheat cg_drawGun
-		Utils::Hook::Set<std::uint8_t>(0x4F8DC6, Game::DVAR_NONE);
+		if (!isExpected)
+		{
+			Logger::Error("dvar: the dvar registrations do not read as expected, the dvars keep the engine's defaults\n");
+			return;
+		}
 
-		// un-cheat cg_draw2D
-		Utils::Hook::Set<std::uint8_t>(0x4F8EEE, Game::DVAR_NONE);
+		bool isSeated = nameHook.Initialize(CL_InitOnceForAllClients_NameRegisterCall, reinterpret_cast<void*>(Dvar_RegisterName), HOOK_CALL)->Install()->IsInstalled();
+		isSeated = scriptSetHook.Initialize(Script_SetDvar_Dvar_SetFromStringByNameCall, reinterpret_cast<void*>(SetFromStringByNameSafeExternal), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+		isSeated = serverSetHook.Initialize(CG_ServerCommand_Dvar_SetFromStringByNameCall, reinterpret_cast<void*>(DvarSetFromStringByName_Stub), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+		isSeated = enumToStringHook.Initialize(Dvar_EnumToString, reinterpret_cast<void*>(Dvar_EnumToString_Stub), HOOK_JUMP)->Install()->IsInstalled() && isSeated;
 
-		// un-cheat cg_overheadNamesFarScale
-		Utils::Hook::Set<std::uint8_t>(0x4FA7C4, Game::DVAR_NONE);
+		for (std::size_t i = 0; i < std::size(registerCalls); ++i)
+		{
+			isSeated = registerHooks[i].Initialize(registerCalls[i].call, registerCalls[i].replacement, HOOK_CALL)->Install()->IsInstalled() && isSeated;
+		}
 
-		// un-cheat cg_overheadNamesSize
-		Utils::Hook::Set<std::uint8_t>(0x4FA7F9, Game::DVAR_NONE);
+		for (std::size_t i = 0; i < std::size(UI_Dvar_SetFromStringByNameCalls); ++i)
+		{
+			isSeated = uiSetHooks[i].Initialize(UI_Dvar_SetFromStringByNameCalls[i], reinterpret_cast<void*>(SetFromStringByNameExternal), HOOK_CALL)
+				->Install()->IsInstalled() && isSeated;
+		}
 
-		// un-cheat cg_overheadRankSize
-		Utils::Hook::Set<std::uint8_t>(0x4FA863, Game::DVAR_NONE);
+		if (!isSeated)
+		{
+			nameHook.Uninstall();
+			scriptSetHook.Uninstall();
+			serverSetHook.Uninstall();
+			enumToStringHook.Uninstall();
 
-		// un-cheat cg_overheadIconSize
-		Utils::Hook::Set<std::uint8_t>(0x4FA833, Game::DVAR_NONE);
+			for (auto& hook : registerHooks)
+			{
+				hook.Uninstall();
+			}
 
-		// un-cheat cg_overheadTitleSize
-		Utils::Hook::Set<std::uint8_t>(0x4FA898, Game::DVAR_NONE);
+			for (auto& hook : uiSetHooks)
+			{
+				hook.Uninstall();
+			}
 
-		// un-cheat cg_overheadNamesGlow
-		Utils::Hook::Set<std::uint8_t>(0x4FA8C9, Game::DVAR_NONE);
+			Logger::Error("dvar: could not seat the dvar hooks, the dvars keep the engine's defaults\n");
+			return;
+		}
 
-		// remove archive flags for cg_hudChatPosition
-		Utils::Hook::Xor<std::uint8_t>(0x4F9992, Game::DVAR_ARCHIVE);
+		nameHook.Quick();
+		scriptSetHook.Quick();
+		serverSetHook.Quick();
+		enumToStringHook.Quick();
 
-		// remove archive flags for sv_hostname
-		Utils::Hook::Xor<std::uint32_t>(0x4D3786, Game::DVAR_ARCHIVE);
+		Utils::Hook::Nop(CG_ServerCommand_DvarTableMiss, sizeof(dvarTableMissJump));
 
-		// remove write protection from fs_game
-		Utils::Hook::Xor<std::uint32_t>(0x6431EA, Game::DVAR_INIT);
+		for (auto& hook : registerHooks)
+		{
+			hook.Quick();
+		}
 
-		// set cg_fov max to 160.0
-		// because that's the max on SP
-		static float cg_Fov = 160.0f;
-		Utils::Hook::Set<float*>(0x4F8E28, &cg_Fov);
+		for (auto& hook : uiSetHooks)
+		{
+			hook.Quick();
+		}
 
-		// set max volume to 1
-		static float volume = 1.0f;
-		Utils::Hook::Set<float*>(0x408078, &volume);
+		for (const auto& patch : flagPatches)
+		{
+			const auto flags = patch.instruction + patch.flagsOffset;
 
-		// un-cheat ui_showList
-		Utils::Hook::Xor<std::uint8_t>(0x6310DC, Game::DVAR_CHEAT);
-
-		// un-cheat ui_debugMode
-		Utils::Hook::Xor<std::uint8_t>(0x6312DE, Game::DVAR_CHEAT);
-
-		// un-cheat jump_slowdownEnable
-		Utils::Hook::Xor<std::uint32_t>(0x4EFABE, Game::DVAR_CHEAT);
-
-		// un-cheat jump_height
-		Utils::Hook::Xor<std::uint32_t>(0x4EFA5C, Game::DVAR_CHEAT);
-
-		// un-cheat player_breath_fire_delay
-		Utils::Hook::Xor<std::uint32_t>(0x448646, Game::DVAR_CHEAT);
-
-		// un-cheat player_breath_gasp_scale
-		Utils::Hook::Xor<std::uint32_t>(0x448678, Game::DVAR_CHEAT);
-
-		// un-cheat player_breath_gasp_lerp
-		Utils::Hook::Xor<std::uint32_t>(0x4486E4, Game::DVAR_CHEAT);
-
-		// un-cheat player_breath_gasp_time
-		Utils::Hook::Xor<std::uint32_t>(0x448612, Game::DVAR_CHEAT);
-
-		// Hook dvar 'name' registration
-		Utils::Hook(0x40531C, Dvar_RegisterName, HOOK_CALL).install()->quick();
-
-		// Hook dvar 'sv_network_fps' registration
-		Utils::Hook(0x4D3C7B, Dvar_RegisterSVNetworkFps, HOOK_CALL).install()->quick();
-
-		// Hook dvar 'perk_extendedMeleeRange' and set a higher max, better than having people force this with external programs
-		Utils::Hook(0x492D2F, Dvar_RegisterPerkExtendedMeleeRange, HOOK_CALL).install()->quick();
-
-		// Hook dvar 'aim_lockon_strength' and clarify in the description that it is for yaw, now that 'aim_lockon_pitch_strength' is registered
-		Utils::Hook(0x43FCFD, Dvar_RegisterAimLockonStrength, HOOK_CALL).install()->quick();
-
-		// un-cheat safeArea_* and add archive flags
-		Utils::Hook::Xor<std::uint32_t>(0x42E3F5, Game::DVAR_ROM | Game::DVAR_ARCHIVE); //safeArea_adjusted_horizontal
-		Utils::Hook::Xor<std::uint32_t>(0x42E423, Game::DVAR_ROM | Game::DVAR_ARCHIVE); //safeArea_adjusted_vertical
-		Utils::Hook::Xor<std::uint8_t>(0x42E398, Game::DVAR_CHEAT | Game::DVAR_ARCHIVE); //safeArea_horizontal
-		Utils::Hook::Xor<std::uint8_t>(0x42E3C4, Game::DVAR_CHEAT | Game::DVAR_ARCHIVE); //safeArea_vertical
-
-		// Don't allow setting cheat protected dvars via menus
-		Utils::Hook(0x63C897, SetFromStringByNameExternal, HOOK_CALL).install()->quick();
-		Utils::Hook(0x63CA96, SetFromStringByNameExternal, HOOK_CALL).install()->quick();
-		Utils::Hook(0x63CDB5, SetFromStringByNameExternal, HOOK_CALL).install()->quick();
-		Utils::Hook(0x635E47, SetFromStringByNameExternal, HOOK_CALL).install()->quick();
-
-		// Script_SetDvar
-		Utils::Hook(0x63444C, SetFromStringByNameSafeExternal, HOOK_CALL).install()->quick();
-
-		// Slider
-		Utils::Hook(0x636159, SetFromStringByNameExternal, HOOK_CALL).install()->quick();
-		Utils::Hook(0x636189, SetFromStringByNameExternal, HOOK_CALL).install()->quick();
-		Utils::Hook(0x6364EA, SetFromStringByNameExternal, HOOK_CALL).install()->quick();
-
-		Utils::Hook(0x636207, SetFromStringByNameExternal, HOOK_CALL).install()->quick();
-		Utils::Hook(0x636608, SetFromStringByNameExternal, HOOK_CALL).install()->quick();
-		Utils::Hook(0x636695, SetFromStringByNameExternal, HOOK_CALL).install()->quick();
-
-		// Hook Dvar_SetFromStringByName inside CG_SetClientDvarFromServer so we can protect dvars
-		Utils::Hook(0x59386A, DvarSetFromStringByName_Stub, HOOK_CALL).install()->quick();
-
-		// For debugging
-		Utils::Hook(0x6483FA, Dvar_RegisterVariant_Stub, HOOK_JUMP).install()->quick();
-		Utils::Hook(0x648438, Dvar_RegisterVariant_Stub, HOOK_JUMP).install()->quick();
-
-		// Fix crash
-		Utils::Hook(0x4B7120, Dvar_EnumToString_Stub, HOOK_JUMP).install()->quick();
+			if (patch.flagsSize == sizeof(std::uint32_t))
+			{
+				Utils::Hook::Xor<std::uint32_t>(flags, patch.flipped);
+			}
+			else
+			{
+				Utils::Hook::Xor<std::uint8_t>(flags, static_cast<std::uint8_t>(patch.flipped));
+			}
+		}
 	}
 }

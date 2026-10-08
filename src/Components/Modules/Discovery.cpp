@@ -1,106 +1,104 @@
-#include <Utils/InfoString.hpp>
+#include "STDInclude.hpp"
 
 #include "Discovery.hpp"
+#include "Events.hpp"
+#include "Logger.hpp"
+#include "Network.hpp"
+#include "ServerInfo.hpp"
 #include "ServerList.hpp"
 
 namespace Components
 {
-	bool Discovery::IsTerminating = false;
-	bool Discovery::IsPerforming = false;
-	std::thread Discovery::Thread;
-	std::string Discovery::Challenge;
+	std::atomic_bool Discovery::isPerforming = false;
+	std::jthread Discovery::thread;
+	std::string Discovery::challenge;
 
-	Dvar::Var Discovery::NetDiscoveryPortRangeMin;
-	Dvar::Var Discovery::NetDiscoveryPortRangeMax;
+	Dvar::Var Discovery::net_discoveryPortRangeMin;
+	Dvar::Var Discovery::net_discoveryPortRangeMax;
 
 	void Discovery::Perform()
 	{
-		IsPerforming = true;
+		isPerforming = true;
 	}
 
 	Discovery::Discovery()
 	{
-		NetDiscoveryPortRangeMin = Dvar::Register<int>("net_discoveryPortRangeMin", 25000, 0, 65535, Game::DVAR_NONE, "Minimum scan range port for local server discovery");
-		NetDiscoveryPortRangeMax = Dvar::Register<int>("net_discoveryPortRangeMax", 35000, 1, 65536, Game::DVAR_NONE, "Maximum scan range port for local server discovery");
-
-		// An additional thread prevents lags
-		// Not sure if that's the best way though
-		IsPerforming = false;
-		IsTerminating = false;
-		Thread = std::thread([]
+		Events::OnDvarInit([]
 		{
-			Com_InitThreadData();
+			net_discoveryPortRangeMin = Dvar::Register("net_discoveryPortRangeMin", 25000, 0, 65535, Game::DVAR_NONE, "Minimum scan range port for local server discovery");
+			net_discoveryPortRangeMax = Dvar::Register("net_discoveryPortRangeMax", 35000, 1, 65536, Game::DVAR_NONE, "Maximum scan range port for local server discovery");
+		});
 
-			while (!IsTerminating)
+		isPerforming = false;
+		thread = std::jthread([](const std::stop_token& stopToken)
+		{
+			Game::Com_InitThreadData();
+
+			while (!stopToken.stop_requested())
 			{
-				if (IsPerforming)
+				if (isPerforming)
 				{
 					const auto start = Game::Sys_Milliseconds();
 
 					Logger::Print("Starting local server discovery...\n");
 
-					Challenge = Utils::Cryptography::Rand::GenerateChallenge();
+					challenge = Utils::Cryptography::Rand::GenerateChallenge();
 
-					const auto minPort = NetDiscoveryPortRangeMin.get<unsigned int>();
-					const auto maxPort = NetDiscoveryPortRangeMax.get<unsigned int>();
-					Network::BroadcastRange(minPort, maxPort, std::format("discovery {}", Challenge));
+					const auto minPort = net_discoveryPortRangeMin.Get<int>();
+					const auto maxPort = net_discoveryPortRangeMax.Get<int>();
+					Network::BroadcastRange(minPort, maxPort, std::format("discovery {}", challenge));
 
 					Logger::Print("Discovery sent within {}ms, awaiting responses...\n", Game::Sys_Milliseconds() - start);
 
-					IsPerforming = false;
+					isPerforming = false;
 				}
 
-				Game::Sys_Sleep(50);
+				std::this_thread::sleep_for(50ms);
 			}
 		});
 
-		Network::OnClientPacket("discovery", [](Network::Address& address, [[maybe_unused]] const std::string& data)
+		Network::OnPacket("discovery", [](Network::Address& address, [[maybe_unused]] const std::string& data)
 		{
-			if (address.isSelf()) return;
-
-			if (!address.isLocal())
+			if (address.IsSelf())
 			{
-				Logger::Print("Received discovery request from non-local address: {}\n", address.getString());
 				return;
 			}
 
-			Logger::Print("Received discovery request from {}\n", address.getString());
+			if (!address.IsLocal())
+			{
+				Logger::Print("Received discovery request from non-local address: {}\n", address.GetString());
+				return;
+			}
+
+			Logger::Print("Received discovery request from {}\n", address.GetString());
 			Network::SendCommand(address, "discoveryResponse", data);
 		});
 
-		Network::OnClientPacket("discoveryResponse", [](Network::Address& address, [[maybe_unused]] const std::string& data)
+		Network::OnPacket("discoveryResponse", [](Network::Address& address, [[maybe_unused]] const std::string& data)
 		{
-			if (address.isSelf()) return;
-
-			if (!address.isLocal())
+			if (address.IsSelf())
 			{
-				Logger::Print("Received discovery response from non-local address: {}\n", address.getString());
 				return;
 			}
 
-			if (Utils::ParseChallenge(data) != Challenge)
+			if (!address.IsLocal())
 			{
-				Logger::Print("Received discovery with invalid challenge from: {}\n", address.getString());
+				Logger::Print("Received discovery response from non-local address: {}\n", address.GetString());
 				return;
 			}
 
-			Logger::Print("Received discovery response from: {}\n", address.getString());
+			if (ServerInfo::ParseChallenge(data) != challenge)
+			{
+				Logger::Print("Received discovery with invalid challenge from: {}\n", address.GetString());
+				return;
+			}
+
+			Logger::Print("Received discovery response from: {}\n", address.GetString());
 
 			if (ServerList::IsOfflineList())
 			{
 				ServerList::InsertRequest(address);
 			}
 		});
-	}
-
-	void Discovery::preDestroy()
-	{
-		IsPerforming = false;
-		IsTerminating = true;
-
-		if (Thread.joinable())
-		{
-			Thread.join();
-		}
 	}
 }

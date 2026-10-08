@@ -1,0 +1,659 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{1E3156E2-8AE6-CED7-13DB-C8AE7F8FC5DB}</ProjectGuid>
+    <IgnoreWarnCompileDuplicatedFilename>true</IgnoreWarnCompileDuplicatedFilename>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>libtomcrypt</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <CharacterSet>NotSet</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <CharacterSet>NotSet</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>$(ProjectDir)..\build\bin\x64\Debug\</OutDir>
+    <IntDir>$(ProjectDir)..\build\obj\libtomcrypt\x64\Debug\</IntDir>
+    <TargetName>libtomcrypt</TargetName>
+    <TargetExt>.lib</TargetExt>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>$(ProjectDir)..\build\bin\x64\Release\</OutDir>
+    <IntDir>$(ProjectDir)..\build\obj\libtomcrypt\x64\Release\</IntDir>
+    <TargetName>libtomcrypt</TargetName>
+    <TargetExt>.lib</TargetExt>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <PreprocessorDefinitions>_WINDOWS;WIN32;_WIN64;DEBUG;_DEBUG;LTC_NO_FAST;LTC_NO_PROTOTYPES;LTC_NO_RSA_BLINDING;LTC_NO_FILE;ARGTYPE=4;LTM_DESC;__STDC_IEC_559__;MP_NO_DEV_URANDOM;_CRT_SECURE_NO_WARNINGS;LTC_SOURCE;_LIB;USE_LTM;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\deps\x64\libtomcrypt\src\headers;..\deps\x64\libtommath;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <Optimization>Disabled</Optimization>
+      <MinimalRebuild>false</MinimalRebuild>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <ExternalWarningLevel>Level3</ExternalWarningLevel>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+    <Lib>
+      <AdditionalOptions>-IGNORE:4221 %(AdditionalOptions)</AdditionalOptions>
+    </Lib>
+    <ProjectReference>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+      <PreprocessorDefinitions>_WINDOWS;WIN32;_WIN64;NDEBUG;LTC_NO_FAST;LTC_NO_PROTOTYPES;LTC_NO_RSA_BLINDING;LTC_NO_FILE;ARGTYPE=4;LTM_DESC;__STDC_IEC_559__;MP_NO_DEV_URANDOM;_CRT_SECURE_NO_WARNINGS;LTC_SOURCE;_LIB;USE_LTM;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\deps\x64\libtomcrypt\src\headers;..\deps\x64\libtommath;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <Optimization>MinSpace</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <MinimalRebuild>false</MinimalRebuild>
+      <StringPooling>true</StringPooling>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <RuntimeTypeInfo>false</RuntimeTypeInfo>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <ExternalWarningLevel>Level3</ExternalWarningLevel>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+    <Lib>
+      <AdditionalOptions>/IGNORE:4702 /LTCG -IGNORE:4221 %(AdditionalOptions)</AdditionalOptions>
+    </Lib>
+    <ProjectReference>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\aes\aes.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\aes\aes_desc.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\aes\aesni.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\anubis.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\aria.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\blowfish.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\camellia.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\cast5.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\des.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\idea.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\kasumi.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\khazad.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\kseed.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\multi2.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\noekeon.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\rc2.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\rc5.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\rc6.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\safer\safer.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\safer\saferp.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\serpent.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\skipjack.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\sm4.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\tea.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\twofish\twofish.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\xtea.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\ccm\ccm_add_aad.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\ccm\ccm_add_nonce.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\ccm\ccm_done.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\ccm\ccm_init.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\ccm\ccm_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\ccm\ccm_process.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\ccm\ccm_reset.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\ccm\ccm_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\chachapoly\chacha20poly1305_add_aad.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\chachapoly\chacha20poly1305_decrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\chachapoly\chacha20poly1305_done.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\chachapoly\chacha20poly1305_encrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\chachapoly\chacha20poly1305_init.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\chachapoly\chacha20poly1305_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\chachapoly\chacha20poly1305_setiv.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\chachapoly\chacha20poly1305_setiv_rfc7905.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\chachapoly\chacha20poly1305_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\eax\eax_addheader.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\eax\eax_decrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\eax\eax_decrypt_verify_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\eax\eax_done.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\eax\eax_encrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\eax\eax_encrypt_authenticate_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\eax\eax_init.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\eax\eax_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm\gcm_add_aad.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm\gcm_add_iv.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm\gcm_done.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm\gcm_gf_mult.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm\gcm_init.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm\gcm_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm\gcm_mult_h.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm\gcm_process.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm\gcm_reset.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm\gcm_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm_siv\gcm_siv.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm_siv\gcm_siv_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\siv\siv.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\blake2b.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\blake2s.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\blake3.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\chc\chc.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\helper\hash_file.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\helper\hash_filehandle.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\helper\hash_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\helper\hash_memory_multi.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\md2.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\md4.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\md5.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\rmd128.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\rmd160.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\rmd256.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\rmd320.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha1.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha1_desc.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha1_x86.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha224.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha224_desc.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha224_x86.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha256.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha256_desc.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha256_x86.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha384.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha384_desc.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha384_x86.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha512.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha512_224.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha512_224_desc.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha512_224_x86.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha512_256.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha512_256_desc.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha512_256_x86.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha512_desc.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha512_x86.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha3.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha3_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sm3.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\tiger.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\whirl\whirl.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\blake2\blake2bmac.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\blake2\blake2bmac_file.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\blake2\blake2bmac_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\blake2\blake2bmac_memory_multi.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\blake2\blake2bmac_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\blake2\blake2smac.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\blake2\blake2smac_file.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\blake2\blake2smac_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\blake2\blake2smac_memory_multi.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\blake2\blake2smac_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\f9\f9_done.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\f9\f9_file.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\f9\f9_init.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\f9\f9_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\f9\f9_memory_multi.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\f9\f9_process.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\f9\f9_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\hmac\hmac_done.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\hmac\hmac_file.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\hmac\hmac_init.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\hmac\hmac_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\hmac\hmac_memory_multi.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\hmac\hmac_process.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\hmac\hmac_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\kmac\kmac.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\kmac\kmac_file.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\kmac\kmac_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\kmac\kmac_memory_multi.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\kmac\kmac_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\omac\omac_done.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\omac\omac_file.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\omac\omac_init.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\omac\omac_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\omac\omac_memory_multi.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\omac\omac_process.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\omac\omac_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pelican\pelican.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pelican\pelican_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pelican\pelican_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pmac\pmac_done.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pmac\pmac_file.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pmac\pmac_init.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pmac\pmac_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pmac\pmac_memory_multi.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pmac\pmac_ntz.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pmac\pmac_process.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pmac\pmac_shift_xor.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pmac\pmac_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\poly1305\poly1305.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\poly1305\poly1305_file.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\poly1305\poly1305_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\poly1305\poly1305_memory_multi.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\poly1305\poly1305_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\xcbc\xcbc_done.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\xcbc\xcbc_file.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\xcbc\xcbc_init.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\xcbc\xcbc_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\xcbc\xcbc_memory_multi.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\xcbc\xcbc_process.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\xcbc\xcbc_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\math\fp\ltc_ecc_fp_mulmod.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\math\gmp_desc.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\math\ltm_desc.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\math\multi.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\math\radix_to_bin.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\math\rand_bn.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\math\rand_prime.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\math\tfm_desc.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\adler32.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\algname_match.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\argon2\argon2.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\base16\base16_decode.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\base16\base16_encode.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\base32\base32_decode.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\base32\base32_encode.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\base64\base64_decode.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\base64\base64_encode.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\bcrypt\bcrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\burn_stack.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\compare_testvector.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\copy_or_zeromem.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crc32.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_argchk.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_cipher_descriptor.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_cipher_is_valid.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_constants.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_find_cipher.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_find_cipher_any.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_find_cipher_id.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_find_hash.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_find_hash_any.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_find_hash_id.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_find_hash_oid.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_find_prng.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_fsa.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_hash_descriptor.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_hash_is_valid.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_inits.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_ltc_mp_descriptor.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_prng_descriptor.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_prng_is_valid.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_prng_rng_descriptor.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_register_all_ciphers.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_register_all_hashes.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_register_all_prngs.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_register_cipher.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_register_hash.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_register_prng.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_sizes.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_unregister_cipher.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_unregister_hash.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_unregister_prng.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\deprecated.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\error_to_string.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\hkdf\hkdf.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\hkdf\hkdf_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\mem_neq.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\padding\padding_depad.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\padding\padding_pad.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\password_free.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pbes\pbes.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pbes\pbes1.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pbes\pbes2.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pem\pem.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pem\pem_pkcs.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pem\pem_read.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pem\pem_ssh.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pkcs12\pkcs12_kdf.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pkcs12\pkcs12_utf8_to_utf16.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pkcs5\pkcs_5_1.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pkcs5\pkcs_5_2.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pkcs5\pkcs_5_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\scrypt\scrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\ssh\ssh_decode_sequence_multi.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\ssh\ssh_encode_sequence_multi.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\zeromem.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cbc\cbc_decrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cbc\cbc_done.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cbc\cbc_encrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cbc\cbc_getiv.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cbc\cbc_setiv.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cbc\cbc_start.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cfb\cfb_decrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cfb\cfb_done.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cfb\cfb_encrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cfb\cfb_getiv.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cfb\cfb_setiv.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cfb\cfb_start.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ctr\ctr_decrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ctr\ctr_done.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ctr\ctr_encrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ctr\ctr_getiv.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ctr\ctr_setiv.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ctr\ctr_start.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ctr\ctr_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ecb\ecb_decrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ecb\ecb_done.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ecb\ecb_encrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ecb\ecb_start.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\f8\f8_decrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\f8\f8_done.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\f8\f8_encrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\f8\f8_getiv.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\f8\f8_setiv.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\f8\f8_start.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\f8\f8_test_mode.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\lrw\lrw_decrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\lrw\lrw_done.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\lrw\lrw_encrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\lrw\lrw_getiv.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\lrw\lrw_process.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\lrw\lrw_setiv.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\lrw\lrw_start.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\lrw\lrw_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ofb\ofb_decrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ofb\ofb_done.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ofb\ofb_encrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ofb\ofb_getiv.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ofb\ofb_setiv.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ofb\ofb_start.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\xts\xts_decrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\xts\xts_done.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\xts\xts_encrypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\xts\xts_init.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\xts\xts_mult_x.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\xts\xts_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\bit\der_decode_bit_string.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\bit\der_decode_raw_bit_string.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\bit\der_encode_bit_string.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\bit\der_encode_raw_bit_string.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\bit\der_length_bit_string.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\boolean\der_decode_boolean.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\boolean\der_encode_boolean.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\boolean\der_length_boolean.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\choice\der_decode_choice.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\custom_type\der_decode_custom_type.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\custom_type\der_encode_custom_type.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\custom_type\der_length_custom_type.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\general\der_asn1_maps.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\general\der_decode_asn1_identifier.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\general\der_decode_asn1_length.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\general\der_encode_asn1_identifier.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\general\der_encode_asn1_length.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\general\der_length_asn1_identifier.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\general\der_length_asn1_length.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\generalizedtime\der_decode_generalizedtime.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\generalizedtime\der_encode_generalizedtime.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\generalizedtime\der_length_generalizedtime.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\ia5\der_decode_ia5_string.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\ia5\der_encode_ia5_string.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\ia5\der_length_ia5_string.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\integer\der_decode_integer.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\integer\der_encode_integer.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\integer\der_length_integer.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\object_identifier\der_decode_object_identifier.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\object_identifier\der_encode_object_identifier.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\object_identifier\der_length_object_identifier.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\octet\der_decode_octet_string.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\octet\der_encode_octet_string.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\octet\der_length_octet_string.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\printable_string\der_decode_printable_string.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\printable_string\der_encode_printable_string.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\printable_string\der_length_printable_string.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\sequence\der_decode_sequence_ex.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\sequence\der_decode_sequence_flexi.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\sequence\der_decode_sequence_multi.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\sequence\der_encode_sequence_ex.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\sequence\der_encode_sequence_multi.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\sequence\der_flexi_sequence_cmp.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\sequence\der_length_sequence.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\sequence\der_sequence_free.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\sequence\der_sequence_shrink.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\set\der_encode_set.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\set\der_encode_setof.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\short_integer\der_decode_short_integer.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\short_integer\der_encode_short_integer.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\short_integer\der_length_short_integer.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\teletex_string\der_decode_teletex_string.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\teletex_string\der_length_teletex_string.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\utctime\der_decode_utctime.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\utctime\der_encode_utctime.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\utctime\der_length_utctime.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\utf8\der_decode_utf8_string.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\utf8\der_encode_utf8_string.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\utf8\der_length_utf8_string.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\oid\pk_get.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\oid\pk_oid_cmp.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\oid\pk_oid_str.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\pkcs8\pkcs8_decode_flexi.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\pkcs8\pkcs8_get.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\x509\x509_decode_public_key_from_certificate.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\x509\x509_decode_spki.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\x509\x509_decode_subject_public_key_info.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\x509\x509_encode_subject_public_key_info.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\x509\x509_get_pka.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\x509\x509_import_spki.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh_check_pubkey.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh_export.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh_export_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh_free.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh_generate_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh_import.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh_import_pkcs8.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh_set.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh_set_pg_dhparam.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh_shared_secret.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_decrypt_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_encrypt_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_export.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_free.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_generate_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_generate_pqg.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_import.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_import_pkcs8.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_init.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_make_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_set.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_set_pqg_dsaparam.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_shared_secret.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_sign_hash.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_verify_hash.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_verify_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ec25519\ec25519_crypto_ctx.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ec25519\ec25519_export.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ec25519\ec25519_import_pkcs8.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ec25519\tweetnacl.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ec448\ec448_common.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ec448\ec448_crypto_ctx.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ec448\ec448_export.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ec448\ec448_import_pkcs8.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_ansi_x963_export.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_ansi_x963_import.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_decrypt_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_encrypt_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_export.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_export_openssl.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_find_curve.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_free.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_get_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_get_oid_str.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_get_size.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_import.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_import_openssl.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_import_pkcs8.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_import_x509.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_make_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_recover_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_rfc6979_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_set_curve.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_set_curve_internal.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_set_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_shared_secret.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_sign_hash.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_sign_hash_eth27.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_sign_hash_internal.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_sign_hash_rfc5656.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_sign_hash_rfc7518.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_sign_hash_x962.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_sizes.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_ssh_ecdsa_encode_name.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_verify_hash.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_verify_hash_eth27.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_verify_hash_internal.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_verify_hash_rfc5656.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_verify_hash_rfc7518.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_verify_hash_x962.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_export_point.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_import_point.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_is_point.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_is_point_at_infinity.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_map.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_mul2add.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_mulmod.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_mulmod_timing.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_points.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_projective_add_point.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_projective_dbl_point.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_verify_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed25519\ed25519_export.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed25519\ed25519_import.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed25519\ed25519_import_pkcs8.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed25519\ed25519_import_raw.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed25519\ed25519_import_x509.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed25519\ed25519_make_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed25519\ed25519_sign.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed25519\ed25519_verify.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed448\ed448_export.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed448\ed448_import.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed448\ed448_import_pkcs8.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed448\ed448_import_raw.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed448\ed448_import_x509.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed448\ed448_make_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed448\ed448_sign.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed448\ed448_verify.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\pka_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\pkcs1\pkcs_1_i2osp.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\pkcs1\pkcs_1_mgf1.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\pkcs1\pkcs_1_oaep_decode.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\pkcs1\pkcs_1_oaep_encode.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\pkcs1\pkcs_1_os2ip.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\pkcs1\pkcs_1_pss_decode.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\pkcs1\pkcs_1_pss_encode.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\pkcs1\pkcs_1_v1_5_decode.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\pkcs1\pkcs_1_v1_5_encode.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_decrypt_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_encrypt_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_export.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_exptmod.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_get_size.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_import.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_import_pkcs8.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_import_x509.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_make_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_set.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_sign_hash.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_sign_saltlen_get.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_verify_hash.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x25519\x25519_export.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x25519\x25519_import.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x25519\x25519_import_pkcs8.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x25519\x25519_import_raw.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x25519\x25519_import_x509.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x25519\x25519_make_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x25519\x25519_shared_secret.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x448\x448_export.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x448\x448_import.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x448\x448_import_pkcs8.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x448\x448_import_raw.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x448\x448_import_x509.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x448\x448_make_key.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x448\x448_shared_secret.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\prngs\chacha20.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\prngs\fortuna.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\prngs\rc4.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\prngs\rng_get_bytes.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\prngs\rng_make_prng.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\prngs\sober128.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\prngs\sprng.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\prngs\yarrow.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\chacha_crypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\chacha_done.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\chacha_ivctr32.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\chacha_ivctr64.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\chacha_keystream.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\chacha_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\chacha_setup.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\chacha_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\xchacha20_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\xchacha20_setup.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\xchacha20_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\rabbit\rabbit.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\rabbit\rabbit_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\rc4\rc4_stream.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\rc4\rc4_stream_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\rc4\rc4_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\salsa20\salsa20_crypt.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\salsa20\salsa20_done.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\salsa20\salsa20_ivctr64.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\salsa20\salsa20_keystream.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\salsa20\salsa20_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\salsa20\salsa20_setup.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\salsa20\salsa20_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\salsa20\xsalsa20_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\salsa20\xsalsa20_setup.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\salsa20\xsalsa20_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\sober128\sober128_stream.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\sober128\sober128_stream_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\sober128\sober128_test.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\sosemanuk\sosemanuk.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\sosemanuk\sosemanuk_memory.c" />
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\sosemanuk\sosemanuk_test.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="libtommath.vcxproj">
+      <Project>{36F6A20E-22AE-E45B-8BB5-BDB7778C7F4C}</Project>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

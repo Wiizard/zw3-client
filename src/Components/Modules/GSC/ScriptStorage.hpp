@@ -8,7 +8,7 @@ namespace Components::GSC
 		ScriptStorage();
 
 	private:
-		static std::unordered_map<std::string, std::string> Data;
+		static std::unordered_map<std::string, std::string> data;
 
 		static void AddScriptFunctions();
 	};

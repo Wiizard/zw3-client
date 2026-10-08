@@ -1,141 +1,99 @@
+#include "STDInclude.hpp"
 
 namespace Game
 {
-	Dvar_RegisterBool_t Dvar_RegisterBool = Dvar_RegisterBool_t(0x4CE1A0);
-	Dvar_RegisterFloat_t Dvar_RegisterFloat = Dvar_RegisterFloat_t(0x648440);
-	Dvar_RegisterVec2_t Dvar_RegisterVec2 = Dvar_RegisterVec2_t(0x4F6070);
-	Dvar_RegisterVec3_t Dvar_RegisterVec3 = Dvar_RegisterVec3_t(0x4EF8E0);
-	Dvar_RegisterVec4_t Dvar_RegisterVec4 = Dvar_RegisterVec4_t(0x471500);
-	Dvar_RegisterInt_t Dvar_RegisterInt = Dvar_RegisterInt_t(0x479830);
-	Dvar_RegisterEnum_t Dvar_RegisterEnum = Dvar_RegisterEnum_t(0x412E40);
-	Dvar_RegisterString_t Dvar_RegisterString = Dvar_RegisterString_t(0x4FC7E0);
-	Dvar_RegisterColor_t Dvar_RegisterColor = Dvar_RegisterColor_t(0x4F28E0);
-	Dvar_RegisterVec3Color_t Dvar_RegisterVec3Color = Dvar_RegisterVec3Color_t(0x4918B0);
+	Dvar_RegisterBool_t Dvar_RegisterBool = nullptr;
+	Dvar_RegisterFloat_t Dvar_RegisterFloat = nullptr;
+	Dvar_RegisterVec2_t Dvar_RegisterVec2 = nullptr;
+	Dvar_RegisterVec3_t Dvar_RegisterVec3 = nullptr;
+	Dvar_RegisterVec4_t Dvar_RegisterVec4 = nullptr;
+	Dvar_RegisterInt_t Dvar_RegisterInt = nullptr;
+	Dvar_RegisterEnum_t Dvar_RegisterEnum = nullptr;
+	Dvar_RegisterString_t Dvar_RegisterString = nullptr;
 
-	Dvar_GetUnpackedColorByName_t Dvar_GetUnpackedColorByName = Dvar_GetUnpackedColorByName_t(0x406530);
-	Dvar_GetString_t Dvar_GetString = Dvar_GetString_t(0x4EC6B0);
-	Dvar_GetVariantString_t Dvar_GetVariantString = Dvar_GetVariantString_t(0x4C47E0);
-	Dvar_FindVar_t Dvar_FindVar = Dvar_FindVar_t(0x4D5390);
-	Dvar_InfoString_Big_t Dvar_InfoString_Big = Dvar_InfoString_Big_t(0x4D98A0);
-	Dvar_SetCommand_t Dvar_SetCommand = Dvar_SetCommand_t(0x4EE430);
-	Dvar_DisplayableValue_t Dvar_DisplayableValue = Dvar_DisplayableValue_t(0x4B5530);
-	Dvar_Reset_t Dvar_Reset = Dvar_Reset_t(0x4FEFD0);
+	Dvar_GetString_t Dvar_GetString = nullptr;
+	Dvar_FindVar_t Dvar_FindVar = nullptr;
+	Dvar_InfoString_Big_t Dvar_InfoString_Big = nullptr;
 
-	Dvar_SetFromStringByName_t Dvar_SetFromStringByName = Dvar_SetFromStringByName_t(0x4F52E0);
-	Dvar_SetFromStringByNameFromSource_t Dvar_SetFromStringByNameFromSource = Dvar_SetFromStringByNameFromSource_t(0x4FC770);
-	Dvar_SetStringByName_t Dvar_SetStringByName = Dvar_SetStringByName_t(0x44F060);
-	Dvar_SetString_t Dvar_SetString = Dvar_SetString_t(0x4A9580);
-	Dvar_SetBool_t Dvar_SetBool = Dvar_SetBool_t(0x4A9510);
-	Dvar_SetBoolByName_t Dvar_SetBoolByName = Dvar_SetBoolByName_t(0x45C4D0);
-	Dvar_SetFloat_t Dvar_SetFloat = Dvar_SetFloat_t(0x40BB20);
-	Dvar_SetFloatByName_t Dvar_SetFloatByName = Dvar_SetFloatByName_t(0x466320);
-	Dvar_SetInt_t Dvar_SetInt = Dvar_SetInt_t(0x421DA0);
+	Dvar_SetFromStringByName_t Dvar_SetFromStringByName = nullptr;
+	Dvar_SetStringByName_t Dvar_SetStringByName = nullptr;
+	Dvar_SetString_t Dvar_SetString = nullptr;
+	Dvar_SetBool_t Dvar_SetBool = nullptr;
+	Dvar_SetFloat_t Dvar_SetFloat = nullptr;
+	Dvar_SetInt_t Dvar_SetInt = nullptr;
+	Dvar_SetVariant_t Dvar_SetVariant = nullptr;
+	Dvar_SetFromStringFromSource_t Dvar_SetFromStringFromSource = nullptr;
 
-	const dvar_t** com_developer = reinterpret_cast<const dvar_t**>(0x1AD78E8);
-	const dvar_t** com_developer_script = reinterpret_cast<const dvar_t**>(0x1AD8F10);
-	const dvar_t** com_timescale = reinterpret_cast<const dvar_t**>(0x1AD7920);
-	const dvar_t** com_maxFrameTime = reinterpret_cast<const dvar_t**>(0x1AD78F4);
-	const dvar_t** com_masterServerName = reinterpret_cast<const dvar_t**>(0x1AD8F48);
-	const dvar_t** com_masterPort = reinterpret_cast<const dvar_t**>(0x1AD8F30);
+	dvar_t** com_developer = nullptr;
+	dvar_t** com_sv_running = nullptr;
+	dvar_t** com_masterServerName = nullptr;
+	dvar_t** com_masterPort = nullptr;
 
-	const dvar_t** dev_timescale = reinterpret_cast<const dvar_t**>(0x1AD8F20);
+	dvar_t** r_displayMode = nullptr;
 
-	const dvar_t** dvar_cheats = reinterpret_cast<const dvar_t**>(0x63F3348);
+	dvar_t** fs_basepath = nullptr;
+	dvar_t** fs_gameDirVar = nullptr;
 
-	const dvar_t** fs_cdpath = reinterpret_cast<const dvar_t**>(0x63D0BB0);
-	const dvar_t** fs_basepath = reinterpret_cast<const dvar_t**>(0x63D0CD4);
-	const dvar_t** fs_gameDirVar = reinterpret_cast<const dvar_t**>(0x63D0CC0);
-	const dvar_t** fs_homepath = reinterpret_cast<const dvar_t**>(0x63D4FD8);
+	dvar_t** sv_privatePassword = nullptr;
+	dvar_t** sv_privateClients = nullptr;
+	dvar_t** sv_maxclients = nullptr;
 
-	const dvar_t** sv_privatePassword = reinterpret_cast<const dvar_t**>(0x62C7C14);
-	const dvar_t** sv_running = reinterpret_cast<const dvar_t**>(0x1AD7934);
-	const dvar_t** sv_hostname = reinterpret_cast<const dvar_t**>(0x2098D98);
-	const dvar_t** sv_gametype = reinterpret_cast<const dvar_t**>(0x2098DD4);
-	const dvar_t** sv_mapname = reinterpret_cast<const dvar_t**>(0x2098DDC);
-	const dvar_t** sv_mapRotation = reinterpret_cast<const dvar_t**>(0x62C7C44);
-	const dvar_t** sv_mapRotationCurrent = reinterpret_cast<const dvar_t**>(0x2098DF0);
-	const dvar_t** sv_maxclients = reinterpret_cast<const dvar_t**>(0x2098D90);
-	const dvar_t** sv_cheats = reinterpret_cast<const dvar_t**>(0x2098DE0);
-	const dvar_t** sv_voiceQuality = reinterpret_cast<const dvar_t**>(0x2098DB0);
+	dvar_t** cl_voice = nullptr;
+	dvar_t** cl_ingame = nullptr;
 
-	const dvar_t** nextmap = reinterpret_cast<const dvar_t**>(0x1AD7924);
+	dvar_t** g_deadChat = nullptr;
 
-	const dvar_t** cl_showSend = reinterpret_cast<const dvar_t**>(0xA1E870);
-	const dvar_t** cl_voice = reinterpret_cast<const dvar_t**>(0xB2BB44);
-	const dvar_t** cl_ingame = reinterpret_cast<const dvar_t**>(0xB2BB80);
-	const dvar_t** cl_shownet = reinterpret_cast<const dvar_t**>(0x1059008);
+	dvar_t** ui_joinGametype = nullptr;
+	dvar_t** ui_netSource = nullptr;
 
-	const dvar_t** g_cheats = reinterpret_cast<const dvar_t**>(0x1A45D54);
-	const dvar_t** g_deadChat = reinterpret_cast<const dvar_t**>(0x19BD5DC);
-	const dvar_t** g_allowVote = reinterpret_cast<const dvar_t**>(0x19BD644);
-	const dvar_t** g_oldVoting = reinterpret_cast<const dvar_t**>(0x1A45DEC);
-	const dvar_t** g_gametype = reinterpret_cast<const dvar_t**>(0x1A45DC8);
-	const dvar_t** g_password = reinterpret_cast<const dvar_t**>(0x18835C0);
-	const dvar_t** g_log = reinterpret_cast<const dvar_t**>(0x1A45D9C);
+	dvar_t** port = nullptr;
 
-	const dvar_t** cg_chatHeight = reinterpret_cast<const dvar_t**>(0x7ED398);
-	const dvar_t** cg_chatTime = reinterpret_cast<const dvar_t**>(0x9F5DE8);
-	const dvar_t** cg_scoreboardHeight = reinterpret_cast<const dvar_t**>(0x9FD070);
-	const dvar_t** cg_scoreboardWidth = reinterpret_cast<const dvar_t**>(0x9FD0AC);
-
-	const dvar_t** version = reinterpret_cast<const dvar_t**>(0x1AD7930);
-	const dvar_t** shortversion = reinterpret_cast<const dvar_t**>(0x01AD79D0);
-
-	const dvar_t** viewposNow = reinterpret_cast<const dvar_t**>(0x9FD30C);
-
-	const dvar_t** ui_currentMap = reinterpret_cast<const dvar_t**>(0x62E2834);
-	const dvar_t** ui_gametype = reinterpret_cast<const dvar_t**>(0x62E2828);
-	const dvar_t** ui_mapname = reinterpret_cast<const dvar_t**>(0x62E279C);
-	const dvar_t** ui_joinGametype = reinterpret_cast<const dvar_t**>(0x62E2840);
-	const dvar_t** ui_netGameType = reinterpret_cast<const dvar_t**>(0x62E2838);
-	const dvar_t** ui_netSource = reinterpret_cast<const dvar_t**>(0x62E27E8);
-
-	const dvar_t** loc_warnings = reinterpret_cast<const dvar_t**>(0x62C8700);
-	const dvar_t** loc_warningsAsErrors = reinterpret_cast<const dvar_t**>(0x62C86FC);
-
-	const dvar_t** party_minplayers = reinterpret_cast<const dvar_t**>(0x1081BFC);
-	const dvar_t** party_maxplayers = reinterpret_cast<const dvar_t**>(0x1080998);
-
-	const dvar_t** ip = reinterpret_cast<const dvar_t**>(0x64A1DF8);
-	const dvar_t** port = reinterpret_cast<const dvar_t**>(0x64A3004);
-
-	__declspec(naked) void Dvar_SetVariant(dvar_t* /*dvar*/, DvarValue /*value*/, DvarSetSource /*source*/)
+	void BindDvars()
 	{
-		static DWORD Dvar_SetVariant_t = 0x647400;
+		Dvar_RegisterBool = BindFunction<Dvar_RegisterBool_t>(0x140285C70);
+		Dvar_RegisterFloat = BindFunction<Dvar_RegisterFloat_t>(0x140286050);
+		Dvar_RegisterVec2 = BindFunction<Dvar_RegisterVec2_t>(0x1402865F0);
+		Dvar_RegisterVec3 = BindFunction<Dvar_RegisterVec3_t>(0x140286710);
+		Dvar_RegisterVec4 = BindFunction<Dvar_RegisterVec4_t>(0x140286960);
+		Dvar_RegisterInt = BindFunction<Dvar_RegisterInt_t>(0x140286180);
+		Dvar_RegisterEnum = BindFunction<Dvar_RegisterEnum_t>(0x140285F50);
+		Dvar_RegisterString = BindFunction<Dvar_RegisterString_t>(0x140286520);
 
-		__asm
-		{
-			pushad
+		Dvar_GetString = BindFunction<Dvar_GetString_t>(0x140285260);
+		Dvar_FindVar = BindFunction<Dvar_FindVar_t>(0x140285000);
+		Dvar_InfoString_Big = BindFunction<Dvar_InfoString_Big_t>(0x1401FC570);
 
-			mov eax, [esp + 0x4 + 0x20] // dvar
-			push [esp + 0x18 + 0x20] // source
-			push [esp + 0x18 + 0x20] // value
-			push [esp + 0x18 + 0x20] // value
-			push [esp + 0x18 + 0x20] // value
-			push [esp + 0x18 + 0x20] // value
+		Dvar_SetFromStringByName = BindFunction<Dvar_SetFromStringByName_t>(0x140287500);
+		Dvar_SetStringByName = BindFunction<Dvar_SetStringByName_t>(0x140287A70);
+		Dvar_SetString = BindFunction<Dvar_SetString_t>(0x140287A10);
+		Dvar_SetBool = BindFunction<Dvar_SetBool_t>(0x140286F40);
+		Dvar_SetFloat = BindFunction<Dvar_SetFloat_t>(0x140287330);
+		Dvar_SetInt = BindFunction<Dvar_SetInt_t>(0x140287670);
+		Dvar_SetVariant = BindFunction<Dvar_SetVariant_t>(0x140287B10);
+		Dvar_SetFromStringFromSource = BindFunction<Dvar_SetFromStringFromSource_t>(0x1402875D0);
 
-			call Dvar_SetVariant_t
-			add esp, 0x14
+		com_developer = reinterpret_cast<dvar_t**>(Utils::Hook::Rebase(0x141BD9A50));
+		com_sv_running = reinterpret_cast<dvar_t**>(Utils::Hook::Rebase(0x141BD9A90));
+		com_masterServerName = reinterpret_cast<dvar_t**>(Utils::Hook::Rebase(0x141BD9A60));
+		com_masterPort = reinterpret_cast<dvar_t**>(Utils::Hook::Rebase(0x141BD9A70));
 
-			popad
+		r_displayMode = reinterpret_cast<dvar_t**>(Utils::Hook::Rebase(0x148CC6AE0));
 
-			retn
-		}
-	}
+		fs_basepath = reinterpret_cast<dvar_t**>(Utils::Hook::Rebase(0x146644B68));
+		fs_gameDirVar = reinterpret_cast<dvar_t**>(Utils::Hook::Rebase(0x146644B88));
 
-	void Dvar_SetFromStringFromSource(const dvar_t* dvar, const char* string, DvarSetSource source)
-	{
-		static DWORD Dvar_SetFromStringFromSource_t = 0x648580;
+		sv_privatePassword = reinterpret_cast<dvar_t**>(Utils::Hook::Rebase(0x14650D840));
+		sv_privateClients = reinterpret_cast<dvar_t**>(Utils::Hook::Rebase(0x14650D918));
+		sv_maxclients = reinterpret_cast<dvar_t**>(Utils::Hook::Rebase(0x14650D858));
 
-		__asm
-		{
-			pushad
-			mov esi, dvar
-			mov eax, string
-			push source
-			call Dvar_SetFromStringFromSource_t
-			add esp, 0x4
-			popad
-		}
+		cl_voice = reinterpret_cast<dvar_t**>(Utils::Hook::Rebase(0x140D050F0));
+		cl_ingame = reinterpret_cast<dvar_t**>(Utils::Hook::Rebase(0x140D050E0));
+
+		g_deadChat = reinterpret_cast<dvar_t**>(Utils::Hook::Rebase(0x141869A40));
+
+		ui_joinGametype = reinterpret_cast<dvar_t**>(Utils::Hook::Rebase(0x1465D0A00));
+		ui_netSource = reinterpret_cast<dvar_t**>(Utils::Hook::Rebase(0x1465D09A8));
+
+		port = reinterpret_cast<dvar_t**>(Utils::Hook::Rebase(0x14678C3C0));
 	}
 }

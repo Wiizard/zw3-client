@@ -1,32 +1,28 @@
+#include "STDInclude.hpp"
 
 namespace Game
 {
-	Z_VirtualAlloc_t Z_VirtualAlloc = Z_VirtualAlloc_t(0x4CFBA0);
-	Z_Malloc_t Z_Malloc = Z_Malloc_t(0x4F3680);
-	Z_Free_t Z_Free = Z_Free_t(0x4291A0);
+	Z_FreeInternal_t Z_FreeInternal = nullptr;
+	Hunk_UserAlloc_t Hunk_UserAlloc = nullptr;
 
-	Hunk_AllocateTempMemoryHigh_t Hunk_AllocateTempMemoryHigh = Hunk_AllocateTempMemoryHigh_t(0x475B30);
-	Hunk_UserAlloc_t Hunk_UserAlloc = Hunk_UserAlloc_t(0x45D1C0);
-
-	TempMalloc_t TempMalloc = TempMalloc_t(0x4613A0);
-
-	int Z_TryVirtualCommitInternal(void* ptr, int size)
+	static bool Z_TryVirtualCommitInternal(void* ptr, int size)
 	{
-		assert((size >= 0));
+		assert(size >= 0);
 
 		return VirtualAlloc(ptr, size, MEM_COMMIT, PAGE_READWRITE) != nullptr;
 	}
 
-	void Z_VirtualDecommitInternal(void* ptr, int size)
+	static void Z_VirtualDecommitInternal(void* ptr, int size)
 	{
-		assert((size >= 0));
+		assert(size >= 0);
+
 #pragma warning(push)
 #pragma warning(disable: 6250)
 		VirtualFree(ptr, size, MEM_DECOMMIT);
 #pragma warning(pop)
 	}
 
-	void Z_VirtualCommitInternal(void* ptr, int size)
+	static void Z_VirtualCommitInternal(void* ptr, int size)
 	{
 		if (Z_TryVirtualCommitInternal(ptr, size))
 		{
@@ -36,7 +32,7 @@ namespace Game
 		Sys_OutOfMemError();
 	}
 
-	void Z_VirtualFreeInternal(void* ptr)
+	static void Z_VirtualFreeInternal(void* ptr)
 	{
 		VirtualFree(ptr, 0, MEM_RELEASE);
 	}
@@ -51,11 +47,12 @@ namespace Game
 
 	void* Z_VirtualReserve(int size)
 	{
-		assert((size >= 0));
+		assert(size >= 0);
 
-		void* buf = VirtualAlloc(nullptr, size, MEM_RESERVE, PAGE_READWRITE);
-		assert(buf);
-		return buf;
+		void* const buffer = VirtualAlloc(nullptr, size, MEM_RESERVE, PAGE_READWRITE);
+		assert(buffer);
+
+		return buffer;
 	}
 
 	void Z_VirtualDecommit(void* ptr, int size)
@@ -69,5 +66,11 @@ namespace Game
 	void Z_VirtualFree(void* ptr)
 	{
 		Z_VirtualFreeInternal(ptr);
+	}
+
+	void BindZone()
+	{
+		Z_FreeInternal = BindFunction<Z_FreeInternal_t>(0x14027F7F0);
+		Hunk_UserAlloc = BindFunction<Hunk_UserAlloc_t>(0x14027ECC0);
 	}
 }

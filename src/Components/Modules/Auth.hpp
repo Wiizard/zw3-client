@@ -1,64 +1,80 @@
 #pragma once
 
+#include "Network.hpp"
+
 namespace Components
 {
 	class Auth : public Component
 	{
 	public:
 		Auth();
-		~Auth();
-
-		void preDestroy() override;
 
 		static void StoreKey();
 		static void LoadKey(bool force = false);
 		static void GenerateKey();
 
-		static unsigned __int64 GetKeyHash();
-		static unsigned __int64 GetKeyHash(const std::string& key);
+		static std::uint64_t GetKeyHash();
+		static std::uint64_t GetKeyHash(const std::string& key);
 
-		static uint32_t GetSecurityLevel();
-		static void IncreaseSecurityLevel(uint32_t level, const std::string& command = {});
+		static std::uint32_t GetSecurityLevel();
+		static void IncreaseSecurityLevel(std::uint32_t level, const std::string& command = {});
 
-		static uint32_t GetZeroBits(Utils::Cryptography::Token token, const std::string& publicKey);
-		static void IncrementToken(Utils::Cryptography::Token& token, Utils::Cryptography::Token& computeToken, const std::string& publicKey, uint32_t zeroBits, bool* cancel = nullptr, uint64_t* count = nullptr);
+		static std::uint32_t GetZeroBits(const Utils::Cryptography::Token& token, const std::string& publicKey);
+		static void IncrementToken(Utils::Cryptography::Token& token, Utils::Cryptography::Token& searchToken,
+			const std::string& publicKey, std::uint32_t zeroBits, bool* cancel = nullptr, std::uint64_t* count = nullptr);
 
 		static std::string GetMachineEntropy();
-		static bool SetManagedConnectTicket(const Network::Address& target,
-			const std::string& ticket, const std::string& matchId,
-			const std::string& sessionId);
+
+		static bool SetManagedConnectTicket(const Network::Address& target, const std::string& ticket, const std::string& matchId, const std::string& sessionId);
 		static void ClearManagedConnectTicket();
 
-	private:
+		static int PrivateClientCount();
 
+	private:
 		class TokenIncrementing
 		{
 		public:
-			bool cancel;
-			bool generating;
-			std::thread thread;
-			uint32_t targetLevel;
-			int startTime;
+			bool cancel = false;
+			bool generating = false;
+			std::jthread thread;
+			std::uint32_t targetLevel = 0;
+			int startTime = 0;
 			std::string command;
-			uint64_t hashes;
+			std::uint64_t hashes = 0;
 		};
 
-		static TokenIncrementing TokenContainer;
+		static TokenIncrementing tokenContainer;
 
-		static Utils::Cryptography::Token GuidToken;
-		static Utils::Cryptography::Token ComputeToken;
-		static Utils::Cryptography::ECC::Key GuidKey;
-		static std::vector<std::uint64_t> BannedUids;
+		static Utils::Cryptography::Token guidToken;
+		static Utils::Cryptography::Token computeToken;
+		static Utils::Cryptography::ECC::Key guidKey;
+		static std::vector<std::uint64_t> bannedUids;
 
-		static bool HasAccessToReservedSlot;
+		static Utils::Hook sendConnectDataHook;
+		static Utils::Hook packetEventHooks[2];
+		static Utils::Hook directConnectHook;
+		static Utils::Hook passwordHook;
+		static Utils::Hook privateClientHook;
+		static Utils::Hook connectFailedHook;
 
-		static void SendConnectDataStub(Game::netsrc_t sock, Game::netadr_t adr, const char* format, int len);
-		static void ParseConnectData(Game::msg_t* msg, Game::netadr_t* addr);
-		static void DirectConnectStub();
-		static char* Info_ValueForKeyStub(const char* s, const char* key);
-		static void DirectConnectPrivateClientStub();
+		static bool hasAccessToReservedSlot;
 
-		static std::string GetGUIDFilePath();
+		static Game::msg_t* currentPacket;
+
+		static bool SendConnectDataStub(Game::netsrc_t source, const Game::netadr_t* target,
+			const void* data, int length);
+
+		static char SV_PacketEvent_Hook(Game::netadr_t* from, Game::msg_t* message);
+
+		static void DirectConnectStub(const Game::netadr_t* from);
+
+		static void ParseConnectData(Game::msg_t* message, const Game::netadr_t* from);
+
+		static const char* Info_ValueForKeyStub(const char* s, const char* key);
+
+		static bool ClientConnectFailedStub(Game::netsrc_t source, const Game::netadr_t* from, const char* data);
+
+		static std::string GetGuidFilePath();
 
 		static void Frame();
 	};

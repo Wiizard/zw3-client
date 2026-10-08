@@ -1,80 +1,85 @@
+#include "STDInclude.hpp"
+
 #include "IMenuList.hpp"
+#include "../Menus.hpp"
 
 namespace Assets
 {
-	void IMenuList::load(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder)
+	void IMenuList::Load(Game::XAssetHeader* header, const std::string& name, Components::ZoneBuilder::Zone* builder)
 	{
-		Utils::Memory::Allocator* allocator = builder->getAllocator();
+		auto* const allocator = builder->GetAllocator();
 
-		// actually gets the whole list
-		auto menus = Components::Menus::LoadMenuByName_Recursive(name);
-		if (menus.empty()) return;
+		const auto menus = Components::Menus::LoadMenuByName_Recursive(name);
 
-		// Allocate new menu list
-		auto* newList = allocator->allocate<Game::MenuList>();
-		if (!newList) return;
-
-		newList->menus = allocator->allocateArray<Game::menuDef_t*>(menus.size());
-		if (!newList->menus)
+		if (menus.empty())
 		{
-			allocator->free(newList);
 			return;
 		}
 
-		newList->name = allocator->duplicateString(name);
-		newList->menuCount = menus.size();
+		auto* const newList = allocator->Allocate<Game::MenuList>();
+		newList->menus = allocator->AllocateArray<Game::menuDef_t*>(menus.size());
+		newList->name = allocator->DuplicateString(name);
+		newList->menuCount = static_cast<int>(menus.size());
 
-		// Copy new menus
-		for (unsigned int i = 0; i < menus.size(); ++i)
+		for (std::size_t i = 0; i < menus.size(); ++i)
 		{
 			newList->menus[i] = menus[i];
 		}
 
 		header->menuList = newList;
 	}
-	void IMenuList::mark(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
+
+	void IMenuList::Mark(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
 	{
-		auto* asset = header.menuList;
+		const auto* const asset = header.menuList;
 
 		for (int i = 0; i < asset->menuCount; ++i)
 		{
 			if (asset->menus[i])
 			{
-				builder->loadAsset(Game::XAssetType::ASSET_TYPE_MENU, asset->menus[i]);
+				builder->LoadAsset(Game::ASSET_TYPE_MENU, asset->menus[i]);
 			}
 		}
 	}
-	void IMenuList::save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
+
+	void IMenuList::Save(Game::XAssetHeader header, Components::ZoneBuilder::Zone* builder)
 	{
-		AssertSize(Game::MenuList, 12);
+		auto* const buffer = builder->GetBuffer();
+		const auto* const asset = header.menuList;
+		auto* const dest = buffer->Dest<Game::X86::MenuList>();
+		const auto record = Game::X86::Convert(*asset);
+		buffer->Save(&record);
 
-		Utils::Stream* buffer = builder->getBuffer();
-		Game::MenuList* asset = header.menuList;
-		auto* dest = buffer->dest<Game::MenuList>();
-
-		buffer->save(asset);
-
-		buffer->pushBlock(Game::XFILE_BLOCK_VIRTUAL);
+		buffer->PushBlock(Game::XFILE_BLOCK_VIRTUAL);
 
 		if (asset->name)
 		{
-			buffer->saveString(builder->getAssetName(this->getType(), asset->name));
+			buffer->SaveString(builder->GetAssetName(this->GetType(), asset->name));
 			Utils::Stream::ClearPointer(&dest->name);
 		}
 
 		if (asset->menus)
 		{
-			buffer->align(Utils::Stream::ALIGN_4);
+			buffer->Align(Utils::Stream::ALIGN_4);
 
-			auto** destMenus = buffer->dest<Game::menuDef_t*>();
-			buffer->saveArray(asset->menus, asset->menuCount);
+			auto* const destMenus = buffer->Dest<std::uint32_t>();
 
 			for (int i = 0; i < asset->menuCount; ++i)
 			{
-				destMenus[i] = builder->saveSubAsset(Game::XAssetType::ASSET_TYPE_MENU, asset->menus[i]).menu;
+				buffer->SaveObject<std::uint32_t>(0);
 			}
+
+			for (int i = 0; i < asset->menuCount; ++i)
+			{
+				if (asset->menus[i])
+				{
+					destMenus[i] = builder->SaveSubAsset(Game::ASSET_TYPE_MENU, asset->menus[i]);
+				}
+			}
+
+			Utils::Stream::ClearPointer(&dest->menus);
 		}
 
-		buffer->popBlock();
+		buffer->PopBlock();
 	}
 }

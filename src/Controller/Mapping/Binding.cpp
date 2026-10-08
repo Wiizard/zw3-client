@@ -1,242 +1,213 @@
-#include "Binding.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Mapping/Binding.hpp"
 
-#include <cctype>
-#include <string>
-
-namespace Controller
+namespace Controller::Mapping
 {
-  namespace mapping
-  {
-    namespace
-    {
-      std::string
-      lowercase (std::string_view s)
-      {
-        std::string r (s);
-        for (char& c: r)
-          c = static_cast<char> (std::tolower (static_cast<unsigned char> (c)));
-        return r;
-      }
+	struct ButtonLayout
+	{
+		const char* name;
+		const char* keyword;
 
-      bool
-      contains (const std::string& s, std::string_view sub) noexcept
-      {
-        return s.find (sub) != std::string::npos;
-      }
-    }
+		Action triggerRight;
+		Action triggerLeft;
+		Action shoulderRight;
+		Action shoulderLeft;
+		Action stickRight;
+		Action stickLeft;
+		Action faceB;
+	};
 
-    void
-    binding_table::
-    bind (engine_key k, std::string command)
-    {
-      commands_[key_index (k)] = std::move (command);
-    }
+	static constexpr ButtonLayout layouts[] =
+	{
+		{ "buttons_default", "default", Action::Fire, Action::Ads, Action::Frag, Action::SpecialGrenade, Action::Melee, Action::Sprint, Action::Stance },
+		{ "buttons_tactical", "tactical", Action::Fire, Action::Ads, Action::Frag, Action::SpecialGrenade, Action::Stance, Action::Sprint, Action::Melee },
+		{ "buttons_lefty", "lefty", Action::Ads, Action::Fire, Action::SpecialGrenade, Action::Frag, Action::Sprint, Action::Melee, Action::Stance },
+		{ "buttons_nomad", "nomad", Action::Fire, Action::AdsToggle, Action::Frag, Action::SpecialGrenade, Action::Stance, Action::Sprint, Action::Melee },
+	};
 
-    void
-    binding_table::
-    bind (engine_key k, action a)
-    {
-      commands_[key_index (k)] = command (a);
-    }
+	static constexpr std::string_view altSuffix = "_alt";
 
-    void
-    binding_table::
-    unbind (engine_key k) noexcept
-    {
-      commands_[key_index (k)].clear ();
-    }
+	static std::string Lowercase(std::string_view text)
+	{
+		std::string lowered(text);
 
-    void
-    binding_table::
-    clear () noexcept
-    {
-      for (std::string& c: commands_)
-        c.clear ();
-    }
+		for (auto& character : lowered)
+		{
+			character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+		}
 
-    const std::string*
-    binding_table::
-    command_for (engine_key k) const noexcept
-    {
-      const std::string& c (commands_[key_index (k)]);
-      return c.empty () ? nullptr : &c;
-    }
+		return lowered;
+	}
 
-    void
-    binding_table::
-    for_each (function_ref<void (engine_key, const std::string&)> fn) const
-    {
-      const std::span<const engine_key> all (keys ());
+	static const ButtonLayout& LayoutFor(const std::string& name) noexcept
+	{
+		for (const auto& layout : layouts)
+		{
+			if (name == layout.name)
+			{
+				return layout;
+			}
+		}
 
-      for (size_t i (0); i < count; ++i)
-      {
-        if (!commands_[i].empty ())
-          fn (all[i], commands_[i]);
-      }
-    }
+		for (const auto& layout : layouts)
+		{
+			if (name.find(layout.keyword) != std::string::npos)
+			{
+				return layout;
+			}
+		}
 
-    size_t
-    binding_table::
-    size () const noexcept
-    {
-      size_t n (0);
-      for (const std::string& c: commands_)
-      {
-        if (!c.empty ())
-          ++n;
-      }
-      return n;
-    }
+		return layouts[0];
+	}
 
-    namespace
-    {
-      struct layout
-      {
-        const char* name;
-        const char* keyword;
+	static bool HaveSameBindings(const BindingTable& left, const BindingTable& right) noexcept
+	{
+		for (const auto key : Keys())
+		{
+			const auto* leftCommand = left.CommandFor(key);
+			const auto* rightCommand = right.CommandFor(key);
 
-        action trigger_right;
-        action trigger_left;
-        action shoulder_right;
-        action shoulder_left;
-        action stick_right;
-        action stick_left;
-        action face_b;
-      };
+			if ((leftCommand == nullptr) != (rightCommand == nullptr))
+			{
+				return false;
+			}
 
-      constexpr layout layouts[]
-      {
-        {"buttons_default", "default",
-         action::fire, action::ads,
-         action::frag, action::special_grenade,
-         action::melee, action::sprint,
-         action::stance},
+			if (leftCommand != nullptr && *leftCommand != *rightCommand)
+			{
+				return false;
+			}
+		}
 
-        {"buttons_tactical", "tactical",
-         action::fire, action::ads,
-         action::frag, action::special_grenade,
-         action::stance, action::sprint,
-         action::melee},
+		return true;
+	}
 
-        {"buttons_lefty", "lefty",
-         action::ads, action::fire,
-         action::special_grenade, action::frag,
-         action::sprint, action::melee,
-         action::stance},
+	void BindingTable::Bind(EngineKey key, std::string command)
+	{
+		this->commands[KeyIndex(key)] = std::move(command);
+	}
 
-        {"buttons_nomad", "nomad",
-         action::fire, action::ads_toggle,
-         action::frag, action::special_grenade,
-         action::stance, action::sprint,
-         action::melee},
-      };
+	void BindingTable::Bind(EngineKey key, Action action)
+	{
+		this->commands[KeyIndex(key)] = Mapping::CommandFor(action);
+	}
 
-      const layout&
-      layout_for (const std::string& name) noexcept
-      {
-        for (const layout& l: layouts)
-        {
-          if (name == l.name)
-            return l;
-        }
+	void BindingTable::Clear() noexcept
+	{
+		for (auto& command : this->commands)
+		{
+			command.clear();
+		}
+	}
 
-        for (const layout& l: layouts)
-        {
-          if (contains (name, l.keyword))
-            return l;
-        }
+	const std::string* BindingTable::CommandFor(EngineKey key) const noexcept
+	{
+		const auto& command = this->commands[KeyIndex(key)];
 
-        return layouts[0];
-      }
+		if (command.empty())
+		{
+			return nullptr;
+		}
 
-      constexpr std::string_view alt_suffix {"_alt"};
-    }
+		return &command;
+	}
 
-    void
-    apply_button_layout (binding_table& t, std::string_view name)
-    {
-      std::string n (lowercase (name));
+	void BindingTable::ForEach(const std::function<void(EngineKey, const std::string&)>& visit) const
+	{
+		const auto all = Keys();
 
-      const bool alt (n.size () > alt_suffix.size () &&
-                      n.compare (n.size () - alt_suffix.size (),
-                                 alt_suffix.size (),
-                                 alt_suffix) == 0);
+		for (std::size_t i = 0; i < engineKeyCount; ++i)
+		{
+			if (!this->commands[i].empty())
+			{
+				visit(all[i], this->commands[i]);
+			}
+		}
+	}
 
-      if (alt)
-        n.resize (n.size () - alt_suffix.size ());
+	std::size_t BindingTable::Size() const noexcept
+	{
+		std::size_t bound = 0;
 
-      const layout& l (layout_for (n));
+		for (const auto& command : this->commands)
+		{
+			if (!command.empty())
+			{
+				++bound;
+			}
+		}
 
-      t.clear ();
+		return bound;
+	}
 
-      t.bind (engine_key::button_start, action::menu);
-      t.bind (engine_key::button_back,  action::scoreboard);
+	void ApplyButtonLayout(BindingTable& table, std::string_view name)
+	{
+		std::string lowered = Lowercase(name);
 
-      t.bind (engine_key::button_a, action::jump_stand);
-      t.bind (engine_key::button_b, l.face_b);
-      t.bind (engine_key::button_x, action::use_reload);
-      t.bind (engine_key::button_y, action::next_weapon);
+		const bool isAlt = lowered.size() > altSuffix.size() && lowered.compare(lowered.size() - altSuffix.size(), altSuffix.size(), altSuffix) == 0;
 
-      t.bind (engine_key::button_rstick, l.stick_right);
-      t.bind (engine_key::button_lstick, l.stick_left);
+		if (isAlt)
+		{
+			lowered.resize(lowered.size() - altSuffix.size());
+		}
 
-      t.bind (alt ? engine_key::button_rshldr : engine_key::button_rtrig,
-              l.trigger_right);
-      t.bind (alt ? engine_key::button_lshldr : engine_key::button_ltrig,
-              l.trigger_left);
-      t.bind (alt ? engine_key::button_rtrig : engine_key::button_rshldr,
-              l.shoulder_right);
-      t.bind (alt ? engine_key::button_ltrig : engine_key::button_lshldr,
-              l.shoulder_left);
+		const auto& layout = LayoutFor(lowered);
 
-      t.bind (engine_key::dpad_up,    action::action_slot_1);
-      t.bind (engine_key::dpad_down,  action::action_slot_2);
-      t.bind (engine_key::dpad_left,  action::action_slot_3);
-      t.bind (engine_key::dpad_right, action::action_slot_4);
-    }
+		table.Clear();
 
-    namespace
-    {
-      bool
-      same_bindings (const binding_table& a, const binding_table& b) noexcept
-      {
-        for (const engine_key k: keys ())
-        {
-          const std::string* const x (a.command_for (k));
-          const std::string* const y (b.command_for (k));
+		table.Bind(EngineKey::ButtonStart, Action::Menu);
+		table.Bind(EngineKey::ButtonBack, Action::Scoreboard);
 
-          if ((x == nullptr) != (y == nullptr))
-            return false;
+		table.Bind(EngineKey::ButtonA, Action::JumpStand);
+		table.Bind(EngineKey::ButtonB, layout.faceB);
+		table.Bind(EngineKey::ButtonX, Action::UseReload);
+		table.Bind(EngineKey::ButtonY, Action::NextWeapon);
 
-          if (x != nullptr && *x != *y)
-            return false;
-        }
+		table.Bind(EngineKey::ButtonRStick, layout.stickRight);
+		table.Bind(EngineKey::ButtonLStick, layout.stickLeft);
 
-        return true;
-      }
-    }
+		if (isAlt)
+		{
+			table.Bind(EngineKey::ButtonRShoulder, layout.triggerRight);
+			table.Bind(EngineKey::ButtonLShoulder, layout.triggerLeft);
+			table.Bind(EngineKey::ButtonRTrigger, layout.shoulderRight);
+			table.Bind(EngineKey::ButtonLTrigger, layout.shoulderLeft);
+		}
+		else
+		{
+			table.Bind(EngineKey::ButtonRTrigger, layout.triggerRight);
+			table.Bind(EngineKey::ButtonLTrigger, layout.triggerLeft);
+			table.Bind(EngineKey::ButtonRShoulder, layout.shoulderRight);
+			table.Bind(EngineKey::ButtonLShoulder, layout.shoulderLeft);
+		}
 
-    bool
-    matches_button_layout (const binding_table& t)
-    {
-      binding_table stock;
+		table.Bind(EngineKey::DpadUp, Action::ActionSlot1);
+		table.Bind(EngineKey::DpadDown, Action::ActionSlot2);
+		table.Bind(EngineKey::DpadLeft, Action::ActionSlot3);
+		table.Bind(EngineKey::DpadRight, Action::ActionSlot4);
+	}
 
-      for (const layout& l: layouts)
-      {
-        for (const bool alt: {false, true})
-        {
-          apply_button_layout (stock,
-                               alt ? std::string (l.name) + std::string (alt_suffix)
-                                   : std::string (l.name));
+	bool MatchesButtonLayout(const BindingTable& table)
+	{
+		BindingTable stock;
 
-          if (same_bindings (t, stock))
-            return true;
-        }
-      }
+		for (const auto& layout : layouts)
+		{
+			ApplyButtonLayout(stock, layout.name);
 
-      return false;
-    }
-  }
+			if (HaveSameBindings(table, stock))
+			{
+				return true;
+			}
+
+			ApplyButtonLayout(stock, std::string(layout.name) + std::string(altSuffix));
+
+			if (HaveSameBindings(table, stock))
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
 }

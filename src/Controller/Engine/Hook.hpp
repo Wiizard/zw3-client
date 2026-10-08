@@ -1,23 +1,19 @@
 #pragma once
 
-#include "../Types.hpp"
+#include "Controller/Types.hpp"
 
 namespace Controller
 {
-  class runtime;
+	class Runtime;
 }
 
-namespace Controller
+namespace Controller::Engine
 {
-  namespace engine
-  {
-    void
-    install (runtime&);
+	bool TryInstall();
 
-    void
-    install_protocol ();
+	void InstallProtocol();
 
-    void
-    note_mouse_move (int dx, int dy) noexcept;
-  }
+	void Attach(Runtime* runtime) noexcept;
+
+	void NoteMouseMove(int dx, int dy);
 }

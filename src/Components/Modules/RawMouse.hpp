@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Dvar.hpp"
+
 namespace Components
 {
 	struct rawMouseValue_t
@@ -18,37 +20,43 @@ namespace Components
 		RawMouse();
 
 		static void IN_MouseMove();
+
 		static void SuspendMouseInput();
 
-		static BOOL OnLBDown(LPARAM lParam, WPARAM wParam);
-		static BOOL OnLBUp(LPARAM lParam, WPARAM wParam);
+		static LRESULT OnLBDown(LPARAM lParam, WPARAM wParam);
+		static LRESULT OnLBUp(LPARAM lParam, WPARAM wParam);
 
-		static BOOL OnRBDown(LPARAM lParam, WPARAM wParam);
-		static BOOL OnRBUp(LPARAM lParam, WPARAM wParam);
+		static LRESULT OnRBDown(LPARAM lParam, WPARAM wParam);
+		static LRESULT OnRBUp(LPARAM lParam, WPARAM wParam);
 
-		static BOOL OnMBDown(LPARAM lParam, WPARAM wParam);
-		static BOOL OnMBUp(LPARAM lParam, WPARAM wParam);
+		static LRESULT OnMBDown(LPARAM lParam, WPARAM wParam);
+		static LRESULT OnMBUp(LPARAM lParam, WPARAM wParam);
 
-		static BOOL OnXBDown(LPARAM lParam, WPARAM wParam);
-		static BOOL OnXBUp(LPARAM lParam, WPARAM wParam);
+		static LRESULT OnXBDown(LPARAM lParam, WPARAM wParam);
+		static LRESULT OnXBUp(LPARAM lParam, WPARAM wParam);
 
 	private:
-		static Dvar::Var M_RawInput, M_RawInputVerbose, R_FullScreen, R_AutoPriority;
-		static rawMouseValue_t MouseRawX, MouseRawY;
-		static uint32_t MouseRawEvents;
-		static bool InRawInput, FirstRawInputUpdate, FirstLegacyInputUpdate;
-		static bool CursorClipped;
+		static Dvar::Var m_rawinput;
+		static Dvar::Var m_rawinput_verbose;
+		static Dvar::Var r_autopriority;
+		static rawMouseValue_t mouseRawX;
+		static rawMouseValue_t mouseRawY;
+		static std::uint32_t mouseRawEvents;
+		static bool inRawInput;
+		static bool firstRawInputUpdate;
+		static bool firstLegacyInputUpdate;
+		static bool isCursorClipped;
 
 		static void IN_ClampMouseMove();
 		static void ResetMouseRawEvents();
 		static void ReleaseMouseCursor();
-		static void ProcessMouseRawEvent(DWORD usButtonFlags, DWORD flag_down, DWORD mouse_event);
+		static void ProcessMouseRawEvent(DWORD usButtonFlags, DWORD flagDown, DWORD mouseEvent);
 		static bool GetRawInput(LPARAM lParam, RAWINPUT& raw, UINT& dwSize);
-		static BOOL OnRawInput(LPARAM lParam, WPARAM);
+		static LRESULT OnRawInput(LPARAM lParam, WPARAM wParam);
 		static bool IsMouseInClientBounds();
-		static BOOL OnLegacyMouseEvent(UINT Msg, LPARAM lParam, WPARAM wParam);
-		static BOOL OnKillFocus(LPARAM lParam, WPARAM);
-		static BOOL OnSetFocus(LPARAM lParam, WPARAM);
+		static LRESULT OnLegacyMouseEvent(UINT Msg, LPARAM lParam, WPARAM wParam);
+		static LRESULT OnKillFocus(LPARAM lParam, WPARAM wParam);
+		static LRESULT OnSetFocus(LPARAM lParam, WPARAM wParam);
 		static void IN_RawMouseMove();
 		static bool ToggleRawInput(bool enable = true);
 		static void IN_RawMouse_Init();

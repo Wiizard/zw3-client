@@ -1,751 +1,220 @@
-#include <Utils/InfoString.hpp>
-#include <Utils/WebIO.hpp>
+#include "STDInclude.hpp"
 
 #include <proto/auth.pb.h>
 
 #include "Auth.hpp"
 #include "Bans.hpp"
 #include "Bots.hpp"
+#include "ClientSlots.hpp"
+#include "Command.hpp"
+#include "Dedicated.hpp"
+#include "Dvar.hpp"
+#include "FileSystem.hpp"
 #include "Friends.hpp"
+#include "Localization.hpp"
+#include "Logger.hpp"
+#include "Network.hpp"
+#include "Scheduler.hpp"
 #include "Toast.hpp"
+#include "UIScript.hpp"
+
+#include "Steam/Proxy.hpp"
 
 namespace Components
 {
-	Auth::TokenIncrementing Auth::TokenContainer;
+	constexpr std::uintptr_t CL_CheckForResend_SendConnectCall = 0x1400F8627;
 
-	Utils::Cryptography::Token Auth::GuidToken;
-	Utils::Cryptography::Token Auth::ComputeToken;
-	Utils::Cryptography::ECC::Key Auth::GuidKey;
+	constexpr std::uintptr_t CSteamID__IsValid = 0x14024BD40;
 
-	std::vector<std::uint64_t> Auth::BannedUids =
+	static const std::uint8_t steamIdIsValidEntry[] = { 0x8B, 0x51, 0x04, 0x44, 0x8B, 0xC2 };
+
+	struct InlineSteamIdTest
 	{
-		// No longer necessary
+		std::uintptr_t site;
+		std::uintptr_t validTarget;
+	};
+
+	static const InlineSteamIdTest lobbyOwnerTests[] =
+	{
+		{ 0x14024D7C5, 0x14024D83D },
+		{ 0x14024DD45, 0x14024DDB0 },
+	};
+
+	static const std::uint8_t lobbyOwnerTestEntry[] = { 0x48, 0x8B, 0x00, 0x48, 0x8B, 0xC8, 0x48, 0xC1, 0xE9, 0x20 };
+
+	constexpr std::uintptr_t SV_PacketEventCalls[] = { 0x1401F5FA6, 0x1401F6003 };
+
+	constexpr std::uintptr_t SV_PacketEvent_DirectConnectCall = 0x14023CC87;
+
+	constexpr std::uintptr_t SV_DirectConnect_PasswordCall = 0x140237B54;
+	constexpr std::uintptr_t Info_ValueForKey = 0x14028CA30;
+
+	constexpr std::uintptr_t SV_DirectConnect_PrivateClients = 0x140237BD0;
+	static const std::uint8_t privateClientsLoad[] = { 0x48, 0x8B, 0x05, 0x41, 0x5D, 0x2D, 0x06, 0x44, 0x8B, 0x70, 0x10 };
+
+	constexpr std::uintptr_t SV_DirectConnect_RejectPrintCall = 0x140237DCA;
+	constexpr std::uintptr_t NET_OutOfBandPrint = 0x140206A90;
+
+	extern "C"
+	{
+		void DirectConnectPrivateClientStub();
+
+		int Auth_PrivateClientCount()
+		{
+			return Auth::PrivateClientCount();
+		}
+	}
+
+	Auth::TokenIncrementing Auth::tokenContainer;
+
+	Utils::Cryptography::Token Auth::guidToken;
+	Utils::Cryptography::Token Auth::computeToken;
+	Utils::Cryptography::ECC::Key Auth::guidKey;
+
+	static bool isCryptographyReady = false;
+
+	Utils::Hook Auth::sendConnectDataHook;
+	Utils::Hook Auth::packetEventHooks[2];
+	Utils::Hook Auth::directConnectHook;
+	Utils::Hook Auth::passwordHook;
+	Utils::Hook Auth::privateClientHook;
+	Utils::Hook Auth::connectFailedHook;
+
+	bool Auth::hasAccessToReservedSlot = false;
+
+	Game::msg_t* Auth::currentPacket = nullptr;
+
+	std::vector<std::uint64_t> Auth::bannedUids =
+	{
 		0xf4d2c30b712ac6e3,
 		0xf7e33c4081337fa3,
 		0x6f5597f103cc50e9,
 		0xecd542eee54ffccf,
 		0xA46B84C54694FD5B,
 		0xECD542EEE54FFCCF,
+		0x759096E09CB2BECF,
 	};
 
-	bool Auth::HasAccessToReservedSlot;
-
-	namespace
+	std::string Auth::GetGuidFilePath()
 	{
-		struct PendingManagedConnect
-		{
-			std::mutex mutex;
-			std::string endpoint;
-			std::string ticket;
-			std::string matchId;
-			std::string sessionId;
-			std::chrono::steady_clock::time_point expires{};
-		};
+		const auto directory = FileSystem::GetAppdataPath();
 
-		PendingManagedConnect& ManagedConnectState()
+		if (directory.empty())
 		{
-			static PendingManagedConnect value;
-			return value;
+			return {};
 		}
 
-		std::string ReadAdmissionEnvironment(const char* name)
-		{
-			const auto size = GetEnvironmentVariableA(name, nullptr, 0);
-			if (size == 0 || size > 1024) return {};
-			std::string value(size, '\0');
-			const auto written = GetEnvironmentVariableA(name, value.data(), size);
-			if (written == 0 || written >= size) return {};
-			value.resize(written);
-			return value;
-		}
+		Utils::IO::CreateDir(directory.string());
 
-		bool OpaqueAdmissionValue(const std::string& value, const std::size_t maximum)
-		{
-			return !value.empty() && value.size() <= maximum &&
-				std::ranges::all_of(value, [](const unsigned char c)
-				{
-					return std::isalnum(c) || c == '-' || c == '_';
-				});
-		}
-
-		struct ManagedAdmissionConfig
-		{
-			bool enabled = false;
-			bool valid = false;
-			std::string token;
-			std::string instanceId;
-			std::string backendUrl;
-		};
-
-		struct RecentManagedAdmission
-		{
-			std::string ticketHash;
-			std::string matchId;
-			std::string sessionId;
-			std::string playerId;
-			std::string instanceId;
-			std::string sourceEndpoint;
-			std::chrono::steady_clock::time_point expires;
-		};
-
-		std::mutex& RecentAdmissionMutex()
-		{
-			static std::mutex value;
-			return value;
-		}
-
-		std::vector<RecentManagedAdmission>& RecentAdmissions()
-		{
-			static std::vector<RecentManagedAdmission> value;
-			return value;
-		}
-
-		const ManagedAdmissionConfig& AdmissionConfig()
-		{
-			static const auto value = []
-			{
-				ManagedAdmissionConfig config;
-				const auto mode = ReadAdmissionEnvironment("ZWNET_ADMISSION_MODE");
-				config.enabled =
-					GetEnvironmentVariableA("ZWNET_ADMISSION_MODE", nullptr, 0) != 0 ||
-					GetEnvironmentVariableA("ZWNET_ADMISSION_TOKEN", nullptr, 0) != 0 ||
-					GetEnvironmentVariableA("ZWNET_ADMISSION_INSTANCE_ID", nullptr, 0) != 0;
-				if (!config.enabled) return config;
-				config.token = ReadAdmissionEnvironment("ZWNET_ADMISSION_TOKEN");
-				config.instanceId = ReadAdmissionEnvironment("ZWNET_ADMISSION_INSTANCE_ID");
-				config.backendUrl = ReadAdmissionEnvironment("ZWNET_ADMISSION_BACKEND_URL");
-				constexpr auto loopback = "http://127.0.0.1:";
-				const auto localUrl = config.backendUrl.starts_with(loopback) &&
-					config.backendUrl.size() > std::strlen(loopback) &&
-					config.backendUrl.size() <= std::strlen(loopback) + 5 &&
-					std::ranges::all_of(config.backendUrl.substr(std::strlen(loopback)),
-						[](const unsigned char c) { return std::isdigit(c); });
-				const auto port = localUrl ?
-					std::stoi(config.backendUrl.substr(std::strlen(loopback))) : 0;
-				config.valid = mode == "REQUIRED" &&
-					OpaqueAdmissionValue(config.token, 128) && config.token.size() >= 43 &&
-					OpaqueAdmissionValue(config.instanceId, 128) &&
-					localUrl && port > 0 && port <= 65535;
-				return config;
-			}();
-			return value;
-		}
-
-		bool AdmitManagedConnect(const Proto::Auth::Connect& packet,
-			const std::uint64_t certificateXuid, const Network::Address& address)
-		{
-			const auto& config = AdmissionConfig();
-			if (!config.enabled) return true;
-			if (!config.valid ||
-				!OpaqueAdmissionValue(packet.connect_ticket(), 128) ||
-				!OpaqueAdmissionValue(packet.match_id(), 128) ||
-				!OpaqueAdmissionValue(packet.session_id(), 128)) return false;
-			const auto playerId = std::format("{:016x}", certificateXuid);
-			const auto ticketHash = Utils::Cryptography::SHA256::Compute(packet.connect_ticket());
-			const auto sourceEndpoint = address.getString();
-			{
-				std::lock_guard lock(RecentAdmissionMutex());
-				auto& recent = RecentAdmissions();
-				const auto now = std::chrono::steady_clock::now();
-				std::erase_if(recent, [now](const RecentManagedAdmission& entry)
-				{
-					return entry.expires <= now;
-				});
-				for (const auto& entry : recent)
-				{
-					if (entry.ticketHash == ticketHash && entry.matchId == packet.match_id() &&
-						entry.sessionId == packet.session_id() && entry.playerId == playerId &&
-						entry.instanceId == config.instanceId && entry.sourceEndpoint == sourceEndpoint)
-						return true;
-				}
-			}
-			try
-			{
-				const auto body = nlohmann::json{
-					{"connect_ticket", packet.connect_ticket()},
-					{"match_id", packet.match_id()},
-					{"session_id", packet.session_id()},
-					{"player_id", playerId},
-					{"instance_id", config.instanceId}
-				};
-				Utils::WebIO::params headers{
-					{"Content-Type", "application/json"},
-					{"Accept", "application/json"},
-					{"X-ZWNET-Admission-Token", config.token}
-				};
-				bool success = false;
-				Utils::WebIO request("ZW3-ManagedAdmission/1",
-					config.backendUrl + "/internal/connect/admit");
-				const auto response = request.setTimeout(1500)->post(body.dump(), headers, &success);
-				if (!success || response.empty()) return false;
-				const auto parsed = nlohmann::json::parse(response);
-				const auto admitted = parsed.is_object() && parsed.value("valid", false) &&
-					parsed.value("match_id", std::string{}) == packet.match_id() &&
-					parsed.value("player_id", std::string{}) == playerId;
-				if (admitted)
-				{
-					std::lock_guard lock(RecentAdmissionMutex());
-					auto& recent = RecentAdmissions();
-					if (recent.size() >= 64) recent.erase(recent.begin());
-					recent.push_back({ticketHash, packet.match_id(), packet.session_id(), playerId,
-						config.instanceId, sourceEndpoint, std::chrono::steady_clock::now() + 5s});
-				}
-				return admitted;
-			}
-			catch (const std::exception&)
-			{
-				return false;
-			}
-		}
-
-		bool IsSameMachineAddress(const Network::Address& address)
-		{
-			if (address.isLoopback())
-			{
-				return true;
-			}
-
-			if (!Game::numIP || !Game::localIP)
-			{
-				return false;
-			}
-
-			for (int i = 0; i < *Game::numIP; ++i)
-			{
-				if (address.getIP().full == Game::localIP[i].full)
-				{
-					return true;
-				}
-			}
-
-			return false;
-		}
+		return (directory / "guid.dat").string();
 	}
 
-	bool Auth::SetManagedConnectTicket(const Network::Address& target,
-		const std::string& ticket, const std::string& matchId,
-		const std::string& sessionId)
+	std::uint64_t Auth::GetKeyHash(const std::string& key)
 	{
-		if (!target.isValid() || !OpaqueAdmissionValue(ticket, 128) ||
-			!OpaqueAdmissionValue(matchId, 128) ||
-			!OpaqueAdmissionValue(sessionId, 128)) return false;
-		auto& state = ManagedConnectState();
-		std::lock_guard lock(state.mutex);
-		std::ranges::fill(state.ticket, '\0');
-		state.endpoint = target.getString();
-		state.ticket = ticket;
-		state.matchId = matchId;
-		state.sessionId = sessionId;
-		state.expires = std::chrono::steady_clock::now() + 120s;
-		return true;
+		const auto hash = Utils::Cryptography::SHA1::Compute(key);
+
+		if (hash.size() < sizeof(std::uint64_t))
+		{
+			return 0;
+		}
+
+		std::uint64_t id = 0;
+		std::memcpy(&id, hash.data(), sizeof(id));
+
+		return id;
 	}
 
-	void Auth::ClearManagedConnectTicket()
-	{
-		auto& state = ManagedConnectState();
-		std::lock_guard lock(state.mutex);
-		std::ranges::fill(state.ticket, '\0');
-		state.endpoint.clear();
-		state.ticket.clear();
-		state.matchId.clear();
-		state.sessionId.clear();
-		state.expires = {};
-	}
-
-	void Auth::Frame()
-	{
-		if (TokenContainer.generating)
-		{
-			static double mseconds = 0;
-			static Utils::Time::Interval interval;
-
-			if (interval.elapsed(500ms))
-			{
-				interval.update();
-
-				int diff = Game::Sys_Milliseconds() - TokenContainer.startTime;
-				double hashPMS = (TokenContainer.hashes * 1.0) / diff;
-				double requiredHashes = std::pow(2, TokenContainer.targetLevel + 1) - TokenContainer.hashes;
-				mseconds = requiredHashes / hashPMS;
-				if (mseconds < 0) mseconds = 0;
-			}
-
-			Localization::Set("MPUI_SECURITY_INCREASE_MESSAGE", Utils::String::VA("Increasing security level from %d to %d (est. %s)", GetSecurityLevel(), TokenContainer.targetLevel, Utils::String::FormatTimeSpan(static_cast<int>(mseconds)).data()));
-		}
-		else if (TokenContainer.thread.joinable())
-		{
-			TokenContainer.thread.join();
-			TokenContainer.generating = false;
-
-			StoreKey();
-			Logger::Debug("Security level is {}", GetSecurityLevel());
-			Command::Execute("closemenu security_increase_popmenu", false);
-
-			if (!TokenContainer.cancel)
-			{
-				if (TokenContainer.command.empty())
-				{
-					Game::ShowMessageBox(Utils::String::VA("Your new security level is %d", GetSecurityLevel()), "Success");
-				}
-				else
-				{
-					Toast::Show("cardicon_locked", "Success", Utils::String::VA("Your new security level is %d", GetSecurityLevel()), 5000);
-					Command::Execute(TokenContainer.command, false);
-				}
-			}
-
-			TokenContainer.cancel = false;
-		}
-	}
-
-	void Auth::SendConnectDataStub(Game::netsrc_t sock, Game::netadr_t adr, const char* format, int len)
-	{
-		// Ensure our certificate is loaded
-		Steam::SteamUser()->GetSteamID();
-		if (!GuidKey.isValid())
-		{
-			Logger::Error(Game::ERR_SERVERDISCONNECT, "Connecting failed: Guid key is invalid!");
-			return;
-		}
-
-		if (std::find(BannedUids.begin(), BannedUids.end(), Steam::SteamUser()->GetSteamID().bits) != BannedUids.end())
-		{
-			GenerateKey();
-			Logger::Error(Game::ERR_SERVERDISCONNECT, "Your online profile is invalid. A new key has been generated.");
-			return;
-		}
-
-		std::string connectString(format, len);
-		Game::SV_Cmd_TokenizeString(connectString.data());
-
-		Command::ServerParams params;
-
-		if (params.size() < 3)
-		{
-			Game::SV_Cmd_EndTokenizedString();
-			Logger::Error(Game::ERR_SERVERDISCONNECT, "Connecting failed: Command parsing error!");
-			return;
-		}
-
-		Utils::InfoString infostr(params[2]);
-		std::string challenge = infostr.get("challenge");
-
-		if (challenge.empty())
-		{
-			Game::SV_Cmd_EndTokenizedString();
-			Logger::Error(Game::ERR_SERVERDISCONNECT, "Connecting failed: Challenge parsing error!");
-			return;
-		}
-
-		if (Steam::Enabled() && !Friends::IsInvisible() && !Dvar::Var("cl_anonymous").get<bool>() && Steam::Proxy::SteamUser_)
-		{
-			infostr.set("realsteamId", Utils::String::VA("%llX", Steam::Proxy::SteamUser_->GetSteamID().bits));
-		}
-
-		// Build new connect string
-		connectString.clear();
-		connectString.append(params[0]);
-		connectString.append(" ");
-		connectString.append(params[1]);
-		connectString.append(" ");
-		connectString.append("\"" + infostr.build() + "\"");
-
-		Game::SV_Cmd_EndTokenizedString();
-
-		if (GuidToken.toString().empty() && adr.type != Game::NA_LOOPBACK)
-		{
-			Game::SV_Cmd_EndTokenizedString();
-			Logger::Error(Game::ERR_SERVERDISCONNECT, "Connecting failed: Empty GUID token!");
-			return;
-		}
-
-		Proto::Auth::Connect connectData;
-		connectData.set_token(GuidToken.toString());
-		connectData.set_publickey(GuidKey.getPublicKey());
-		connectData.set_signature(Utils::Cryptography::ECC::SignMessage(GuidKey, challenge));
-		connectData.set_infostring(connectString);
-		{
-			auto& state = ManagedConnectState();
-			std::lock_guard lock(state.mutex);
-			const Network::Address expected(state.endpoint);
-			if (expected.isValid() && expected == Network::Address(adr) &&
-				std::chrono::steady_clock::now() < state.expires)
-			{
-				connectData.set_connect_ticket(state.ticket);
-				connectData.set_match_id(state.matchId);
-				connectData.set_session_id(state.sessionId);
-			}
-		}
-
-		Network::SendCommand(sock, adr, "connect", connectData.SerializeAsString());
-	}
-
-	void Auth::ParseConnectData(Game::msg_t* msg, Game::netadr_t* addr)
-	{
-		Network::Address address(addr);
-
-		// Parse proto data
-		Proto::Auth::Connect connectData;
-		if (msg->cursize <= 12 || !connectData.ParseFromString(std::string(reinterpret_cast<char*>(&msg->data[12]), msg->cursize - 12)))
-		{
-			Logger::PrintFail2Ban("Failed connect attempt from IP address: {}\n", Network::AdrToString(address));
-			Network::Send(address, "error\nInvalid connect packet!");
-			return;
-		}
-
-		// Legacy local/debug joins retain their previous behavior. Managed
-		// instances always verify the certificate and backend admission, even
-		// for loopback clients and debug builds.
-		bool skipNativeChecks = address.isLoopback();
-#ifdef DEBUG
-		skipNativeChecks = true;
-#endif
-		if (skipNativeChecks && !AdmissionConfig().enabled)
-		{
-			if (!connectData.infostring().empty())
-			{
-				Game::SV_Cmd_EndTokenizedString();
-				Game::SV_Cmd_TokenizeString(connectData.infostring().data());
-				Game::SV_DirectConnect(*address.get());
-			}
-			else
-			{
-				Logger::PrintFail2Ban("Failed connect attempt from IP address: {}\n", Network::AdrToString(address));
-				Network::Send(address, "error\nInvalid infostring data!");
-			}
-		}
-		else
-		{
-			// Validate proto data
-			if (connectData.signature().empty() || connectData.publickey().empty() || connectData.token().empty() || connectData.infostring().empty())
-			{
-				Logger::PrintFail2Ban("Failed connect attempt from IP address: {}\n", Network::AdrToString(address));
-				Network::Send(address, "error\nInvalid connect data!");
-				return;
-			}
-
-			// Setup new cmd params
-			Game::SV_Cmd_EndTokenizedString();
-			Game::SV_Cmd_TokenizeString(connectData.infostring().data());
-
-			// Access the params
-			Command::ServerParams params;
-
-			// Ensure there are enough params
-			if (params.size() < 3)
-			{
-				Logger::PrintFail2Ban("Failed connect attempt from IP address: {}\n", Network::AdrToString(address));
-				Network::Send(address, "error\nInvalid connect string!");
-				return;
-			}
-
-			// Parse the infostring
-			Utils::InfoString infostr(params.get(2));
-
-			// Read the required data
-			const auto steamId = infostr.get("xuid");
-			const auto challenge = infostr.get("challenge");
-
-			if (steamId.empty() || challenge.empty())
-			{
-				Logger::PrintFail2Ban("Failed connect attempt from IP address: {}\n", Network::AdrToString(address));
-				Network::Send(address, "error\nInvalid connect data!");
-				return;
-			}
-
-			// Parse the id
-			const auto xuid = std::strtoull(steamId.data(), nullptr, 16);
-
-			SteamID guid;
-			guid.bits = xuid;
-
-			if (Bans::IsBanned({ guid, address.getIP() }))
-			{
-				Logger::PrintFail2Ban("Failed connect attempt from IP address: {}\n", Network::AdrToString(address));
-				Network::Send(address, "error\nEXE_ERR_BANNED_PERM");
-				return;
-			}
-
-			if (std::find(BannedUids.begin(), BannedUids.end(), xuid) != BannedUids.end())
-			{
-				Network::Send(address, "error\nYour online profile is invalid. Delete your players folder and restart ^1ZW3^7.");
-				return;
-			}
-
-			/*if (xuid != GetKeyHash(connectData.publickey()))
-			{
-				Network::Send(address, "error\nXUID doesn't match the certificate!");
-				return;
-			}*/
-
-			const auto certificateXuid = GetKeyHash(connectData.publickey());
-			if (xuid != certificateXuid)
-			{
-				if (AdmissionConfig().enabled || !address.isLocal())
-				{
-					Network::Send(address, "error\nXUID doesn't match the certificate!");
-					return;
-				}
-
-				Logger::Debug("Allowing local test XUID {:#X} to use certificate XUID {:#X} from {}", xuid, certificateXuid, address.getString());
-			}
-
-			// Verify the signature
-			Utils::Cryptography::ECC::Key key;
-			key.set(connectData.publickey());
-
-			if (!key.isValid() || !Utils::Cryptography::ECC::VerifyMessage(key, challenge, connectData.signature()))
-			{
-				Network::Send(address, "error\nChallenge signature was invalid!");
-				return;
-			}
-
-			// Verify the security level
-			auto ourLevel = Dvar::Var("sv_securityLevel").get<unsigned int>();
-			auto userLevel = GetZeroBits(connectData.token(), connectData.publickey());
-
-			if (userLevel < ourLevel)
-			{
-				if (!IsSameMachineAddress(address))
-				{
-					Network::Send(address, Utils::String::VA("error\nYour security level (%d) is lower than the server's security level (%d)", userLevel, ourLevel));
-					return;
-				}
-
-				Logger::Debug("Allowing same-machine client {} with security level {} below server level {}", address.getString(), userLevel, ourLevel);
-			}
-
-			Logger::Debug("Verified XUID {:#X} ({}) from {}", xuid, userLevel, address.getString());
-			if (!AdmitManagedConnect(connectData, certificateXuid, address))
-			{
-				Logger::PrintFail2Ban("Managed admission rejected connection from {}\n", address.getString());
-				Network::Send(address, "error\nThis managed match did not authorize your connection.");
-				return;
-			}
-			Game::SV_DirectConnect(*address.get());
-		}
-	}
-
-	__declspec(naked) void Auth::DirectConnectStub()
-	{
-		__asm
-		{
-			pushad
-			lea eax, [esp + 20h]
-			push eax
-			push esi
-			call ParseConnectData
-			pop esi
-			pop eax
-			popad
-
-			push 6265FEh
-			retn
-		}
-	}
-
-	char* Auth::Info_ValueForKeyStub(const char* s, const char* key)
-	{
-		auto* value = Game::Info_ValueForKey(s, key);
-
-		HasAccessToReservedSlot = std::strcmp((*Game::sv_privatePassword)->current.string, value) == 0;
-
-		// This stub runs right before the 'server is full check' so we can call this here
-		Bots::SV_DirectConnect_Full_Check();
-
-		return value;
-	}
-
-	__declspec(naked) void Auth::DirectConnectPrivateClientStub()
-	{
-		__asm
-		{
-			push eax
-
-			mov al, HasAccessToReservedSlot
-			test al, al
-
-			pop eax
-
-			je noAccess
-
-			// Set the number of private clients to 0 if the client has the right password
-			xor eax, eax
-			jmp safeContinue
-
-			noAccess :
-			mov eax, dword ptr[edx + 0x10]
-
-				safeContinue :
-				// Game code skipped by hook
-				add esp, 0xC
-
-				push 0x460FB3
-				ret
-		}
-	}
-
-	std::string Auth::GetGUIDFilePath()
-	{
-		const auto appdata = Components::FileSystem::GetAppdataPath();
-		Utils::IO::CreateDir(appdata.string());
-
-		const auto guidPath = appdata / "guid.dat";
-
-		return guidPath.string();
-	}
-
-	void ClientConnectFailedStub(Game::netsrc_t sock, Game::netadr_t adr, const char* data)
-	{
-		Logger::PrintFail2Ban("Failed connect attempt from IP address: {}\n", Network::AdrToString(adr));
-		Game::NET_OutOfBandPrint(sock, adr, data);
-	}
-
-	unsigned __int64 Auth::GetKeyHash(const std::string& key)
-	{
-		std::string hash = Utils::Cryptography::SHA1::Compute(key);
-
-		if (hash.size() >= 8)
-		{
-			return *reinterpret_cast<unsigned __int64*>(const_cast<char*>(hash.data()));
-		}
-
-		return 0;
-	}
-
-	unsigned __int64 Auth::GetKeyHash()
+	std::uint64_t Auth::GetKeyHash()
 	{
 		LoadKey();
-		return GetKeyHash(GuidKey.getPublicKey());
+		return GetKeyHash(guidKey.GetPublicKey());
 	}
 
 	void Auth::StoreKey()
 	{
-		if (!Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled() && GuidKey.isValid())
+		if (!guidKey.IsValid())
 		{
-			Proto::Auth::Certificate cert;
-			cert.set_token(GuidToken.toString());
-			cert.set_ctoken(ComputeToken.toString());
-			cert.set_privatekey(GuidKey.serialize(PK_PRIVATE));
-
-			const auto guidPath = GetGUIDFilePath();
-			Utils::IO::WriteFile(guidPath, cert.SerializeAsString());
+			return;
 		}
+
+		Proto::Auth::Certificate cert;
+		cert.set_token(guidToken.ToString());
+		cert.set_ctoken(computeToken.ToString());
+		cert.set_privatekey(guidKey.Serialize(PK_PRIVATE));
+
+		const auto guidPath = GetGuidFilePath();
+
+		if (guidPath.empty())
+		{
+			Logger::Warning("could not work out where to keep guid.dat, the key will not survive a restart\n");
+			return;
+		}
+
+		Utils::IO::WriteFile(guidPath, cert.SerializeAsString());
 	}
 
 	void Auth::GenerateKey()
 	{
-		GuidToken.clear();
-		ComputeToken.clear();
-		GuidKey = Utils::Cryptography::ECC::GenerateKey(512, GetMachineEntropy());
+		guidToken.Clear();
+		computeToken.Clear();
+		guidKey = Utils::Cryptography::ECC::GenerateKey(512, GetMachineEntropy());
+
 		StoreKey();
 	}
 
 	void Auth::LoadKey(bool force)
 	{
-		if (Dedicated::IsEnabled() || ZoneBuilder::IsEnabled()) return;
-		if (!force && GuidKey.isValid()) return;
-
-		const auto guidPath = GetGUIDFilePath();
-
-#ifndef REGENERATE_INVALID_KEY
-		// Migrate old file
-		const auto oldGuidPath = "players/guid.dat";
-		if (Utils::IO::FileExists(oldGuidPath))
+		if (!isCryptographyReady)
 		{
-			if (MoveFileA(oldGuidPath, guidPath.data()))
-			{
-				Utils::IO::RemoveFile(oldGuidPath);
-			}
+			Utils::Cryptography::Initialize();
+			isCryptographyReady = true;
 		}
-#endif
 
-		const auto guidFile = Utils::IO::ReadFile(guidPath);
+		if (!force && guidKey.IsValid())
+		{
+			return;
+		}
+
+		const auto guidPath = GetGuidFilePath();
 
 		Proto::Auth::Certificate cert;
-		if (cert.ParseFromString(guidFile))
+
+		if (!guidPath.empty() && cert.ParseFromString(Utils::IO::ReadFile(guidPath)))
 		{
-			GuidKey.deserialize(cert.privatekey());
-			GuidToken = cert.token();
-			ComputeToken = cert.ctoken();
+			guidKey.Deserialize(cert.privatekey());
+			guidToken = cert.token();
+			computeToken = cert.ctoken();
 		}
 		else
 		{
-			GuidKey.free();
+			guidKey.Free();
 		}
 
-		if (GuidKey.isValid())
+		if (!guidKey.IsValid())
 		{
-#ifdef REGENERATE_INVALID_KEY
-			auto machineKey = Utils::Cryptography::ECC::GenerateKey(512, GetMachineEntropy());
-			if (GetKeyHash(machineKey.getPublicKey()) != GetKeyHash())
-			{
-			// kill! The user has changed machine or copied files from another
-			Auth::GenerateKey();
-			}
-#endif
-			//All good, nothing to do
-		}
-		else
-		{
-			Auth::GenerateKey();
+			GenerateKey();
 		}
 	}
 
-	uint32_t Auth::GetSecurityLevel()
+	std::uint32_t Auth::GetZeroBits(const Utils::Cryptography::Token& token, const std::string& publicKey)
 	{
-		return GuidToken.toString().empty() ? 0 : GetZeroBits(GuidToken, GuidKey.getPublicKey());
-	}
+		const auto hash = Utils::Cryptography::SHA512::Compute(publicKey + token.ToString(), false);
 
-	void Auth::IncreaseSecurityLevel(uint32_t level, const std::string& command)
-	{
-		if (GetSecurityLevel() >= level) return;
+		std::uint32_t bits = 0;
 
-		if (!TokenContainer.generating)
+		for (const auto entry : hash)
 		{
-			TokenContainer.cancel = false;
-			TokenContainer.targetLevel = level;
-			TokenContainer.command = command;
+			const auto value = static_cast<std::uint8_t>(entry);
 
-			// Open menu
-			Command::Execute("openmenu security_increase_popmenu", true);
-
-			// Start thread
-			TokenContainer.thread = std::thread([&level]()
-				{
-					TokenContainer.generating = true;
-					TokenContainer.hashes = 0;
-					TokenContainer.startTime = Game::Sys_Milliseconds();
-					IncrementToken(GuidToken, ComputeToken, GuidKey.getPublicKey(), TokenContainer.targetLevel, &TokenContainer.cancel, &TokenContainer.hashes);
-					TokenContainer.generating = false;
-
-					if (TokenContainer.cancel)
-					{
-						Logger::Print("Token incrementation thread terminated\n");
-					}
-				});
-		}
-	}
-
-	uint32_t Auth::GetZeroBits(Utils::Cryptography::Token token, const std::string& publicKey)
-	{
-		std::string message = publicKey + token.toString();
-		std::string hash = Utils::Cryptography::SHA512::Compute(message, false);
-
-		uint32_t bits = 0;
-
-		for (unsigned int i = 0; i < hash.size(); ++i)
-		{
-			if (hash[i] == '\0')
+			if (value == 0)
 			{
 				bits += 8;
 				continue;
 			}
 
-			uint8_t value = static_cast<uint8_t>(hash[i]);
-			for (int j = 7; j >= 0; --j)
+			for (auto shift = 7; shift >= 0; --shift)
 			{
-				if ((value >> j) & 1)
+				if ((value >> shift) & 1)
 				{
 					return bits;
 				}
@@ -757,193 +226,933 @@ namespace Components
 		return bits;
 	}
 
-	void Auth::IncrementToken(Utils::Cryptography::Token& token, Utils::Cryptography::Token& computeToken, const std::string& publicKey, uint32_t zeroBits, bool* cancel, uint64_t* count)
+	std::uint32_t Auth::GetSecurityLevel()
 	{
-		if (zeroBits > 512) return; // Not possible, due to SHA512
+		LoadKey();
 
-		if (computeToken < token)
+		if (guidToken.ToString().empty())
 		{
-			computeToken = token;
+			return 0;
 		}
 
-		// Check if we already have the desired security level
-		uint32_t lastLevel = token.toString().empty() ? 0 : GetZeroBits(token, publicKey);
-		uint32_t level = lastLevel;
-		if (level >= zeroBits) return;
+		return GetZeroBits(guidToken, guidKey.GetPublicKey());
+	}
+
+	void Auth::IncrementToken(Utils::Cryptography::Token& token, Utils::Cryptography::Token& searchToken,
+		const std::string& publicKey, std::uint32_t zeroBits, bool* cancel, std::uint64_t* count)
+	{
+		if (zeroBits > 512)
+		{
+			return;
+		}
+
+		if (searchToken < token)
+		{
+			searchToken = token;
+		}
+
+		auto lastLevel = token.ToString().empty() ? 0u : GetZeroBits(token, publicKey);
+
+		if (lastLevel >= zeroBits)
+		{
+			return;
+		}
+
+		auto level = lastLevel;
 
 		do
 		{
-			++computeToken;
-			if (count) ++(*count);
-			level = GetZeroBits(computeToken, publicKey);
+			++searchToken;
 
-			// Store level if higher than the last one
+			if (count)
+			{
+				++(*count);
+			}
+
+			level = GetZeroBits(searchToken, publicKey);
+
 			if (level >= lastLevel)
 			{
-				token = computeToken;
+				token = searchToken;
 				lastLevel = level;
 			}
 
-			// Allow canceling that shit
-			if (cancel && *cancel) return;
-		} while (level < zeroBits);
+			if (cancel && *cancel)
+			{
+				return;
+			}
+		}
+		while (level < zeroBits);
 
-		token = computeToken;
+		token = searchToken;
 	}
 
-	// A somewhat hardware tied 48 bit value
-	std::string Auth::GetMachineEntropy()
+	void Auth::IncreaseSecurityLevel(std::uint32_t level, const std::string& command)
 	{
-		std::string entropy{};
-		DWORD volumeID;
-		if (GetVolumeInformationA("C:\\",
-			NULL,
-			NULL,
-			&volumeID,
-			NULL,
-			NULL,
-			NULL,
-			NULL
-		))
+		if (GetSecurityLevel() >= level)
 		{
-			// Drive info
-			entropy += std::to_string(volumeID);
+			return;
 		}
 
-		// MAC Address
+		if (tokenContainer.generating)
 		{
-			unsigned long outBufLen = 0;
-			DWORD dwResult = GetAdaptersInfo(NULL, &outBufLen);
-			if (dwResult == ERROR_BUFFER_OVERFLOW)  // This is what we're expecting
-			{
-				// Now allocate a structure of the required size.
-				std::vector<std::uint8_t> buffer(outBufLen);
-				auto* pIpAdapterInfo = reinterpret_cast<PIP_ADAPTER_INFO>(buffer.data());
-				{
-					dwResult = GetAdaptersInfo(pIpAdapterInfo, &outBufLen);
-					if (dwResult == ERROR_SUCCESS)
-					{
-						for (auto* adapter = pIpAdapterInfo; adapter; adapter = adapter->Next)
-						{
-							switch (adapter->Type)
-							{
-							case IF_TYPE_IEEE80211:
-							case MIB_IF_TYPE_ETHERNET:
-							{
-								for (UINT i = 0; i < adapter->AddressLength; i++)
-								{
-									entropy += std::to_string(adapter->Address[i]);
-								}
+			return;
+		}
 
-								break;
-							}
-							}
-						}
+		tokenContainer.cancel = false;
+		tokenContainer.targetLevel = level;
+		tokenContainer.command = command;
+
+		Command::Execute("openmenu security_increase_popmenu", true);
+
+		tokenContainer.thread = std::jthread([]
+		{
+			tokenContainer.generating = true;
+			tokenContainer.hashes = 0;
+			tokenContainer.startTime = Game::Sys_Milliseconds();
+
+			IncrementToken(guidToken, computeToken, guidKey.GetPublicKey(), tokenContainer.targetLevel,
+				&tokenContainer.cancel, &tokenContainer.hashes);
+
+			tokenContainer.generating = false;
+
+			if (tokenContainer.cancel)
+			{
+				Logger::Print("token incrementation thread terminated\n");
+			}
+		});
+	}
+
+	void Auth::Frame()
+	{
+		if (tokenContainer.generating)
+		{
+			const auto elapsed = Game::Sys_Milliseconds() - tokenContainer.startTime;
+
+			if (elapsed <= 0)
+			{
+				return;
+			}
+
+			const auto hashesPerMs = static_cast<double>(tokenContainer.hashes) / elapsed;
+			const auto requiredHashes = std::pow(2, tokenContainer.targetLevel + 1) - static_cast<double>(tokenContainer.hashes);
+
+			auto remaining = (hashesPerMs > 0.0 ? requiredHashes / hashesPerMs : 0.0) + 2 * 60 * 1000;
+
+			if (remaining < 0.0)
+			{
+				remaining = 0.0;
+			}
+
+			Localization::Set("MPUI_SECURITY_INCREASE_MESSAGE",
+				Utils::String::VA("Increasing security level from %d to %d (est. %s)", GetSecurityLevel(),
+					tokenContainer.targetLevel, Utils::String::FormatTimeSpan(static_cast<int>(remaining)).data()));
+
+			return;
+		}
+
+		if (!tokenContainer.thread.joinable())
+		{
+			return;
+		}
+
+		tokenContainer.thread.join();
+
+		StoreKey();
+		Logger::Debug("security level is {}", GetSecurityLevel());
+		Command::Execute("closemenu security_increase_popmenu", false);
+
+		if (!tokenContainer.cancel)
+		{
+			if (tokenContainer.command.empty())
+			{
+				Game::ShowMessageBox(std::format("Your new security level is {}", GetSecurityLevel()), "Success");
+			}
+			else
+			{
+				Toast::Show("cardicon_locked", "Success", std::format("Your new security level is {}", GetSecurityLevel()), 5000);
+				Command::Execute(tokenContainer.command, false);
+			}
+		}
+
+		tokenContainer.cancel = false;
+	}
+
+	struct ManagedConnectTicket
+	{
+		std::mutex mutex;
+		std::string endpoint;
+		std::string ticket;
+		std::string matchId;
+		std::string sessionId;
+		std::chrono::steady_clock::time_point expires{};
+	};
+
+	struct ManagedAdmissionConfig
+	{
+		bool isEnabled = false;
+		bool isValid = false;
+		std::string token;
+		std::string instanceId;
+		std::string backendUrl;
+	};
+
+	struct RecentManagedAdmission
+	{
+		std::string ticketHash;
+		std::string matchId;
+		std::string sessionId;
+		std::string playerId;
+		std::string instanceId;
+		std::string sourceEndpoint;
+		std::chrono::steady_clock::time_point expires;
+	};
+
+	constexpr auto managedTicketLifetime = 120s;
+	constexpr auto recentAdmissionLifetime = 5s;
+	constexpr std::size_t recentAdmissionLimit = 64;
+	constexpr DWORD admissionTimeoutMs = 1500;
+
+	static ManagedConnectTicket managedConnectTicket;
+	static std::mutex recentAdmissionMutex;
+	static std::vector<RecentManagedAdmission> recentAdmissions;
+
+	static std::string ReadAdmissionEnvironment(const char* name)
+	{
+		const DWORD size = GetEnvironmentVariableA(name, nullptr, 0);
+
+		if (size == 0 || size > 1024)
+		{
+			return {};
+		}
+
+		std::string value(size, '\0');
+		const DWORD written = GetEnvironmentVariableA(name, value.data(), size);
+
+		if (written == 0 || written >= size)
+		{
+			return {};
+		}
+
+		value.resize(written);
+		return value;
+	}
+
+	static bool IsOpaqueAdmissionValue(const std::string& value, const std::size_t maximum)
+	{
+		if (value.empty() || value.size() > maximum)
+		{
+			return false;
+		}
+
+		return std::ranges::all_of(value, [](const unsigned char character)
+		{
+			return std::isalnum(character) || character == '-' || character == '_';
+		});
+	}
+
+	static const ManagedAdmissionConfig& GetAdmissionConfig()
+	{
+		static const ManagedAdmissionConfig config = []
+		{
+			ManagedAdmissionConfig result;
+
+			result.isEnabled = GetEnvironmentVariableA("ZWNET_ADMISSION_MODE", nullptr, 0) != 0
+				|| GetEnvironmentVariableA("ZWNET_ADMISSION_TOKEN", nullptr, 0) != 0
+				|| GetEnvironmentVariableA("ZWNET_ADMISSION_INSTANCE_ID", nullptr, 0) != 0;
+
+			if (!result.isEnabled)
+			{
+				return result;
+			}
+
+			const std::string mode = ReadAdmissionEnvironment("ZWNET_ADMISSION_MODE");
+			result.token = ReadAdmissionEnvironment("ZWNET_ADMISSION_TOKEN");
+			result.instanceId = ReadAdmissionEnvironment("ZWNET_ADMISSION_INSTANCE_ID");
+			result.backendUrl = ReadAdmissionEnvironment("ZWNET_ADMISSION_BACKEND_URL");
+
+			constexpr std::string_view loopback = "http://127.0.0.1:";
+			const std::string port = result.backendUrl.substr(std::min(result.backendUrl.size(), loopback.size()));
+
+			const bool isLoopbackUrl = result.backendUrl.starts_with(loopback)
+				&& !port.empty()
+				&& port.size() <= 5
+				&& std::ranges::all_of(port, [](const unsigned char character)
+				{
+					return std::isdigit(character);
+				});
+
+			int portNumber = 0;
+
+			if (isLoopbackUrl)
+			{
+				portNumber = std::stoi(port);
+			}
+
+			result.isValid = mode == "REQUIRED"
+				&& IsOpaqueAdmissionValue(result.token, 128)
+				&& result.token.size() >= 43
+				&& IsOpaqueAdmissionValue(result.instanceId, 128)
+				&& portNumber > 0
+				&& portNumber <= 65535;
+
+			return result;
+		}();
+
+		return config;
+	}
+
+	static bool TryAdmitManagedConnect(const Proto::Auth::Connect& packet, const std::uint64_t certificateXuid, const Network::Address& address)
+	{
+		const auto& config = GetAdmissionConfig();
+
+		if (!config.isEnabled)
+		{
+			return true;
+		}
+
+		const bool hasManagedFields = IsOpaqueAdmissionValue(packet.connect_ticket(), 128)
+			&& IsOpaqueAdmissionValue(packet.match_id(), 128)
+			&& IsOpaqueAdmissionValue(packet.session_id(), 128);
+
+		if (!config.isValid || !hasManagedFields)
+		{
+			return false;
+		}
+
+		const std::string playerId = std::format("{:016x}", certificateXuid);
+		const std::string ticketHash = Utils::Cryptography::SHA256::Compute(packet.connect_ticket());
+		const std::string sourceEndpoint = address.GetString();
+
+		{
+			std::lock_guard _(recentAdmissionMutex);
+			const auto now = std::chrono::steady_clock::now();
+
+			std::erase_if(recentAdmissions, [now](const RecentManagedAdmission& entry)
+			{
+				return entry.expires <= now;
+			});
+
+			for (const auto& entry : recentAdmissions)
+			{
+				const bool isSameConnect = entry.ticketHash == ticketHash
+					&& entry.matchId == packet.match_id()
+					&& entry.sessionId == packet.session_id()
+					&& entry.playerId == playerId
+					&& entry.instanceId == config.instanceId
+					&& entry.sourceEndpoint == sourceEndpoint;
+
+				if (isSameConnect)
+				{
+					return true;
+				}
+			}
+		}
+
+		try
+		{
+			const nlohmann::json body =
+			{
+				{ "connect_ticket", packet.connect_ticket() },
+				{ "match_id", packet.match_id() },
+				{ "session_id", packet.session_id() },
+				{ "player_id", playerId },
+				{ "instance_id", config.instanceId },
+			};
+
+			const Utils::WebIO::Params headers =
+			{
+				{ "Content-Type", "application/json" },
+				{ "Accept", "application/json" },
+				{ "X-ZWNET-Admission-Token", config.token },
+			};
+
+			bool isSuccessful = false;
+			Utils::WebIO request("ZW3-ManagedAdmission/1");
+			const std::string response = request.SetTimeout(admissionTimeoutMs)->Post(config.backendUrl + "/internal/connect/admit", body.dump(), headers, &isSuccessful);
+
+			if (!isSuccessful || response.empty())
+			{
+				return false;
+			}
+
+			const auto answer = nlohmann::json::parse(response);
+
+			const bool isAdmitted = answer.is_object()
+				&& answer.value("valid", false)
+				&& answer.value("match_id", std::string{}) == packet.match_id()
+				&& answer.value("player_id", std::string{}) == playerId;
+
+			if (isAdmitted)
+			{
+				std::lock_guard _(recentAdmissionMutex);
+
+				if (recentAdmissions.size() >= recentAdmissionLimit)
+				{
+					recentAdmissions.erase(recentAdmissions.begin());
+				}
+
+				recentAdmissions.push_back({ ticketHash, packet.match_id(), packet.session_id(), playerId, config.instanceId, sourceEndpoint, std::chrono::steady_clock::now() + recentAdmissionLifetime });
+			}
+
+			return isAdmitted;
+		}
+		catch (const std::exception&)
+		{
+			return false;
+		}
+	}
+
+	bool Auth::SetManagedConnectTicket(const Network::Address& target, const std::string& ticket, const std::string& matchId, const std::string& sessionId)
+	{
+		const bool isTicketValid = IsOpaqueAdmissionValue(ticket, 128)
+			&& IsOpaqueAdmissionValue(matchId, 128)
+			&& IsOpaqueAdmissionValue(sessionId, 128);
+
+		if (!target.IsValid() || !isTicketValid)
+		{
+			return false;
+		}
+
+		std::lock_guard _(managedConnectTicket.mutex);
+
+		std::ranges::fill(managedConnectTicket.ticket, '\0');
+		managedConnectTicket.endpoint = target.GetString();
+		managedConnectTicket.ticket = ticket;
+		managedConnectTicket.matchId = matchId;
+		managedConnectTicket.sessionId = sessionId;
+		managedConnectTicket.expires = std::chrono::steady_clock::now() + managedTicketLifetime;
+
+		return true;
+	}
+
+	void Auth::ClearManagedConnectTicket()
+	{
+		std::lock_guard _(managedConnectTicket.mutex);
+
+		std::ranges::fill(managedConnectTicket.ticket, '\0');
+		managedConnectTicket.endpoint.clear();
+		managedConnectTicket.ticket.clear();
+		managedConnectTicket.matchId.clear();
+		managedConnectTicket.sessionId.clear();
+		managedConnectTicket.expires = {};
+	}
+
+	bool Auth::SendConnectDataStub(Game::netsrc_t source, const Game::netadr_t* target, const void* data, int length)
+	{
+		if (!target || !data || length <= 0)
+		{
+			return false;
+		}
+
+		LoadKey();
+
+		if (!guidKey.IsValid())
+		{
+			Logger::Error("connecting failed: the guid key is invalid\n");
+			return false;
+		}
+
+		if (std::ranges::find(bannedUids, GetKeyHash()) != bannedUids.end())
+		{
+			GenerateKey();
+			Logger::Error("your online profile is invalid, a new key has been generated\n");
+			return false;
+		}
+
+		const std::string_view packet{static_cast<const char*>(data), static_cast<std::size_t>(length)};
+
+		const auto qportStart = packet.find(' ');
+		const auto infoStart = qportStart == std::string_view::npos
+			? std::string_view::npos
+			: packet.find(' ', qportStart + 1);
+
+		if (infoStart == std::string_view::npos)
+		{
+			Logger::Error("connecting failed: could not read the connect string\n");
+			return false;
+		}
+
+		auto infoString = packet.substr(infoStart + 1);
+
+		if (infoString.size() < 2 || infoString.front() != '"' || infoString.back() != '"')
+		{
+			Logger::Error("connecting failed: the connect string is not quoted\n");
+			return false;
+		}
+
+		infoString = infoString.substr(1, infoString.size() - 2);
+
+		Utils::InfoString info{std::string{infoString}};
+
+		const Network::Address address{target};
+
+		if (!address.IsLoopback())
+		{
+			info.Set("xuid", Utils::String::VA("%llX", GetKeyHash()));
+		}
+
+		if (!Friends::IsInvisible() && !Friends::cl_anonymous.Get<bool>() && ::Steam::Proxy::SteamUser_)
+		{
+			info.Set("realsteamId", Utils::String::VA("%llX", ::Steam::Proxy::SteamUser_->GetSteamID().bits));
+		}
+
+		const auto challenge = info.Get("challenge");
+
+		if (challenge.empty())
+		{
+			Logger::Error("connecting failed: the server sent no challenge\n");
+			return false;
+		}
+
+		if (guidToken.ToString().empty() && !address.IsLoopback())
+		{
+			Logger::Error("connecting failed: the guid token is empty\n");
+			return false;
+		}
+
+		std::string connectString{packet.substr(0, infoStart + 1)};
+		connectString.append("\"");
+		connectString.append(info.Build());
+		connectString.append("\"");
+
+		Proto::Auth::Connect connectData;
+		connectData.set_token(guidToken.ToString());
+		connectData.set_publickey(guidKey.GetPublicKey());
+		connectData.set_signature(Utils::Cryptography::ECC::SignMessage(guidKey, challenge));
+		connectData.set_infostring(connectString);
+
+		{
+			std::lock_guard _(managedConnectTicket.mutex);
+
+			const Network::Address ticketTarget{managedConnectTicket.endpoint};
+			const bool isTicketForTarget = ticketTarget.IsValid()
+				&& ticketTarget == address
+				&& std::chrono::steady_clock::now() < managedConnectTicket.expires;
+
+			if (isTicketForTarget)
+			{
+				connectData.set_connect_ticket(managedConnectTicket.ticket);
+				connectData.set_match_id(managedConnectTicket.matchId);
+				connectData.set_session_id(managedConnectTicket.sessionId);
+			}
+		}
+
+		Network::SendCommand(source, address, "connect", connectData.SerializeAsString());
+
+		return true;
+	}
+
+	static bool IsSameMachineAddress(const Network::Address& address)
+	{
+		if (address.IsLoopback())
+		{
+			return true;
+		}
+
+		for (int i = 0; i < *Game::numIP; ++i)
+		{
+			if (address.GetIP() == Game::localIP[i].full)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	void Auth::ParseConnectData(Game::msg_t* message, const Game::netadr_t* from)
+	{
+		const Network::Address address{from};
+
+		constexpr int payloadOffset = 12;
+
+		Proto::Auth::Connect connectData;
+
+		if (message->cursize <= payloadOffset
+			|| !connectData.ParseFromString(std::string(
+				reinterpret_cast<const char*>(message->data) + payloadOffset,
+				static_cast<std::size_t>(message->cursize) - payloadOffset)))
+		{
+			Logger::Print("refused a connect from {}, the packet is not a connect protobuf\n",
+				address.GetString());
+			Network::Send(Game::NS_SERVER, address, "error\nInvalid connect packet!");
+			return;
+		}
+
+		if (address.IsLoopback() && !GetAdmissionConfig().isEnabled)
+		{
+			if (connectData.infostring().empty())
+			{
+				Logger::Print("refused a connect from {}, the packet carries no infostring\n",
+					address.GetString());
+				Network::Send(Game::NS_SERVER, address, "error\nInvalid infostring data!");
+				return;
+			}
+
+			Game::SV_Cmd_EndTokenizedString();
+			Game::SV_Cmd_TokenizeString(connectData.infostring().data());
+			Game::SV_DirectConnect(address.Get());
+
+			Logger::Print("accepted a loopback connect from {}\n", address.GetString());
+			return;
+		}
+
+		if (connectData.signature().empty() || connectData.publickey().empty()
+			|| connectData.token().empty() || connectData.infostring().empty())
+		{
+			Logger::Print("refused a connect from {}, the packet is missing a field\n",
+				address.GetString());
+			Network::Send(Game::NS_SERVER, address, "error\nInvalid connect data!");
+			return;
+		}
+
+		Game::SV_Cmd_EndTokenizedString();
+		Game::SV_Cmd_TokenizeString(connectData.infostring().data());
+
+		const Command::ServerParams params;
+
+		if (params.Size() < 3)
+		{
+			Logger::Print("refused a connect from {}, the infostring is not a connect line\n",
+				address.GetString());
+			Network::Send(Game::NS_SERVER, address, "error\nInvalid connect string!");
+			return;
+		}
+
+		const std::string userinfo = params.Get(2);
+		const std::string steamId = Game::Info_ValueForKey(userinfo.data(), "xuid");
+		const std::string challenge = Game::Info_ValueForKey(userinfo.data(), "challenge");
+
+		if (steamId.empty() || challenge.empty())
+		{
+			Logger::Print("refused a connect from {}, the infostring has no xuid or no challenge\n",
+				address.GetString());
+			Network::Send(Game::NS_SERVER, address, "error\nInvalid connect data!");
+			return;
+		}
+
+		const auto xuid = std::strtoull(steamId.data(), nullptr, 16);
+
+		::Steam::SteamID guid;
+		guid.bits = xuid;
+
+		Game::netIP_t ip;
+		ip.full = address.GetIP();
+
+		if (Bans::IsBanned({ guid, ip }))
+		{
+			Logger::Print("refused a connect from {}, xuid {:#x} or its address is banned\n",
+				address.GetString(), xuid);
+			Network::Send(Game::NS_SERVER, address, "error\nEXE_ERR_BANNED_PERM");
+			return;
+		}
+
+		if (Game::IsTempBanned(xuid))
+		{
+			Logger::Print("rejected connection from temporarily banned client {:#x}\n", xuid);
+			Network::Send(Game::NS_SERVER, address, "error\nEXE_ERR_BANNED_TEMP");
+			return;
+		}
+
+		if (std::ranges::find(bannedUids, xuid) != bannedUids.end())
+		{
+			Logger::Print("refused a connect from {}, xuid {:#x} is on the banned list\n",
+				address.GetString(), xuid);
+			Network::Send(Game::NS_SERVER, address,
+				"error\nYour online profile is invalid. Delete your players folder and restart ^1ZW3^7.");
+			return;
+		}
+
+		if (xuid != GetKeyHash(connectData.publickey()))
+		{
+			Logger::Print("refused a connect from {}, xuid {:#x} is not this certificate's\n",
+				address.GetString(), xuid);
+			Network::Send(Game::NS_SERVER, address, "error\nXUID doesn't match the certificate!");
+			return;
+		}
+
+		Utils::Cryptography::ECC::Key key;
+		key.Set(connectData.publickey());
+
+		if (!key.IsValid()
+			|| !Utils::Cryptography::ECC::VerifyMessage(key, challenge, connectData.signature()))
+		{
+			Logger::Print("refused a connect from {}, the challenge signature does not verify\n",
+				address.GetString());
+			Network::Send(Game::NS_SERVER, address, "error\nChallenge signature was invalid!");
+			return;
+		}
+
+		const auto ourLevel = Dvar::Var("sv_securityLevel").Get<unsigned int>();
+		const auto userLevel = GetZeroBits(connectData.token(), connectData.publickey());
+
+		if (userLevel < ourLevel && IsSameMachineAddress(address))
+		{
+			Logger::Print("allowing {} from this machine at security level {} below our {}\n",
+				address.GetString(), userLevel, ourLevel);
+		}
+		else if (userLevel < ourLevel)
+		{
+			Logger::Print("refused a connect from {}, security level {} is below our {}\n",
+				address.GetString(), userLevel, ourLevel);
+			Network::Send(Game::NS_SERVER, address, Utils::String::VA(
+				"error\nYour security level (%d) is lower than the server's security level (%d)",
+				userLevel, ourLevel));
+			return;
+		}
+
+		if (!TryAdmitManagedConnect(connectData, GetKeyHash(connectData.publickey()), address))
+		{
+			Logger::PrintFail2Ban("Managed admission rejected connection from {}\n", address.GetString());
+			Network::Send(Game::NS_SERVER, address, "error\nThis managed match did not authorize your connection.");
+			return;
+		}
+
+		Logger::Print("accepted xuid {:#x} at security level {} from {}\n",
+			xuid, userLevel, address.GetString());
+
+		Game::SV_DirectConnect(address.Get());
+	}
+
+	void Auth::DirectConnectStub(const Game::netadr_t* from)
+	{
+		if (!currentPacket)
+		{
+			Game::SV_DirectConnect(from);
+			return;
+		}
+
+		ParseConnectData(currentPacket, from);
+	}
+
+	const char* Auth::Info_ValueForKeyStub(const char* s, const char* key)
+	{
+		const auto* value = Game::Info_ValueForKey(s, key);
+
+		hasAccessToReservedSlot = std::strcmp((*Game::sv_privatePassword)->current.string, value) == 0;
+
+		Bots::SV_DirectConnect_Full_Check();
+
+		return value;
+	}
+
+	bool Auth::ClientConnectFailedStub(const Game::netsrc_t source, const Game::netadr_t* from, const char* data)
+	{
+		Logger::PrintFail2Ban("Failed connect attempt from IP address: {}\n", Network::AdrToString(from));
+		return Game::NET_OutOfBandPrint(source, from, data);
+	}
+
+	int Auth::PrivateClientCount()
+	{
+		const int botFirstSlot = ClientSlots::FirstSlotForNewBot();
+
+		if (botFirstSlot >= 0)
+		{
+			return botFirstSlot;
+		}
+
+		if (hasAccessToReservedSlot)
+		{
+			return 0;
+		}
+
+		return (*Game::sv_privateClients)->current.integer;
+	}
+
+	char Auth::SV_PacketEvent_Hook(Game::netadr_t* from, Game::msg_t* message)
+	{
+		currentPacket = message;
+
+		const auto result = reinterpret_cast<char(*)(Game::netadr_t*, Game::msg_t*)>(
+			packetEventHooks[0].GetOriginal())(from, message);
+
+		currentPacket = nullptr;
+
+		return result;
+	}
+
+	std::string Auth::GetMachineEntropy()
+	{
+		std::string entropy;
+
+		DWORD volumeId = 0;
+
+		if (GetVolumeInformationA("C:\\", nullptr, 0, &volumeId, nullptr, nullptr, nullptr, 0))
+		{
+			entropy += std::to_string(volumeId);
+		}
+
+		unsigned long bufferLength = 0;
+
+		if (GetAdaptersInfo(nullptr, &bufferLength) == ERROR_BUFFER_OVERFLOW)
+		{
+			std::vector<std::uint8_t> buffer(bufferLength);
+			auto* adapterInfo = reinterpret_cast<PIP_ADAPTER_INFO>(buffer.data());
+
+			if (GetAdaptersInfo(adapterInfo, &bufferLength) == ERROR_SUCCESS)
+			{
+				for (auto* adapter = adapterInfo; adapter; adapter = adapter->Next)
+				{
+					if (adapter->Type != IF_TYPE_IEEE80211 && adapter->Type != MIB_IF_TYPE_ETHERNET)
+					{
+						continue;
+					}
+
+					for (UINT i = 0; i < adapter->AddressLength; ++i)
+					{
+						entropy += std::to_string(adapter->Address[i]);
 					}
 				}
 			}
-
 		}
 
 		if (entropy.empty())
 		{
-			// ultimate fallback
 			return std::to_string(Utils::Cryptography::Rand::GenerateLong());
 		}
-		else
-		{
-			return entropy;
-		}
+
+		return entropy;
 	}
 
 	Auth::Auth()
 	{
-		TokenContainer.cancel = false;
-		TokenContainer.generating = false;
-
-		HasAccessToReservedSlot = false;
-
 		Localization::Set("MPUI_SECURITY_INCREASE_MESSAGE", "");
 
-		// Load the key
-		//LoadKey(true);
-		//Steam::SteamUser()->GetSteamID();
-		Scheduler::OnGameInitialized([]
+		if (Utils::Hook::MatchesBytes(CSteamID__IsValid, steamIdIsValidEntry, sizeof(steamIdIsValidEntry)))
+		{
+			Utils::Hook::Set<std::uint8_t>(CSteamID__IsValid, 0xB0);
+			Utils::Hook::Set<std::uint8_t>(CSteamID__IsValid + 1, 0x01);
+			Utils::Hook::Set<std::uint8_t>(CSteamID__IsValid + 2, 0xC3);
+		}
+		else
+		{
+			Logger::Error("auth: CSteamID::IsValid does not read as expected, a key hash steam id may be refused\n");
+		}
+
+		const bool areOwnerTestsIntact = std::ranges::all_of(lobbyOwnerTests, [](const InlineSteamIdTest& test)
+		{
+			return Utils::Hook::MatchesBytes(test.site, lobbyOwnerTestEntry, sizeof(lobbyOwnerTestEntry));
+		});
+
+		if (areOwnerTestsIntact)
+		{
+			for (const InlineSteamIdTest& test : lobbyOwnerTests)
 			{
-				LoadKey(true);
-				Steam::SteamUser()->GetSteamID();
-			}, Scheduler::Pipeline::MAIN);
+				Utils::Hook::Set<std::uint8_t>(test.site, 0xEB);
+				Utils::Hook::Set<std::int8_t>(test.site + 1, static_cast<std::int8_t>(test.validTarget - (test.site + 2)));
+			}
+		}
+		else
+		{
+			Logger::Error("auth: the inline lobby owner tests do not read as expected, a private party can drop as disconnected from steam\n");
+		}
 
-		Scheduler::Loop(Frame, Scheduler::Pipeline::MAIN);
+		if (!sendConnectDataHook.Initialize(CL_CheckForResend_SendConnectCall,
+			reinterpret_cast<void*>(SendConnectDataStub), HOOK_CALL)->Install()->IsInstalled())
+		{
+			Logger::Error("auth could not seat its connect hook, joining anything would fail on the far end\n");
+			return;
+		}
 
-		// Register dvar
-		Dvar::Register<int>("sv_securityLevel", 23, 0, 512, Game::DVAR_SERVERINFO, "Security level for GUID certificates (POW)");
+		sendConnectDataHook.Quick();
 
-		// Install registration hook
-		Utils::Hook(0x6265F9, DirectConnectStub, HOOK_JUMP).install()->quick();
-		Utils::Hook(0x460EF5, Info_ValueForKeyStub, HOOK_CALL).install()->quick();
-		Utils::Hook(0x460FAD, DirectConnectPrivateClientStub, HOOK_JUMP).install()->quick();
-		Utils::Hook::Nop(0x460FAD + 5, 1);
+		int failed = 0;
 
-		Utils::Hook(0x41D3E3, SendConnectDataStub, HOOK_CALL).install()->quick();
+		for (std::size_t i = 0; i < ARRAYSIZE(SV_PacketEventCalls); ++i)
+		{
+			failed += !packetEventHooks[i].Initialize(SV_PacketEventCalls[i],
+				reinterpret_cast<void*>(SV_PacketEvent_Hook), HOOK_CALL)->Install()->IsInstalled();
+		}
 
-		// Hook for Fail2Ban (Hook near client connect to detect password brute forcing)
-		Utils::Hook(0x4611CA, ClientConnectFailedStub, HOOK_CALL).install()->quick(); // NET_OutOfBandPrint (Grab IP super easy)
+		failed += !directConnectHook.Initialize(SV_PacketEvent_DirectConnectCall,
+			reinterpret_cast<void*>(DirectConnectStub), HOOK_CALL)->Install()->IsInstalled();
 
-		// SteamIDs can only contain 31 bits of actual 'id' data.
-		// The other 33 bits are steam internal data like universe and so on.
-		// Using only 31 bits for fingerprints is pretty insecure.
-		// The function below verifies the integrity steam's part of the SteamID.
-		// Patching that check allows us to use 64 bit for fingerprints.
-		Utils::Hook::Set<std::uint32_t>(0x4D0D60, 0xC301B0);
+		if (failed)
+		{
+			Logger::Error("auth could not seat {} of 3 server hooks, nothing will be able to join us\n", failed);
+			return;
+		}
 
-		// Guid command
+		for (auto& hook : packetEventHooks)
+		{
+			hook.Quick();
+		}
+
+		directConnectHook.Quick();
+
+		const bool isDirectConnectIntact = Utils::Hook::BranchesTo(SV_DirectConnect_PasswordCall, Info_ValueForKey, HOOK_CALL)
+			&& Utils::Hook::MatchesBytes(SV_DirectConnect_PrivateClients, privateClientsLoad, sizeof(privateClientsLoad));
+
+		bool isReservedSlotSeated = false;
+
+		if (isDirectConnectIntact)
+		{
+			isReservedSlotSeated = passwordHook.Initialize(SV_DirectConnect_PasswordCall, reinterpret_cast<void*>(Info_ValueForKeyStub), HOOK_CALL)->Install()->IsInstalled();
+			isReservedSlotSeated = privateClientHook.Initialize(SV_DirectConnect_PrivateClients, DirectConnectPrivateClientStub, HOOK_CALL)->Install()->IsInstalled() && isReservedSlotSeated;
+		}
+
+		if (!isReservedSlotSeated)
+		{
+			passwordHook.Uninstall();
+			privateClientHook.Uninstall();
+
+			Logger::Error("auth: SV_DirectConnect does not read as expected, no reserved slots and sv_replaceBots does nothing\n");
+		}
+		else
+		{
+			passwordHook.Quick();
+			privateClientHook.Quick();
+			Utils::Hook::Nop(SV_DirectConnect_PrivateClients + 5, sizeof(privateClientsLoad) - 5);
+		}
+
+		if (!Utils::Hook::BranchesTo(SV_DirectConnect_RejectPrintCall, NET_OutOfBandPrint, HOOK_CALL)
+			|| !connectFailedHook.Initialize(SV_DirectConnect_RejectPrintCall, reinterpret_cast<void*>(ClientConnectFailedStub), HOOK_CALL)->Install()->IsInstalled())
+		{
+			Logger::Error("auth: SV_DirectConnect's reject print does not read as expected, fail2ban sees no failed connect\n");
+		}
+		else
+		{
+			connectFailedHook.Quick();
+		}
+
+		Scheduler::Once([]
+		{
+			LoadKey(true);
+
+			Dvar::Register("sv_securityLevel", 23, 0, 512, Game::DVAR_SERVERINFO,
+				"Security level for GUID certificates (POW)");
+		}, Scheduler::Pipeline::MAIN);
+
+		Scheduler::Loop(Frame, Scheduler::Pipeline::MAIN, 500ms);
+
 		Command::Add("guid", []
-			{
-				Logger::Print("Your guid: {:#X}\n", Steam::SteamUser()->GetSteamID().bits);
-			});
+		{
+			Logger::Print("your guid: {:#X}\n", GetKeyHash());
+		});
 
-		if (!Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled())
+		if (!Dedicated::IsEnabled())
 		{
 			Command::Add("securityLevel", [](const Command::Params* params)
-				{
-					if (params->size() < 2)
-					{
-						const auto level = GetZeroBits(GuidToken, GuidKey.getPublicKey());
-						Logger::Print("Your current security level is {}\n", level);
-						Logger::Print("Your security token is: {}\n", Utils::String::DumpHex(GuidToken.toString(), ""));
-						Logger::Print("Your computation token is: {}\n", Utils::String::DumpHex(ComputeToken.toString(), ""));
-
-						Toast::Show("cardicon_locked", "^5Security Level", Utils::String::VA("Your security level is %d", level), 3000);
-					}
-					else
-					{
-						const auto level = std::strtoul(params->get(1), nullptr, 10);
-						IncreaseSecurityLevel(level);
-					}
-				});
-		}
-
-		UIScript::Add("security_increase_cancel", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
 			{
-				TokenContainer.cancel = true;
-				Logger::Print("Token incrementation process canceled!\n");
+				if (params->Size() < 2)
+				{
+					Logger::Print("your current security level is {}\n", GetSecurityLevel());
+					Logger::Print("your security token is: {}\n", Utils::String::DumpHex(guidToken.ToString(), ""));
+					Logger::Print("your computation token is: {}\n", Utils::String::DumpHex(computeToken.ToString(), ""));
+
+					Toast::Show("cardicon_locked", "^5Security Level", std::format("Your security level is {}", GetSecurityLevel()), 3000);
+					return;
+				}
+
+				IncreaseSecurityLevel(std::strtoul(params->Get(1), nullptr, 10));
 			});
-	}
-
-	Auth::~Auth()
-	{
-		StoreKey();
-	}
-
-	void Auth::preDestroy()
-	{
-		TokenContainer.cancel = true;
-		TokenContainer.generating = false;
-
-		if (TokenContainer.thread.joinable())
-		{
-			TokenContainer.thread.join();
 		}
+
+		UIScript::Add("security_increase_cancel", []([[maybe_unused]] const UIScript::Token& token)
+		{
+			tokenContainer.cancel = true;
+			Logger::Print("token incrementation process canceled\n");
+		});
 	}
 }

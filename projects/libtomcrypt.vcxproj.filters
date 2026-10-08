@@ -1,0 +1,1909 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="ciphers">
+      <UniqueIdentifier>{B34298C5-1F22-1761-283A-A23794987DC2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ciphers\aes">
+      <UniqueIdentifier>{1BD4AB88-8789-247E-107E-1E557C321B82}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ciphers\safer">
+      <UniqueIdentifier>{93A43464-FF64-B09A-C89F-F917341FF576}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ciphers\twofish">
+      <UniqueIdentifier>{C621DFC4-32AD-4C89-3BBE-CF7DA7C8A889}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="encauth">
+      <UniqueIdentifier>{6DB6476A-D995-C605-E2AD-51DC4E0C2D67}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="encauth\ccm">
+      <UniqueIdentifier>{0F9D021B-7B52-7B10-0447-75E770FB7114}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="encauth\chachapoly">
+      <UniqueIdentifier>{984AFC8D-842E-BDE3-ED8E-B736D991A765}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="encauth\eax">
+      <UniqueIdentifier>{5AA5021B-C65A-7B10-4F4F-75E7BB037214}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="encauth\gcm">
+      <UniqueIdentifier>{13AE021B-7F63-7B10-0858-75E7740C7214}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="encauth\gcm_siv">
+      <UniqueIdentifier>{C48E371A-301A-A5DE-392B-28D3A53501DF}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="encauth\siv">
+      <UniqueIdentifier>{EEE1021B-5A97-7B10-E38B-75E74F407214}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="hashes">
+      <UniqueIdentifier>{81A69301-6D48-BED7-5603-D22B42444528}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="hashes\chc">
+      <UniqueIdentifier>{BE773058-AA2F-72A5-1337-4B01FF0D0D96}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="hashes\helper">
+      <UniqueIdentifier>{F0A153F7-5C62-CF2D-259D-18AB911C140A}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="hashes\sha2">
+      <UniqueIdentifier>{7E35485E-EAEA-C053-73DF-BA2ADF93B757}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="hashes\whirl">
+      <UniqueIdentifier>{F6719727-E2D4-26CC-8B5A-5F82779CF24E}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="mac">
+      <UniqueIdentifier>{768F880B-E298-887C-6B14-9F7CD71C947C}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="mac\blake2">
+      <UniqueIdentifier>{56DF2D7D-4297-6FCA-AB9E-482697750ABB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="mac\f9">
+      <UniqueIdentifier>{04B9330D-F05A-5EE3-D915-7237C556E533}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="mac\hmac">
+      <UniqueIdentifier>{DE0C0829-CAD9-6234-F3F2-50DCDF1E98C2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="mac\kmac">
+      <UniqueIdentifier>{01B20929-ED7E-6434-1698-52DC02C499C2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="mac\omac">
+      <UniqueIdentifier>{85E30B29-71B0-6634-9AC9-54DC86F59BC2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="mac\pelican">
+      <UniqueIdentifier>{01F30A49-6DA8-833E-F69C-7D1562517A42}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="mac\pmac">
+      <UniqueIdentifier>{E66F0C29-D23C-6734-FB55-55DCE7819CC2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="mac\poly1305">
+      <UniqueIdentifier>{5204356D-3E67-C411-E7EC-FCC7D32E9094}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="mac\xcbc">
+      <UniqueIdentifier>{85A81029-7175-6B34-9A8E-59DC86BAA0C2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="math">
+      <UniqueIdentifier>{CF809A7C-BBB7-9B0D-64A4-811050BA170F}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="math\fp">
+      <UniqueIdentifier>{F4D7FCB4-60B7-7B50-69CF-0627D52DE2B1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="misc">
+      <UniqueIdentifier>{B1A29A7C-9DD9-9B0D-46C6-811032DC170F}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="misc\argon2">
+      <UniqueIdentifier>{0969131A-751E-8C0F-FE12-86E66AC78213}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="misc\base16">
+      <UniqueIdentifier>{42533B1B-AE08-B410-37FD-ADE7A3B1AA14}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="misc\base32">
+      <UniqueIdentifier>{80533B1B-EC08-B410-75FD-ADE7E1B1AA14}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="misc\base64">
+      <UniqueIdentifier>{E5533B1B-5109-B410-DAFD-ADE746B2AA14}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="misc\bcrypt">
+      <UniqueIdentifier>{54555F1B-C00A-D810-49FF-D1E7B5B3CE14}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="misc\crypt">
+      <UniqueIdentifier>{B2A77210-9E5F-B45D-0767-8DB9F33D4F4E}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="misc\hkdf">
+      <UniqueIdentifier>{DD54FEF0-49BF-B267-92FD-630DFEA690BC}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="misc\padding">
+      <UniqueIdentifier>{F70746B7-E36A-D55B-8CF0-0D127832A1DE}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="misc\pbes">
+      <UniqueIdentifier>{CA9102F1-36FC-B667-7F3A-680DEBE394BC}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="misc\pem">
+      <UniqueIdentifier>{E242BAB9-CE0F-15C5-F728-036DE3544A53}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="misc\pkcs12">
+      <UniqueIdentifier>{94F68F3C-00AC-0832-89A0-0209F554FF35}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="misc\pkcs5">
+      <UniqueIdentifier>{26B25911-126A-9B5E-7B71-74BA6748364F}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="misc\scrypt">
+      <UniqueIdentifier>{05080743-71BD-7F38-FAB1-790F6666763C}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="misc\ssh">
+      <UniqueIdentifier>{6E51BAB9-5A1E-15C5-8337-036D6F634A53}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="modes">
+      <UniqueIdentifier>{FD03F20F-6918-1AC1-329A-BD209E6D16F2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="modes\cbc">
+      <UniqueIdentifier>{74323901-E09C-ED77-29DB-9E1D9584CBCC}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="modes\cfb">
+      <UniqueIdentifier>{F7323901-639D-ED77-ACDB-9E1D1885CBCC}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="modes\ctr">
+      <UniqueIdentifier>{D5343901-419F-ED77-8ADD-9E1DF686CBCC}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="modes\ecb">
+      <UniqueIdentifier>{163B3901-82A5-ED77-CBE3-9E1D378DCBCC}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="modes\f8">
+      <UniqueIdentifier>{2AB4E264-1681-3D70-3F9A-2B182BC672FE}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="modes\lrw">
+      <UniqueIdentifier>{E15A3901-4DC5-ED77-9603-9F1D02ADCBCC}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="modes\ofb">
+      <UniqueIdentifier>{03663901-6FD0-ED77-B80E-9F1D24B8CBCC}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="modes\xts">
+      <UniqueIdentifier>{2B8E3901-97F8-ED77-E036-9F1D4CE0CBCC}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk">
+      <UniqueIdentifier>{20795900-0C05-880B-75B3-880B615E880B}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1">
+      <UniqueIdentifier>{22D55BAE-8EB4-DA49-97CC-6520032B41AB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\der">
+      <UniqueIdentifier>{CC12C174-38C8-396A-C1BC-33412D71306E}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\der\bit">
+      <UniqueIdentifier>{7A0D8141-E698-EE05-EFA9-71FA5BB44A06}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\der\boolean">
+      <UniqueIdentifier>{3BA7C01B-A708-9E29-3076-E4DB9CD6D4E8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\der\choice">
+      <UniqueIdentifier>{46F18667-32D5-47BD-9B35-42108738323F}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\der\custom_type">
+      <UniqueIdentifier>{D7D87ABC-4310-C353-4C1A-2777B8D0E94C}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\der\general">
+      <UniqueIdentifier>{D9883A85-45EA-1793-CE57-5E453AB84E52}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\der\generalizedtime">
+      <UniqueIdentifier>{1499EB81-80A6-1968-098D-15537599E51E}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\der\ia5">
+      <UniqueIdentifier>{FA298141-66B5-EE05-6FC6-71FADBD04A06}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\der\integer">
+      <UniqueIdentifier>{C9D49934-3536-7742-BEA3-BDF42A04AE01}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\der\object_identifier">
+      <UniqueIdentifier>{143222C5-804A-09EF-49F7-9888B5CE9D88}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\der\octet">
+      <UniqueIdentifier>{BA55E2A6-266C-E03C-6FE3-6B5EDB38B1C4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\der\printable_string">
+      <UniqueIdentifier>{9299A4A4-7E54-9450-270C-0D9B13A6DEE0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\der\sequence">
+      <UniqueIdentifier>{14B6BB47-0045-4511-A963-590C95D155B7}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\der\set">
+      <UniqueIdentifier>{47558141-B3E0-EE05-BCF1-71FA28FC4A06}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\der\short_integer">
+      <UniqueIdentifier>{38DDDC70-A49F-10FB-ED4F-9F875951E9D8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\der\teletex_string">
+      <UniqueIdentifier>{CC44E98F-B854-9560-210E-FA7E0D3D84F9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\der\utctime">
+      <UniqueIdentifier>{364428DD-A2A5-05EB-2B13-4C9D97733CAA}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\der\utf8">
+      <UniqueIdentifier>{2255AD71-0E4E-CCC3-3780-B14823D8ABCF}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\oid">
+      <UniqueIdentifier>{0D42C174-79F7-396A-02EC-33416EA0306E}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\pkcs8">
+      <UniqueIdentifier>{5A352DAA-C6F5-A8E0-8F30-F25DFBAFEDBC}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\asn1\x509">
+      <UniqueIdentifier>{678FED0C-53F2-7CB1-FC77-B567E8B94834}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\dh">
+      <UniqueIdentifier>{5B3A2510-C74E-4DC1-90D0-F020FCA349F2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\dsa">
+      <UniqueIdentifier>{8787CC14-7329-F7EA-5CE4-0A3F48257E3B}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\ec25519">
+      <UniqueIdentifier>{1D1EB653-09D6-F7A0-72DD-D0FC5EB49291}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\ec448">
+      <UniqueIdentifier>{371F157A-23EC-6F85-4C05-5E2D3831A513}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\ecc">
+      <UniqueIdentifier>{BA89CC14-A62B-F7EA-8FE6-0A3F7B277E3B}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\ed25519">
+      <UniqueIdentifier>{BE460B56-AAFE-4CA3-1306-26FFFFDCE793}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\ed448">
+      <UniqueIdentifier>{98AB157A-8478-7085-AD91-5E2D99BDA513}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\pkcs1">
+      <UniqueIdentifier>{D15FE17A-BD2C-3C86-E645-2A2ED2717114}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\rsa">
+      <UniqueIdentifier>{15C3CC14-0165-F7EA-EA1F-0B3FD6607E3B}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\x25519">
+      <UniqueIdentifier>{4DE994E5-B953-495C-0292-FA016E3B27B1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="pk\x448">
+      <UniqueIdentifier>{675E67AE-D33D-E649-DC55-712048B44CAB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="prngs">
+      <UniqueIdentifier>{6F1D2A10-DB31-52C1-A4B3-F52010874EF2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="stream">
+      <UniqueIdentifier>{519D931C-3D3F-BEF2-26FA-D146123B4543}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="stream\chacha">
+      <UniqueIdentifier>{F80D060A-64CE-8140-2D09-CBBD9988C61C}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="stream\rabbit">
+      <UniqueIdentifier>{344C852C-A00C-0163-6947-4AE0D5C6453F}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="stream\rc4">
+      <UniqueIdentifier>{8995EF4C-754D-319A-DE54-0AF6CA2BCC8A}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="stream\salsa20">
+      <UniqueIdentifier>{962CE70A-82FA-DA10-6B8E-4B3757FBB675}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="stream\sober128">
+      <UniqueIdentifier>{36733485-A2FE-A149-AB0F-253E171AFE49}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="stream\sosemanuk">
+      <UniqueIdentifier>{F6C12148-E2BA-409A-0BED-251FF74420A6}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\aes\aes.c">
+      <Filter>ciphers\aes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\aes\aes_desc.c">
+      <Filter>ciphers\aes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\aes\aesni.c">
+      <Filter>ciphers\aes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\anubis.c">
+      <Filter>ciphers</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\aria.c">
+      <Filter>ciphers</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\blowfish.c">
+      <Filter>ciphers</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\camellia.c">
+      <Filter>ciphers</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\cast5.c">
+      <Filter>ciphers</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\des.c">
+      <Filter>ciphers</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\idea.c">
+      <Filter>ciphers</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\kasumi.c">
+      <Filter>ciphers</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\khazad.c">
+      <Filter>ciphers</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\kseed.c">
+      <Filter>ciphers</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\multi2.c">
+      <Filter>ciphers</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\noekeon.c">
+      <Filter>ciphers</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\rc2.c">
+      <Filter>ciphers</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\rc5.c">
+      <Filter>ciphers</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\rc6.c">
+      <Filter>ciphers</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\safer\safer.c">
+      <Filter>ciphers\safer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\safer\saferp.c">
+      <Filter>ciphers\safer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\serpent.c">
+      <Filter>ciphers</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\skipjack.c">
+      <Filter>ciphers</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\sm4.c">
+      <Filter>ciphers</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\tea.c">
+      <Filter>ciphers</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\twofish\twofish.c">
+      <Filter>ciphers\twofish</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\ciphers\xtea.c">
+      <Filter>ciphers</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\ccm\ccm_add_aad.c">
+      <Filter>encauth\ccm</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\ccm\ccm_add_nonce.c">
+      <Filter>encauth\ccm</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\ccm\ccm_done.c">
+      <Filter>encauth\ccm</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\ccm\ccm_init.c">
+      <Filter>encauth\ccm</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\ccm\ccm_memory.c">
+      <Filter>encauth\ccm</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\ccm\ccm_process.c">
+      <Filter>encauth\ccm</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\ccm\ccm_reset.c">
+      <Filter>encauth\ccm</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\ccm\ccm_test.c">
+      <Filter>encauth\ccm</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\chachapoly\chacha20poly1305_add_aad.c">
+      <Filter>encauth\chachapoly</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\chachapoly\chacha20poly1305_decrypt.c">
+      <Filter>encauth\chachapoly</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\chachapoly\chacha20poly1305_done.c">
+      <Filter>encauth\chachapoly</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\chachapoly\chacha20poly1305_encrypt.c">
+      <Filter>encauth\chachapoly</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\chachapoly\chacha20poly1305_init.c">
+      <Filter>encauth\chachapoly</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\chachapoly\chacha20poly1305_memory.c">
+      <Filter>encauth\chachapoly</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\chachapoly\chacha20poly1305_setiv.c">
+      <Filter>encauth\chachapoly</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\chachapoly\chacha20poly1305_setiv_rfc7905.c">
+      <Filter>encauth\chachapoly</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\chachapoly\chacha20poly1305_test.c">
+      <Filter>encauth\chachapoly</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\eax\eax_addheader.c">
+      <Filter>encauth\eax</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\eax\eax_decrypt.c">
+      <Filter>encauth\eax</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\eax\eax_decrypt_verify_memory.c">
+      <Filter>encauth\eax</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\eax\eax_done.c">
+      <Filter>encauth\eax</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\eax\eax_encrypt.c">
+      <Filter>encauth\eax</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\eax\eax_encrypt_authenticate_memory.c">
+      <Filter>encauth\eax</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\eax\eax_init.c">
+      <Filter>encauth\eax</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\eax\eax_test.c">
+      <Filter>encauth\eax</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm\gcm_add_aad.c">
+      <Filter>encauth\gcm</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm\gcm_add_iv.c">
+      <Filter>encauth\gcm</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm\gcm_done.c">
+      <Filter>encauth\gcm</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm\gcm_gf_mult.c">
+      <Filter>encauth\gcm</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm\gcm_init.c">
+      <Filter>encauth\gcm</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm\gcm_memory.c">
+      <Filter>encauth\gcm</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm\gcm_mult_h.c">
+      <Filter>encauth\gcm</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm\gcm_process.c">
+      <Filter>encauth\gcm</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm\gcm_reset.c">
+      <Filter>encauth\gcm</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm\gcm_test.c">
+      <Filter>encauth\gcm</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm_siv\gcm_siv.c">
+      <Filter>encauth\gcm_siv</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\gcm_siv\gcm_siv_test.c">
+      <Filter>encauth\gcm_siv</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\encauth\siv\siv.c">
+      <Filter>encauth\siv</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\blake2b.c">
+      <Filter>hashes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\blake2s.c">
+      <Filter>hashes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\blake3.c">
+      <Filter>hashes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\chc\chc.c">
+      <Filter>hashes\chc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\helper\hash_file.c">
+      <Filter>hashes\helper</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\helper\hash_filehandle.c">
+      <Filter>hashes\helper</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\helper\hash_memory.c">
+      <Filter>hashes\helper</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\helper\hash_memory_multi.c">
+      <Filter>hashes\helper</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\md2.c">
+      <Filter>hashes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\md4.c">
+      <Filter>hashes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\md5.c">
+      <Filter>hashes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\rmd128.c">
+      <Filter>hashes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\rmd160.c">
+      <Filter>hashes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\rmd256.c">
+      <Filter>hashes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\rmd320.c">
+      <Filter>hashes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha1.c">
+      <Filter>hashes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha1_desc.c">
+      <Filter>hashes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha1_x86.c">
+      <Filter>hashes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha224.c">
+      <Filter>hashes\sha2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha224_desc.c">
+      <Filter>hashes\sha2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha224_x86.c">
+      <Filter>hashes\sha2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha256.c">
+      <Filter>hashes\sha2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha256_desc.c">
+      <Filter>hashes\sha2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha256_x86.c">
+      <Filter>hashes\sha2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha384.c">
+      <Filter>hashes\sha2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha384_desc.c">
+      <Filter>hashes\sha2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha384_x86.c">
+      <Filter>hashes\sha2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha512.c">
+      <Filter>hashes\sha2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha512_224.c">
+      <Filter>hashes\sha2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha512_224_desc.c">
+      <Filter>hashes\sha2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha512_224_x86.c">
+      <Filter>hashes\sha2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha512_256.c">
+      <Filter>hashes\sha2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha512_256_desc.c">
+      <Filter>hashes\sha2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha512_256_x86.c">
+      <Filter>hashes\sha2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha512_desc.c">
+      <Filter>hashes\sha2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha2\sha512_x86.c">
+      <Filter>hashes\sha2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha3.c">
+      <Filter>hashes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sha3_test.c">
+      <Filter>hashes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\sm3.c">
+      <Filter>hashes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\tiger.c">
+      <Filter>hashes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\hashes\whirl\whirl.c">
+      <Filter>hashes\whirl</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\blake2\blake2bmac.c">
+      <Filter>mac\blake2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\blake2\blake2bmac_file.c">
+      <Filter>mac\blake2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\blake2\blake2bmac_memory.c">
+      <Filter>mac\blake2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\blake2\blake2bmac_memory_multi.c">
+      <Filter>mac\blake2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\blake2\blake2bmac_test.c">
+      <Filter>mac\blake2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\blake2\blake2smac.c">
+      <Filter>mac\blake2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\blake2\blake2smac_file.c">
+      <Filter>mac\blake2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\blake2\blake2smac_memory.c">
+      <Filter>mac\blake2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\blake2\blake2smac_memory_multi.c">
+      <Filter>mac\blake2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\blake2\blake2smac_test.c">
+      <Filter>mac\blake2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\f9\f9_done.c">
+      <Filter>mac\f9</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\f9\f9_file.c">
+      <Filter>mac\f9</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\f9\f9_init.c">
+      <Filter>mac\f9</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\f9\f9_memory.c">
+      <Filter>mac\f9</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\f9\f9_memory_multi.c">
+      <Filter>mac\f9</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\f9\f9_process.c">
+      <Filter>mac\f9</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\f9\f9_test.c">
+      <Filter>mac\f9</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\hmac\hmac_done.c">
+      <Filter>mac\hmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\hmac\hmac_file.c">
+      <Filter>mac\hmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\hmac\hmac_init.c">
+      <Filter>mac\hmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\hmac\hmac_memory.c">
+      <Filter>mac\hmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\hmac\hmac_memory_multi.c">
+      <Filter>mac\hmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\hmac\hmac_process.c">
+      <Filter>mac\hmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\hmac\hmac_test.c">
+      <Filter>mac\hmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\kmac\kmac.c">
+      <Filter>mac\kmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\kmac\kmac_file.c">
+      <Filter>mac\kmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\kmac\kmac_memory.c">
+      <Filter>mac\kmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\kmac\kmac_memory_multi.c">
+      <Filter>mac\kmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\kmac\kmac_test.c">
+      <Filter>mac\kmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\omac\omac_done.c">
+      <Filter>mac\omac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\omac\omac_file.c">
+      <Filter>mac\omac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\omac\omac_init.c">
+      <Filter>mac\omac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\omac\omac_memory.c">
+      <Filter>mac\omac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\omac\omac_memory_multi.c">
+      <Filter>mac\omac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\omac\omac_process.c">
+      <Filter>mac\omac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\omac\omac_test.c">
+      <Filter>mac\omac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pelican\pelican.c">
+      <Filter>mac\pelican</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pelican\pelican_memory.c">
+      <Filter>mac\pelican</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pelican\pelican_test.c">
+      <Filter>mac\pelican</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pmac\pmac_done.c">
+      <Filter>mac\pmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pmac\pmac_file.c">
+      <Filter>mac\pmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pmac\pmac_init.c">
+      <Filter>mac\pmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pmac\pmac_memory.c">
+      <Filter>mac\pmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pmac\pmac_memory_multi.c">
+      <Filter>mac\pmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pmac\pmac_ntz.c">
+      <Filter>mac\pmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pmac\pmac_process.c">
+      <Filter>mac\pmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pmac\pmac_shift_xor.c">
+      <Filter>mac\pmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\pmac\pmac_test.c">
+      <Filter>mac\pmac</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\poly1305\poly1305.c">
+      <Filter>mac\poly1305</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\poly1305\poly1305_file.c">
+      <Filter>mac\poly1305</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\poly1305\poly1305_memory.c">
+      <Filter>mac\poly1305</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\poly1305\poly1305_memory_multi.c">
+      <Filter>mac\poly1305</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\poly1305\poly1305_test.c">
+      <Filter>mac\poly1305</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\xcbc\xcbc_done.c">
+      <Filter>mac\xcbc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\xcbc\xcbc_file.c">
+      <Filter>mac\xcbc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\xcbc\xcbc_init.c">
+      <Filter>mac\xcbc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\xcbc\xcbc_memory.c">
+      <Filter>mac\xcbc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\xcbc\xcbc_memory_multi.c">
+      <Filter>mac\xcbc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\xcbc\xcbc_process.c">
+      <Filter>mac\xcbc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\mac\xcbc\xcbc_test.c">
+      <Filter>mac\xcbc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\math\fp\ltc_ecc_fp_mulmod.c">
+      <Filter>math\fp</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\math\gmp_desc.c">
+      <Filter>math</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\math\ltm_desc.c">
+      <Filter>math</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\math\multi.c">
+      <Filter>math</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\math\radix_to_bin.c">
+      <Filter>math</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\math\rand_bn.c">
+      <Filter>math</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\math\rand_prime.c">
+      <Filter>math</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\math\tfm_desc.c">
+      <Filter>math</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\adler32.c">
+      <Filter>misc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\algname_match.c">
+      <Filter>misc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\argon2\argon2.c">
+      <Filter>misc\argon2</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\base16\base16_decode.c">
+      <Filter>misc\base16</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\base16\base16_encode.c">
+      <Filter>misc\base16</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\base32\base32_decode.c">
+      <Filter>misc\base32</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\base32\base32_encode.c">
+      <Filter>misc\base32</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\base64\base64_decode.c">
+      <Filter>misc\base64</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\base64\base64_encode.c">
+      <Filter>misc\base64</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\bcrypt\bcrypt.c">
+      <Filter>misc\bcrypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\burn_stack.c">
+      <Filter>misc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\compare_testvector.c">
+      <Filter>misc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\copy_or_zeromem.c">
+      <Filter>misc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crc32.c">
+      <Filter>misc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_argchk.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_cipher_descriptor.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_cipher_is_valid.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_constants.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_find_cipher.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_find_cipher_any.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_find_cipher_id.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_find_hash.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_find_hash_any.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_find_hash_id.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_find_hash_oid.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_find_prng.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_fsa.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_hash_descriptor.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_hash_is_valid.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_inits.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_ltc_mp_descriptor.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_prng_descriptor.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_prng_is_valid.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_prng_rng_descriptor.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_register_all_ciphers.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_register_all_hashes.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_register_all_prngs.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_register_cipher.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_register_hash.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_register_prng.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_sizes.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_unregister_cipher.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_unregister_hash.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\crypt\crypt_unregister_prng.c">
+      <Filter>misc\crypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\deprecated.c">
+      <Filter>misc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\error_to_string.c">
+      <Filter>misc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\hkdf\hkdf.c">
+      <Filter>misc\hkdf</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\hkdf\hkdf_test.c">
+      <Filter>misc\hkdf</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\mem_neq.c">
+      <Filter>misc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\padding\padding_depad.c">
+      <Filter>misc\padding</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\padding\padding_pad.c">
+      <Filter>misc\padding</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\password_free.c">
+      <Filter>misc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pbes\pbes.c">
+      <Filter>misc\pbes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pbes\pbes1.c">
+      <Filter>misc\pbes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pbes\pbes2.c">
+      <Filter>misc\pbes</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pem\pem.c">
+      <Filter>misc\pem</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pem\pem_pkcs.c">
+      <Filter>misc\pem</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pem\pem_read.c">
+      <Filter>misc\pem</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pem\pem_ssh.c">
+      <Filter>misc\pem</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pkcs12\pkcs12_kdf.c">
+      <Filter>misc\pkcs12</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pkcs12\pkcs12_utf8_to_utf16.c">
+      <Filter>misc\pkcs12</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pkcs5\pkcs_5_1.c">
+      <Filter>misc\pkcs5</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pkcs5\pkcs_5_2.c">
+      <Filter>misc\pkcs5</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\pkcs5\pkcs_5_test.c">
+      <Filter>misc\pkcs5</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\scrypt\scrypt.c">
+      <Filter>misc\scrypt</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\ssh\ssh_decode_sequence_multi.c">
+      <Filter>misc\ssh</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\ssh\ssh_encode_sequence_multi.c">
+      <Filter>misc\ssh</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\misc\zeromem.c">
+      <Filter>misc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cbc\cbc_decrypt.c">
+      <Filter>modes\cbc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cbc\cbc_done.c">
+      <Filter>modes\cbc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cbc\cbc_encrypt.c">
+      <Filter>modes\cbc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cbc\cbc_getiv.c">
+      <Filter>modes\cbc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cbc\cbc_setiv.c">
+      <Filter>modes\cbc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cbc\cbc_start.c">
+      <Filter>modes\cbc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cfb\cfb_decrypt.c">
+      <Filter>modes\cfb</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cfb\cfb_done.c">
+      <Filter>modes\cfb</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cfb\cfb_encrypt.c">
+      <Filter>modes\cfb</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cfb\cfb_getiv.c">
+      <Filter>modes\cfb</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cfb\cfb_setiv.c">
+      <Filter>modes\cfb</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\cfb\cfb_start.c">
+      <Filter>modes\cfb</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ctr\ctr_decrypt.c">
+      <Filter>modes\ctr</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ctr\ctr_done.c">
+      <Filter>modes\ctr</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ctr\ctr_encrypt.c">
+      <Filter>modes\ctr</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ctr\ctr_getiv.c">
+      <Filter>modes\ctr</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ctr\ctr_setiv.c">
+      <Filter>modes\ctr</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ctr\ctr_start.c">
+      <Filter>modes\ctr</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ctr\ctr_test.c">
+      <Filter>modes\ctr</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ecb\ecb_decrypt.c">
+      <Filter>modes\ecb</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ecb\ecb_done.c">
+      <Filter>modes\ecb</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ecb\ecb_encrypt.c">
+      <Filter>modes\ecb</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ecb\ecb_start.c">
+      <Filter>modes\ecb</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\f8\f8_decrypt.c">
+      <Filter>modes\f8</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\f8\f8_done.c">
+      <Filter>modes\f8</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\f8\f8_encrypt.c">
+      <Filter>modes\f8</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\f8\f8_getiv.c">
+      <Filter>modes\f8</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\f8\f8_setiv.c">
+      <Filter>modes\f8</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\f8\f8_start.c">
+      <Filter>modes\f8</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\f8\f8_test_mode.c">
+      <Filter>modes\f8</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\lrw\lrw_decrypt.c">
+      <Filter>modes\lrw</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\lrw\lrw_done.c">
+      <Filter>modes\lrw</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\lrw\lrw_encrypt.c">
+      <Filter>modes\lrw</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\lrw\lrw_getiv.c">
+      <Filter>modes\lrw</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\lrw\lrw_process.c">
+      <Filter>modes\lrw</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\lrw\lrw_setiv.c">
+      <Filter>modes\lrw</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\lrw\lrw_start.c">
+      <Filter>modes\lrw</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\lrw\lrw_test.c">
+      <Filter>modes\lrw</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ofb\ofb_decrypt.c">
+      <Filter>modes\ofb</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ofb\ofb_done.c">
+      <Filter>modes\ofb</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ofb\ofb_encrypt.c">
+      <Filter>modes\ofb</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ofb\ofb_getiv.c">
+      <Filter>modes\ofb</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ofb\ofb_setiv.c">
+      <Filter>modes\ofb</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\ofb\ofb_start.c">
+      <Filter>modes\ofb</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\xts\xts_decrypt.c">
+      <Filter>modes\xts</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\xts\xts_done.c">
+      <Filter>modes\xts</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\xts\xts_encrypt.c">
+      <Filter>modes\xts</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\xts\xts_init.c">
+      <Filter>modes\xts</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\xts\xts_mult_x.c">
+      <Filter>modes\xts</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\modes\xts\xts_test.c">
+      <Filter>modes\xts</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\bit\der_decode_bit_string.c">
+      <Filter>pk\asn1\der\bit</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\bit\der_decode_raw_bit_string.c">
+      <Filter>pk\asn1\der\bit</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\bit\der_encode_bit_string.c">
+      <Filter>pk\asn1\der\bit</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\bit\der_encode_raw_bit_string.c">
+      <Filter>pk\asn1\der\bit</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\bit\der_length_bit_string.c">
+      <Filter>pk\asn1\der\bit</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\boolean\der_decode_boolean.c">
+      <Filter>pk\asn1\der\boolean</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\boolean\der_encode_boolean.c">
+      <Filter>pk\asn1\der\boolean</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\boolean\der_length_boolean.c">
+      <Filter>pk\asn1\der\boolean</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\choice\der_decode_choice.c">
+      <Filter>pk\asn1\der\choice</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\custom_type\der_decode_custom_type.c">
+      <Filter>pk\asn1\der\custom_type</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\custom_type\der_encode_custom_type.c">
+      <Filter>pk\asn1\der\custom_type</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\custom_type\der_length_custom_type.c">
+      <Filter>pk\asn1\der\custom_type</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\general\der_asn1_maps.c">
+      <Filter>pk\asn1\der\general</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\general\der_decode_asn1_identifier.c">
+      <Filter>pk\asn1\der\general</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\general\der_decode_asn1_length.c">
+      <Filter>pk\asn1\der\general</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\general\der_encode_asn1_identifier.c">
+      <Filter>pk\asn1\der\general</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\general\der_encode_asn1_length.c">
+      <Filter>pk\asn1\der\general</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\general\der_length_asn1_identifier.c">
+      <Filter>pk\asn1\der\general</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\general\der_length_asn1_length.c">
+      <Filter>pk\asn1\der\general</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\generalizedtime\der_decode_generalizedtime.c">
+      <Filter>pk\asn1\der\generalizedtime</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\generalizedtime\der_encode_generalizedtime.c">
+      <Filter>pk\asn1\der\generalizedtime</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\generalizedtime\der_length_generalizedtime.c">
+      <Filter>pk\asn1\der\generalizedtime</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\ia5\der_decode_ia5_string.c">
+      <Filter>pk\asn1\der\ia5</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\ia5\der_encode_ia5_string.c">
+      <Filter>pk\asn1\der\ia5</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\ia5\der_length_ia5_string.c">
+      <Filter>pk\asn1\der\ia5</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\integer\der_decode_integer.c">
+      <Filter>pk\asn1\der\integer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\integer\der_encode_integer.c">
+      <Filter>pk\asn1\der\integer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\integer\der_length_integer.c">
+      <Filter>pk\asn1\der\integer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\object_identifier\der_decode_object_identifier.c">
+      <Filter>pk\asn1\der\object_identifier</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\object_identifier\der_encode_object_identifier.c">
+      <Filter>pk\asn1\der\object_identifier</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\object_identifier\der_length_object_identifier.c">
+      <Filter>pk\asn1\der\object_identifier</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\octet\der_decode_octet_string.c">
+      <Filter>pk\asn1\der\octet</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\octet\der_encode_octet_string.c">
+      <Filter>pk\asn1\der\octet</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\octet\der_length_octet_string.c">
+      <Filter>pk\asn1\der\octet</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\printable_string\der_decode_printable_string.c">
+      <Filter>pk\asn1\der\printable_string</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\printable_string\der_encode_printable_string.c">
+      <Filter>pk\asn1\der\printable_string</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\printable_string\der_length_printable_string.c">
+      <Filter>pk\asn1\der\printable_string</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\sequence\der_decode_sequence_ex.c">
+      <Filter>pk\asn1\der\sequence</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\sequence\der_decode_sequence_flexi.c">
+      <Filter>pk\asn1\der\sequence</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\sequence\der_decode_sequence_multi.c">
+      <Filter>pk\asn1\der\sequence</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\sequence\der_encode_sequence_ex.c">
+      <Filter>pk\asn1\der\sequence</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\sequence\der_encode_sequence_multi.c">
+      <Filter>pk\asn1\der\sequence</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\sequence\der_flexi_sequence_cmp.c">
+      <Filter>pk\asn1\der\sequence</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\sequence\der_length_sequence.c">
+      <Filter>pk\asn1\der\sequence</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\sequence\der_sequence_free.c">
+      <Filter>pk\asn1\der\sequence</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\sequence\der_sequence_shrink.c">
+      <Filter>pk\asn1\der\sequence</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\set\der_encode_set.c">
+      <Filter>pk\asn1\der\set</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\set\der_encode_setof.c">
+      <Filter>pk\asn1\der\set</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\short_integer\der_decode_short_integer.c">
+      <Filter>pk\asn1\der\short_integer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\short_integer\der_encode_short_integer.c">
+      <Filter>pk\asn1\der\short_integer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\short_integer\der_length_short_integer.c">
+      <Filter>pk\asn1\der\short_integer</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\teletex_string\der_decode_teletex_string.c">
+      <Filter>pk\asn1\der\teletex_string</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\teletex_string\der_length_teletex_string.c">
+      <Filter>pk\asn1\der\teletex_string</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\utctime\der_decode_utctime.c">
+      <Filter>pk\asn1\der\utctime</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\utctime\der_encode_utctime.c">
+      <Filter>pk\asn1\der\utctime</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\utctime\der_length_utctime.c">
+      <Filter>pk\asn1\der\utctime</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\utf8\der_decode_utf8_string.c">
+      <Filter>pk\asn1\der\utf8</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\utf8\der_encode_utf8_string.c">
+      <Filter>pk\asn1\der\utf8</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\der\utf8\der_length_utf8_string.c">
+      <Filter>pk\asn1\der\utf8</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\oid\pk_get.c">
+      <Filter>pk\asn1\oid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\oid\pk_oid_cmp.c">
+      <Filter>pk\asn1\oid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\oid\pk_oid_str.c">
+      <Filter>pk\asn1\oid</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\pkcs8\pkcs8_decode_flexi.c">
+      <Filter>pk\asn1\pkcs8</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\pkcs8\pkcs8_get.c">
+      <Filter>pk\asn1\pkcs8</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\x509\x509_decode_public_key_from_certificate.c">
+      <Filter>pk\asn1\x509</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\x509\x509_decode_spki.c">
+      <Filter>pk\asn1\x509</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\x509\x509_decode_subject_public_key_info.c">
+      <Filter>pk\asn1\x509</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\x509\x509_encode_subject_public_key_info.c">
+      <Filter>pk\asn1\x509</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\x509\x509_get_pka.c">
+      <Filter>pk\asn1\x509</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\asn1\x509\x509_import_spki.c">
+      <Filter>pk\asn1\x509</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh.c">
+      <Filter>pk\dh</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh_check_pubkey.c">
+      <Filter>pk\dh</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh_export.c">
+      <Filter>pk\dh</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh_export_key.c">
+      <Filter>pk\dh</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh_free.c">
+      <Filter>pk\dh</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh_generate_key.c">
+      <Filter>pk\dh</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh_import.c">
+      <Filter>pk\dh</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh_import_pkcs8.c">
+      <Filter>pk\dh</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh_set.c">
+      <Filter>pk\dh</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh_set_pg_dhparam.c">
+      <Filter>pk\dh</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dh\dh_shared_secret.c">
+      <Filter>pk\dh</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_decrypt_key.c">
+      <Filter>pk\dsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_encrypt_key.c">
+      <Filter>pk\dsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_export.c">
+      <Filter>pk\dsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_free.c">
+      <Filter>pk\dsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_generate_key.c">
+      <Filter>pk\dsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_generate_pqg.c">
+      <Filter>pk\dsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_import.c">
+      <Filter>pk\dsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_import_pkcs8.c">
+      <Filter>pk\dsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_init.c">
+      <Filter>pk\dsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_make_key.c">
+      <Filter>pk\dsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_set.c">
+      <Filter>pk\dsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_set_pqg_dsaparam.c">
+      <Filter>pk\dsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_shared_secret.c">
+      <Filter>pk\dsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_sign_hash.c">
+      <Filter>pk\dsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_verify_hash.c">
+      <Filter>pk\dsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\dsa\dsa_verify_key.c">
+      <Filter>pk\dsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ec25519\ec25519_crypto_ctx.c">
+      <Filter>pk\ec25519</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ec25519\ec25519_export.c">
+      <Filter>pk\ec25519</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ec25519\ec25519_import_pkcs8.c">
+      <Filter>pk\ec25519</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ec25519\tweetnacl.c">
+      <Filter>pk\ec25519</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ec448\ec448_common.c">
+      <Filter>pk\ec448</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ec448\ec448_crypto_ctx.c">
+      <Filter>pk\ec448</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ec448\ec448_export.c">
+      <Filter>pk\ec448</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ec448\ec448_import_pkcs8.c">
+      <Filter>pk\ec448</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_ansi_x963_export.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_ansi_x963_import.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_decrypt_key.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_encrypt_key.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_export.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_export_openssl.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_find_curve.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_free.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_get_key.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_get_oid_str.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_get_size.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_import.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_import_openssl.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_import_pkcs8.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_import_x509.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_make_key.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_recover_key.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_rfc6979_key.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_set_curve.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_set_curve_internal.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_set_key.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_shared_secret.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_sign_hash.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_sign_hash_eth27.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_sign_hash_internal.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_sign_hash_rfc5656.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_sign_hash_rfc7518.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_sign_hash_x962.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_sizes.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_ssh_ecdsa_encode_name.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_verify_hash.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_verify_hash_eth27.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_verify_hash_internal.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_verify_hash_rfc5656.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_verify_hash_rfc7518.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ecc_verify_hash_x962.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_export_point.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_import_point.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_is_point.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_is_point_at_infinity.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_map.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_mul2add.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_mulmod.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_mulmod_timing.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_points.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_projective_add_point.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_projective_dbl_point.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ecc\ltc_ecc_verify_key.c">
+      <Filter>pk\ecc</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed25519\ed25519_export.c">
+      <Filter>pk\ed25519</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed25519\ed25519_import.c">
+      <Filter>pk\ed25519</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed25519\ed25519_import_pkcs8.c">
+      <Filter>pk\ed25519</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed25519\ed25519_import_raw.c">
+      <Filter>pk\ed25519</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed25519\ed25519_import_x509.c">
+      <Filter>pk\ed25519</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed25519\ed25519_make_key.c">
+      <Filter>pk\ed25519</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed25519\ed25519_sign.c">
+      <Filter>pk\ed25519</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed25519\ed25519_verify.c">
+      <Filter>pk\ed25519</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed448\ed448_export.c">
+      <Filter>pk\ed448</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed448\ed448_import.c">
+      <Filter>pk\ed448</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed448\ed448_import_pkcs8.c">
+      <Filter>pk\ed448</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed448\ed448_import_raw.c">
+      <Filter>pk\ed448</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed448\ed448_import_x509.c">
+      <Filter>pk\ed448</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed448\ed448_make_key.c">
+      <Filter>pk\ed448</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed448\ed448_sign.c">
+      <Filter>pk\ed448</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\ed448\ed448_verify.c">
+      <Filter>pk\ed448</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\pka_key.c">
+      <Filter>pk</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\pkcs1\pkcs_1_i2osp.c">
+      <Filter>pk\pkcs1</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\pkcs1\pkcs_1_mgf1.c">
+      <Filter>pk\pkcs1</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\pkcs1\pkcs_1_oaep_decode.c">
+      <Filter>pk\pkcs1</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\pkcs1\pkcs_1_oaep_encode.c">
+      <Filter>pk\pkcs1</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\pkcs1\pkcs_1_os2ip.c">
+      <Filter>pk\pkcs1</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\pkcs1\pkcs_1_pss_decode.c">
+      <Filter>pk\pkcs1</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\pkcs1\pkcs_1_pss_encode.c">
+      <Filter>pk\pkcs1</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\pkcs1\pkcs_1_v1_5_decode.c">
+      <Filter>pk\pkcs1</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\pkcs1\pkcs_1_v1_5_encode.c">
+      <Filter>pk\pkcs1</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_decrypt_key.c">
+      <Filter>pk\rsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_encrypt_key.c">
+      <Filter>pk\rsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_export.c">
+      <Filter>pk\rsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_exptmod.c">
+      <Filter>pk\rsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_get_size.c">
+      <Filter>pk\rsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_import.c">
+      <Filter>pk\rsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_import_pkcs8.c">
+      <Filter>pk\rsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_import_x509.c">
+      <Filter>pk\rsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_key.c">
+      <Filter>pk\rsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_make_key.c">
+      <Filter>pk\rsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_set.c">
+      <Filter>pk\rsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_sign_hash.c">
+      <Filter>pk\rsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_sign_saltlen_get.c">
+      <Filter>pk\rsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\rsa\rsa_verify_hash.c">
+      <Filter>pk\rsa</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x25519\x25519_export.c">
+      <Filter>pk\x25519</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x25519\x25519_import.c">
+      <Filter>pk\x25519</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x25519\x25519_import_pkcs8.c">
+      <Filter>pk\x25519</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x25519\x25519_import_raw.c">
+      <Filter>pk\x25519</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x25519\x25519_import_x509.c">
+      <Filter>pk\x25519</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x25519\x25519_make_key.c">
+      <Filter>pk\x25519</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x25519\x25519_shared_secret.c">
+      <Filter>pk\x25519</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x448\x448_export.c">
+      <Filter>pk\x448</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x448\x448_import.c">
+      <Filter>pk\x448</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x448\x448_import_pkcs8.c">
+      <Filter>pk\x448</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x448\x448_import_raw.c">
+      <Filter>pk\x448</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x448\x448_import_x509.c">
+      <Filter>pk\x448</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x448\x448_make_key.c">
+      <Filter>pk\x448</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\pk\x448\x448_shared_secret.c">
+      <Filter>pk\x448</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\prngs\chacha20.c">
+      <Filter>prngs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\prngs\fortuna.c">
+      <Filter>prngs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\prngs\rc4.c">
+      <Filter>prngs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\prngs\rng_get_bytes.c">
+      <Filter>prngs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\prngs\rng_make_prng.c">
+      <Filter>prngs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\prngs\sober128.c">
+      <Filter>prngs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\prngs\sprng.c">
+      <Filter>prngs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\prngs\yarrow.c">
+      <Filter>prngs</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\chacha_crypt.c">
+      <Filter>stream\chacha</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\chacha_done.c">
+      <Filter>stream\chacha</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\chacha_ivctr32.c">
+      <Filter>stream\chacha</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\chacha_ivctr64.c">
+      <Filter>stream\chacha</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\chacha_keystream.c">
+      <Filter>stream\chacha</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\chacha_memory.c">
+      <Filter>stream\chacha</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\chacha_setup.c">
+      <Filter>stream\chacha</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\chacha_test.c">
+      <Filter>stream\chacha</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\xchacha20_memory.c">
+      <Filter>stream\chacha</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\xchacha20_setup.c">
+      <Filter>stream\chacha</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\chacha\xchacha20_test.c">
+      <Filter>stream\chacha</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\rabbit\rabbit.c">
+      <Filter>stream\rabbit</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\rabbit\rabbit_memory.c">
+      <Filter>stream\rabbit</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\rc4\rc4_stream.c">
+      <Filter>stream\rc4</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\rc4\rc4_stream_memory.c">
+      <Filter>stream\rc4</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\rc4\rc4_test.c">
+      <Filter>stream\rc4</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\salsa20\salsa20_crypt.c">
+      <Filter>stream\salsa20</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\salsa20\salsa20_done.c">
+      <Filter>stream\salsa20</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\salsa20\salsa20_ivctr64.c">
+      <Filter>stream\salsa20</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\salsa20\salsa20_keystream.c">
+      <Filter>stream\salsa20</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\salsa20\salsa20_memory.c">
+      <Filter>stream\salsa20</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\salsa20\salsa20_setup.c">
+      <Filter>stream\salsa20</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\salsa20\salsa20_test.c">
+      <Filter>stream\salsa20</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\salsa20\xsalsa20_memory.c">
+      <Filter>stream\salsa20</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\salsa20\xsalsa20_setup.c">
+      <Filter>stream\salsa20</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\salsa20\xsalsa20_test.c">
+      <Filter>stream\salsa20</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\sober128\sober128_stream.c">
+      <Filter>stream\sober128</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\sober128\sober128_stream_memory.c">
+      <Filter>stream\sober128</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\sober128\sober128_test.c">
+      <Filter>stream\sober128</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\sosemanuk\sosemanuk.c">
+      <Filter>stream\sosemanuk</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\sosemanuk\sosemanuk_memory.c">
+      <Filter>stream\sosemanuk</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\x64\libtomcrypt\src\stream\sosemanuk\sosemanuk_test.c">
+      <Filter>stream\sosemanuk</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>

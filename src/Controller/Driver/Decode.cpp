@@ -1,141 +1,136 @@
-#include "Decode.hpp"
+#include "STDInclude.hpp"
 
-#include "../Types.hpp"
+#include "Controller/Driver/Decode.hpp"
 
-#include <cmath>
-#include <cassert>
-#include <algorithm>
-
-namespace Controller
+namespace Controller::Driver
 {
-  namespace driver
-  {
-    uint8_t
-    rd_u8 (std::span<const std::byte> d, size_t off) noexcept
-    {
-      assert (off < d.size ());
-      return static_cast<uint8_t> (d[off]);
-    }
+	std::uint8_t ReadU8(std::span<const std::byte> data, std::size_t offset) noexcept
+	{
+		assert(offset < data.size());
+		return static_cast<std::uint8_t>(data[offset]);
+	}
 
-    uint16_t
-    rd_le16 (std::span<const std::byte> d, size_t off) noexcept
-    {
-      assert (off + 1 < d.size ());
-      return static_cast<uint16_t> (
-        static_cast<uint16_t> (d[off]) |
-        (static_cast<uint16_t> (d[off + 1]) << 8));
-    }
+	std::uint16_t ReadLe16(std::span<const std::byte> data, std::size_t offset) noexcept
+	{
+		assert(offset + 1 < data.size());
 
-    int16_t
-    rd_le16s (std::span<const std::byte> d, size_t off) noexcept
-    {
-      return static_cast<int16_t> (rd_le16 (d, off));
-    }
+		const auto low = static_cast<std::uint16_t>(data[offset]);
+		const auto high = static_cast<std::uint16_t>(static_cast<std::uint16_t>(data[offset + 1]) << 8);
 
-    uint32_t
-    rd_le32 (std::span<const std::byte> d, size_t off) noexcept
-    {
-      assert (off + 3 < d.size ());
-      return static_cast<uint32_t> (d[off]) |
-             (static_cast<uint32_t> (d[off + 1]) << 8) |
-             (static_cast<uint32_t> (d[off + 2]) << 16) |
-             (static_cast<uint32_t> (d[off + 3]) << 24);
-    }
+		return static_cast<std::uint16_t>(low | high);
+	}
 
-    uint32_t
-    crc32_le (uint32_t crc, std::span<const std::byte> data) noexcept
-    {
-      constexpr uint32_t reflected_polynomial {0xEDB88320u};
+	std::int16_t ReadLe16Signed(std::span<const std::byte> data, std::size_t offset) noexcept
+	{
+		return static_cast<std::int16_t>(ReadLe16(data, offset));
+	}
 
-      for (std::byte b: data)
-      {
-        crc ^= static_cast<uint8_t> (b);
+	std::uint32_t ReadLe32(std::span<const std::byte> data, std::size_t offset) noexcept
+	{
+		assert(offset + 3 < data.size());
 
-        for (int i (0); i < 8; ++i)
-        {
-          if ((crc & 1u) != 0)
-            crc = (crc >> 1) ^ reflected_polynomial;
-          else
-            crc >>= 1;
-        }
-      }
+		return static_cast<std::uint32_t>(data[offset])
+			| (static_cast<std::uint32_t>(data[offset + 1]) << 8)
+			| (static_cast<std::uint32_t>(data[offset + 2]) << 16)
+			| (static_cast<std::uint32_t>(data[offset + 3]) << 24);
+	}
 
-      return crc;
-    }
+	std::uint32_t Crc32Le(std::uint32_t crc, std::span<const std::byte> data) noexcept
+	{
+		constexpr std::uint32_t reflectedPolynomial = 0xEDB88320u;
 
-    bool
-    verify_ps_crc32 (uint8_t seed,
-                     std::span<const std::byte> data,
-                     uint32_t expected) noexcept
-    {
-      const std::byte s {static_cast<std::byte> (seed)};
+		for (const auto value : data)
+		{
+			crc ^= static_cast<std::uint8_t>(value);
 
-      uint32_t crc (crc32_le (0xFFFFFFFFu, std::span<const std::byte> (&s, 1)));
-      crc = ~crc32_le (crc, data);
+			for (int bit = 0; bit < 8; ++bit)
+			{
+				if ((crc & 1u) != 0)
+				{
+					crc = (crc >> 1) ^ reflectedPolynomial;
+				}
+				else
+				{
+					crc >>= 1;
+				}
+			}
+		}
 
-      return crc == expected;
-    }
+		return crc;
+	}
 
-    ps_touch_point
-    decode_touch_point (std::span<const std::byte> p) noexcept
-    {
-      assert (p.size () >= 4);
+	bool IsPsCrc32Valid(std::uint8_t seed, std::span<const std::byte> data, std::uint32_t expected) noexcept
+	{
+		const auto seedByte = static_cast<std::byte>(seed);
 
-      const uint8_t contact (static_cast<uint8_t> (p[0]));
-      const uint8_t x_lo (static_cast<uint8_t> (p[1]));
-      const uint8_t mid (static_cast<uint8_t> (p[2]));
-      const uint8_t y_hi (static_cast<uint8_t> (p[3]));
+		std::uint32_t crc = Crc32Le(0xFFFFFFFFu, std::span<const std::byte>(&seedByte, 1));
+		crc = ~Crc32Le(crc, data);
 
-      ps_touch_point r {};
-      r.active = (contact & 0x80u) == 0;
-      r.id = static_cast<uint8_t> (contact & 0x7Fu);
-      r.x = static_cast<uint16_t> (x_lo | ((mid & 0x0Fu) << 8));
-      r.y = static_cast<uint16_t> ((mid >> 4) | (y_hi << 4));
-      return r;
-    }
+		return crc == expected;
+	}
 
-    void
-    apply_hat (button_set& s, uint8_t hat) noexcept
-    {
-      struct dir { int x; int y; };
-      static constexpr dir table[8]
-      {
-        { 0, -1},
-        { 1, -1},
-        { 1,  0},
-        { 1,  1},
-        { 0,  1},
-        {-1,  1},
-        {-1,  0},
-        {-1, -1},
-      };
+	PsTouchPoint DecodeTouchPoint(std::span<const std::byte> point) noexcept
+	{
+		assert(point.size() >= 4);
 
-      if (hat >= 8)
-        return;
+		const auto contact = static_cast<std::uint8_t>(point[0]);
+		const auto xLow = static_cast<std::uint8_t>(point[1]);
+		const auto middle = static_cast<std::uint8_t>(point[2]);
+		const auto yHigh = static_cast<std::uint8_t>(point[3]);
 
-      const dir d (table[hat]);
-      s.set (button::dpad_up,    d.y < 0);
-      s.set (button::dpad_down,  d.y > 0);
-      s.set (button::dpad_left,  d.x < 0);
-      s.set (button::dpad_right, d.x > 0);
-    }
+		PsTouchPoint decoded{};
+		decoded.isActive = (contact & 0x80u) == 0;
+		decoded.id = static_cast<std::uint8_t>(contact & 0x7Fu);
+		decoded.x = static_cast<std::uint16_t>(xLow | ((middle & 0x0Fu) << 8));
+		decoded.y = static_cast<std::uint16_t>((middle >> 4) | (yHigh << 4));
+		return decoded;
+	}
 
-    stick_vector
-    normalize_ps_stick (uint8_t x, uint8_t y) noexcept
-    {
-      float fx (std::clamp ((static_cast<float> (x) - 128.0f) / 127.0f,
-                            -1.0f, 1.0f));
-      float fy (std::clamp ((128.0f - static_cast<float> (y)) / 127.0f,
-                            -1.0f, 1.0f));
+	void ApplyHat(ButtonSet& buttons, std::uint8_t hat) noexcept
+	{
+		struct Direction
+		{
+			int x;
+			int y;
+		};
 
-      float m (std::sqrt (fx * fx + fy * fy));
-      if (m > 1.0f)
-      {
-        fx /= m;
-        fy /= m;
-      }
+		static constexpr Direction directions[8] =
+		{
+			{ 0, -1 },
+			{ 1, -1 },
+			{ 1, 0 },
+			{ 1, 1 },
+			{ 0, 1 },
+			{ -1, 1 },
+			{ -1, 0 },
+			{ -1, -1 },
+		};
 
-      return {fx, fy};
-    }
-  }
+		if (hat >= 8)
+		{
+			return;
+		}
+
+		const auto direction = directions[hat];
+		buttons.Set(Button::DpadUp, direction.y < 0);
+		buttons.Set(Button::DpadDown, direction.y > 0);
+		buttons.Set(Button::DpadLeft, direction.x < 0);
+		buttons.Set(Button::DpadRight, direction.x > 0);
+	}
+
+	StickVector NormalizePsStick(std::uint8_t x, std::uint8_t y) noexcept
+	{
+		float normalizedX = std::clamp((static_cast<float>(x) - 128.0f) / 127.0f, -1.0f, 1.0f);
+		float normalizedY = std::clamp((128.0f - static_cast<float>(y)) / 127.0f, -1.0f, 1.0f);
+
+		const float magnitude = std::sqrt(normalizedX * normalizedX + normalizedY * normalizedY);
+
+		if (magnitude > 1.0f)
+		{
+			normalizedX /= magnitude;
+			normalizedY /= magnitude;
+		}
+
+		return { normalizedX, normalizedY };
+	}
 }

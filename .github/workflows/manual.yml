@@ -21,16 +21,18 @@ jobs:
       uses: microsoft/setup-msbuild@v2
 
     - name: Generate project files
-      run: tools/premake5 vs2022
+      run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-x64.ps1
 
     - name: Build zw3 solution
-      run: msbuild build/zw3.sln /m /p:Configuration=Release /p:Platform=Win32
+      run: msbuild build/zw3.sln /m /p:Configuration=Release /p:Platform=x64
 
     - name: List output files
-      run: Get-ChildItem build/bin/Win32/Release
+      run: Get-ChildItem build/bin/x64/Release
 
     - name: Upload zw3.dll
       uses: actions/upload-artifact@v4
       with:
         name: zw3.dll
-        path: build/bin/Win32/Release/zw3.dll
+        path: |
+          build/bin/x64/Release/zw3.dll
+          build/bin/x64/Release/d3d9.dll

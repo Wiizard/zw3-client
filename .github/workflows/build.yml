@@ -35,18 +35,19 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Generate project files
-        run: tools/premake5 vs2022
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-x64.ps1
 
       - name: Set up problem matching
         uses: ammaraskar/msvc-problem-matcher@master
 
       - name: Build ${{matrix.configuration}} binaries
-        run: msbuild /m /v:minimal /p:Configuration=${{matrix.configuration}} /p:Platform=Win32 build/zw3.sln
+        run: msbuild /m /v:minimal /p:Configuration=${{matrix.configuration}} /p:Platform=x64 build/zw3.sln
 
       - name: Upload ${{matrix.configuration}} binaries
         uses: actions/upload-artifact@v4
         with:
           name: ${{matrix.configuration}} binaries
           path: |
-            build/bin/Win32/${{matrix.configuration}}/zw3.dll
-            build/bin/Win32/${{matrix.configuration}}/zw3.pdb
+            build/bin/x64/${{matrix.configuration}}/zw3.dll
+            build/bin/x64/${{matrix.configuration}}/d3d9.dll
+            build/bin/x64/${{matrix.configuration}}/zw3.pdb

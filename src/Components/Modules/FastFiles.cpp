@@ -16,6 +16,7 @@
 #include "Events.hpp"
 #include "Flags.hpp"
 #include "LobbyScene.hpp"
+#include "Party.hpp"
 #include "Logger.hpp"
 #include "Renderer.hpp"
 #include "Scheduler.hpp"
@@ -1735,5 +1736,27 @@ namespace Components
 
 		Utils::Hook::Nop(DB_InflateInit_UnsignedJnz, sizeof(unsignedJnz));
 		Utils::Hook::Set<std::uint8_t>(Image_LoadFromFileWithReader_SizeJz, 0xEB);
+
+		Scheduler::Loop([]
+		{
+			if ((!Party::IsInLobby() && !LobbyScene::IsSceneReady()) || !Game::Sys_IsDatabaseReady()
+				|| Game::CL_IsCgameInitialized(0) || Game::CL_GetLocalClientConnectionState(0) >= Game::CA_CONNECTING) return;
+			static std::string selectedMap;
+			static std::string prefetchedMap;
+			static std::chrono::steady_clock::time_point selectedAt;
+			const auto map = Dvar::Var("ui_mapname").Get<std::string>();
+			const auto now = std::chrono::steady_clock::now();
+			if (map != selectedMap)
+			{
+				selectedMap = map;
+				selectedAt = now;
+			}
+			if (map.empty() || map == prefetchedMap || now - selectedAt < 250ms) return;
+			PrefetchZone(map + "_load");
+			PrefetchZone(map);
+			PrefetchZone("patch_" + map);
+			PrefetchZone("localized_" + map);
+			prefetchedMap = map;
+		}, Scheduler::Pipeline::MAIN, 250ms);
 	}
 }

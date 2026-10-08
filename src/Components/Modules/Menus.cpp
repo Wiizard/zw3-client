@@ -17,6 +17,7 @@
 #include "UIScript.hpp"
 #include "SPLoadscreens.hpp"
 #include "LobbyScene.hpp"
+#include "Renderer.hpp"
 
 #include "Utils/MenuPreprocessor.hpp"
 
@@ -28,6 +29,20 @@ namespace Components
 	std::unordered_map<std::string, Game::menuDef_t*> Menus::overridden;
 	std::vector<std::string> Menus::custom;
 	std::vector<std::string> Menus::deferred;
+	struct BorderStyle
+	{
+		float size;
+		float alpha;
+		float appliedAlpha;
+	};
+	static std::unordered_map<Game::windowDef_t*, BorderStyle> requestedBorderSizes;
+	static std::unordered_map<std::string, std::string> menuReadCache;
+	static bool isCachingMenuReads = false;
+	struct MenuReadBatch
+	{
+		MenuReadBatch() { menuReadCache.clear(); isCachingMenuReads = true; }
+		~MenuReadBatch() { isCachingMenuReads = false; menuReadCache.clear(); }
+	};
 	bool Menus::isIngameLoaded = false;
 	Utils::Hook Menus::uiInitHook;
 	Utils::Hook Menus::cgameInitHook;
@@ -3203,6 +3218,31 @@ namespace Components
 		{
 			menu->window.dynamicFlags[0] |= static_cast<int>(Game::WINDOW_DYNAMIC_VISIBLE);
 		}
+		requestedBorderSizes[&menu->window] = { menu->window.borderSize, menu->window.borderColor[3], menu->window.borderColor[3] };
+		for (int index = 0; index < menu->itemCount; ++index)
+		{
+			if (menu->items[index])
+			{
+				const auto& window = menu->items[index]->window;
+				requestedBorderSizes[&menu->items[index]->window] = { window.borderSize, window.borderColor[3], window.borderColor[3] };
+			}
+		}
+
+		if (menu->window.name && _stricmp(menu->window.name, "menu_xboxlive_privatelobby") == 0)
+		{
+			for (int index = 0; index < menu->itemCount; ++index)
+			{
+				auto* item = menu->items[index];
+				if (!item) continue;
+				const bool isSaveBanner = (item->window.name
+					&& (_stricmp(item->window.name, "btn_load_save") == 0 || _stricmp(item->window.name, "btn_load_save_bar") == 0))
+					|| (item->text && (std::strcmp(item->text, "LOAD SAVE GAME") == 0 || std::strcmp(item->text, "View your saved progress") == 0));
+				if (!isSaveBanner) continue;
+				item->dvarTest = Menus::GetAllocator()->DuplicateString("ui_autosave_banner_visible");
+				item->enableDvar = Menus::GetAllocator()->DuplicateString("\"1\"");
+				item->dvarFlags |= Game::ITEM_DVAR_FLAG_SHOW;
+			}
+		}
 
 		return menu;
 	}
@@ -3219,6 +3259,17 @@ namespace Components
 
 	bool Menus::TryReadFile(const std::string& path, std::string* contents)
 	{
+		auto key = Utils::String::ToLower(path);
+		std::ranges::replace(key, '\\', '/');
+		if (isCachingMenuReads)
+		{
+			const auto cached = menuReadCache.find(key);
+			if (cached != menuReadCache.end())
+			{
+				*contents = cached->second;
+				return true;
+			}
+		}
 		void* buffer = nullptr;
 		const int length = Game::FS_ReadFile(path.data(), &buffer);
 
@@ -3236,6 +3287,7 @@ namespace Components
 
 		contents->assign(static_cast<const char*>(buffer), static_cast<std::size_t>(length));
 		Game::FS_FreeFile(buffer);
+		if (isCachingMenuReads) menuReadCache.emplace(key, *contents);
 		return true;
 	}
 
@@ -3351,6 +3403,8 @@ namespace Components
 
 	void Menus::Reset()
 	{
+		requestedBorderSizes.clear();
+		menuReadCache.clear();
 		if (Game::cgDC)
 		{
 			Game::cgDC->menuCount = 0;
@@ -3506,6 +3560,7 @@ namespace Components
 	void Menus::LoadAll()
 	{
 		Reset();
+		const MenuReadBatch readBatch;
 
 		const std::vector<std::string> files = FileSystem::GetFileList("ui_mp", "menu");
 
@@ -3576,6 +3631,7 @@ namespace Components
 			return;
 		}
 
+		const MenuReadBatch readBatch;
 		int linked = 0;
 
 		for (const std::string& path : deferred)
@@ -4290,17 +4346,33 @@ namespace Components
 
 	bool Menus::Menu_Paint_IsVisible_Hook(Game::UiContext* context, Game::menuDef_t* menu)
 	{
+		if (menu)
+		{
+			const float pixelSize = 480.0f / static_cast<float>(std::max(1, Renderer::Height()));
+			const auto updateBorder = [pixelSize](Game::windowDef_t& window)
+			{
+				const auto requested = requestedBorderSizes.find(&window);
+				if (requested != requestedBorderSizes.end() && requested->second.size > 0.0f)
+				{
+					auto& style = requested->second;
+					if (window.borderColor[3] != style.appliedAlpha) style.alpha = window.borderColor[3];
+					window.borderSize = std::max(pixelSize, style.size);
+					style.appliedAlpha = style.alpha * std::clamp(style.size / pixelSize, 0.5f, 1.0f);
+					window.borderColor[3] = style.appliedAlpha;
+				}
+			};
+			updateBorder(menu->window);
+			for (int index = 0; index < menu->itemCount; ++index)
+			{
+				if (menu->items[index]) updateBorder(menu->items[index]->window);
+			}
+		}
 		const bool hasName = menu && menu->window.name;
-
 		const bool isHeldForScene = hasName && (_stricmp(menu->window.name, "main_text") == 0
 			|| _stricmp(menu->window.name, "pregame_loaderror") == 0
 			|| _stricmp(menu->window.name, "menu_xboxlive_privatelobby") == 0
 			|| _stricmp(menu->window.name, "zwnet_matchmaking") == 0);
-
-		if (isHeldForScene && LobbyScene::IsStartupLoading())
-		{
-			return false;
-		}
+		if (isHeldForScene && LobbyScene::IsStartupLoading()) return false;
 
 		if (LobbyScene::IsTransitionActive())
 		{

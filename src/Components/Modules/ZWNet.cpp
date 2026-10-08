@@ -10,6 +10,7 @@
 #include "FileSystem.hpp"
 #include "Friends.hpp"
 #include "Localization.hpp"
+#include "LobbyScene.hpp"
 #include "Logger.hpp"
 #include "Maps.hpp"
 #include "Party.hpp"
@@ -20,9 +21,10 @@ namespace Components
 {
 	constexpr auto apiBase = "https://backend.zw3.eu";
 
-	constexpr auto clientVersion = "3.0.4";
-	constexpr auto modVersion = "3.0.4";
-	constexpr auto userAgent = "ZW3-ZWNET/3.0.4";
+	// The architecture port uses the same service/content version as the x86 client.
+	constexpr auto clientVersion = "3.0.3";
+	constexpr auto modVersion = "3.0.3";
+	constexpr auto userAgent = "ZW3-ZWNET/3.0.3";
 
 	template <typename Callback>
 	class ScopeExit
@@ -527,7 +529,8 @@ namespace Components
 
 	static bool IsCurrentPlaylistActivation(const std::uint64_t generation)
 	{
-		return isPlaylistSelectorOpen && playlistSelectorGeneration == generation;
+		return isActive && (isPlaylistSelectorOpen || isPlaylistSelectionStarting || isPlaylistSearchStarting)
+			&& playlistSelectorGeneration == generation;
 	}
 
 	static std::string SafePlaylistText(const std::string& value, const std::size_t limit)
@@ -2129,7 +2132,7 @@ namespace Components
 			return {};
 		}
 
-		const auto directory = appdata.parent_path() / BASEGAME;
+		const auto directory = appdata;
 		Utils::IO::CreateDir(directory.string());
 
 		return (directory / "zwnet.session").string();
@@ -2319,6 +2322,7 @@ namespace Components
 			}
 
 			SetDisplayText("ui_zwnet_state", state);
+			Dvar::Var("zwnet_search_active").Set(state == "SEARCH_STARTING" || state == "SEARCHING");
 			SetDisplayText("ui_zwnet_state_text", stateText);
 			Dvar::Var("ui_zwnet_error").Set(error);
 			Dvar::Var("ui_zwnet_error_text").Set(errorText);
@@ -2456,7 +2460,20 @@ namespace Components
 
 		if (result->contains("error"))
 		{
-			SetState("LOGIN_REQUIRED", "ZWNET_ACCOUNT_LINK_REQUIRED");
+			const auto code = ResponseErrorCode(*result);
+
+			if (code == "STATS_ACCOUNT_NOT_LINKED")
+			{
+				SetState("LOGIN_REQUIRED", "ZWNET_ACCOUNT_LINK_REQUIRED");
+			}
+			else if (code == "CLIENT_VERSION_UNSUPPORTED" || code == "VERSION_MISMATCH")
+			{
+				SetState("ERROR", "ZWNET_VERSION_MISMATCH");
+			}
+			else
+			{
+				SetState("ERROR", "ZWNET_REQUEST_FAILED");
+			}
 			return;
 		}
 
@@ -2644,7 +2661,7 @@ namespace Components
 		{
 			if (isActive)
 			{
-				Command::Execute("openLink " + url, false);
+				Command::Execute(std::format("openLink \"{}\"", url), false);
 			}
 		}, Scheduler::Pipeline::MAIN);
 	}
@@ -2721,7 +2738,7 @@ namespace Components
 
 			if (playlistCatalog.accountId != accountId)
 			{
-				hasAccountChanged = true;
+				hasAccountChanged = !playlistCatalog.accountId.empty();
 				ResetPlaylistCatalogLocked(false);
 				playlistCatalog.accountId = accountId;
 				playlistCatalog.lastAttempt = {};
@@ -2741,6 +2758,10 @@ namespace Components
 		{
 			isPlaylistSelectorOpen = false;
 			++playlistSelectorGeneration;
+			Scheduler::Once([]
+			{
+				Command::Execute("closemenu popup_zwnet_playlists", false);
+			}, Scheduler::Pipeline::MAIN);
 			SchedulePlaylistCatalogPublish();
 		}
 
@@ -2886,7 +2907,7 @@ namespace Components
 	void ZWNet::CancelPlaylistSelection()
 	{
 		isPlaylistSelectorOpen = false;
-		++playlistSelectorGeneration;
+		if (!isPlaylistSelectionStarting && !isPlaylistSearchStarting) ++playlistSelectorGeneration;
 
 		Dvar::Var("zwnet_catalog_action_error").Set("");
 		PublishPlaylistCatalog();
@@ -2918,7 +2939,8 @@ namespace Components
 
 	void ZWNet::ActivatePlaylistSlot(const int slot)
 	{
-		if (!isPlaylistSelectorOpen || isPlaylistSearchStarting || isSearching || isInGame
+		auto* const menu = Game::uiContext ? Game::Menus_FindByName(Game::uiContext, "popup_zwnet_playlists") : nullptr;
+		if (!isActive || !menu || !Game::Menu_IsVisible(Game::uiContext, menu) || isPlaylistSearchStarting || isSearching || isInGame
 			|| slot < 0 || slot >= static_cast<int>(playlistPageSize))
 		{
 			return;
@@ -2928,6 +2950,7 @@ namespace Components
 		{
 			return;
 		}
+		if (!isPlaylistSelectorOpen.exchange(true)) ++playlistSelectorGeneration;
 
 		if (!isLocalPartyLeader)
 		{
@@ -2936,6 +2959,7 @@ namespace Components
 		}
 
 		std::string playlistId;
+		std::string playlistName;
 		std::int64_t playlistRevision = 0;
 
 		{
@@ -2959,6 +2983,7 @@ namespace Components
 			}
 
 			playlistId = entry.id;
+			playlistName = entry.name;
 			playlistRevision = entry.revision;
 		}
 
@@ -2970,7 +2995,10 @@ namespace Components
 		const auto generation = playlistSelectorGeneration.load();
 
 		Dvar::Var("zwnet_catalog_action_error").Set("");
+		Dvar::Var("zwnet_search_playlist_name").Set(playlistName);
+		SetState("SEARCH_STARTING");
 		PublishPlaylistCatalog();
+		Command::Execute("closemenu popup_zwnet_playlists", false);
 
 		EnqueueAsync([playlistId, playlistRevision, generation]
 		{
@@ -3090,10 +3118,11 @@ namespace Components
 
 		if (playlistName.empty() || !IsCurrentPlaylistActivation(selectorGeneration))
 		{
+			const bool isCurrent = IsCurrentPlaylistActivation(selectorGeneration);
 			isSearching = false;
 			isPlaylistSelectionStarting = false;
 
-			if (IsCurrentPlaylistActivation(selectorGeneration))
+			if (isCurrent)
 			{
 				SetState("IN_PARTY", "ZWNET_PLAYLIST_REFRESH_REQUIRED");
 			}
@@ -4894,6 +4923,21 @@ namespace Components
 		return true;
 	}
 
+	static void ConnectWithLobbyTransition(const Network::Address& target)
+	{
+		const auto generation = joinTransitionGeneration.load();
+		const auto connect = [target, generation]
+		{
+			if (!isActive || joinTransitionGeneration != generation) return;
+			Scheduler::Once([generation]
+			{
+				if (joinTransitionGeneration == generation) isServerJoinTransition = false;
+			}, Scheduler::Pipeline::MAIN, 12s);
+			Party::Connect(target, false, false, true);
+		};
+		if (!LobbyScene::DeferLaunch(connect)) connect();
+	}
+
 	void ZWNet::ConnectMatch(const std::string& matchId, const bool isRelay, const bool isReconnect)
 	{
 		if (!isRelay && IsRelayUsedForMatch(matchId))
@@ -5240,18 +5284,10 @@ namespace Components
 
 			MarkJoinInProgressConnectionStarted(matchId);
 
-			const auto transitionGeneration = ++joinTransitionGeneration;
+			++joinTransitionGeneration;
 			isServerJoinTransition = true;
 
-			Scheduler::Once([transitionGeneration]
-			{
-				if (joinTransitionGeneration == transitionGeneration)
-				{
-					isServerJoinTransition = false;
-				}
-			}, Scheduler::Pipeline::MAIN, 12s);
-
-			Party::Connect(target);
+			ConnectWithLobbyTransition(target);
 			isManagedReconnectInFlight = false;
 		}, Scheduler::Pipeline::MAIN);
 	}
@@ -6018,6 +6054,7 @@ namespace Components
 	void ZWNet::InitializeDvars()
 	{
 		Dvar::Register("ui_zwnet_state", "OFFLINE", Game::DVAR_NONE, "Localized ZWNET state key");
+		Dvar::Register("zwnet_search_active", false, Game::DVAR_NONE, "Matchmaking search is starting or active");
 		Dvar::Register("ui_zwnet_state_text", "OFFLINE", Game::DVAR_NONE, "Readable ZWNET state text");
 		Dvar::Register("ui_zwnet_error", "", Game::DVAR_NONE, "Stable ZWNET error key");
 		Dvar::Register("ui_zwnet_error_text", "", Game::DVAR_NONE, "Readable ZWNET error text");
@@ -6306,18 +6343,10 @@ namespace Components
 
 				MarkJoinInProgressConnectionStarted(matchId);
 
-				const auto transitionGeneration = ++joinTransitionGeneration;
+				++joinTransitionGeneration;
 				isServerJoinTransition = true;
 
-				Scheduler::Once([transitionGeneration]
-				{
-					if (joinTransitionGeneration == transitionGeneration)
-					{
-						isServerJoinTransition = false;
-					}
-				}, Scheduler::Pipeline::MAIN, 12s);
-
-				Party::Connect(target);
+				ConnectWithLobbyTransition(target);
 				isManagedReconnectInFlight = false;
 			}, Scheduler::Pipeline::MAIN);
 		});

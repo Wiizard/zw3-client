@@ -112,6 +112,13 @@ namespace Components
 		return party_enable.IsValid() && party_enable.Get<bool>();
 	}
 
+	bool Party::IsLobbySceneClient()
+	{
+		if (IsHostingParty() || !joinContainer.target.IsValid() || Game::CL_IsCgameInitialized(0)) return false;
+		const auto* const lobby = reinterpret_cast<const std::uint8_t*>(Game::g_lobbyData);
+		return *reinterpret_cast<const int*>(lobby + partyInParty) != 0;
+	}
+
 	bool Party::IsInLobby()
 	{
 		return !Dedicated::IsRunning() && IsEnabled() && IsHostingParty();
@@ -552,6 +559,45 @@ namespace Components
 				Network::SendCommand(target, "dvarUpdate", update);
 			}
 		}
+	}
+
+	void Party::BroadcastLobbyTransition()
+	{
+		if (!IsHostingParty() || !LobbyScene::IsTransitionActive()) return;
+		std::vector<Network::Address> targets;
+		std::unordered_set<std::string> sentAddresses;
+		for (int i = 0; i < maxPartySlots; ++i)
+		{
+			const auto& member = Game::g_lobbyData->partyMembers[i];
+			if (member.status == 0 || member.player == GetLocalPlayerXuid()) continue;
+			const auto addresses = xuidAddresses.find(member.player);
+			if (addresses == xuidAddresses.end()) continue;
+			for (const auto& target : addresses->second)
+			{
+				if (sentAddresses.insert(target.GetString()).second) targets.push_back(target);
+			}
+		}
+		const auto map = Dvar::Var("ui_mapname").Get<std::string>();
+		for (int attempt = 0; attempt < 3; ++attempt)
+		{
+			Scheduler::Once([targets, map]
+			{
+				if (!IsHostingParty() || !LobbyScene::IsTransitionActive()) return;
+				for (const auto& target : targets) Network::SendCommand(target, "lobbyTransition", map);
+			}, Scheduler::Pipeline::MAIN, std::chrono::milliseconds(attempt * 100));
+		}
+	}
+
+	static bool HasJoinableHostLobby()
+	{
+		static constexpr const char* names[] = { "menu_xboxlive_privatelobby", "zwnet_matchmaking", "zwnet_party_lobby" };
+		if (!Game::uiContext) return false;
+		for (const auto* name : names)
+		{
+			auto* menu = Game::Menus_FindByName(Game::uiContext, name);
+			if (menu && Game::Menu_IsVisible(Game::uiContext, menu)) return true;
+		}
+		return false;
 	}
 
 	struct RealCharacterParticipant
@@ -1153,6 +1199,10 @@ namespace Components
 
 	static std::string GetAutosavePath()
 	{
+		if (!Game::fs_basepath || !*Game::fs_basepath || !(*Game::fs_basepath)->current.string)
+		{
+			return {};
+		}
 		return std::string((*Game::fs_basepath)->current.string) + "\\zw3\\core\\scriptdata\\autosave";
 	}
 
@@ -1193,6 +1243,9 @@ namespace Components
 
 			if (end == std::string::npos)
 			{
+				auto remainder = text.substr(start);
+				Utils::String::Trim(remainder);
+				if (!remainder.empty()) return {};
 				break;
 			}
 
@@ -1203,7 +1256,7 @@ namespace Components
 
 			if (colon == std::string::npos)
 			{
-				continue;
+				return {};
 			}
 
 			auto key = item.substr(0, colon);
@@ -1212,12 +1265,65 @@ namespace Components
 			Utils::String::Trim(key);
 			Utils::String::Trim(value);
 
-			if (!key.empty())
-			{
-				fields[key] = value;
-			}
+			if (key.empty()) return {};
+			const auto [field, inserted] = fields.emplace(key, value);
+			// The save writer repeats its accumulated data when adding weapons and perks.
+			if (!inserted && field->second != value) return {};
 		}
 
+		return fields;
+	}
+
+	static bool IsValidAutosave(const std::unordered_map<std::string, std::string>& fields)
+	{
+		const auto map = fields.find("map");
+		if (map == fields.end() || map->second.empty() || map->second.size() > 64
+			|| !std::ranges::all_of(map->second, [](const unsigned char character)
+			{
+				return std::isalnum(character) != 0 || character == '_' || character == '-';
+			})) return false;
+
+		for (const auto* key : { "round", "score", "kills", "downs", "revives", "exfiltrated" })
+		{
+			const auto field = fields.find(key);
+			if (field == fields.end() || field->second.empty()) return false;
+			int value = 0;
+			const auto& text = field->second;
+			const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+			if (result.ec != std::errc{} || result.ptr != text.data() + text.size()
+				|| value < (std::strcmp(key, "round") == 0 ? 1 : 0)) return false;
+		}
+
+		const auto mode = fields.find("zombiemode");
+		if (mode == fields.end() || (mode->second != "Normal" && mode->second != "Classic" && mode->second != "Hardcore")) return false;
+		const auto time = fields.find("time");
+		if (time == fields.end()) return false;
+		std::string_view remaining = time->second;
+		for (int part = 0; part < 3; ++part)
+		{
+			const auto separator = remaining.find(':');
+			if ((part < 2) != (separator != std::string_view::npos)) return false;
+			const auto text = remaining.substr(0, separator);
+			int value = 0;
+			const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+			if (text.empty() || result.ec != std::errc{} || result.ptr != text.data() + text.size()
+				|| value < 0 || (part > 0 && value > 59)) return false;
+			if (part < 2) remaining.remove_prefix(separator + 1);
+		}
+		return true;
+	}
+
+	static std::unordered_map<std::string, std::string> ReadValidAutosave()
+	{
+		const auto path = GetAutosavePath();
+		struct _stat64 status{};
+		if (path.empty() || _stat64(path.data(), &status) != 0 || !(status.st_mode & _S_IFREG)
+			|| status.st_size <= 0 || status.st_size > 65536) return {};
+		std::ifstream file(path, std::ios::binary);
+		std::string encrypted(static_cast<std::size_t>(status.st_size), '\0');
+		if (!file.read(encrypted.data(), static_cast<std::streamsize>(encrypted.size()))) return {};
+		auto fields = ParseAutosave(DecryptAutosave(encrypted));
+		if (!IsValidAutosave(fields)) return {};
 		return fields;
 	}
 
@@ -1476,9 +1582,9 @@ namespace Components
 	static void ShowAutosave()
 	{
 		const auto path = GetAutosavePath();
-		std::ifstream file(path);
-
-		if (!file.is_open())
+		const auto fields = ReadValidAutosave();
+		Dvar::Var("autosave_available").Set(!fields.empty());
+		if (fields.empty())
 		{
 			return;
 		}
@@ -1497,16 +1603,6 @@ namespace Components
 		else
 		{
 			SetAutosaveDvar("autosave_date", "Unknown date");
-		}
-
-		const std::string encrypted((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-		file.close();
-
-		const auto fields = ParseAutosave(DecryptAutosave(encrypted));
-
-		if (!fields.contains("map"))
-		{
-			return;
 		}
 
 		const auto get = [&fields](const char* key, const char* fallback) -> std::string
@@ -1746,7 +1842,7 @@ namespace Components
 
 		MatchType matchType = MatchType::NoMatch;
 
-		if (IsHostingParty())
+		if (IsHostingParty() && (Dvar::Var("sv_running").Get<bool>() || HasJoinableHostLobby()))
 		{
 			matchType = MatchType::PrivateParty;
 
@@ -1786,9 +1882,10 @@ namespace Components
 		return std::strtol(value.data(), nullptr, 10);
 	}
 
-	void Party::Connect(const Network::Address& target, bool downloadOnly, bool isUnmanagedRequired)
+	void Party::Connect(const Network::Address& target, bool downloadOnly, bool isUnmanagedRequired, bool preserveLobbyTransition)
 	{
-		LobbyScene::StopTransition();
+		LobbyScene::ClearRemoteScene();
+		if (!preserveLobbyTransition) LobbyScene::StopTransition();
 
 		Node::Add(target);
 
@@ -2727,6 +2824,9 @@ namespace Components
 			Dvar::Register("autosave_date", "", Game::DVAR_INIT, "");
 			Dvar::Register("autosave_mapname_display", "", Game::DVAR_INIT, "");
 			Dvar::Register("autosave_load", false, Game::DVAR_INIT, "");
+			Dvar::Register("autosave_available", false, Game::DVAR_NONE, "A valid local autosave can be loaded");
+			Dvar::Register("ui_autosave_banner_visible", false, Game::DVAR_NONE, "Autosave banner is showing or animating out");
+			Dvar::Register("ui_autosave_banner_time", 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Autosave banner reveal time");
 
 			mapPreference = Dvar::Register("zw3_pref_ui_mapname", "mp_cod5_prototype", Game::DVAR_ARCHIVE, "Saved private-match map preference");
 			isMapPreferenceReady = true;
@@ -2950,6 +3050,27 @@ namespace Components
 			}
 		});
 
+		Scheduler::Loop([]
+		{
+			if (!Game::Dvar_FindVar("autosave_available")) return;
+			const bool available = IsHostingParty() && !ReadValidAutosave().empty();
+			const int now = Game::Sys_Milliseconds();
+			if (available != Dvar::Var("autosave_available").Get<bool>())
+			{
+				Dvar::Var("ui_autosave_banner_time").Set(now);
+			}
+			Dvar::Var("autosave_available").Set(available);
+			const bool animatingOut = Dvar::Var("ui_autosave_banner_visible").Get<bool>()
+				&& now - Dvar::Var("ui_autosave_banner_time").Get<int>() < 450;
+			Dvar::Var("ui_autosave_banner_visible").Set(available || animatingOut);
+		}, Scheduler::Pipeline::MAIN, 250ms);
+
+		UIScript::Add("RefreshAutosaveBanner", [](const UIScript::Token&)
+		{
+			Dvar::Var("ui_autosave_banner_time").Set(Game::Sys_Milliseconds());
+			Dvar::Var("ui_autosave_banner_visible").Set(Dvar::Var("autosave_available").Get<bool>());
+		});
+
 		UIScript::Add("LoadSave", [](const UIScript::Token&)
 		{
 			if (IsHostingParty())
@@ -2979,7 +3100,14 @@ namespace Components
 				return;
 			}
 
-			const auto mapName = Dvar::Var("autosave_map").Get<std::string>();
+			const auto fields = ReadValidAutosave();
+			if (!IsHostingParty() || fields.empty())
+			{
+				Dvar::Var("autosave_available").Set(false);
+				Command::Execute("closemenu popup_autosave", false);
+				return;
+			}
+			const auto mapName = fields.at("map");
 			const bool isValidMapName = !mapName.empty() && mapName.size() <= 64 && std::ranges::all_of(mapName, [](const unsigned char character)
 			{
 				return std::isalnum(character) != 0 || character == '_' || character == '-';
@@ -3004,6 +3132,73 @@ namespace Components
 				Command::Execute("map " + mapName, false);
 				isAutosaveLaunchPending = false;
 			}, Scheduler::Pipeline::MAIN, 100ms);
+		});
+
+		Network::OnPacket("lobbyClock", [](Network::Address& address, const std::string& data)
+		{
+			if (!IsHostingParty() || data.size() != sizeof(DWORD)) return;
+			bool isMember = false;
+			for (int i = 0; i < maxPartySlots; ++i)
+			{
+				const auto& member = Game::g_lobbyData->partyMembers[i];
+				if (member.status == 0 || member.player == GetLocalPlayerXuid()) continue;
+				const auto found = xuidAddresses.find(member.player);
+				if (found != xuidAddresses.end() && std::ranges::find(found->second, address) != found->second.end()) isMember = true;
+			}
+			if (!isMember) return;
+			std::array<DWORD, 2> sample{};
+			std::memcpy(&sample[0], data.data(), sizeof(DWORD));
+			sample[1] = timeGetTime();
+			Network::SendCommand(address, "lobbyClockReply", std::string(reinterpret_cast<const char*>(sample.data()), sizeof(sample)));
+		});
+		Network::OnPacket("lobbyClockReply", [](Network::Address& address, const std::string& data)
+		{
+			if (!IsLobbySceneClient() || !(address == Target()) || data.size() != sizeof(DWORD) * 2) return;
+			std::array<DWORD, 2> sample{};
+			std::memcpy(sample.data(), data.data(), sizeof(sample));
+			LobbyScene::ReceiveSceneClock(sample[0], sample[1]);
+		});
+		Scheduler::Loop([]
+		{
+			if (!IsLobbySceneClient()) return;
+			const DWORD sent = timeGetTime();
+			Network::SendCommand(Target(), "lobbyClock", std::string(reinterpret_cast<const char*>(&sent), sizeof(sent)));
+		}, Scheduler::Pipeline::MAIN, 250ms);
+
+		Network::OnPacket("lobbyScene", [](Network::Address& address, const std::string& data)
+		{
+			if (IsLobbySceneClient() && address == Target()) LobbyScene::ReceiveSceneSnapshot(data);
+		});
+
+		Scheduler::Loop([]
+		{
+			if (!IsHostingParty() || Dedicated::IsEnabled() || Game::CL_IsCgameInitialized(0)) return;
+			const auto snapshot = LobbyScene::GetSceneSnapshot();
+			if (snapshot.empty()) return;
+			std::unordered_set<std::string> sent;
+			for (int slot = 0; slot < maxPartySlots; ++slot)
+			{
+				const auto& member = Game::g_lobbyData->partyMembers[slot];
+				if (member.status == 0 || member.player == GetLocalPlayerXuid()) continue;
+				const auto found = xuidAddresses.find(member.player);
+				if (found == xuidAddresses.end()) continue;
+				for (const auto& target : found->second)
+				{
+					if (sent.insert(target.GetString()).second) Network::SendCommand(target, "lobbyScene", snapshot);
+				}
+			}
+		}, Scheduler::Pipeline::MAIN, 16ms);
+
+		Network::OnPacket("lobbyTransition", [](Network::Address& address, const std::string& data)
+		{
+			if (!IsPrivateMatchClient() || !(address == Target()) || data.empty() || data.size() > 64
+				|| data.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != std::string::npos) return;
+			Scheduler::Once([address, map = data]
+			{
+				if (!IsPrivateMatchClient() || !(address == Target())) return;
+				Dvar::Var("ui_mapname").Set(map);
+				LobbyScene::StartTransition();
+			}, Scheduler::Pipeline::MAIN);
 		});
 
 		Network::OnPacket("dvarUpdate", [](Network::Address&, const std::string& data)

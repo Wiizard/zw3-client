@@ -252,6 +252,14 @@ namespace Components
 		return isDragActive;
 	}
 
+	static bool IsFrontendMovable()
+	{
+		const auto* mode = *Game::r_displayMode;
+		return Window::IsLoadingScreenMovable() || (mode && mode->current.integer == displayModeWindowed
+			&& LobbyScene::IsSceneReady() && !Game::CL_IsCgameInitialized(0)
+			&& Game::CL_GetLocalClientConnectionState(0) < Game::CA_CONNECTING);
+	}
+
 	void Window::PumpLoadingEvents()
 	{
 		thread_local std::uint32_t callCount = 0;
@@ -305,7 +313,7 @@ namespace Components
 
 	LRESULT CALLBACK Window::NativeWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
 	{
-		if (isDragActive && !IsLoadingScreenMovable())
+		if (isDragActive && !IsFrontendMovable())
 		{
 			EndWindowDrag();
 		}
@@ -329,7 +337,7 @@ namespace Components
 
 		const bool isCaptionPress = Msg == WM_NCLBUTTONDOWN && wParam == HTCAPTION;
 
-		if ((Msg == WM_LBUTTONDOWN || isCaptionPress) && IsLoadingScreenMovable())
+		if ((Msg == WM_LBUTTONDOWN && IsLoadingScreenMovable()) || (isCaptionPress && IsFrontendMovable()))
 		{
 			BeginWindowDrag(hWnd);
 			return 0;

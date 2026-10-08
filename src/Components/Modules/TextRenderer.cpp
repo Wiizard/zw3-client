@@ -411,15 +411,12 @@ namespace Components
 		return false;
 	}
 
-	static bool TryConvertToWindows1252(const std::uint32_t codepoint, char& converted)
+	static bool TryConvertToGameGlyph(const std::uint32_t codepoint, char& converted)
 	{
-		std::wstring utf16;
-		AppendUtf16(utf16, codepoint);
-
-		BOOL usedDefaultCharacter = FALSE;
-
-		return WideCharToMultiByte(1252, WC_NO_BEST_FIT_CHARS, utf16.data(), static_cast<int>(utf16.size()), &converted, 1, nullptr, &usedDefaultCharacter) == 1
-			&& !usedDefaultCharacter;
+		// Non-ASCII glyph coverage differs between engine fonts. Use the Unicode renderer.
+		if (codepoint < 0x20 || codepoint > 0x7E) return false;
+		converted = static_cast<char>(codepoint);
+		return true;
 	}
 
 	static std::size_t ClusterEnd(const std::vector<std::uint32_t>& codepoints, const std::size_t start)
@@ -442,7 +439,7 @@ namespace Components
 		{
 			char character{};
 
-			if (!TryConvertToWindows1252(codepoints[i], character))
+			if (!TryConvertToGameGlyph(codepoints[i], character))
 			{
 				return false;
 			}
@@ -643,7 +640,7 @@ namespace Components
 	constexpr int unicodeUnitPixels = unicodeEmPixels / inlineIconUnit;
 	constexpr int unicodeBoxUnits = 56;
 	constexpr int unicodeBoxPixels = unicodeBoxUnits * unicodeUnitPixels;
-	constexpr int unicodeBaselinePixels = (unicodeBoxPixels + unicodeEmPixels) / 2;
+	constexpr int unicodeBaselinePixels = (unicodeBoxPixels + unicodeEmPixels) / 2 - unicodeEmPixels / 8;
 	constexpr int unicodePieceUnits = inlineIconLargest - inlineIconBias;
 
 	constexpr int unicodeMaxRunPixels = 4096;
@@ -1062,8 +1059,34 @@ namespace Components
 		}
 
 		ComPtr<IDWriteTextFormat> format;
+		const wchar_t* familyName = L"Segoe UI";
+		if (build.text.size() == 1 && build.text[0] >= 0x80)
+		{
+			ComPtr<IDWriteFontCollection> collection;
+			if (SUCCEEDED(factory->GetSystemFontCollection(&collection)))
+			{
+				for (const auto* candidate : { L"Segoe UI", L"Segoe UI Symbol", L"Cambria Math" })
+				{
+					UINT32 index = 0;
+					BOOL exists = FALSE;
+					ComPtr<IDWriteFontFamily> family;
+					ComPtr<IDWriteFont> font;
+					ComPtr<IDWriteFontFace> face;
+					const UINT32 codepoint = build.text[0];
+					UINT16 glyph = 0;
+					if (SUCCEEDED(collection->FindFamilyName(candidate, &index, &exists)) && exists
+						&& SUCCEEDED(collection->GetFontFamily(index, &family))
+						&& SUCCEEDED(family->GetFirstMatchingFont(DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, &font))
+						&& SUCCEEDED(font->CreateFontFace(&face)) && SUCCEEDED(face->GetGlyphIndices(&codepoint, 1, &glyph)) && glyph)
+					{
+						familyName = candidate;
+						break;
+					}
+				}
+			}
+		}
 
-		if (FAILED(factory->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+		if (FAILED(factory->CreateTextFormat(familyName, nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
 			static_cast<FLOAT>(unicodeEmPixels), L"", &format)))
 		{
 			return false;
@@ -1107,6 +1130,7 @@ namespace Components
 		{
 			return false;
 		}
+		if (FAILED(target->SetPixelsPerDip(1.0f))) return false;
 
 		const HDC memoryDc = target->GetMemoryDC();
 
@@ -1534,6 +1558,54 @@ namespace Components
 		return true;
 	}
 
+	static std::string NormalizeUtf8Text(const char* text)
+	{
+		std::string result;
+		if (!text) return result;
+		while (*text)
+		{
+			if (IsHudIcon(text))
+			{
+				const auto* end = SkipHudIcon(text);
+				result.append(text, end);
+				text = end;
+				continue;
+			}
+			if (static_cast<unsigned char>(*text) < 0x20 || *text == inlineIconEscape)
+			{
+				result.push_back(*text++);
+				if (result.back() == inlineIconEscape && *text) result.push_back(*text++);
+				continue;
+			}
+			const char* start = text;
+			bool hasNonAscii = false;
+			while (*text && static_cast<unsigned char>(*text) >= 0x20 && *text != inlineIconEscape)
+			{
+				hasNonAscii |= static_cast<unsigned char>(*text) >= 0x80;
+				++text;
+			}
+			const std::string_view span(start, text - start);
+			if (hasNonAscii && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, start, static_cast<int>(span.size()), nullptr, 0) > 0)
+			{
+				std::size_t offset = 0;
+				while (offset < span.size())
+				{
+					const auto begin = offset;
+					std::size_t characters = 0;
+					while (offset < span.size() && characters < encodedCharacterLimit)
+					{
+						const auto byte = static_cast<unsigned char>(span[offset]);
+						offset += byte < 0x80 ? 1 : byte < 0xE0 ? 2 : byte < 0xF0 ? 3 : 4;
+						++characters;
+					}
+					result += TextRenderer::EncodeUtf8ForGame(span.substr(begin, offset - begin), encodedCharacterLimit);
+				}
+			}
+			else result.append(span);
+		}
+		return result;
+	}
+
 	bool TextRenderer::TranslateText(const char* text, bool isEditing, std::string& translated, std::vector<std::size_t>& unicodeIcons)
 	{
 		unicodeIcons.clear();
@@ -1542,13 +1614,17 @@ namespace Components
 		{
 			return false;
 		}
+		const auto normalized = isEditing ? std::string(text) : NormalizeUtf8Text(text);
+		const bool wasNormalized = normalized != text;
+		text = normalized.data();
 
 		const bool hasFontIcons = !isEditing && areFontIconsReady.load(std::memory_order_acquire) && std::strchr(text, fontIconSeparator) != nullptr;
 		const bool hasUnicodeEscapes = !isEditing && HasUnicodeEscape(text);
 
 		if (!hasFontIcons && !hasUnicodeEscapes && !HasHudIcon(text))
 		{
-			return false;
+			if (wasNormalized) translated = normalized;
+			return wasNormalized;
 		}
 
 		translated.clear();
@@ -1835,6 +1911,8 @@ namespace Components
 
 	int TextRenderer::R_TextWidth(const char* text, int maxChars, void* font)
 	{
+		const auto normalized = NormalizeUtf8Text(text);
+		text = normalized.data();
 		const auto* const fontBytes = static_cast<const std::uint8_t*>(font);
 		const int pixelHeight = *reinterpret_cast<const int*>(fontBytes + fontPixelHeight);
 		const int glyphCount = *reinterpret_cast<const int*>(fontBytes + fontGlyphCount);

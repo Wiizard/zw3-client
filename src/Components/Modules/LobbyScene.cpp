@@ -17,6 +17,8 @@
 #include "FileSystem.hpp"
 #include "Logger.hpp"
 #include "Materials.hpp"
+#include "Network.hpp"
+#include "Party.hpp"
 #include "Renderer.hpp"
 #include "Scheduler.hpp"
 #include "Sound.hpp"
@@ -135,10 +137,129 @@ namespace Components
 		float x;
 		float y;
 		float z;
+	NLOHMANN_DEFINE_TYPE_INTRUSIVE(LobbyPathPoint, x, y, z)
 	};
 
 	constexpr DWORD vertexFormat = D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1;
 	constexpr DWORD roomVertexFormat = D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX2;
+
+				struct ZombieVisual
+	{
+		DWORD spawnTime = 0;
+		DWORD deathTime = 0;
+		DWORD nextSpawnTime = 0;
+		float routeProgress = 0.0f;
+		bool isAdmitted = false;
+		DWORD admittedTime = 0;
+		int approachPhase = 0;
+		float assignedHomeX = 0.0f;
+		float walkDuration = 22000.0f;
+		std::vector<LobbyVertex> deathPose;
+		LobbyPathPoint location{};
+		float facing = 0.0f;
+		bool isChasing = false;
+		bool isAttacking = false;
+		DWORD attackTime = 0;
+		float animationTime = 0.0f;
+		DWORD nextAttackTime = 0;
+		int targetSurvivor = -1;
+		float fallDirection = 1.0f;
+		int variant = 0;
+		bool isDying = false;
+		bool isVisible = false;
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE(ZombieVisual, spawnTime, deathTime, nextSpawnTime, routeProgress, isAdmitted, admittedTime, approachPhase, assignedHomeX, walkDuration, location, facing, isChasing, isAttacking, attackTime, animationTime, nextAttackTime, targetSurvivor, fallDirection, variant, isDying, isVisible)
+	};
+	struct SurvivorState
+				{
+					float currentX = 0.0f;
+					float homeX = 0.0f;
+					int targetZombieIndex = -1;
+					DWORD targetEngageTime = 0;
+					DWORD lastFireTime = 0;
+					DWORD meleeTime = 0;
+					DWORD recoveryUntil = 0;
+					float meleeFacing = 0.0f;
+					int meleeTarget = -1;
+					bool isMeleePending = false;
+					int burstRemaining = 0;
+					DWORD nextBurstShotTime = 0;
+					float facing = -DirectX::XM_PI * 0.5f;
+					bool isWalking = false;
+					bool isFiring = false;
+					bool isInitialized = false;
+					bool isPresent = false;
+					int modelIndex = -1;
+					int weaponIndex = 0;
+					unsigned int session = 0;
+					NLOHMANN_DEFINE_TYPE_INTRUSIVE(SurvivorState, currentX, homeX, targetZombieIndex, targetEngageTime, lastFireTime, meleeTime, recoveryUntil, meleeFacing, meleeTarget, isMeleePending, burstRemaining, nextBurstShotTime, facing, isWalking, isFiring, isInitialized, isPresent, modelIndex, weaponIndex, session)
+	};
+				struct TeleportBurst
+				{
+					float x = 0.0f;
+					DWORD started = 0;
+					bool isActive = false;
+					NLOHMANN_DEFINE_TYPE_INTRUSIVE(TeleportBurst, x, started, isActive)
+	};
+
+	struct SceneSnapshot
+	{
+		DWORD now = 0;
+		DWORD phaseOrigin = 0;
+		DWORD transitionElapsed = 0;
+		bool transitioning = false;
+		LobbyPathPoint baseEye{};
+		LobbyPathPoint baseTarget{};
+		std::array<ZombieVisual, 32> zombies;
+		std::array<SurvivorState, 4> survivors;
+		std::array<TeleportBurst, 4> teleports;
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE(SceneSnapshot, now, phaseOrigin, transitionElapsed, transitioning, baseEye, baseTarget, zombies, survivors, teleports)
+	};
+	static std::mutex sceneSyncMutex;
+	static std::shared_ptr<const SceneSnapshot> receivedScene;
+	static std::shared_ptr<const SceneSnapshot> previousScene;
+	static std::atomic_uint64_t remoteSceneGeneration = 0;
+	static std::atomic_bool hasSceneClock = false;
+	static std::atomic_int sceneClockOffset = 0;
+	static std::atomic_uint bestSceneRoundTrip = 1001;
+	static DWORD receivedSceneAt = 0;
+	static std::string publishedScene;
+	static bool isDirectScene = false;
+	struct LocalSceneBuffer
+	{
+		volatile LONG sequence = 0;
+		DWORD size = 0;
+		char bytes[8192]{};
+	};
+	struct LocalSceneMapping
+	{
+		HANDLE handle = nullptr;
+		LocalSceneBuffer* view = nullptr;
+		unsigned short port = 0;
+		~LocalSceneMapping() { Close(); }
+		void Close()
+		{
+			if (view) UnmapViewOfFile(view);
+			if (handle) CloseHandle(handle);
+			view = nullptr;
+			handle = nullptr;
+			port = 0;
+		}
+		bool Open(const unsigned short targetPort, const bool writer)
+		{
+			if (view && port == targetPort) return true;
+			Close();
+			const auto name = std::format(L"Local\\ZW3.LobbyScene.{}", targetPort);
+			handle = writer ? CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(LocalSceneBuffer), name.c_str())
+				: OpenFileMappingW(FILE_MAP_READ, FALSE, name.c_str());
+			if (!handle) return false;
+			view = static_cast<LocalSceneBuffer*>(MapViewOfFile(handle, writer ? FILE_MAP_ALL_ACCESS : FILE_MAP_READ, 0, 0, sizeof(LocalSceneBuffer)));
+			if (!view) { Close(); return false; }
+			port = targetPort;
+			return true;
+		}
+	};
+	static LocalSceneMapping localSceneWriter;
+	static LocalSceneMapping localSceneReader;
 
 	static const std::vector<LobbyPathPoint> leftZombiePath =
 	{
@@ -304,17 +425,17 @@ namespace Components
 		return true;
 	}
 
-	static void IndexTexturePack()
+	static void IndexTexturePack(LobbyTexturePack& pack)
 	{
-		if (texturePack.isIndexed)
+		if (pack.isIndexed)
 		{
 			return;
 		}
 
-		texturePack.isIndexed = true;
+		pack.isIndexed = true;
 
-		auto& bytes = texturePack.bytes;
-		auto& entries = texturePack.entries;
+		auto& bytes = pack.bytes;
+		auto& entries = pack.entries;
 
 		const bool hasHeader = bytes.size() >= 12 && std::memcmp(bytes.data(), "ZWTP", 4) == 0;
 
@@ -398,7 +519,6 @@ namespace Components
 		}
 
 		const auto expected = static_cast<uLong>(raw->len);
-
 		if (raw->compressedLen == 0)
 		{
 			texturePack.bytes.assign(raw->buffer, static_cast<std::size_t>(raw->len));
@@ -406,22 +526,18 @@ namespace Components
 		else
 		{
 			texturePack.bytes.resize(expected);
-
 			uLongf length = expected;
-			const int result = uncompress(reinterpret_cast<Bytef*>(texturePack.bytes.data()), &length, reinterpret_cast<const Bytef*>(raw->buffer), static_cast<uLong>(raw->compressedLen));
-
-			if (result != Z_OK || length != expected)
-			{
-				texturePack.bytes.clear();
-			}
+			const int result = uncompress(reinterpret_cast<Bytef*>(texturePack.bytes.data()), &length,
+				reinterpret_cast<const Bytef*>(raw->buffer), static_cast<uLong>(raw->compressedLen));
+			if (result != Z_OK || length != expected) texturePack.bytes.clear();
 		}
-
-		IndexTexturePack();
+		IndexTexturePack(texturePack);
 		isTexturePackReady.store(true, std::memory_order_release);
 	}
 
-	static std::string FindPackedTexture(const std::string& assetName)
+	static std::string_view FindPackedTexture(const std::string& assetName)
 	{
+		if (!isTexturePackReady.load(std::memory_order_acquire)) return {};
 		const auto found = texturePack.entries.find(assetName.substr(15));
 
 		if (found == texturePack.entries.end())
@@ -429,7 +545,7 @@ namespace Components
 			return {};
 		}
 
-		return texturePack.bytes.substr(found->second.first, found->second.second);
+		return std::string_view(texturePack.bytes).substr(found->second.first, found->second.second);
 	}
 
 	static std::string ReadLobbyAsset(const std::string& assetName, const std::string& diskPath)
@@ -438,26 +554,20 @@ namespace Components
 
 		if (isTexture && isTexturePackReady.load(std::memory_order_acquire))
 		{
-			std::string packed = FindPackedTexture(assetName);
+			const auto packed = FindPackedTexture(assetName);
 
 			if (!packed.empty())
 			{
-				return packed;
+				return std::string(packed);
 			}
 		}
 
 		if (CanReadLobbyZone())
 		{
-			if (isTexture)
+			if (isTexture && !isTexturePackReady.load(std::memory_order_acquire))
 			{
-				IndexTexturePack();
+				PrepareTexturePack();
 
-				std::string packed = FindPackedTexture(assetName);
-
-				if (!packed.empty())
-				{
-					return packed;
-				}
 			}
 
 			FileSystem::RawFile asset(assetName);
@@ -1531,6 +1641,8 @@ namespace Components
 
 	static void UpdateMenu()
 	{
+		if (!Party::IsLobbySceneClient()) LobbyScene::ClearRemoteScene();
+		else LobbyScene::PollLocalScene();
 		static bool wasStartupCinematic = false;
 		static DWORD cinematicEndTime = 0;
 
@@ -2030,7 +2142,14 @@ namespace Components
 			const std::string& name = pendingTextureNames[nextTexture];
 			++nextTexture;
 
-			const std::string bytes = ReadLobbyAsset("lobby/textures/" + name, "zw3/core/lobby/textures/" + name);
+			const std::string assetName = "lobby/textures/" + name;
+			std::string fallback;
+			auto bytes = FindPackedTexture(assetName);
+			if (bytes.empty())
+			{
+				fallback = ReadLobbyAsset(assetName, "zw3/core/lobby/textures/" + name);
+				bytes = fallback;
+			}
 			IDirect3DTexture9* texture = nullptr;
 
 			if (!bytes.empty())
@@ -2283,9 +2402,24 @@ namespace Components
 			return;
 		}
 
-		const bool isInTransition = isTransitionActive.load(std::memory_order_acquire);
+		std::shared_ptr<const SceneSnapshot> remoteScene;
+		std::shared_ptr<const SceneSnapshot> priorScene;
+		DWORD remoteAge = 0;
+		bool directScene = false;
+		if (Party::IsLobbySceneClient())
+		{
+			std::lock_guard lock(sceneSyncMutex);
+			remoteScene = receivedScene;
+			directScene = isDirectScene;
+			priorScene = previousScene;
+			const DWORD hostNow = timeGetTime() + static_cast<DWORD>(sceneClockOffset.load());
+			remoteAge = receivedScene && hasSceneClock
+				? static_cast<DWORD>(std::clamp(static_cast<int>(hostNow - receivedScene->now), 0, 100))
+				: std::min<DWORD>(timeGetTime() - receivedSceneAt, 100u);
+		}
+		const bool isInTransition = directScene && remoteScene ? remoteScene->transitioning : isTransitionActive.load(std::memory_order_acquire);
 		const bool isBootPreview = isStartupLoading.load(std::memory_order_acquire) && Game::CL_GetLocalClientConnectionState(0) < Game::CA_CONNECTING;
-		const DWORD transitionElapsed = timeGetTime() - transitionStartTime.load(std::memory_order_acquire);
+		const DWORD transitionElapsed = directScene && remoteScene ? remoteScene->transitionElapsed : timeGetTime() - transitionStartTime.load(std::memory_order_acquire);
 
 		if (isInTransition && transitionElapsed >= LobbyTransition::whiteEndMs)
 		{
@@ -2359,8 +2493,9 @@ namespace Components
 			const DirectX::XMMATRIX world = DirectX::XMMatrixIdentity();
 
 			static const DWORD startTime = timeGetTime();
-			const DWORD now = timeGetTime();
-			const float phase = static_cast<float>(now - startTime) * 0.00012f;
+			const DWORD now = directScene && remoteScene ? remoteScene->now : remoteScene ? (hasSceneClock ? timeGetTime() + static_cast<DWORD>(sceneClockOffset.load())
+				: remoteScene->now + remoteAge) : timeGetTime();
+			const float phase = static_cast<float>(now - (remoteScene ? remoteScene->phaseOrigin : startTime)) * 0.00012f;
 
 			static DirectX::XMFLOAT3 currentBaseEye = { 0.0f, -1450.0f, 192.0f };
 			static DirectX::XMFLOAT3 currentBaseTarget = { 0.0f, -600.0f, 182.0f };
@@ -2403,6 +2538,11 @@ namespace Components
 			currentBaseTarget.x += (desiredBaseTarget.x - currentBaseTarget.x) * lerpFactor;
 			currentBaseTarget.y += (desiredBaseTarget.y - currentBaseTarget.y) * lerpFactor;
 			currentBaseTarget.z += (desiredBaseTarget.z - currentBaseTarget.z) * lerpFactor;
+			if (remoteScene)
+			{
+				currentBaseEye = { remoteScene->baseEye.x, remoteScene->baseEye.y, remoteScene->baseEye.z };
+				currentBaseTarget = { remoteScene->baseTarget.x, remoteScene->baseTarget.y, remoteScene->baseTarget.z };
+			}
 
 			DirectX::XMFLOAT3 eye{};
 			DirectX::XMFLOAT3 at{};
@@ -2410,7 +2550,7 @@ namespace Components
 
 			if (isInTransition)
 			{
-				const DWORD elapsed = now - transitionStartTime.load(std::memory_order_acquire);
+				const DWORD elapsed = transitionElapsed;
 
 				const float doorProgress = LobbyTransition::Smooth(LobbyTransition::Progress(elapsed, LobbyTransition::doorStartMs, LobbyTransition::doorEndMs));
 				doorAngle = doorProgress * DirectX::XMConvertToRadians(102.0f);
@@ -2729,35 +2869,12 @@ namespace Components
 
 			if (isRendered)
 			{
-				const int count = lobbyCharacterCount.load(std::memory_order_acquire);
+				const int count = remoteScene ? static_cast<int>(std::ranges::count_if(remoteScene->survivors, [](const SurvivorState& s) { return s.isPresent; })) : lobbyCharacterCount.load(std::memory_order_acquire);
 
 				auto& zombieMesh = actorMeshes[zombieActor];
 
-				struct ZombieVisual
-				{
-					DWORD spawnTime = 0;
-					DWORD deathTime = 0;
-					DWORD nextSpawnTime = 0;
-					float routeProgress = 0.0f;
-					bool isAdmitted = false;
-					DWORD admittedTime = 0;
-					int approachPhase = 0;
-					float assignedHomeX = 0.0f;
-					float walkDuration = 22000.0f;
-					std::vector<LobbyVertex> deathPose;
-					LobbyPathPoint location{};
-					float facing = 0.0f;
-					bool isChasing = false;
-					bool isAttacking = false;
-					DWORD attackTime = 0;
-					float animationTime = 0.0f;
-					DWORD nextAttackTime = 0;
-					int targetSurvivor = -1;
-					float fallDirection = 1.0f;
-					int variant = 0;
-					bool isDying = false;
-					bool isVisible = false;
-				};
+
+
 
 				constexpr std::size_t zombieSlots = 32;
 				constexpr DWORD zombieFallDuration = 650;
@@ -2788,7 +2905,7 @@ namespace Components
 					return 21000.0f + static_cast<float>(index % 5) * 1100.0f;
 				};
 
-				if (!areZombiesInitialized || session != zombieSession)
+				if (!remoteScene && (!areZombiesInitialized || session != zombieSession))
 				{
 					for (std::size_t i = 0; i < zombies.size(); ++i)
 					{
@@ -2805,7 +2922,26 @@ namespace Components
 					spawnCursor = 0;
 				}
 
-				for (std::size_t index = 0; index < zombies.size(); ++index)
+				if (remoteScene)
+				{
+					zombies = remoteScene->zombies;
+					if (priorScene && !directScene)
+					{
+						const auto span = std::max<DWORD>(1u, remoteScene->now - priorScene->now);
+						const float blend = 1.0f + std::min(1.0f, static_cast<float>(remoteAge) / static_cast<float>(span));
+						for (std::size_t i = 0; i < zombies.size(); ++i)
+						{
+							auto& visual = zombies[i];
+							const auto& prior = priorScene->zombies[i];
+							if (!visual.isVisible || visual.isDying || !prior.isVisible || prior.isDying || visual.spawnTime != prior.spawnTime) continue;
+							if (span > 150u) continue;
+							visual.location.x = std::lerp(prior.location.x, visual.location.x, blend);
+							visual.location.y = std::lerp(prior.location.y, visual.location.y, blend);
+							visual.location.z = std::lerp(prior.location.z, visual.location.z, blend);
+						}
+					}
+				}
+				for (std::size_t index = 0; !remoteScene && index < zombies.size(); ++index)
 				{
 					auto& visual = zombies[index];
 
@@ -2836,7 +2972,7 @@ namespace Components
 					return visual.isVisible;
 				}));
 
-				const bool canSpawnZombie = hasZombieWaveStarted.load(std::memory_order_acquire)
+				const bool canSpawnZombie = !remoteScene && hasZombieWaveStarted.load(std::memory_order_acquire)
 					&& isLobbyVisible.load(std::memory_order_acquire)
 					&& !isBootPreview
 					&& !isInTransition
@@ -2887,35 +3023,9 @@ namespace Components
 					return SampleActor(zombieMesh, clip, now, static_cast<DWORD>(visual.animationTime) - now);
 				};
 
-				struct SurvivorState
-				{
-					float currentX = 0.0f;
-					float homeX = 0.0f;
-					int targetZombieIndex = -1;
-					DWORD targetEngageTime = 0;
-					DWORD lastFireTime = 0;
-					DWORD meleeTime = 0;
-					DWORD recoveryUntil = 0;
-					float meleeFacing = 0.0f;
-					int meleeTarget = -1;
-					bool isMeleePending = false;
-					int burstRemaining = 0;
-					DWORD nextBurstShotTime = 0;
-					float facing = -DirectX::XM_PI * 0.5f;
-					bool isWalking = false;
-					bool isInitialized = false;
-					bool isPresent = false;
-					int modelIndex = -1;
-					int weaponIndex = 0;
-					unsigned int session = 0;
-				};
 
-				struct TeleportBurst
-				{
-					float x = 0.0f;
-					DWORD started = 0;
-					bool isActive = false;
-				};
+
+
 
 				struct MuzzleFlare
 				{
@@ -2931,7 +3041,12 @@ namespace Components
 				static std::array<TeleportBurst, 4> teleportBursts{};
 				static unsigned int teleportSession = 0;
 
-				if (teleportSession != session)
+				if (remoteScene)
+				{
+					survivors = remoteScene->survivors;
+					teleportBursts = remoteScene->teleports;
+				}
+				if (!remoteScene && teleportSession != session)
 				{
 					teleportBursts = {};
 
@@ -2943,7 +3058,7 @@ namespace Components
 					teleportSession = session;
 				}
 
-				for (std::size_t slot = 0; slot < survivors.size(); ++slot)
+				for (std::size_t slot = 0; !remoteScene && slot < survivors.size(); ++slot)
 				{
 					auto& survivor = survivors[slot];
 					const int model = lobbyCharacterModels[slot].load(std::memory_order_acquire);
@@ -2980,7 +3095,7 @@ namespace Components
 				std::array<int, 5> roster{};
 				roster[0] = count;
 
-				for (std::size_t slot = 0; slot < survivors.size(); ++slot)
+				for (std::size_t slot = 0; !remoteScene && slot < survivors.size(); ++slot)
 				{
 					roster[slot + 1] = -1;
 
@@ -2993,7 +3108,7 @@ namespace Components
 				static std::array<int, 5> lastRoster{};
 				static bool isRosterReady = false;
 
-				if (isRosterReady && roster != lastRoster)
+				if (!remoteScene && isRosterReady && roster != lastRoster)
 				{
 					for (auto& survivor : survivors)
 					{
@@ -3158,6 +3273,7 @@ namespace Components
 
 				for (const std::size_t index : movementOrder)
 				{
+					if (remoteScene) break;
 					auto& visual = zombies[index];
 
 					if (!visual.isVisible || visual.isDying)
@@ -3315,7 +3431,7 @@ namespace Components
 
 				for (int i = 0; i < count; ++i)
 				{
-					const int modelIndex = lobbyCharacterModels[i].load(std::memory_order_acquire);
+					const int modelIndex = remoteScene ? survivors[i].modelIndex : lobbyCharacterModels[i].load(std::memory_order_acquire);
 
 					if (modelIndex < 0 || modelIndex >= 4)
 					{
@@ -3341,6 +3457,11 @@ namespace Components
 					auto& survivor = survivors[i];
 					const float homeX = (static_cast<float>(i) - static_cast<float>(count - 1) * 0.5f) * 65.0f;
 
+					const float y = balconyY;
+					const float z = 245.0f;
+					bool isBestNearSurvivor = false;
+					if (!remoteScene)
+					{
 					if (!survivor.isInitialized || survivor.session != session)
 					{
 						survivor.currentX = homeX;
@@ -3370,8 +3491,7 @@ namespace Components
 						survivor.targetZombieIndex = -1;
 					}
 
-					const float y = balconyY;
-					const float z = 245.0f;
+
 
 					int bestZombie = -1;
 					float bestScore = 9999999.0f;
@@ -3539,7 +3659,7 @@ namespace Components
 						bestDistance = std::hypot(bestLocation.x - survivor.currentX, bestLocation.y - y);
 					}
 
-					const bool isBestNearSurvivor = bestZombie >= 0 && isNearAnySurvivor(bestLocation);
+					isBestNearSurvivor = bestZombie >= 0 && isNearAnySurvivor(bestLocation);
 
 					const bool canShootBest = bestZombie >= 0
 						&& bestLocation.z >= 224.0f
@@ -3675,6 +3795,8 @@ namespace Components
 						}
 					}
 
+					}
+					const bool isMeleeing = survivor.meleeTime != 0 && now - survivor.meleeTime < meleeDuration;
 					unsigned int fireClip = clipRifleFire;
 					unsigned int idleClip = clipRifleIdle;
 
@@ -3695,11 +3817,13 @@ namespace Components
 						fireDuration = 450;
 					}
 
-					const bool isFiring = !isInTransition
+					const bool computedFiring = !isInTransition
 						&& !isMeleeing
 						&& !isBestNearSurvivor
 						&& survivor.lastFireTime != 0
 						&& now - survivor.lastFireTime < fireDuration;
+					if (!remoteScene) survivor.isFiring = computedFiring;
+					const bool isFiring = survivor.isFiring && !isInTransition && now - survivor.lastFireTime < fireDuration;
 
 					const DirectX::XMMATRIX placement = DirectX::XMMatrixMultiply(DirectX::XMMatrixRotationZ(survivor.facing), DirectX::XMMatrixTranslation(survivor.homeX, y, z));
 					SetTransform(device, D3DTS_WORLD, placement);
@@ -3793,6 +3917,36 @@ namespace Components
 					}
 				}
 
+				if (!remoteScene && Party::IsHostingParty())
+				{
+					static DWORD lastPublish = 0;
+					if (now != lastPublish)
+					{
+						lastPublish = now;
+						const auto raw = nlohmann::json::to_msgpack(nlohmann::json{
+							{ "now", now }, { "phaseOrigin", startTime }, { "transitionElapsed", transitionElapsed },
+							{ "transitioning", isInTransition }, { "baseEye", LobbyPathPoint{currentBaseEye.x, currentBaseEye.y, currentBaseEye.z} },
+							{ "baseTarget", LobbyPathPoint{currentBaseTarget.x, currentBaseTarget.y, currentBaseTarget.z} },
+							{ "zombies", zombies }, { "survivors", survivors }, { "teleports", teleportBursts } });
+						std::string packet(compressBound(static_cast<uLong>(raw.size())), '\0');
+						uLongf length = static_cast<uLongf>(packet.size());
+						if (compress2(reinterpret_cast<Bytef*>(packet.data()), &length, raw.data(), static_cast<uLong>(raw.size()), Z_BEST_SPEED) == Z_OK && length <= 8192)
+						{
+							packet.resize(length);
+							if (localSceneWriter.Open(Network::GetPort(), true))
+							{
+								auto* const buffer = localSceneWriter.view;
+								const LONG sequence = (buffer->sequence + 1) | 1;
+								InterlockedExchange(&buffer->sequence, sequence);
+								buffer->size = static_cast<DWORD>(packet.size());
+								std::memcpy(buffer->bytes, packet.data(), packet.size());
+								InterlockedExchange(&buffer->sequence, sequence + 1);
+							}
+							std::lock_guard lock(sceneSyncMutex);
+							publishedScene = std::move(packet);
+						}
+					}
+				}
 				if (isRendered)
 				{
 					std::vector<LobbyVertex> eyeFlares;
@@ -3832,7 +3986,13 @@ namespace Components
 							continue;
 						}
 
-						if (visual.isDying && !visual.deathPose.empty())
+						if (remoteScene && visual.isDying)
+						{
+							const unsigned int deathClip = visual.isAttacking ? clipAttack : (visual.variant == 1 ? clipAction : clipIdle);
+							const DWORD deathPhase = visual.isAttacking ? visual.deathTime - visual.attackTime : static_cast<DWORD>(visual.animationTime);
+							zombieMesh.blended = SampleActor(zombieMesh, deathClip, deathPhase, 0);
+						}
+						else if (visual.isDying && !visual.deathPose.empty())
 						{
 							zombieMesh.blended = visual.deathPose;
 						}
@@ -4298,6 +4458,111 @@ namespace Components
 		});
 	}
 
+	std::string LobbyScene::GetSceneSnapshot()
+	{
+		std::lock_guard lock(sceneSyncMutex);
+		return publishedScene;
+	}
+
+	void LobbyScene::ClearRemoteScene()
+	{
+		std::lock_guard lock(sceneSyncMutex);
+		++remoteSceneGeneration;
+		receivedScene.reset();
+		previousScene.reset();
+		isDirectScene = false;
+		localSceneReader.Close();
+		hasSceneClock = false;
+		bestSceneRoundTrip = 1001;
+		receivedSceneAt = 0;
+	}
+
+	void LobbyScene::ReceiveSceneClock(const unsigned int clientSent, const unsigned int hostTime)
+	{
+		const DWORD received = timeGetTime();
+		const DWORD roundTrip = received - clientSent;
+		if (roundTrip > 1000u || roundTrip > bestSceneRoundTrip.load() + 10u) return;
+		bestSceneRoundTrip = std::min<DWORD>(bestSceneRoundTrip.load(), roundTrip);
+		sceneClockOffset = static_cast<int>(hostTime + roundTrip / 2u - received);
+		hasSceneClock = true;
+	}
+
+	void LobbyScene::PollLocalScene()
+	{
+		if (!Party::IsLobbySceneClient()) return;
+		const auto target = Party::Target();
+		bool sameComputer = target.IsLoopback();
+		for (int i = 0; !sameComputer && i < *Game::numIP; ++i) sameComputer = target.GetIP() == Game::localIP[i].full;
+		if (!sameComputer || !localSceneReader.Open(target.GetPort(), false)) return;
+		const auto* const view = localSceneReader.view;
+		const LONG sequence = view->sequence;
+		MemoryBarrier();
+		if (sequence == 0 || (sequence & 1) || view->size == 0 || view->size > sizeof(view->bytes)) return;
+		const std::string packet(view->bytes, view->size);
+		MemoryBarrier();
+		if (sequence != view->sequence) return;
+		ReceiveSceneSnapshot(packet, true);
+	}
+
+	void LobbyScene::ReceiveSceneSnapshot(const std::string& packet, const bool immediate)
+	{
+		if (!immediate && localSceneReader.view) return;
+		const auto generation = remoteSceneGeneration.load();
+		if (packet.empty() || packet.size() > 8192) return;
+		std::string bytes(65536, '\0');
+		uLongf size = static_cast<uLongf>(bytes.size());
+		if (uncompress(reinterpret_cast<Bytef*>(bytes.data()), &size, reinterpret_cast<const Bytef*>(packet.data()), static_cast<uLong>(packet.size())) != Z_OK) return;
+		bytes.resize(size);
+		try
+		{
+			const auto json = nlohmann::json::from_msgpack(bytes);
+			if (json.at("zombies").size() != 32 || json.at("survivors").size() != 4 || json.at("teleports").size() != 4) return;
+			const auto scene = std::make_shared<SceneSnapshot>(json.get<SceneSnapshot>());
+			const auto validPoint = [](const LobbyPathPoint& point)
+			{
+				return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z)
+					&& std::abs(point.x) < 100000.0f && std::abs(point.y) < 100000.0f && std::abs(point.z) < 100000.0f;
+			};
+			if (!validPoint(scene->baseEye) || !validPoint(scene->baseTarget) || scene->transitionElapsed > 25000u) return;
+			for (const auto& survivor : scene->survivors)
+			{
+				if (survivor.modelIndex < -1 || survivor.modelIndex >= 4 || survivor.weaponIndex < 0 || survivor.weaponIndex >= 4
+					|| !std::isfinite(survivor.facing) || !std::isfinite(survivor.homeX)) return;
+			}
+			for (const auto& zombie : scene->zombies)
+			{
+				if (!validPoint(zombie.location)
+					|| !std::isfinite(zombie.facing) || !std::isfinite(zombie.animationTime)) return;
+			}
+			const auto apply = [scene, generation, immediate]
+			{
+				if (!Party::IsLobbySceneClient() || generation != remoteSceneGeneration) return;
+				{
+					std::lock_guard lock(sceneSyncMutex);
+					if (receivedScene && static_cast<int>(scene->now - receivedScene->now) <= 0)
+					{
+						if (immediate && scene->now == receivedScene->now) isDirectScene = true;
+						return;
+					}
+					previousScene = receivedScene;
+					receivedScene = scene;
+					isDirectScene = immediate;
+					receivedSceneAt = timeGetTime();
+				}
+				if (scene->transitioning)
+				{
+					StartTransition();
+					const DWORD age = hasSceneClock ? static_cast<DWORD>(std::max(0, static_cast<int>(timeGetTime()
+						+ static_cast<DWORD>(sceneClockOffset.load()) - scene->now))) : 0u;
+					transitionStartTime.store(timeGetTime() - scene->transitionElapsed - age, std::memory_order_release);
+				}
+			};
+			if (immediate) apply();
+			else Scheduler::Once(apply, Scheduler::Pipeline::MAIN);
+		}
+		catch (const nlohmann::json::exception&) {}
+	}
+
 	bool LobbyScene::IsTransitionActive()
 	{
 		return isTransitionActive.load(std::memory_order_acquire);
@@ -4374,21 +4639,13 @@ namespace Components
 
 		PrepareTexturePack();
 		LoadRoomMesh();
-
-		if (!roomVertices.empty())
-		{
-			LoadPropMesh();
-		}
-
+		if (!roomVertices.empty()) LoadPropMesh();
 		LoadTheaterVision();
-
 		static constexpr const char* actorNames[] = { "richtofen", "dempsey", "nikolai", "takeo", "zombie" };
-
 		for (std::size_t i = 0; i < std::size(actorNames); ++i)
 		{
 			LoadActorMesh(i, actorNames[i]);
 		}
-
 		auto* const entry = Game::DB_FindXAssetEntry(Game::ASSET_TYPE_RAWFILE, "lobby/audio/round_start.wav");
 
 		if (entry)
@@ -4414,19 +4671,21 @@ namespace Components
 			return false;
 		}
 
-		if (IsTransitionActive() || pendingLaunchId)
+		if (pendingLaunchId)
 		{
 			return true;
 		}
 
 		const bool isInLobby = IsLobbyMenuVisible("menu_xboxlive_privatelobby") || IsLobbyMenuVisible("zwnet_matchmaking");
 
-		if (!IsSceneReady() || !isInLobby)
+		if (!IsSceneReady() || (!isInLobby && !IsTransitionActive() && !Party::IsPrivateMatchClient()))
 		{
 			return false;
 		}
 
+		const bool wasTransitionActive = IsTransitionActive();
 		StartTransition();
+		if (!wasTransitionActive && Party::IsHostingParty()) Party::BroadcastLobbyTransition();
 
 		++launchCount;
 		pendingLaunchId = launchCount;
@@ -4485,8 +4744,8 @@ namespace Components
 		if (!mapName.empty())
 		{
 			D3D9Ex::BeginMapLoading(mapName);
-			FastFiles::PrefetchZone(mapName);
 			FastFiles::PrefetchZone(mapName + "_load");
+			FastFiles::PrefetchZone(mapName);
 			FastFiles::PrefetchZone("patch_" + mapName);
 			FastFiles::PrefetchZone("localized_" + mapName);
 		}

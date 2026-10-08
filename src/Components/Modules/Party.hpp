@@ -18,8 +18,10 @@ namespace Components
 
 		static bool IsHostingParty();
 		static bool IsPrivateMatchClient();
+		static bool IsLobbySceneClient();
+		static void BroadcastLobbyTransition();
 
-		static void Connect(const Network::Address& target, bool downloadOnly = false, bool isUnmanagedRequired = false);
+		static void Connect(const Network::Address& target, bool downloadOnly = false, bool isUnmanagedRequired = false, bool preserveLobbyTransition = false);
 
 		static std::uint64_t GetLocalPlayerXuid();
 

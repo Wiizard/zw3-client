@@ -1,5 +1,6 @@
 #include "LobbyScene.hpp"
 #include "LobbyTransition.hpp"
+#include "LobbyCombat.hpp"
 
 #include "D3D9Ex.hpp"
 #include "Events.hpp"
@@ -104,7 +105,11 @@ namespace Components
 			UINT shotgunFireCount = 1;
 			UINT pointFirst = 0;
 			UINT pointCount = 0;
-			std::array<unsigned, 8> clipDurationMs{};
+			UINT meleeFirst = 0;
+			UINT meleeCount = 0;
+			UINT attackFirst = 0;
+			UINT attackCount = 0;
+			std::array<unsigned, 10> clipDurationMs{};
 		};
 
 		static_assert(sizeof(Vertex) == 24);
@@ -154,8 +159,10 @@ namespace Components
 		IDirect3DSurface9* roomDepth = nullptr;
 		IDirect3DStateBlock9* savedState = nullptr;
 		std::atomic_bool lobbyVisible = false;
+		std::atomic_bool zombieWaveStarted = false;
 		std::atomic_bool closeCamera = false;
 		std::atomic_uint lobbySession = 0;
+		std::atomic_uint cameraResetSession = 0;
 		std::atomic_int lobbyCharacterCount = 1;
 		std::array<std::atomic_int, 4> lobbyCharacterModels = { 0, 1, 2, 3 };
 		std::atomic_bool assetsReady = false;
@@ -534,6 +541,7 @@ namespace Components
 			roomVertices = std::move(filteredRoomVertices);
 			roomGroups = std::move(filteredRoomGroups);
 
+
 			return true;
 		}
 
@@ -638,7 +646,7 @@ namespace Components
 				headerSize + static_cast<std::uint64_t>(frameCount) * count * sizeof(Vertex);
 			if ((version != 2 && version != 3 && version != 4) ||
 				stride != (version == 4 ? 6u : sizeof(Vertex)) || !count || count % 3 || count > 100000 ||
-				!frameCount || frameCount > 64 || expected > 100'000'000 ||
+				!frameCount || frameCount > 128 || expected > 100'000'000 ||
 				data.size() < expected || data.size() > expected + 1) return;
 			auto& actor = actorMeshes[index];
 			try
@@ -698,7 +706,7 @@ namespace Components
 						const auto length = clip.at("frameCount").get<UINT>();
 						if (!length || first >= frameCount || length > frameCount - first) return;
 						const auto clipName = clip.at("name").get<std::string>();
-						const auto clipIndex = clipName == "point" ? 7 : clipName == "shotgun_fire" ? 6 :
+						const auto clipIndex = clipName == "attack" ? 9 : clipName == "melee" ? 8 : clipName == "point" ? 7 : clipName == "shotgun_fire" ? 6 :
 							clipName == "rifle_fire" ? 5 : clipName == "rifle_idle" ? 4 :
 							clipName == "walk" && index != 4 ? 3 : clipName == "death" ? 2 :
 							clipName == "fire" || clipName == "run" ? 1 : 0;
@@ -717,6 +725,16 @@ namespace Components
 						{
 							actor.actionFirst = first;
 							actor.actionCount = length;
+						}
+						else if (clipName == "melee")
+						{
+							actor.meleeFirst = first;
+							actor.meleeCount = length;
+						}
+						else if (clipName == "attack")
+						{
+							actor.attackFirst = first;
+							actor.attackCount = length;
 						}
 						else if (clipName == "point")
 						{
@@ -839,6 +857,10 @@ namespace Components
 			if (roomMaterial) materialNeedsRefresh = false;
 		}
 
+		// Retain fallback animation expressions so recovery/loading can restore the original background.
+		struct BackgroundAnimation { int expressionCount; float opacity; };
+		std::unordered_map<Game::itemDef_s*, BackgroundAnimation> backgroundExpressionCounts;
+
 		void AttachMaterialToLobby(const char* name, const bool sceneReady = true)
 		{
 			auto* menu = Game::Menus_FindByName(Game::uiContext, name);
@@ -872,9 +894,25 @@ namespace Components
 				else if (!_stricmp(winName, "zw3_lobby_fallback_cloud") ||
 					!_stricmp(winName, "main_text_cloud") ||
 					strstr(winName, "cloud") ||
-					strstr(bgName, "cloud"))
+					strstr(bgName, "cloud") ||
+					(item->window.rectClient.w >= 640.0f && item->window.rectClient.h >= 480.0f &&
+						(!_stricmp(bgName, "black") || !_stricmp(bgName, "mockup_bg_glow"))))
 				{
-					item->window.foreColor[3] = sceneReady ? 0.0f : 0.7f;
+					if (sceneReady)
+					{
+						backgroundExpressionCounts.try_emplace(item, BackgroundAnimation{item->floatExpressionCount, item->window.foreColor[3]});
+						// An exp foreColor a otherwise restores the black pulse during UI painting.
+						item->floatExpressionCount = 0;
+						item->window.foreColor[3] = 0.0f;
+					}
+					else
+					{
+						if (const auto original = backgroundExpressionCounts.find(item); original != backgroundExpressionCounts.end())
+						{
+							item->floatExpressionCount = original->second.expressionCount;
+							item->window.foreColor[3] = original->second.opacity;
+						}
+					}
 				}
 			}
 		}
@@ -931,6 +969,7 @@ namespace Components
 					}
 				}
 				lobbyVisible.store(false, std::memory_order_release);
+				zombieWaveStarted.store(false, std::memory_order_release);
 				return;
 			}
 
@@ -952,12 +991,25 @@ namespace Components
 			const auto privateVisible = IsLobbyVisible("menu_xboxlive_privatelobby");
 			const auto matchmakingVisible = IsLobbyVisible("zwnet_matchmaking");
 			const auto inLobby = privateVisible || matchmakingVisible;
+			static bool hadLobby = false;
+			if (inLobby) hadLobby = true;
+			else if (hadLobby && (IsLobbyVisible("main_text") || IsLobbyVisible("pregame_loaderror")))
+			{
+				// Leaving a frontend lobby need not call CL_Disconnect. Reset on its return to the main menu.
+				zombieWaveStarted.store(false, std::memory_order_release);
+				lobbySession.fetch_add(1, std::memory_order_release);
+				hadLobby = false;
+			}
 			const auto visible = inLobby || IsLobbyVisible("pregame_loaderror") || IsLobbyVisible("main_text");
 			closeCamera.store(inLobby, std::memory_order_release);
 			lobbyVisible.store(visible, std::memory_order_release);
 
 			static bool wasLobbyVisible = false;
-			if (visible && !wasLobbyVisible) lobbySession.fetch_add(1, std::memory_order_release);
+			if (visible && !wasLobbyVisible)
+			{
+				lobbySession.fetch_add(1, std::memory_order_release);
+				cameraResetSession.fetch_add(1, std::memory_order_release);
+			}
 			wasLobbyVisible = visible;
 
 			if (!visible)
@@ -971,6 +1023,11 @@ namespace Components
 				if (sceneReady || timeGetTime() - startupWaitStart >= 12000u)
 					startupLoading.store(false, std::memory_order_release);
 			}
+
+			// Begin the wave when the title / press-any-key scene is actually shown.
+			if (sceneReady && !Renderer::IsDeviceRecoveryActive() && !startupLoading.load(std::memory_order_acquire) &&
+				(IsLobbyVisible("main_text") || inLobby || IsLobbyVisible("pregame_loaderror")))
+				zombieWaveStarted.store(true, std::memory_order_release);
 
 			if (inLobby)
 			{
@@ -1559,7 +1616,8 @@ namespace Components
 				D3DXVECTOR3 desiredBaseEye = { 0.0f, -1450.0f, 192.0f };
 				D3DXVECTOR3 desiredBaseTarget = { 0.0f, -600.0f, 182.0f };
 				static unsigned cameraSession = 0;
-				const auto session = lobbySession.load(std::memory_order_acquire);
+				// Reset framing only when the scene opens, independently of combat wave resets.
+				const auto session = cameraResetSession.load(std::memory_order_acquire);
 				if (cameraSession != session)
 				{
 					currentBaseEye = desiredBaseEye;
@@ -1830,11 +1888,11 @@ namespace Components
 						-> const std::vector<Vertex>&
 					{
 						if (actor.frames.size() < 2) return actor.frames.front();
-						const auto first = clip == 7 ? actor.pointFirst : clip == 6 ? actor.shotgunFireFirst :
+						const auto first = clip == 9 ? actor.attackFirst : clip == 8 ? actor.meleeFirst : clip == 7 ? actor.pointFirst : clip == 6 ? actor.shotgunFireFirst :
 							clip == 5 ? actor.rifleFireFirst : clip == 4 ? actor.rifleIdleFirst :
 							clip == 3 ? actor.walkFirst : clip == 2 ? actor.deathFirst :
 							clip == 1 ? actor.actionFirst : actor.idleFirst;
-						const auto length = clip == 7 ? actor.pointCount : clip == 6 ? actor.shotgunFireCount :
+						const auto length = clip == 9 ? actor.attackCount : clip == 8 ? actor.meleeCount : clip == 7 ? actor.pointCount : clip == 6 ? actor.shotgunFireCount :
 							clip == 5 ? actor.rifleFireCount : clip == 4 ? actor.rifleIdleCount :
 							clip == 3 ? actor.walkCount : clip == 2 ? actor.deathCount :
 							clip == 1 ? actor.actionCount : actor.idleCount;
@@ -1842,7 +1900,7 @@ namespace Components
 						const auto zombie = &actor == &actorMeshes[4];
 						const auto frameTime = clip == 2 || clip == 7 ? 140u : (clip == 1 || clip == 5 || clip == 6) ? (zombie ? 130u : 85u) :
 							clip == 3 ? 250u : (zombie ? 190u : 240u);
-						const bool oneShot = clip == 2 || clip == 7 || (!zombie && (clip == 1 || clip == 5 || clip == 6));
+						const bool oneShot = clip == 2 || clip >= 7 || (!zombie && (clip == 1 || clip == 5 || clip == 6));
 						const auto duration = actor.clipDurationMs[clip] ? actor.clipDurationMs[clip] : frameTime * (length - 1);
 						const unsigned elapsed = now + phaseOffset;
 						const auto phase = static_cast<float>(oneShot ? std::min(elapsed, duration) : elapsed % duration) /
@@ -1868,14 +1926,14 @@ namespace Components
 					struct PathPoint { float x, y, z; };
 					static const std::vector<PathPoint> leftPath = {
 						{ -900, -1191, 80 }, { -493, -1191, 80 },
-						{ -241, -1158, 80 }, { -314, -937, 160 },
-						{ -318, -651, 248 }, { -205, -765, 248 }
+						{ -340, -1158, 80 }, { -340, -937, 160 },
+						{ -340, -750, 248 }, { -340, -700, 248 }, { -120, -700, 248 }
 					};
 					static const std::vector<PathPoint> rightPath = {
 						{ 900, -1253, 80 }, { 463, -1253, 80 },
-						{ 327, -1243, 80 }, { 213, -1198, 86 },
-						{ 282, -991, 135 }, { 278, -682, 248 },
-						{ 205, -765, 248 }
+						{ 327, -1243, 80 }, { 260, -1198, 80 },
+						{ 260, -991, 135 }, { 260, -750, 248 },
+						{ 260, -700, 248 }, { 120, -700, 248 }
 					};
 
 					const auto sampleZombiePath = [](size_t index, float progress, PathPoint& outLoc, float& outFacing)
@@ -1932,12 +1990,23 @@ namespace Components
 						outFacing = std::atan2(after.y - before.y, after.x - before.x);
 
 						// Lateral spreading across stairs & hallway so zombies don't stack directly inside each other
-						const float lateral = ((static_cast<int>(index / 2) % 4) - 1.5f) * 11.0f;
+						const float lateral = ((static_cast<int>(index / 2) % 4) - 1.5f) * 4.0f;
 						const float stairScale = progress > 0.86f ? std::max(0.0f, 1.0f - (progress - 0.86f) / 0.12f) : 1.0f;
 						const float perpX = -std::sin(outFacing);
 						const float perpY = std::cos(outFacing);
 						outLoc.x += perpX * lateral * stairScale;
 						outLoc.y += perpY * lateral * stairScale;
+
+
+						// The theater treads rise 8 units per 16 units of forward travel.
+						// Follow their continuous support ramp instead of snapping to treads/rubble.
+						// Four units of clearance keep the feet above the next tread during a stride.
+						outLoc.z = std::clamp(84.0f + (outLoc.y + 1098.0f) * 0.5f, 80.0f, 248.0f);
+						const auto& landing = path[path.size() - 2];
+						const auto& end = path.back();
+						const auto landingLength = std::hypot(end.x - landing.x, end.y - landing.y);
+						return progress * total >= total - landingLength;
+
 					};
 
 					struct ZombieVisual
@@ -1945,17 +2014,41 @@ namespace Components
 						unsigned spawnTime = 0;
 						unsigned deathTime = 0;
 						unsigned nextSpawnTime = 0;
-						float deathProgress = 0.0f;
+						float routeProgress = 0.0f;
+						bool admitted = false;
+						unsigned admittedTime = 0;
+						int approachPhase = 0;
+						float assignedHomeX = 0.0f;
 						float walkDuration = 22000.0f;
+						std::vector<Vertex> deathPose;
+						PathPoint location{};
+						float facing = 0.0f;
+						bool chasing = false;
+						bool attacking = false;
+						unsigned attackTime = 0;
+						float animationTime = 0.0f;
+						unsigned nextAttackTime = 0;
+						int targetSurvivor = -1;
+						float fallDirection = 1.0f;
 						int variant = 0; // 0 = walk, 1 = run
 						bool dying = false;
 						bool visible = false;
 					};
-					static std::array<ZombieVisual, 16> zombies{};
+					constexpr unsigned zombieFallDuration = 650u;
+					constexpr unsigned zombieCorpseLifetime = 3200u;
+					const unsigned zombieAttackDuration = actorMeshes[4].clipDurationMs[9] ? actorMeshes[4].clipDurationMs[9] : 1800u;
+					static std::array<ZombieVisual, 32> zombies{};
+					static unsigned nextWaveTime = 0;
+					static unsigned spawnCursor = 0;
+					const auto zombieAnimationTime = [now](const ZombieVisual& visual)
+					{
+						// Movement advances the gait; attacks and waiting hold the last planted pose.
+						return static_cast<unsigned>(visual.animationTime);
+					};
 					static bool initialized = false;
 					static unsigned lastSession = 0;
 					const auto session = lobbySession.load(std::memory_order_acquire);
-					const auto desiredZombies = static_cast<unsigned>(std::clamp(count * 2 + 8, 8, 16));
+					const auto desiredZombies = LobbyCombat::Population(count);
 					if (!initialized || session != lastSession)
 					{
 						for (auto i = 0u; i < zombies.size(); ++i)
@@ -1963,16 +2056,24 @@ namespace Components
 							const bool isRunner = (i % 3 == 2);
 							zombies[i].variant = isRunner ? 1 : 0;
 							zombies[i].walkDuration = isRunner ? 16500.0f : (21000.0f + (i % 5) * 1100.0f);
-							const float initialProgress = static_cast<float>(i) / static_cast<float>(zombies.size());
-							zombies[i].spawnTime = now - static_cast<unsigned>(initialProgress * zombies[i].walkDuration);
+							zombies[i].spawnTime = now;
 							zombies[i].deathTime = 0;
 							zombies[i].nextSpawnTime = now;
-							zombies[i].deathProgress = 0.0f;
+							zombies[i].routeProgress = 0.0f;
+							zombies[i].animationTime = 0.0f;
+							zombies[i].admitted = false;
+							zombies[i].targetSurvivor = -1;
+							zombies[i].deathPose.clear();
+							zombies[i].chasing = false;
+							zombies[i].attacking = false;
+							zombies[i].nextAttackTime = 0;
 							zombies[i].dying = false;
-							zombies[i].visible = i < desiredZombies;
+							zombies[i].visible = false;
 						}
 						initialized = true;
 						lastSession = session;
+						nextWaveTime = now;
+						spawnCursor = 0;
 					}
 
 					for (auto index = 0u; index < zombies.size(); ++index)
@@ -1980,25 +2081,49 @@ namespace Components
 						auto& visual = zombies[index];
 						if (visual.dying)
 						{
-							if (now - visual.deathTime >= 2400u &&
+							if (now - visual.deathTime >= zombieCorpseLifetime &&
 								static_cast<int>(now - visual.nextSpawnTime) >= 0)
 							{
 								visual.dying = false;
+								visual.visible = false;
+								visual.deathPose.clear();
+								visual.chasing = false;
+								visual.routeProgress = 0.0f;
+								visual.admitted = false;
+								visual.targetSurvivor = -1;
+								visual.attacking = false;
+								visual.nextAttackTime = 0;
 								visual.spawnTime = now;
 								const bool isRunner = (index % 3 == 2);
 								visual.variant = isRunner ? 1 : 0;
 								visual.walkDuration = isRunner ? 16500.0f : (21000.0f + (index % 5) * 1100.0f);
 							}
 						}
-						else if (now - visual.spawnTime >= static_cast<unsigned>(visual.walkDuration))
+
+					}
+
+					// One off-screen arrival per interval; frame stalls never release a catch-up wave.
+					const auto visibleCount = std::count_if(zombies.begin(), zombies.end(), [](const ZombieVisual& visual) { return visual.visible; });
+					if (zombieWaveStarted.load(std::memory_order_acquire) && lobbyVisible.load(std::memory_order_acquire) &&
+						!bootPreview && !inTransition && static_cast<unsigned>(visibleCount) < desiredZombies && static_cast<int>(now - nextWaveTime) >= 0)
+					{
+						for (auto offset = 0u; offset < zombies.size(); ++offset)
 						{
-							visual.spawnTime += static_cast<unsigned>((now - visual.spawnTime) / visual.walkDuration) * static_cast<unsigned>(visual.walkDuration);
-						}
-						const auto phase = static_cast<float>(now - visual.spawnTime) / visual.walkDuration;
-						if (index < desiredZombies && !visual.visible && phase < 0.1f)
+							const auto index = (spawnCursor + offset) % zombies.size();
+							auto& visual = zombies[index];
+							if (visual.visible || visual.dying) continue;
+							visual = ZombieVisual{};
+							visual.variant = index % 3 == 2 ? 1 : 0;
+							visual.walkDuration = visual.variant == 1 ? 16500.0f : 21000.0f + (index % 5) * 1100.0f;
+							visual.spawnTime = now;
+							visual.nextSpawnTime = now;
+							// Skip the long off-screen entrance corridor, while still starting on the lower floor.
+							visual.routeProgress = 0.28f;
 							visual.visible = true;
-						else if (index >= desiredZombies && visual.visible && phase > 0.95f && !visual.dying)
-							visual.visible = false;
+							spawnCursor = static_cast<unsigned>((index + 1) % zombies.size());
+							nextWaveTime = now + LobbyCombat::SpawnInterval(count);
+							break;
+						}
 					}
 
 					struct SurvivorState
@@ -2008,6 +2133,11 @@ namespace Components
 						int targetZombieIndex = -1;
 						unsigned targetEngageTime = 0;
 						unsigned lastFireTime = 0;
+						unsigned meleeTime = 0;
+						unsigned recoveryUntil = 0;
+						float meleeFacing = 0.0f;
+						int meleeTarget = -1;
+						bool meleePending = false;
 						int burstRemaining = 0;
 						unsigned nextBurstShotTime = 0;
 						float facing = -D3DX_PI * 0.5f;
@@ -2053,6 +2183,188 @@ namespace Components
 						survivor.modelIndex = model;
 					}
 
+					// Changed occupied slots invalidate combat claims while preserving each
+					// zombie's route and position. Camera changes alone do not interrupt encounters.
+					std::array<int, 5> roster{};
+					roster[0] = count;
+					for (auto slot = 0u; slot < survivors.size(); ++slot)
+						roster[slot + 1] = survivors[slot].present ? survivors[slot].modelIndex : -1;
+					static std::array<int, 5> lastRoster{};
+					static bool rosterReady = false;
+					if (rosterReady && roster != lastRoster)
+					{
+						for (auto& survivor : survivors)
+						{
+							survivor.targetZombieIndex = -1;
+							survivor.burstRemaining = 0;
+							survivor.lastFireTime = 0;
+							survivor.meleeTime = 0;
+							survivor.meleePending = false;
+							survivor.recoveryUntil = 0;
+						}
+						for (auto& visual : zombies)
+						{
+							if (!visual.visible || visual.dying) continue;
+							LobbyCombat::ReleaseEncounter(visual);
+						}
+					}
+					lastRoster = roster;
+					rosterReady = true;
+
+					const auto killZombie = [&](ZombieVisual& visual, bool meleeHit = false)
+					{
+						if (visual.dying) return;
+						auto& mesh = actorMeshes[4];
+						if (!mesh.frames.empty()) visual.deathPose = sampleActor(mesh,
+							visual.attacking && mesh.attackCount > 1 ? 9 : visual.variant == 1 ? 1 : 0,
+							visual.attacking && mesh.attackCount > 1 ? 0u - visual.attackTime : zombieAnimationTime(visual) - now);
+						visual.fallDirection = meleeHit ? -1.0f : 1.0f;
+						visual.dying = true;
+						visual.deathTime = now;
+						visual.nextSpawnTime = now + zombieCorpseLifetime;
+						if (meleeHit && visual.targetSurvivor >= 0 && visual.targetSurvivor < count)
+							survivors[visual.targetSurvivor].recoveryUntil = now + LobbyCombat::RecoveryMs;
+					};
+
+					// Ease movement and gait together into a slower pace during the camera transition.
+					const auto transitionPace = inTransition ?
+						1.0f - 0.45f * LobbyTransition::Smooth(std::clamp(transitionElapsed / 600.0f, 0.0f, 1.0f)) : 1.0f;
+					const auto movementDt = dt * transitionPace;
+					const auto advanceEncounter = [&](ZombieVisual& visual, float home, bool waiting)
+					{
+						const auto oldX = visual.location.x, oldY = visual.location.y;
+						const auto moved = LobbyCombat::AdvanceApproach(visual.location.x, visual.location.y, visual.approachPhase,
+							home, movementDt, visual.variant == 1 ? 80.0f : 55.0f, waiting);
+						if (moved > 0.001f)
+						{
+							visual.animationTime += movementDt * 1000.0f;
+							const auto yaw = std::atan2(visual.location.y - oldY, visual.location.x - oldX);
+							auto difference = yaw - visual.facing;
+							while (difference > D3DX_PI) difference -= 2.0f * D3DX_PI;
+							while (difference < -D3DX_PI) difference += 2.0f * D3DX_PI;
+							visual.facing += difference * (1.0f - std::exp(-dt * 8.0f));
+						}
+					};
+
+					// Advance leaders first so followers leave space instead of stacking on the landing.
+					std::array<unsigned, 32> movementOrder{};
+					for (auto index = 0u; index < movementOrder.size(); ++index) movementOrder[index] = index;
+					std::sort(movementOrder.begin(), movementOrder.end(), [&](unsigned a, unsigned b)
+						{ return zombies[a].routeProgress > zombies[b].routeProgress; });
+					for (const auto index : movementOrder)
+					{
+						auto& visual = zombies[index];
+						if (!visual.visible || visual.dying) continue;
+						if (visual.targetSurvivor >= count || (visual.targetSurvivor >= 0 && !survivors[visual.targetSurvivor].present))
+						{
+							LobbyCombat::ReleaseEncounter(visual);
+						}
+						if (!visual.chasing)
+						{
+							auto progress = std::min(visual.routeProgress + (movementDt * 1000.0f / visual.walkDuration), 1.0f);
+							for (auto leader = 0u; leader < zombies.size(); ++leader)
+							{
+								const auto& other = zombies[leader];
+								if (leader != index && leader % 2 == index % 2 && other.visible && !other.dying && !other.chasing &&
+									other.routeProgress > visual.routeProgress)
+									progress = std::max(visual.routeProgress, std::min(progress, other.routeProgress - LobbyCombat::RouteSpacing));
+							}
+							if (!visual.admitted && progress >= LobbyCombat::AdmissionProgress)
+							{
+								float best = std::numeric_limits<float>::max();
+								visual.targetSurvivor = -1;
+								PathPoint entry{}; float entryFacing = 0.0f;
+								sampleZombiePath(index, progress, entry, entryFacing);
+								for (auto slot = 0; slot < count; ++slot)
+								{
+									if (!survivors[slot].present) continue;
+									const auto occupied = std::count_if(zombies.begin(), zombies.end(), [&](const ZombieVisual& other)
+										{ return other.visible && !other.dying && other.admitted && other.targetSurvivor == slot; });
+									if (occupied >= 2) continue;
+									const auto x = (static_cast<float>(slot) - (count - 1) * 0.5f) * 65.0f;
+									const auto score = std::hypot(x - entry.x, balconyY - entry.y) + occupied * 120.0f;
+									if (score < best) { best = score; visual.targetSurvivor = slot; }
+								}
+								visual.admitted = visual.targetSurvivor >= 0;
+								if (visual.admitted)
+								{
+									visual.admittedTime = now;
+									visual.approachPhase = 0;
+									visual.assignedHomeX = (static_cast<float>(visual.targetSurvivor) - (count - 1) * 0.5f) * 65.0f;
+								}
+								// Full encounter slots do not stop the stair route. Reassign at the landing.
+							}
+							if (progress > visual.routeProgress) visual.animationTime += movementDt * 1000.0f;
+							visual.routeProgress = progress;
+							sampleZombiePath(index, progress, visual.location, visual.facing);
+							if (progress < 1.0f) continue;
+							visual.chasing = true;
+						}
+						// A departing character releases its encounter without teleporting the zombie.
+						if (!visual.admitted)
+						{
+							float best = std::numeric_limits<float>::max();
+							for (auto slot = 0; slot < count; ++slot)
+							{
+								if (!survivors[slot].present) continue;
+								const auto occupied = std::count_if(zombies.begin(), zombies.end(), [&](const ZombieVisual& other)
+									{ return other.visible && !other.dying && other.admitted && other.targetSurvivor == slot; });
+								const auto x = (static_cast<float>(slot) - (count - 1) * 0.5f) * 65.0f;
+								const auto score = std::hypot(x - visual.location.x, balconyY - visual.location.y) + occupied * 120.0f;
+								if (score < best) { best = score; visual.targetSurvivor = slot; }
+							}
+							visual.admitted = visual.targetSurvivor >= 0;
+								if (visual.admitted)
+								{
+									visual.admittedTime = now;
+									visual.approachPhase = 0;
+									visual.assignedHomeX = (static_cast<float>(visual.targetSurvivor) - (count - 1) * 0.5f) * 65.0f;
+								}
+						}
+						const auto target = visual.targetSurvivor;
+						if (target < 0)
+						{
+							// Keep clear of the characters until an occupied slot becomes available.
+							visual.attacking = false;
+							advanceEncounter(visual, visual.location.x, true);
+							continue;
+						}
+						const auto targetX = (static_cast<float>(target) - (count - 1) * 0.5f) * 65.0f;
+						if (targetX != visual.assignedHomeX)
+						{
+							visual.assignedHomeX = targetX;
+							visual.approachPhase = 0;
+							visual.attacking = false;
+						}
+						const auto dx = targetX - visual.location.x, dy = balconyY - visual.location.y;
+						const auto nearest = std::hypot(dx, dy);
+						unsigned ahead = 0;
+						bool waiting = survivors[target].recoveryUntil != 0 && static_cast<int>(now - survivors[target].recoveryUntil) < 0;
+						for (auto otherIndex = 0u; otherIndex < zombies.size(); ++otherIndex)
+						{
+							const auto& other = zombies[otherIndex];
+							if (otherIndex == index || !other.visible || other.dying || !other.admitted || other.targetSurvivor != target) continue;
+							if (other.attacking || LobbyCombat::OlderEncounter(other.admittedTime, otherIndex, visual.admittedTime, index))
+							{ waiting = true; ++ahead; }
+						}
+						if (visual.attacking && now - visual.attackTime >= zombieAttackDuration) visual.attacking = false;
+						if (!visual.attacking)
+						{
+							// Spread a solo character's waiting crowd across the rear row, rather than stacking at one point.
+							const auto queueOffset = count == 1 && waiting && ahead > 0 ?
+								(ahead % 2 ? -1.0f : 1.0f) * std::min(112.0f, ((ahead + 1) / 2) * 28.0f) : 0.0f;
+							advanceEncounter(visual, targetX + queueOffset, waiting);
+						}
+
+						if (!inTransition && !waiting && visual.approachPhase == 2 && nearest <= LobbyCombat::AttackDistance && !visual.attacking && static_cast<int>(now - visual.nextAttackTime) >= 0)
+						{
+							visual.attacking = true;
+							visual.facing = std::atan2(dy, dx);
+							visual.attackTime = now;
+							visual.nextAttackTime = now + zombieAttackDuration + 450u;
+						}
+					}
+
 					struct MuzzleFlareRecord
 					{
 						D3DXVECTOR3 worldPos;
@@ -2068,6 +2380,8 @@ namespace Components
 						auto& actor = actorMeshes[modelIndex];
 						if (actor.frames.empty()) continue;
 
+						const unsigned meleeDuration = actor.clipDurationMs[8] ? actor.clipDurationMs[8] : 1067u;
+						const unsigned meleeImpact = meleeDuration * 45u / 100u;
 						auto& survivor = survivors[i];
 						const auto homeX = (static_cast<float>(i) - (count - 1) * 0.5f) * 65.0f;
 						if (!survivor.initialized || survivor.session != session)
@@ -2077,6 +2391,10 @@ namespace Components
 							survivor.targetZombieIndex = -1;
 							survivor.targetEngageTime = 0;
 							survivor.lastFireTime = 0;
+							survivor.meleeTime = 0;
+							survivor.recoveryUntil = 0;
+							survivor.meleeTarget = -1;
+							survivor.meleePending = false;
 							survivor.burstRemaining = 0;
 							survivor.nextBurstShotTime = 0;
 							survivor.facing = -D3DX_PI * 0.5f;
@@ -2088,6 +2406,11 @@ namespace Components
 						{
 							survivor.currentX = homeX;
 							survivor.homeX = homeX;
+							survivor.meleeTime = 0;
+							survivor.meleePending = false;
+							survivor.lastFireTime = 0;
+							survivor.burstRemaining = 0;
+							survivor.targetZombieIndex = -1;
 						}
 
 						const auto y = balconyY;
@@ -2096,28 +2419,41 @@ namespace Components
 						int bestZombie = -1;
 						float bestScore = 9999999.0f;
 						PathPoint bestLoc{};
-						float bestApproach = 0.0f;
 
 						for (auto zIdx = 0u; zIdx < zombies.size(); ++zIdx)
 						{
 							auto& zmb = zombies[zIdx];
 							if (!zmb.visible || zmb.dying || static_cast<int>(now - zmb.nextSpawnTime) < 0) continue;
-							const auto approach = static_cast<float>(now - zmb.spawnTime) / zmb.walkDuration;
-							if (approach < 0.55f || approach > 0.98f) continue;
+							const auto approach = zmb.routeProgress;
+							if (approach < 0.55f) continue;
+							const auto loc = zmb.location;
+							const auto closeDistance = std::hypot(loc.x - survivor.currentX, loc.y - y);
+							const bool meleeLocked = survivor.meleeTime != 0 && now - survivor.meleeTime < meleeDuration;
+							if (meleeLocked && survivor.meleeTarget != static_cast<int>(zIdx)) continue;
+							if (loc.z < 224.0f || closeDistance > 420.0f) continue;
+							if (closeDistance > LobbyCombat::MeleeDistance)
+							{
+								if (!LobbyCombat::ClearShot(survivor.currentX, y, loc.x, loc.y)) continue;
+								bool unsafe = false;
+								for (auto slot = 0; slot < count; ++slot)
+									if (survivors[slot].present && std::hypot(loc.x - (static_cast<float>(slot) - (count - 1) * 0.5f) * 65.0f,
+										loc.y - y) <= LobbyCombat::GunSafetyDistance) unsafe = true;
+								if (unsafe) continue;
+							}
 
-							PathPoint loc{};
-							float facingTmp = 0.0f;
-							sampleZombiePath(zIdx, approach, loc, facingTmp);
+							// A close attacker interrupts a distant gun burst.
+							if (closeDistance > 58.0f && survivor.burstRemaining > 0 && survivor.targetZombieIndex != static_cast<int>(zIdx)) continue;
 
 							const auto sideBias = (homeX * loc.x >= 0.0f) ? 0.7f : 1.4f;
 							const auto urgency = (1.05f - approach);
 							const auto dx = loc.x - survivor.currentX;
 							const auto dy = loc.y - y;
-							float score = (dx * dx + dy * dy) * sideBias * (urgency * urgency);
+							float score = closeDistance <= 58.0f ? -100000.0f + closeDistance :
+								(dx * dx + dy * dy) * sideBias * (urgency * urgency);
 
 							for (auto s = 0; s < count; ++s)
 							{
-								if (s != i && survivors[s].targetZombieIndex == static_cast<int>(zIdx) && survivors[s].burstRemaining > 0)
+								if (closeDistance > LobbyCombat::MeleeDistance && s != i && survivors[s].targetZombieIndex == static_cast<int>(zIdx) && survivors[s].burstRemaining > 0)
 								{
 									score *= 2.8f;
 									break;
@@ -2129,7 +2465,6 @@ namespace Components
 								bestScore = score;
 								bestZombie = static_cast<int>(zIdx);
 								bestLoc = loc;
-								bestApproach = approach;
 							}
 						}
 
@@ -2150,9 +2485,10 @@ namespace Components
 							targetYaw = -D3DX_PI * 0.5f + scan;
 						}
 
-						// Smooth shortest-arc yaw rotation
-						// Keep balcony aim forward-facing instead of twisting through the torso.
-						targetYaw = std::clamp(targetYaw, -D3DX_PI * 0.5f - 1.05f, -D3DX_PI * 0.5f + 1.05f);
+						if (survivor.meleeTime != 0 && now - survivor.meleeTime < meleeDuration) targetYaw = survivor.meleeFacing;
+
+						// Rotate the whole actor toward the actual target, including the stair landings.
+						// Clamping the aim here previously allowed kills outside the gun's direction.
 						float diffYaw = targetYaw - survivor.facing;
 						while (diffYaw > D3DX_PI) diffYaw -= 2.0f * D3DX_PI;
 						while (diffYaw < -D3DX_PI) diffYaw += 2.0f * D3DX_PI;
@@ -2172,12 +2508,58 @@ namespace Components
 							survivor.isWalking = false;
 						}
 
-						// Check if ready to initiate burst
-						if (!inTransition && bestZombie >= 0 && bestApproach >= 0.80f && bestApproach <= 0.98f)
+						if (bestZombie < 0) survivor.burstRemaining = 0;
+						const bool aimAligned = bestZombie >= 0 && std::abs(diffYaw) <= 0.12f;
+
+						const auto bestDistance = bestZombie >= 0 ? std::hypot(bestLoc.x - survivor.currentX, bestLoc.y - y) : 99999.0f;
+						bool closeToAnySurvivor = false;
+						if (bestZombie >= 0)
+							for (auto slot = 0; slot < count; ++slot)
+								if (survivors[slot].present && std::hypot(bestLoc.x -
+									(static_cast<float>(slot) - (count - 1) * 0.5f) * 65.0f, bestLoc.y - y) <= 72.0f)
+									closeToAnySurvivor = true;
+						const bool canShootBest = bestZombie >= 0 && bestLoc.z >= 224.0f && bestDistance <= 420.0f &&
+							LobbyCombat::ClearShot(survivor.currentX, y, bestLoc.x, bestLoc.y);
+						if (closeToAnySurvivor || !canShootBest) survivor.burstRemaining = 0;
+						const auto nearbyThreats = static_cast<unsigned>(std::count_if(zombies.begin(), zombies.end(), [&](const ZombieVisual& zombie)
+							{ return zombie.visible && !zombie.dying && zombie.location.z >= 224.0f &&
+								std::hypot(zombie.location.x - survivor.currentX, zombie.location.y - y) <= 220.0f; }));
+						if (!inTransition && survivor.meleePending && now - survivor.meleeTime >= meleeImpact)
 						{
-							if (now - survivor.targetEngageTime >= 180u &&
+							auto& target = zombies[survivor.meleeTarget];
+							if (target.visible && !target.dying && LobbyCombat::InMeleeSweep(
+								target.location.x - survivor.currentX, target.location.y - y, survivor.meleeFacing))
+							{
+								killZombie(target, true);
+								// The same visible knife swing can catch two additional tightly packed attackers.
+								unsigned hits = 1;
+								for (auto& nearby : zombies)
+								{
+									if (hits >= 3) break;
+									if (!nearby.visible || nearby.dying || nearby.location.z < 224.0f) continue;
+									if (LobbyCombat::InMeleeSweep(nearby.location.x - survivor.currentX,
+										nearby.location.y - y, survivor.meleeFacing)) { killZombie(nearby, true); ++hits; }
+								}
+							}
+							survivor.meleePending = false;
+						}
+						if (!inTransition && bestZombie >= 0 && !zombies[bestZombie].dying && bestDistance <= 58.0f && aimAligned &&
+							!survivor.meleePending && zombies[bestZombie].attacking && now - zombies[bestZombie].attackTime >= 600u && (survivor.meleeTime == 0 || now - survivor.meleeTime >= meleeDuration + 200u))
+						{
+							survivor.meleeTime = now;
+							survivor.meleeFacing = survivor.facing;
+							survivor.meleeTarget = bestZombie;
+							survivor.meleePending = true;
+							survivor.lastFireTime = 0;
+						}
+						const bool isMeleeing = survivor.meleeTime != 0 && now - survivor.meleeTime < meleeDuration;
+
+						// Upper stairs and the far balcony remain valid ranged targets; recover between bursts.
+						if (!inTransition && bestZombie >= 0 && canShootBest && aimAligned && !closeToAnySurvivor && !isMeleeing && bestDistance <= 420.0f)
+						{
+							if (now - survivor.targetEngageTime >= 350u &&
 								survivor.burstRemaining == 0 &&
-								now - survivor.lastFireTime >= 1000u)
+								now - survivor.lastFireTime >= LobbyCombat::PressureCooldown(count, nearbyThreats) + i * 120u)
 							{
 								survivor.burstRemaining = (survivor.weaponIndex == 3 ? 1 : survivor.weaponIndex == 0 ? 2 : 3);
 								survivor.nextBurstShotTime = now;
@@ -2185,7 +2567,7 @@ namespace Components
 						}
 
 						// Handle active burst shots
-						if (!inTransition && survivor.burstRemaining > 0 && static_cast<int>(now - survivor.nextBurstShotTime) >= 0)
+						if (!inTransition && canShootBest && !closeToAnySurvivor && !isMeleeing && aimAligned && survivor.burstRemaining > 0 && static_cast<int>(now - survivor.nextBurstShotTime) >= 0)
 						{
 							survivor.burstRemaining--;
 							survivor.lastFireTime = now;
@@ -2194,32 +2576,30 @@ namespace Components
 								survivor.weaponIndex == 2 ? 100u : 115u);
 							survivor.nextBurstShotTime = now + shotDelay;
 
-							// On the final shot of the burst: kill the target zombie!
+							// A completed, aimed gun burst kills its target at range.
 							if (survivor.burstRemaining == 0 && bestZombie >= 0)
 							{
 								auto& zmb = zombies[bestZombie];
-								zmb.dying = true;
-								zmb.deathTime = now;
-								zmb.deathProgress = bestApproach;
-								zmb.nextSpawnTime = now + 2400u;
+								killZombie(zmb);
 								survivor.targetZombieIndex = -1;
 							}
 						}
 
 						const auto fireClip = survivor.weaponIndex == 3 ? 6 : survivor.weaponIndex == 0 ? 1 : 5;
 						const auto fireDuration = actor.clipDurationMs[fireClip] ? actor.clipDurationMs[fireClip] : 450u;
-						const bool isFiring = !inTransition && ((survivor.burstRemaining > 0) || (now - survivor.lastFireTime < fireDuration));
+						const bool isFiring = !inTransition && !isMeleeing && !closeToAnySurvivor && survivor.lastFireTime != 0 && now - survivor.lastFireTime < fireDuration;
 
 						D3DXMATRIX rotation, translation, placement;
+						// Melee is pose animation only; keep the character planted at its home.
 						D3DXMatrixRotationZ(&rotation, survivor.facing);
-						D3DXMatrixTranslation(&translation, survivor.currentX, y, z);
+						D3DXMatrixTranslation(&translation, survivor.homeX, y, z);
 						placement = rotation * translation;
 						device->SetTransform(D3DTS_WORLD, &placement);
 
-						const auto clip = isFiring ? (survivor.weaponIndex == 3 ? 6 :
+						const auto clip = isMeleeing ? (actor.meleeCount > 1 ? 8 : survivor.weaponIndex == 0 ? 0 : 4) : isFiring ? (survivor.weaponIndex == 3 ? 6 :
 							survivor.weaponIndex == 0 ? 1 : 5) :
 							(survivor.isWalking ? 3 : survivor.weaponIndex == 0 ? 0 : 4);
-						const auto phaseOffset = isFiring ? (0u - survivor.lastFireTime) :
+						const auto phaseOffset = isMeleeing ? (0u - survivor.meleeTime) : isFiring ? (0u - survivor.lastFireTime) :
 							(survivor.isWalking ? (i * 200u) : (i * 540u));
 						const std::vector<Vertex>* pose = &sampleActor(actor, clip, phaseOffset);
 						const auto shotAge = now - survivor.lastFireTime;
@@ -2290,23 +2670,33 @@ namespace Components
 						{
 							auto& visual = zombies[i];
 							if (!visual.visible) continue;
-							const auto progress = visual.dying ? visual.deathProgress :
-								std::min(static_cast<float>(now - visual.spawnTime) / visual.walkDuration, 1.0f);
+							const auto location = visual.location;
+							const auto facing = visual.facing;
 
-							PathPoint location{};
-							float facing = 0.0f;
-							sampleZombiePath(i, progress, location, facing);
+							// Baked meshes have no bones: blending a walk pose into a distant death
+							// pose collapses limbs. Fall from the hit pose with one rigid transform.
+							if (visual.dying && !visual.deathPose.empty()) zombie.blended = visual.deathPose;
+							else zombie.blended = sampleActor(zombie, visual.attacking && zombie.attackCount > 1 ? 9 : visual.variant == 1 ? 1 : 0,
+								visual.attacking && zombie.attackCount > 1 ? 0u - visual.attackTime : zombieAnimationTime(visual) - now);
+							auto& pose = zombie.blended;
+							float lowest = std::numeric_limits<float>::max();
+							for (const auto& vertex : pose) lowest = std::min(lowest, vertex.z);
+							for (auto& vertex : pose) vertex.z -= lowest;
 
-							D3DXMATRIX rotation, translation, placement;
+							D3DXMATRIX fall, rotation, translation, placement;
+							const auto fallProgress = visual.dying ?
+								LobbyTransition::Progress(now - visual.deathTime, 0u, zombieFallDuration) : 0.0f;
+							const auto fallAngle = visual.dying ? visual.fallDirection * fallProgress * fallProgress * D3DX_PI * 0.5f : 0.0f;
+							D3DXMatrixRotationY(&fall, fallAngle);
+							// Keep the rotating body supported throughout the fall and corpse hold.
+							float supportZ = std::numeric_limits<float>::max();
+							for (const auto& vertex : pose)
+								supportZ = std::min(supportZ, vertex.z * std::cos(fallAngle) - vertex.x * std::sin(fallAngle));
 							D3DXMatrixRotationZ(&rotation, facing);
-							D3DXMatrixTranslation(&translation, location.x, location.y, location.z - 3.0f);
-							placement = rotation * translation;
+							D3DXMatrixTranslation(&translation, location.x, location.y, location.z - supportZ);
+							placement = fall * rotation * translation;
 							device->SetTransform(D3DTS_WORLD, &placement);
 
-							// Keep walkers walking on the stairs; changing to run mid-route snaps the pose.
-							const auto clip = visual.dying ? 2 : visual.variant == 1 ? 1 : 0;
-							const auto clipStart = visual.dying ? visual.deathTime : visual.spawnTime;
-							const auto& pose = sampleActor(zombie, clip, 0u - clipStart);
 							if (!drawGroups(zombie.groups, pose, false, false, nullptr))
 							{
 								rendered = false;
@@ -2559,6 +2949,7 @@ namespace Components
 
 		Events::AfterUIInit([]
 		{
+			backgroundExpressionCounts.clear();
 			materialNeedsRefresh = true;
 			RefreshLobbyMaterial();
 			PrepareStartup();
@@ -2583,6 +2974,10 @@ namespace Components
 		Renderer::OnDeviceRecoveryBegin([]
 		{
 			StopTransition();
+			// Recreate the empty startup wave before warming the recovered scene texture.
+			zombieWaveStarted.store(false, std::memory_order_release);
+			lobbySession.fetch_add(1, std::memory_order_release);
+			cameraResetSession.fetch_add(1, std::memory_order_release);
 			frameReady.store(false, std::memory_order_release);
 			assetsReady.store(false, std::memory_order_release);
 			startupLoading.store(true, std::memory_order_release);
@@ -2625,6 +3020,8 @@ namespace Components
 		});
 		Events::OnCLDisconnected([](bool)
 		{
+			zombieWaveStarted.store(false, std::memory_order_release);
+			lobbySession.fetch_add(1, std::memory_order_release);
 			if (sawConnectingState.load(std::memory_order_acquire))
 			{
 				StopTransition();

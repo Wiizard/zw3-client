@@ -9,6 +9,7 @@
 #include "Logger.hpp"
 #include "Scheduler.hpp"
 #include "TextRenderer.hpp"
+#include "Window.hpp"
 
 #ifdef MOUSE_MOVED
 	#undef MOUSE_MOVED
@@ -31,7 +32,8 @@ namespace Components
 	std::atomic_bool Console::isWatchdogStarted = false;
 
 	constexpr int maxLines = 2048;
-	constexpr int lineLength = 256;
+	constexpr int pendingCapacity = 512;
+	constexpr int lineLength = pendingCapacity + 1;
 	constexpr int inputCapacity = 256;
 	constexpr int historyMax = 32;
 	constexpr int maxMatches = 24;
@@ -42,6 +44,9 @@ namespace Components
 	static int scrollOffset = 0;
 	static int visibleLineCount = 0;
 	static SRWLOCK lineBufferLock = SRWLOCK_INIT;
+	static int pushedLineCount = 0;
+	static char pendingLine[pendingCapacity + 1];
+	static int pendingLength = 0;
 
 	static char inputBuffer[inputCapacity];
 	static int inputLength = 0;
@@ -49,6 +54,7 @@ namespace Components
 	static int inputScroll = 0;
 	static int inputDrawWidth = 0;
 	static bool isOverstrike = false;
+	static int inputAnchor = -1;
 
 	static char historyBuffer[historyMax][inputCapacity];
 	static int historyCount = 0;
@@ -57,6 +63,32 @@ namespace Components
 	static char matchBuffer[maxMatches][64];
 	static int matchCount = 0;
 	static int matchTotal = 0;
+
+	struct LogPosition
+	{
+		int lineNumber;
+		int column;
+	};
+
+	struct InputRange
+	{
+		int start;
+		int end;
+	};
+
+	enum class DragTarget
+	{
+		None,
+		Log,
+		Input,
+	};
+
+	static LogPosition logAnchor{};
+	static LogPosition logCaret{};
+	static DragTarget dragTarget = DragTarget::None;
+	static bool didPressMouse = false;
+	static bool isMouseHeld = false;
+	static bool isOwningMouse = false;
 
 	static float minX = 0.0f;
 	static float minY = 0.0f;
@@ -81,17 +113,26 @@ namespace Components
 	constexpr Console::Color outputBarColor{ 1.00f, 1.00f, 0.95f, 0.60f };
 	constexpr Console::Color outputSliderColor{ 0.15f, 0.15f, 0.10f, 0.60f };
 	constexpr Console::Color outputTextColor{ 1.00f, 1.00f, 1.00f, 1.00f };
-	constexpr Console::Color versionColor{ 1.00f, 1.00f, 0.00f, 1.00f };
+	constexpr Console::Color versionColor{ 1.00f, 0.00f, 0.00f, 1.00f };
 	constexpr Console::Color dvarNameColor{ 1.00f, 1.00f, 0.80f, 1.00f };
 	constexpr Console::Color dvarValueColor{ 1.00f, 1.00f, 1.00f, 1.00f };
 	constexpr Console::Color commandNameColor{ 0.80f, 0.80f, 1.00f, 1.00f };
 	constexpr Console::Color descriptionColor{ 0.80f, 0.80f, 1.00f, 1.00f };
+	constexpr Console::Color selectionColor{ 0.25f, 0.45f, 0.85f, 0.70f };
 
 	constexpr std::uintptr_t cls_whiteMaterial = 0x140C5CF08;
 	constexpr std::uintptr_t cls_consoleFont = 0x140C5CF18;
+	constexpr std::uintptr_t cls_vidWidth = 0x140C5CF28;
+	constexpr std::uintptr_t cls_vidHeight = 0x140C5CF2C;
 	constexpr std::uintptr_t keyCatchers = 0x1406CECF0;
 	constexpr std::uintptr_t cmd_functions = 0x141BBC798;
 	constexpr std::uintptr_t dvarHashTable = 0x1466E3A60;
+	constexpr std::uintptr_t con_visiblePixelWidth = 0x1406C4830;
+	constexpr std::uintptr_t in_mouseActive = 0x146786F6C;
+	constexpr std::uintptr_t R_TextLineWrapPosition = 0x14001AB80;
+
+	constexpr char defaultColor = '7';
+	constexpr int iconEscapeLength = 12;
 
 	constexpr int dvarName = 0x0;
 	constexpr int dvarType = 0xC;
@@ -123,6 +164,7 @@ namespace Components
 	constexpr int keyPageUp = 0xA4;
 	constexpr int keyHome = 0xA5;
 	constexpr int keyEnd = 0xA6;
+	constexpr int keyMouse1 = 0xC8;
 	constexpr int keyMouseWheelDown = 0xCD;
 	constexpr int keyMouseWheelUp = 0xCE;
 
@@ -637,23 +679,17 @@ namespace Components
 		keyObservers.push_back(observer);
 	}
 
-	static int LengthBeforeInlineMaterial(const char* text, int length)
+	static void AppendPending(char character)
 	{
-		for (int i = 0; i + 1 < length; ++i)
+		if (pendingLength < pendingCapacity)
 		{
-			if (text[i] == '^' && (text[i + 1] == 1 || text[i + 1] == 2))
-			{
-				return i;
-			}
+			pendingLine[pendingLength] = character;
+			++pendingLength;
 		}
-
-		return length;
 	}
 
 	void Console::PushLine(const char* text, int length)
 	{
-		length = LengthBeforeInlineMaterial(text, length);
-
 		if (length >= lineLength)
 		{
 			length = lineLength - 1;
@@ -663,6 +699,7 @@ namespace Components
 		lineBuffer[writeHead][length] = '\0';
 
 		writeHead = (writeHead + 1) % maxLines;
+		++pushedLineCount;
 
 		if (lineBufferCount < maxLines)
 		{
@@ -690,30 +727,107 @@ namespace Components
 		Logger::NetworkLog(text, false);
 
 		AcquireSRWLockExclusive(&lineBufferLock);
+		AddLine(text);
+		ReleaseSRWLockExclusive(&lineBufferLock);
+	}
 
-		const char* lineStart = text;
+	void Console::AddLine(const char* text)
+	{
+		const auto wrapPosition = reinterpret_cast<const char* (*)(const char*, int, int, Game::Font_s*, float)>(
+			Utils::Hook::Rebase(R_TextLineWrapPosition));
+		auto* const font = *reinterpret_cast<Game::Font_s**>(Utils::Hook::Rebase(cls_consoleFont));
+		const int pixelWidth = *reinterpret_cast<const int*>(Utils::Hook::Rebase(con_visiblePixelWidth));
 
-		while (true)
+		const char* wrap = wrapPosition(text, pendingCapacity - pendingLength, pixelWidth, font, 1.0f);
+
+		if (!*wrap)
 		{
-			const char* const lineEnd = std::strchr(lineStart, '\n');
-
-			if (!lineEnd)
-			{
-				const auto remaining = static_cast<int>(std::strlen(lineStart));
-
-				if (remaining > 0)
-				{
-					PushLine(lineStart, remaining);
-				}
-
-				break;
-			}
-
-			PushLine(lineStart, static_cast<int>(lineEnd - lineStart));
-			lineStart = lineEnd + 1;
+			wrap = nullptr;
 		}
 
-		ReleaseSRWLockExclusive(&lineBufferLock);
+		if (wrap == text && pendingLength > 0)
+		{
+			FlushPendingLine();
+			wrap = wrapPosition(text, pendingCapacity, pixelWidth, font, 1.0f);
+
+			if (!*wrap)
+			{
+				wrap = nullptr;
+			}
+		}
+
+		const char* cursor = text;
+		char color = defaultColor;
+		bool isContinuation = false;
+
+		while (*cursor)
+		{
+			const char character = *cursor;
+			++cursor;
+
+			if (character == '^' && *cursor >= '0' && *cursor <= '9')
+			{
+				color = *cursor;
+				AppendPending(character);
+				AppendPending(*cursor);
+				++cursor;
+				isContinuation = false;
+			}
+			else if (character == '^' && (*cursor == 1 || *cursor == 2))
+			{
+				cursor += iconEscapeLength - 1;
+				isContinuation = false;
+			}
+			else if (character != '\n' && (character != ' ' || !isContinuation))
+			{
+				AppendPending(character);
+				isContinuation = false;
+			}
+
+			if (cursor != wrap && (character != '\n' || wrap != nullptr))
+			{
+				continue;
+			}
+
+			FlushPendingLine();
+
+			int capacity = pendingCapacity;
+
+			if (character != '\n')
+			{
+				isContinuation = true;
+
+				if (color != defaultColor)
+				{
+					AppendPending('^');
+					AppendPending(color);
+					capacity -= 2;
+				}
+			}
+
+			const char* next = cursor;
+
+			if (isContinuation)
+			{
+				while (*next == ' ')
+				{
+					++next;
+				}
+			}
+
+			wrap = wrapPosition(next, capacity, pixelWidth, font, 1.0f);
+
+			if (!*wrap)
+			{
+				wrap = nullptr;
+			}
+		}
+	}
+
+	void Console::FlushPendingLine()
+	{
+		PushLine(pendingLine, pendingLength);
+		pendingLength = 0;
 	}
 
 	void Console::ClearScrollback()
@@ -723,6 +837,9 @@ namespace Components
 		writeHead = 0;
 		lineBufferCount = 0;
 		scrollOffset = 0;
+		pushedLineCount = 0;
+		logAnchor = {};
+		logCaret = {};
 
 		ReleaseSRWLockExclusive(&lineBufferLock);
 	}
@@ -743,6 +860,7 @@ namespace Components
 		inputCursor = 0;
 		inputScroll = 0;
 		inputDrawWidth = 0;
+		inputAnchor = -1;
 	}
 
 	void Console::LoadInput(const char* text)
@@ -751,6 +869,49 @@ namespace Components
 		inputLength = static_cast<int>(std::strlen(inputBuffer));
 		inputCursor = inputLength;
 		inputScroll = 0;
+		inputAnchor = -1;
+	}
+
+	static bool HasInputSelection()
+	{
+		return inputAnchor >= 0 && inputAnchor != inputCursor;
+	}
+
+	static InputRange InputSelection()
+	{
+		if (inputAnchor < inputCursor)
+		{
+			return { inputAnchor, inputCursor };
+		}
+
+		return { inputCursor, inputAnchor };
+	}
+
+	static void DeleteInputSelection()
+	{
+		const InputRange selection = InputSelection();
+
+		std::memmove(inputBuffer + selection.start, inputBuffer + selection.end,
+			static_cast<std::size_t>(inputLength - selection.end) + 1);
+
+		inputLength -= selection.end - selection.start;
+		inputCursor = selection.start;
+		inputAnchor = -1;
+	}
+
+	static bool IsBefore(const LogPosition& first, const LogPosition& second)
+	{
+		if (first.lineNumber != second.lineNumber)
+		{
+			return first.lineNumber < second.lineNumber;
+		}
+
+		return first.column < second.column;
+	}
+
+	static bool HasLogSelection()
+	{
+		return logAnchor.lineNumber != logCaret.lineNumber || logAnchor.column != logCaret.column;
 	}
 
 	void Console::InsertInputChar(char character)
@@ -780,6 +941,312 @@ namespace Components
 		char slice[inputCapacity];
 		std::snprintf(slice, sizeof(slice), "%.*s", count, inputBuffer + from);
 		return TextWidth(slice);
+	}
+
+	int Console::MeasurePrefix(const char* text, int count)
+	{
+		char prefix[lineLength];
+		std::snprintf(prefix, sizeof(prefix), "%.*s", count, text);
+		return TextWidth(prefix);
+	}
+
+	int Console::HitColumn(const char* text, int length, float offsetX)
+	{
+		int bestColumn = 0;
+		float bestDistance = std::fabs(offsetX);
+
+		for (int column = 1; column <= length; ++column)
+		{
+			const float distance = std::fabs(static_cast<float>(MeasurePrefix(text, column)) - offsetX);
+
+			if (distance < bestDistance)
+			{
+				bestDistance = distance;
+				bestColumn = column;
+			}
+		}
+
+		return bestColumn;
+	}
+
+	static bool TryReadClipboard(char* out, std::size_t outSize)
+	{
+		out[0] = '\0';
+
+		if (!OpenClipboard(nullptr))
+		{
+			return false;
+		}
+
+		bool didRead = false;
+		const HANDLE handle = GetClipboardData(CF_TEXT);
+
+		if (handle)
+		{
+			const char* const text = static_cast<const char*>(GlobalLock(handle));
+
+			if (text)
+			{
+				std::snprintf(out, outSize, "%s", text);
+				GlobalUnlock(handle);
+				didRead = true;
+			}
+		}
+
+		CloseClipboard();
+		return didRead;
+	}
+
+	static bool TryWriteClipboard(HGLOBAL block)
+	{
+		if (!OpenClipboard(nullptr))
+		{
+			GlobalFree(block);
+			return false;
+		}
+
+		EmptyClipboard();
+		const bool didWrite = SetClipboardData(CF_TEXT, block) != nullptr;
+
+		if (!didWrite)
+		{
+			GlobalFree(block);
+		}
+
+		CloseClipboard();
+		return didWrite;
+	}
+
+	static void CopyInputToClipboard(int from, int count)
+	{
+		const HGLOBAL block = GlobalAlloc(GMEM_MOVEABLE, static_cast<std::size_t>(count) + 1);
+
+		if (!block)
+		{
+			return;
+		}
+
+		char* const dest = static_cast<char*>(GlobalLock(block));
+
+		if (!dest)
+		{
+			GlobalFree(block);
+			return;
+		}
+
+		std::memcpy(dest, inputBuffer + from, static_cast<std::size_t>(count));
+		dest[count] = '\0';
+		GlobalUnlock(block);
+
+		TryWriteClipboard(block);
+	}
+
+	static void CopyLogToClipboard()
+	{
+		AcquireSRWLockShared(&lineBufferLock);
+
+		const int lineCount = lineBufferCount;
+		const std::size_t capacity = static_cast<std::size_t>(lineCount) * (lineLength + 2) + 1;
+		const HGLOBAL block = GlobalAlloc(GMEM_MOVEABLE, capacity);
+		char* dest = nullptr;
+
+		if (block)
+		{
+			dest = static_cast<char*>(GlobalLock(block));
+		}
+
+		if (!dest)
+		{
+			ReleaseSRWLockShared(&lineBufferLock);
+
+			if (block)
+			{
+				GlobalFree(block);
+			}
+
+			return;
+		}
+
+		std::size_t written = 0;
+		const int oldest = (writeHead - lineCount + maxLines) % maxLines;
+
+		for (int i = 0; i < lineCount; ++i)
+		{
+			const char* const line = lineBuffer[(oldest + i) % maxLines];
+			const std::size_t length = std::strlen(line);
+			std::memcpy(dest + written, line, length);
+			written += length;
+			dest[written] = '\r';
+			dest[written + 1] = '\n';
+			written += 2;
+		}
+
+		dest[written] = '\0';
+
+		ReleaseSRWLockShared(&lineBufferLock);
+		GlobalUnlock(block);
+
+		if (TryWriteClipboard(block))
+		{
+			Console::Print(Utils::String::VA("copied %d lines to clipboard\n", lineCount));
+		}
+	}
+
+	static void CopyLogSelection()
+	{
+		LogPosition first = logAnchor;
+		LogPosition last = logCaret;
+
+		if (IsBefore(last, first))
+		{
+			first = logCaret;
+			last = logAnchor;
+		}
+
+		AcquireSRWLockShared(&lineBufferLock);
+
+		const int oldestLineNumber = pushedLineCount - lineBufferCount;
+
+		if (first.lineNumber < oldestLineNumber)
+		{
+			first = { oldestLineNumber, 0 };
+		}
+
+		if (last.lineNumber < first.lineNumber)
+		{
+			ReleaseSRWLockShared(&lineBufferLock);
+			return;
+		}
+
+		const std::size_t capacity =
+			static_cast<std::size_t>(last.lineNumber - first.lineNumber + 1) * (lineLength + 2) + 1;
+		const HGLOBAL block = GlobalAlloc(GMEM_MOVEABLE, capacity);
+		char* dest = nullptr;
+
+		if (block)
+		{
+			dest = static_cast<char*>(GlobalLock(block));
+		}
+
+		if (!dest)
+		{
+			ReleaseSRWLockShared(&lineBufferLock);
+
+			if (block)
+			{
+				GlobalFree(block);
+			}
+
+			return;
+		}
+
+		std::size_t written = 0;
+
+		for (int lineNumber = first.lineNumber; lineNumber <= last.lineNumber; ++lineNumber)
+		{
+			const char* const line = lineBuffer[lineNumber % maxLines];
+			const int length = static_cast<int>(std::strlen(line));
+
+			int start = 0;
+
+			if (lineNumber == first.lineNumber)
+			{
+				start = std::min(first.column, length);
+			}
+
+			int end = length;
+
+			if (lineNumber == last.lineNumber)
+			{
+				end = std::min(last.column, length);
+			}
+
+			char slice[lineLength];
+			std::snprintf(slice, sizeof(slice), "%.*s", end - start, line + start);
+
+			char cleaned[lineLength];
+			TextRenderer::StripColors(slice, cleaned, sizeof(cleaned));
+
+			const std::size_t cleanedLength = std::strlen(cleaned);
+			std::memcpy(dest + written, cleaned, cleanedLength);
+			written += cleanedLength;
+
+			if (lineNumber != last.lineNumber)
+			{
+				dest[written] = '\r';
+				dest[written + 1] = '\n';
+				written += 2;
+			}
+		}
+
+		dest[written] = '\0';
+
+		ReleaseSRWLockShared(&lineBufferLock);
+		GlobalUnlock(block);
+
+		TryWriteClipboard(block);
+	}
+
+	void Console::PasteClipboard()
+	{
+		char clipboard[inputCapacity];
+
+		if (!TryReadClipboard(clipboard, sizeof(clipboard)))
+		{
+			return;
+		}
+
+		if (HasInputSelection())
+		{
+			DeleteInputSelection();
+		}
+
+		for (const char* cursor = clipboard; *cursor; ++cursor)
+		{
+			char character = *cursor;
+
+			if (character == '\n' || character == '\t')
+			{
+				character = ' ';
+			}
+
+			if (character < ' ' || character > '~')
+			{
+				continue;
+			}
+
+			InsertInputChar(character);
+		}
+	}
+
+	static bool TryGetMousePosition(float& x, float& y)
+	{
+		const HWND window = Window::GetWindow();
+
+		if (!window || !Window::HasFocus())
+		{
+			return false;
+		}
+
+		POINT point{};
+		RECT client{};
+
+		if (!GetCursorPos(&point) || !ScreenToClient(window, &point) || !GetClientRect(window, &client))
+		{
+			return false;
+		}
+
+		const int screenWidth = *reinterpret_cast<const int*>(Utils::Hook::Rebase(cls_vidWidth));
+		const int screenHeight = *reinterpret_cast<const int*>(Utils::Hook::Rebase(cls_vidHeight));
+
+		if (client.right <= 0 || client.bottom <= 0 || screenWidth <= 0 || screenHeight <= 0)
+		{
+			return false;
+		}
+
+		x = static_cast<float>(point.x) * static_cast<float>(screenWidth) / static_cast<float>(client.right);
+		y = static_cast<float>(point.y) * static_cast<float>(screenHeight) / static_cast<float>(client.bottom);
+		return true;
 	}
 
 	void Console::AdjustInputScroll(float fieldWidth)
@@ -1040,8 +1507,8 @@ namespace Components
 		char command[inputCapacity];
 		std::snprintf(command, sizeof(command), "%s", NamePrefix());
 
-		char echo[inputCapacity + 16];
-		std::snprintf(echo, sizeof(echo), "%s%s", promptText, command);
+		char echo[inputCapacity + 64];
+		std::snprintf(echo, sizeof(echo), "%s%s\n", promptText, command);
 		Print(echo);
 
 		PushHistory(inputBuffer);
@@ -1055,7 +1522,7 @@ namespace Components
 
 		if (*firstToken && !FindCommand(firstToken) && !FindDvar(firstToken))
 		{
-			Print(Utils::String::VA("unknown command or dvar: %s", firstToken));
+			Print(Utils::String::VA("unknown command or dvar: %s\n", firstToken));
 			return;
 		}
 
@@ -1077,9 +1544,19 @@ namespace Components
 			*catchers &= ~1u;
 		}
 
+		if (!isOpen && isOwningMouse)
+		{
+			*reinterpret_cast<int*>(Utils::Hook::Rebase(in_mouseActive)) = 1;
+			isOwningMouse = false;
+		}
+
 		ResetInput();
 		scrollOffset = 0;
 		historyBrowse = -1;
+		logCaret = logAnchor;
+		dragTarget = DragTarget::None;
+		didPressMouse = false;
+		isMouseHeld = false;
 	}
 
 	void Console::FollowEngineClose()
@@ -1201,11 +1678,34 @@ namespace Components
 
 	void Console::DrawFrame()
 	{
+		AcquireSRWLockExclusive(&lineBufferLock);
+
+		if (pendingLength > 0)
+		{
+			FlushPendingLine();
+		}
+
+		ReleaseSRWLockExclusive(&lineBufferLock);
+
 		FollowEngineClose();
 
 		if (!isOpen || !IsRenderReady())
 		{
 			return;
+		}
+
+		*reinterpret_cast<int*>(Utils::Hook::Rebase(in_mouseActive)) = 0;
+		isOwningMouse = true;
+
+		float mouseX = 0.0f;
+		float mouseY = 0.0f;
+		const bool hasMouse = TryGetMousePosition(mouseX, mouseY);
+
+		if (didPressMouse)
+		{
+			logCaret = logAnchor;
+			inputAnchor = -1;
+			dragTarget = DragTarget::None;
 		}
 
 		UpdateConsoleRect();
@@ -1217,14 +1717,40 @@ namespace Components
 		const float consoleW = maxX - minX;
 		const float textX = minX + pad;
 		const float inputY = minY + pad;
+		const float inputBoxHeight = fontH + 2.0f * pad;
 
-		DrawBox(minX, minY, consoleW, fontH + 2.0f * pad, inputBoxColor);
+		DrawBox(minX, minY, consoleW, inputBoxHeight, inputBoxColor);
 		DrawText(promptText, textX, inputY + fontH, outputTextColor);
 
 		const float hintX = textX + static_cast<float>(TextWidth(promptText));
 		const float hintY = inputY + 2.0f * fontH;
 
 		AdjustInputScroll(maxX - pad - hintX);
+
+		const char* const visibleInput = inputBuffer + inputScroll;
+		const bool isOverInput = hasMouse && mouseX >= minX && mouseX < maxX
+			&& mouseY >= minY && mouseY < minY + inputBoxHeight;
+
+		if (didPressMouse && isOverInput)
+		{
+			inputCursor = inputScroll + HitColumn(visibleInput, inputDrawWidth, mouseX - hintX);
+			inputAnchor = inputCursor;
+			dragTarget = DragTarget::Input;
+		}
+		else if (dragTarget == DragTarget::Input && hasMouse)
+		{
+			inputCursor = inputScroll + HitColumn(visibleInput, inputDrawWidth, mouseX - hintX);
+		}
+
+		if (HasInputSelection())
+		{
+			const InputRange selection = InputSelection();
+			const int start = std::clamp(selection.start - inputScroll, 0, inputDrawWidth);
+			const int end = std::clamp(selection.end - inputScroll, 0, inputDrawWidth);
+			const float startX = hintX + static_cast<float>(MeasurePrefix(visibleInput, start));
+			const float endX = hintX + static_cast<float>(MeasurePrefix(visibleInput, end));
+			DrawRect(startX, inputY, endX - startX, fontH, selectionColor);
+		}
 
 		const char caret = isOverstrike ? '_' : '|';
 		DrawTextWithCursor(inputBuffer + inputScroll, inputDrawWidth, hintX, inputY + fontH,
@@ -1252,6 +1778,27 @@ namespace Components
 				const int maxSkip = std::max(0, lineBufferCount - visibleLines);
 				const int skip = std::clamp(scrollOffset, 0, maxSkip);
 
+				const bool isOverLog = hasMouse && !isOverInput && mouseX >= minX && mouseX < maxX
+					&& mouseY >= outputY && mouseY < maxY;
+				const bool isPressingLog = didPressMouse && isOverLog;
+				const bool isDraggingLog = dragTarget == DragTarget::Log && hasMouse;
+
+				if (lineBufferCount > 0 && (isPressingLog || isDraggingLog))
+				{
+					const int row = std::clamp(static_cast<int>(std::floor((mouseY - textTop) / fontH)), 0, visibleLines - 1);
+					const int back = std::min((visibleLines - 1 - row) + skip, lineBufferCount - 1);
+					const int lineNumber = pushedLineCount - 1 - back;
+					const char* const line = lineBuffer[lineNumber % maxLines];
+					const LogPosition hit{ lineNumber, HitColumn(line, static_cast<int>(std::strlen(line)), mouseX - textX) };
+					logCaret = hit;
+
+					if (isPressingLog)
+					{
+						logAnchor = hit;
+						dragTarget = DragTarget::Log;
+					}
+				}
+
 				const float barX = textX + textW - scrollBarWidth;
 				DrawBox(barX, textTop, scrollBarWidth, textH, outputBarColor);
 
@@ -1269,6 +1816,18 @@ namespace Components
 
 				DrawBox(barX, sliderY, scrollBarWidth, sliderH, outputSliderColor);
 
+				LogPosition first = logAnchor;
+				LogPosition last = logCaret;
+
+				if (IsBefore(last, first))
+				{
+					first = logCaret;
+					last = logAnchor;
+				}
+
+				const bool hasSelection = HasLogSelection();
+				const float newlineWidth = static_cast<float>(TextWidth(" "));
+
 				for (int row = 0; row < visibleLines; ++row)
 				{
 					const int back = (visibleLines - 1 - row) + skip;
@@ -1279,17 +1838,71 @@ namespace Components
 					}
 
 					const int index = (newest - back + maxLines) % maxLines;
+					const char* const line = lineBuffer[index];
+					const float y = textTop + static_cast<float>(row + 1) * fontH;
+					const int lineNumber = pushedLineCount - 1 - back;
 
-					if (!lineBuffer[index][0])
+					if (hasSelection && lineNumber >= first.lineNumber && lineNumber <= last.lineNumber)
+					{
+						const int length = static_cast<int>(std::strlen(line));
+						int start = 0;
+
+						if (lineNumber == first.lineNumber)
+						{
+							start = std::min(first.column, length);
+						}
+
+						int end = length;
+
+						if (lineNumber == last.lineNumber)
+						{
+							end = std::min(last.column, length);
+						}
+
+						const float startX = textX + static_cast<float>(MeasurePrefix(line, start));
+						float endX = textX + static_cast<float>(MeasurePrefix(line, end));
+
+						if (lineNumber != last.lineNumber)
+						{
+							endX += newlineWidth;
+						}
+
+						DrawRect(startX, y - fontH, endX - startX, fontH, selectionColor);
+					}
+
+					if (!line[0])
 					{
 						continue;
 					}
 
-					DrawText(lineBuffer[index], textX,
-						textTop + static_cast<float>(row + 1) * fontH, outputTextColor);
+					DrawText(line, textX, y, outputTextColor);
 				}
 
 				ReleaseSRWLockShared(&lineBufferLock);
+			}
+		}
+
+		int primaryButton = VK_LBUTTON;
+
+		if (GetSystemMetrics(SM_SWAPBUTTON))
+		{
+			primaryButton = VK_RBUTTON;
+		}
+
+		if (isMouseHeld && !(GetAsyncKeyState(primaryButton) & 0x8000))
+		{
+			isMouseHeld = false;
+		}
+
+		didPressMouse = false;
+
+		if (!isMouseHeld)
+		{
+			dragTarget = DragTarget::None;
+
+			if (!HasInputSelection())
+			{
+				inputAnchor = -1;
 			}
 		}
 
@@ -1444,6 +2057,18 @@ namespace Components
 			return false;
 		}
 
+		if (key == keyMouse1)
+		{
+			isMouseHeld = down != 0;
+
+			if (down)
+			{
+				didPressMouse = true;
+			}
+
+			return true;
+		}
+
 		if (!down)
 		{
 			return true;
@@ -1452,6 +2077,7 @@ namespace Components
 		if (TextRenderer::HandleFontIconAutocompleteKey(TextRenderer::FONT_ICON_ACI_CONSOLE, key, inputBuffer, inputCursor))
 		{
 			inputLength = static_cast<int>(std::strlen(inputBuffer));
+			inputAnchor = -1;
 			return true;
 		}
 
@@ -1486,7 +2112,11 @@ namespace Components
 			return true;
 
 		case keyBackspace:
-			if (inputCursor > 0)
+			if (HasInputSelection())
+			{
+				DeleteInputSelection();
+			}
+			else if (inputCursor > 0)
 			{
 				std::memmove(inputBuffer + inputCursor - 1, inputBuffer + inputCursor,
 					static_cast<std::size_t>(inputLength - inputCursor) + 1);
@@ -1496,6 +2126,8 @@ namespace Components
 			return true;
 
 		case keyLeftArrow:
+			inputAnchor = -1;
+
 			if (inputCursor > 0)
 			{
 				--inputCursor;
@@ -1503,6 +2135,8 @@ namespace Components
 			return true;
 
 		case keyRightArrow:
+			inputAnchor = -1;
+
 			if (inputCursor < inputLength)
 			{
 				++inputCursor;
@@ -1529,6 +2163,7 @@ namespace Components
 			else
 			{
 				inputCursor = 0;
+				inputAnchor = -1;
 			}
 			return true;
 
@@ -1540,6 +2175,7 @@ namespace Components
 			else
 			{
 				inputCursor = inputLength;
+				inputAnchor = -1;
 			}
 			return true;
 
@@ -1559,6 +2195,53 @@ namespace Components
 			ScrollBy(-3);
 			return true;
 
+		case 'c':
+			if (isControlDown)
+			{
+				if (HasLogSelection())
+				{
+					CopyLogSelection();
+				}
+				else if (HasInputSelection())
+				{
+					const InputRange selection = InputSelection();
+					CopyInputToClipboard(selection.start, selection.end - selection.start);
+				}
+				else if (inputLength > 0)
+				{
+					CopyInputToClipboard(0, inputLength);
+				}
+				else
+				{
+					CopyLogToClipboard();
+				}
+			}
+			return true;
+
+		case 'x':
+			if (isControlDown)
+			{
+				if (HasInputSelection())
+				{
+					const InputRange selection = InputSelection();
+					CopyInputToClipboard(selection.start, selection.end - selection.start);
+					DeleteInputSelection();
+				}
+				else
+				{
+					CopyInputToClipboard(0, inputLength);
+					ResetInput();
+				}
+			}
+			return true;
+
+		case 'v':
+			if (isControlDown)
+			{
+				PasteClipboard();
+			}
+			return true;
+
 		default:
 			return true;
 		}
@@ -1574,6 +2257,11 @@ namespace Components
 		if (character == '`' || character == '~')
 		{
 			return;
+		}
+
+		if (HasInputSelection())
+		{
+			DeleteInputSelection();
 		}
 
 		InsertInputChar(static_cast<char>(character));
@@ -1742,7 +2430,7 @@ namespace Components
 
 		Command::Add("echo", [](const Command::Params* params)
 		{
-			Print(params->Join(1).data());
+			Print((params->Join(1) + "\n").data());
 		});
 
 		Command::Add("quit", []
@@ -1753,8 +2441,8 @@ namespace Components
 		isInstalled = true;
 
 		char banner[128];
-		std::snprintf(banner, sizeof(banner), "%s console, press ~ to open and shift+~ for the log", versionText);
+		std::snprintf(banner, sizeof(banner), "%s console, press ~ to open and shift+~ for the log\n", versionText);
 		Print(banner);
-		Print("tab completes, up and down recall, pgup and pgdn scroll, quit exits");
+		Print("tab completes, up and down recall, pgup and pgdn scroll, drag to highlight, ctrl+c copies, ctrl+v pastes, quit exits\n");
 	}
 }

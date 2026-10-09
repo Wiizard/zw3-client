@@ -51,13 +51,18 @@ namespace Components
 		static void ScrollOutput(int amount);
 
 		static void PushLine(const char* text, int length);
+		static void AddLine(const char* text);
+		static void FlushPendingLine();
 		static void ClearScrollback();
 		static void ScrollBy(int lines);
 
 		static void ResetInput();
 		static void LoadInput(const char* text);
 		static void InsertInputChar(char character);
+		static void PasteClipboard();
 		static int MeasureInput(int from, int count);
+		static int MeasurePrefix(const char* text, int count);
+		static int HitColumn(const char* text, int length, float offsetX);
 		static void AdjustInputScroll(float fieldWidth);
 
 		static void PushHistory(const char* text);

@@ -34,41 +34,30 @@ namespace Utils::IO
 
 	bool ReadFile(const std::string& file, std::string* data)
 	{
-		if (!data)
-		{
-			return false;
-		}
-
+		if (!data) return false;
 		data->clear();
-
-		if (!FileExists(file))
+		const HANDLE raw = CreateFileA(file.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+			nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+		if (raw == INVALID_HANDLE_VALUE) return false;
+		const std::unique_ptr<void, decltype(&CloseHandle)> handle(raw, &CloseHandle);
+		LARGE_INTEGER length{};
+		if (!GetFileSizeEx(raw, &length) || length.QuadPart < 0
+			|| static_cast<unsigned long long>(length.QuadPart) > data->max_size()) return false;
+		data->resize(static_cast<std::size_t>(length.QuadPart));
+		std::size_t offset = 0;
+		while (offset < data->size())
 		{
-			return false;
+			const DWORD requested = static_cast<DWORD>(std::min<std::size_t>(data->size() - offset, 16u * 1024u * 1024u));
+			DWORD received = 0;
+			if (!::ReadFile(raw, data->data() + offset, requested, &received, nullptr) || !received)
+			{
+				data->clear();
+				return false;
+			}
+			offset += received;
 		}
-
-		std::ifstream stream(file, std::ios::binary);
-
-		if (!stream.is_open())
-		{
-			return false;
-		}
-
-		stream.seekg(0, std::ios::end);
-		const std::streamsize size = stream.tellg();
-		stream.seekg(0, std::ios::beg);
-
-		if (size < 0)
-		{
-			return false;
-		}
-
-		data->resize(static_cast<std::string::size_type>(size));
-		stream.read(data->data(), size);
-		stream.close();
-
 		return true;
 	}
-
 	std::string ReadFile(const std::string& file)
 	{
 		std::string data;
@@ -84,23 +73,12 @@ namespace Utils::IO
 
 	std::size_t FileSize(const std::string& file)
 	{
-		if (!FileExists(file))
-		{
-			return 0;
-		}
-
-		std::ifstream stream(file, std::ios::binary);
-
-		if (!stream.good())
-		{
-			return 0;
-		}
-
-		stream.seekg(0, std::ios::end);
-
-		return static_cast<std::size_t>(stream.tellg());
+		WIN32_FILE_ATTRIBUTE_DATA attributes{};
+		if (!GetFileAttributesExA(file.c_str(), GetFileExInfoStandard, &attributes)
+			|| (attributes.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return 0;
+		const std::uint64_t size = (static_cast<std::uint64_t>(attributes.nFileSizeHigh) << 32) | attributes.nFileSizeLow;
+		return size <= std::numeric_limits<std::size_t>::max() ? static_cast<std::size_t>(size) : 0;
 	}
-
 	bool CreateDir(const std::string& directory)
 	{
 		std::error_code error;

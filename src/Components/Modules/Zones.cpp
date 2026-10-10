@@ -449,14 +449,27 @@ namespace Components
 
 	static std::uint16_t FieldIndex(std::uint16_t record, const char* name)
 	{
-		const auto& r = Record(record);
-
-		for (std::uint16_t i = 0; i < r.fieldCount; ++i)
+		static const auto fieldIndices = []
 		{
-			if (std::strcmp(zoneFields[r.firstField + i].name, name) == 0)
+			std::array<std::unordered_map<std::string_view, std::uint16_t>, std::size(zoneRecords)> indices;
+			for (std::size_t entry = 0; entry < indices.size(); ++entry)
 			{
-				return static_cast<std::uint16_t>(r.firstField + i);
+				const auto& layout = zoneRecords[entry];
+				indices[entry].reserve(layout.fieldCount);
+				for (std::uint16_t i = 0; i < layout.fieldCount; ++i)
+				{
+					const auto index = static_cast<std::uint16_t>(layout.firstField + i);
+					indices[entry].emplace(zoneFields[index].name, index);
+				}
 			}
+			return indices;
+		}();
+
+		const auto& r = Record(record);
+		const auto found = fieldIndices[record].find(name);
+		if (found != fieldIndices[record].end())
+		{
+			return found->second;
 		}
 
 		Fail(std::format("{} has no field {}", r.name, name));
@@ -2751,6 +2764,10 @@ namespace Components
 	{
 		std::vector<std::int16_t> out;
 		const auto framesPerBlock = (blockAlign - 4 * channels) * 2 / channels + 1;
+		const auto sampleCount = static_cast<std::size_t>(framesPerBlock) * channels;
+		std::vector<std::int16_t> frames(sampleCount);
+		const auto blocks = (static_cast<std::size_t>(length) + blockAlign - 1) / blockAlign;
+		out.reserve(blocks * sampleCount);
 
 		for (std::uint32_t offset = 0; offset + 4 * channels <= length; offset += blockAlign)
 		{
@@ -2758,7 +2775,6 @@ namespace Components
 			const auto* block = data + offset;
 			std::int32_t predictor[2]{};
 			std::int32_t stepIndex[2]{};
-			std::vector<std::int16_t> frames(static_cast<std::size_t>(framesPerBlock) * channels);
 
 			for (std::uint32_t c = 0; c < channels; ++c)
 			{

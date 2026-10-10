@@ -3,6 +3,7 @@
 #include <bit>
 #include <d3dcommon.h>
 #include <DirectXMath.h>
+#include <future>
 #include <zlib.h>
 
 #include "LobbyScene.hpp"
@@ -1131,14 +1132,8 @@ namespace Components
 		return clipIdle;
 	}
 
-	static void LoadActorMesh(const std::size_t index, const char* name)
+	static void LoadActorMesh(const std::size_t index, const std::string& mesh, const std::string& manifestBytes)
 	{
-		const std::string stem = std::string("lobby/actors/") + name;
-		const std::string diskStem = std::string("zw3/core/lobby/actors/") + name;
-
-		const std::string mesh = ReadLobbyAsset(stem + ".zwlb", diskStem + ".zwlb");
-		const std::string manifestBytes = ReadLobbyAsset(stem + ".json", diskStem + ".json");
-
 		if (mesh.size() < 16 || manifestBytes.empty() || std::memcmp(mesh.data(), "ZWLB", 4) != 0)
 		{
 			return;
@@ -1912,15 +1907,27 @@ namespace Components
 
 	static IDirect3DPixelShader9* CompilePixelShader(IDirect3DDevice9* device, const std::string_view source)
 	{
+		static std::unordered_map<std::string, std::vector<DWORD>> bytecode;
+		const std::string key(source);
+		const auto cached = bytecode.find(key);
+		IDirect3DPixelShader9* shader = nullptr;
+		if (cached != bytecode.end())
+		{
+			device->CreatePixelShader(cached->second.data(), &shader);
+			return shader;
+		}
+
 		ID3DBlob* code = nullptr;
 		ID3DBlob* errors = nullptr;
-		IDirect3DPixelShader9* shader = nullptr;
 
 		const HRESULT result = compileShader(source.data(), static_cast<UINT>(source.size()), nullptr, nullptr, "main", "ps_2_0", 0, &code, &errors, nullptr);
 
 		if (SUCCEEDED(result) && code)
 		{
-			device->CreatePixelShader(static_cast<const DWORD*>(code->GetBufferPointer()), &shader);
+			const auto* words = static_cast<const DWORD*>(code->GetBufferPointer());
+			auto& cachedCode = bytecode[key];
+			cachedCode.assign(words, words + code->GetBufferSize() / sizeof(DWORD));
+			device->CreatePixelShader(cachedCode.data(), &shader);
 		}
 
 		ReleaseObject(errors);
@@ -2129,8 +2136,8 @@ namespace Components
 
 		if (isPreparing)
 		{
-			uploadLimit = 16;
-			uploadBudgetMs = 4;
+			uploadLimit = 64;
+			uploadBudgetMs = 12;
 		}
 
 		unsigned int uploaded = 0;
@@ -4642,9 +4649,21 @@ namespace Components
 		if (!roomVertices.empty()) LoadPropMesh();
 		LoadTheaterVision();
 		static constexpr const char* actorNames[] = { "richtofen", "dempsey", "nikolai", "takeo", "zombie" };
+		std::array<std::future<void>, std::size(actorNames)> actorLoads;
 		for (std::size_t i = 0; i < std::size(actorNames); ++i)
 		{
-			LoadActorMesh(i, actorNames[i]);
+			const std::string stem = std::string("lobby/actors/") + actorNames[i];
+			const std::string diskStem = std::string("zw3/core/lobby/actors/") + actorNames[i];
+			auto mesh = ReadLobbyAsset(stem + ".zwlb", diskStem + ".zwlb");
+			auto manifest = ReadLobbyAsset(stem + ".json", diskStem + ".json");
+			actorLoads[i] = std::async(std::launch::async, [i, mesh = std::move(mesh), manifest = std::move(manifest)]
+			{
+				LoadActorMesh(i, mesh, manifest);
+			});
+		}
+		for (auto& load : actorLoads)
+		{
+			load.get();
 		}
 		auto* const entry = Game::DB_FindXAssetEntry(Game::ASSET_TYPE_RAWFILE, "lobby/audio/round_start.wav");
 

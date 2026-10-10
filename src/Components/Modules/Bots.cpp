@@ -404,10 +404,6 @@ namespace Components
 	int Bots::BuildConnectString(char* buffer, const char* connectString, int num, int, int protocol, int checksum, int statVer, int stats, int port)
 	{
 		const char* pendingName = BotAI::BotAI::PendingName();
-		if (pendingName)
-		{
-			return _snprintf_s(buffer, 0x400, _TRUNCATE, connectString, num, pendingName, "None", "", protocol, checksum, statVer, stats, port);
-		}
 
 		auto selected = GetPendingBotCharacter(port);
 
@@ -444,7 +440,7 @@ namespace Components
 			}
 		}
 
-		std::string botName = std::format("[BOT] Bot{}", num);
+		std::string botName = pendingName ? pendingName : std::format("[BOT] Bot{}", num);
 		std::string botIcon = "None";
 
 		if (CharacterAssignments::IsValid(selected))

@@ -9,7 +9,7 @@ namespace Utils
 	public:
 		void Reset()
 		{
-			this->buffer.reset();
+
 			this->begin = 0;
 			this->end = 0;
 			this->status = Z_OK;
@@ -51,7 +51,7 @@ namespace Utils
 					return Z_OK;
 				}
 
-				if (stream->avail_out >= capacity)
+				if (stream->avail_out >= directThreshold)
 				{
 					this->status = inflate(stream, flush);
 					return this->status;
@@ -94,7 +94,8 @@ namespace Utils
 		}
 
 	private:
-		static constexpr unsigned int capacity = 32 * 1024;
+		static constexpr unsigned int directThreshold = 32 * 1024;
+		static constexpr unsigned int capacity = 128 * 1024;
 
 		std::unique_ptr<unsigned char[]> buffer;
 		unsigned int begin = 0;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bcrypt.h>
+#include <emmintrin.h>
 
 #pragma comment(lib, "Bcrypt.lib")
 
@@ -114,9 +115,11 @@ namespace Utils
 					return false;
 				}
 
-				for (std::size_t i = 0; i < blocks * blockSize; ++i)
+				for (std::size_t i = 0; i < blocks * blockSize; i += blockSize)
 				{
-					data[i] ^= this->stream[i];
+					const auto input = _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i));
+					const auto keyStream = _mm_loadu_si128(reinterpret_cast<const __m128i*>(this->stream.data() + i));
+					_mm_storeu_si128(reinterpret_cast<__m128i*>(data + i), _mm_xor_si128(input, keyStream));
 				}
 
 				std::memcpy(this->pad.data(), this->stream.data() + (blocks - 1) * blockSize, blockSize);

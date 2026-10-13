@@ -61,6 +61,8 @@ namespace Components
 			FileReader() : handle(0), size(-1) {}
 			FileReader(std::string file);
 			~FileReader();
+			FileReader(const FileReader&) = delete;
+			FileReader& operator=(const FileReader&) = delete;
 
 			[[nodiscard]] bool Exists() const noexcept;
 			[[nodiscard]] std::string GetName() const;
@@ -80,6 +82,8 @@ namespace Components
 		public:
 			FileWriter(std::string file, bool append = false) : handle(0), filePath(std::move(file)) { this->Open(append); }
 			~FileWriter() { this->Close(); }
+			FileWriter(const FileWriter&) = delete;
+			FileWriter& operator=(const FileWriter&) = delete;
 
 			void Write(const std::string& data) const;
 

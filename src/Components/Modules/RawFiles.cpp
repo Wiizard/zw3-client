@@ -137,7 +137,13 @@ namespace Components
 		}
 
 		const auto identLen = static_cast<int>(std::strlen(ident));
-		Game::FS_Read(loadBuffer, identLen, fileHandle);
+		if (identLen >= infoStringBufferSize || fileLen < identLen
+			|| Game::FS_Read(loadBuffer, identLen, fileHandle) != identLen)
+		{
+			Game::FS_FCloseFile(fileHandle);
+			Game::Com_Error(Game::ERR_DROP, "\x15" "File [%s] is a truncated %s\n", fileName, fileDesc);
+			return nullptr;
+		}
 		loadBuffer[identLen] = '\0';
 
 		if (std::strncmp(loadBuffer, ident, identLen) != 0)
@@ -154,7 +160,12 @@ namespace Components
 			return nullptr;
 		}
 
-		Game::FS_Read(loadBuffer, fileLen - identLen, fileHandle);
+		if (Game::FS_Read(loadBuffer, fileLen - identLen, fileHandle) != fileLen - identLen)
+		{
+			Game::FS_FCloseFile(fileHandle);
+			Game::Com_Error(Game::ERR_DROP, "\x15" "File [%s] is a truncated %s\n", fileName, fileDesc);
+			return nullptr;
+		}
 		loadBuffer[fileLen - identLen] = '\0';
 		Game::FS_FCloseFile(fileHandle);
 

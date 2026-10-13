@@ -8,7 +8,7 @@ namespace Components
 		LobbyScene();
 
 		static bool IsTransitionActive();
-		static void StartTransition();
+		static void StartTransition(const std::string& mapName = {});
 		static void StopTransition();
 		static bool IsSceneReady();
 		static bool IsStartupLoading();
@@ -19,6 +19,6 @@ namespace Components
 		static void PollLocalScene();
 		static void ClearRemoteScene();
 		static void ReceiveSceneClock(unsigned int clientSent, unsigned int hostTime);
-		static bool DeferLaunch(const std::function<void()>& launch);
+		static bool DeferLaunch(const std::function<void()>& launch, const std::string& mapName = {});
 	};
 }

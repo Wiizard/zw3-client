@@ -18,6 +18,7 @@
 #include "FileSystem.hpp"
 #include "Logger.hpp"
 #include "Materials.hpp"
+#include "Maps.hpp"
 #include "Network.hpp"
 #include "Party.hpp"
 #include "Renderer.hpp"
@@ -236,6 +237,7 @@ namespace Components
 		HANDLE handle = nullptr;
 		LocalSceneBuffer* view = nullptr;
 		unsigned short port = 0;
+		LONG lastReadSequence = 0;
 		~LocalSceneMapping() { Close(); }
 		void Close()
 		{
@@ -244,6 +246,7 @@ namespace Components
 			view = nullptr;
 			handle = nullptr;
 			port = 0;
+			lastReadSequence = 0;
 		}
 		bool Open(const unsigned short targetPort, const bool writer)
 		{
@@ -302,6 +305,11 @@ namespace Components
 	static IDirect3DTexture9* sceneTexture = nullptr;
 	static std::array<IDirect3DTexture9*, 3> roomLightmaps{};
 	static IDirect3DVertexBuffer9* roomVertexBuffer = nullptr;
+	static IDirect3DVertexBuffer9* doorLeftVertexBuffer = nullptr;
+	static IDirect3DVertexBuffer9* doorRightVertexBuffer = nullptr;
+	static IDirect3DVertexBuffer9* actorVertexBuffer = nullptr;
+	static UINT actorBufferCapacity = 0;
+	static UINT actorBufferOffset = 0;
 	static IDirect3DVertexBuffer9* propVertexBuffer = nullptr;
 	static IDirect3DIndexBuffer9* propIndexBuffer = nullptr;
 
@@ -334,6 +342,7 @@ namespace Components
 	static std::atomic_bool isTransitionActive = false;
 	static std::atomic_bool didSeeConnecting = false;
 	static std::atomic<DWORD> transitionStartTime = 0;
+	static std::atomic<DWORD> whiteFrameTransition = 0;
 	static void(*CL_Live_PartyGo)() = nullptr;
 	static bool isRunningDeferredLaunch = false;
 	static bool didRunDeferredLaunch = false;
@@ -1870,6 +1879,11 @@ namespace Components
 	{
 		ReleaseObject(savedState);
 		ReleaseObject(roomVertexBuffer);
+		ReleaseObject(doorLeftVertexBuffer);
+		ReleaseObject(doorRightVertexBuffer);
+		ReleaseObject(actorVertexBuffer);
+		actorBufferCapacity = 0;
+		actorBufferOffset = 0;
 		ReleaseObject(propVertexBuffer);
 		ReleaseObject(propIndexBuffer);
 		ReleaseObject(visionShader);
@@ -2184,6 +2198,16 @@ namespace Components
 
 		EnsureRoomVertexBuffer(device);
 
+		if (!doorLeftVertexBuffer && !doorLeftVertices.empty())
+		{
+			doorLeftVertexBuffer = CreateFilledVertexBuffer(device, doorLeftVertices.data(), doorLeftVertices.size() * sizeof(LobbyRoomVertex));
+		}
+
+		if (!doorRightVertexBuffer && !doorRightVertices.empty())
+		{
+			doorRightVertexBuffer = CreateFilledVertexBuffer(device, doorRightVertices.data(), doorRightVertices.size() * sizeof(LobbyRoomVertex));
+		}
+
 		if (!propVertexBuffer && !propVertices.empty())
 		{
 			propVertexBuffer = CreateFilledVertexBuffer(device, propVertices.data(), propVertices.size() * sizeof(LobbyVertex));
@@ -2236,6 +2260,47 @@ namespace Components
 
 		hasRenderResources = true;
 		return true;
+	}
+
+	static bool UploadActorVertices(IDirect3DDevice9* device, const std::vector<LobbyVertex>& vertices)
+	{
+		constexpr UINT allocationStep = 1024 * 1024;
+		constexpr UINT maximumCapacity = 16 * allocationStep;
+		if (vertices.empty() || vertices.size() > maximumCapacity / sizeof(LobbyVertex))
+		{
+			return false;
+		}
+
+		const auto bytes = static_cast<UINT>(vertices.size() * sizeof(LobbyVertex));
+		if (!actorVertexBuffer || actorBufferCapacity < bytes)
+		{
+			ReleaseObject(actorVertexBuffer);
+			actorBufferCapacity = ((bytes + allocationStep - 1) / allocationStep) * allocationStep;
+			actorBufferOffset = actorBufferCapacity;
+			if (FAILED(device->CreateVertexBuffer(actorBufferCapacity, D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY,
+				vertexFormat, D3DPOOL_DEFAULT, &actorVertexBuffer, nullptr)))
+			{
+				actorBufferCapacity = 0;
+				return false;
+			}
+		}
+
+		const bool discard = bytes > actorBufferCapacity - actorBufferOffset;
+		const UINT offset = discard ? 0 : actorBufferOffset;
+		void* destination = nullptr;
+		if (FAILED(actorVertexBuffer->Lock(offset, bytes, &destination, discard ? D3DLOCK_DISCARD : D3DLOCK_NOOVERWRITE)))
+		{
+			return false;
+		}
+
+		std::memcpy(destination, vertices.data(), bytes);
+		if (FAILED(actorVertexBuffer->Unlock()))
+		{
+			return false;
+		}
+
+		actorBufferOffset = offset + bytes;
+		return SUCCEEDED(device->SetStreamSource(0, actorVertexBuffer, offset, sizeof(LobbyVertex)));
 	}
 
 	static const std::vector<LobbyVertex>& SampleActor(LobbyActorMesh& actor, const unsigned int clip, const DWORD now, const DWORD phaseOffset)
@@ -2420,18 +2485,26 @@ namespace Components
 			directScene = isDirectScene;
 			priorScene = previousScene;
 			const DWORD hostNow = timeGetTime() + static_cast<DWORD>(sceneClockOffset.load());
-			remoteAge = receivedScene && hasSceneClock
+			remoteAge = receivedScene && directScene
+				? static_cast<DWORD>(std::clamp(static_cast<int>(timeGetTime() - receivedScene->now), 0, 100))
+				: receivedScene && hasSceneClock
 				? static_cast<DWORD>(std::clamp(static_cast<int>(hostNow - receivedScene->now), 0, 100))
 				: std::min<DWORD>(timeGetTime() - receivedSceneAt, 100u);
 		}
 		const bool isInTransition = directScene && remoteScene ? remoteScene->transitioning : isTransitionActive.load(std::memory_order_acquire);
 		const bool isBootPreview = isStartupLoading.load(std::memory_order_acquire) && Game::CL_GetLocalClientConnectionState(0) < Game::CA_CONNECTING;
-		const DWORD transitionElapsed = directScene && remoteScene ? remoteScene->transitionElapsed : timeGetTime() - transitionStartTime.load(std::memory_order_acquire);
+		const DWORD transitionStarted = transitionStartTime.load(std::memory_order_acquire);
+		const DWORD transitionElapsed = directScene && remoteScene
+			? remoteScene->transitionElapsed + static_cast<DWORD>(std::max(0, static_cast<int>(timeGetTime() - remoteScene->now)))
+			: timeGetTime() - transitionStarted;
 
 		if (isInTransition && transitionElapsed >= LobbyTransition::whiteEndMs)
 		{
 			const auto intensity = static_cast<unsigned int>((1.0f - LobbyTransition::BlackOpacity(transitionElapsed)) * 255.0f);
-			device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_XRGB(intensity, intensity, intensity), 1.0f, 0);
+			if (SUCCEEDED(device->Clear(0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_XRGB(intensity, intensity, intensity), 1.0f, 0)))
+			{
+				whiteFrameTransition.store(transitionStarted, std::memory_order_release);
+			}
 			return;
 		}
 
@@ -2500,7 +2573,7 @@ namespace Components
 			const DirectX::XMMATRIX world = DirectX::XMMatrixIdentity();
 
 			static const DWORD startTime = timeGetTime();
-			const DWORD now = directScene && remoteScene ? remoteScene->now : remoteScene ? (hasSceneClock ? timeGetTime() + static_cast<DWORD>(sceneClockOffset.load())
+			const DWORD now = directScene && remoteScene ? timeGetTime() : remoteScene ? (hasSceneClock ? timeGetTime() + static_cast<DWORD>(sceneClockOffset.load())
 				: remoteScene->now + remoteAge) : timeGetTime();
 			const float phase = static_cast<float>(now - (remoteScene ? remoteScene->phaseOrigin : startTime)) * 0.00012f;
 
@@ -2618,6 +2691,13 @@ namespace Components
 			device->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
 			device->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
 			device->SetSamplerState(0, D3DSAMP_MAXANISOTROPY, 16);
+			device->SetSamplerState(2, D3DSAMP_MINFILTER, D3DTEXF_ANISOTROPIC);
+			device->SetSamplerState(2, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+			device->SetSamplerState(2, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+			device->SetSamplerState(2, D3DSAMP_MAXANISOTROPY, 16);
+			device->SetSamplerState(2, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+			device->SetSamplerState(2, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+			actorBufferOffset = actorBufferCapacity;
 			device->SetSamplerState(1, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
 			device->SetSamplerState(1, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
 			device->SetSamplerState(1, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
@@ -2645,6 +2725,10 @@ namespace Components
 				if (staticBuffer)
 				{
 					isUsingBuffer = SUCCEEDED(device->SetStreamSource(0, staticBuffer, 0, stride));
+				}
+				else if constexpr (std::is_same_v<VertexType, LobbyVertex>)
+				{
+					isUsingBuffer = UploadActorVertices(device, vertices);
 				}
 
 				if (isRoomPass)
@@ -2675,6 +2759,11 @@ namespace Components
 						{
 							continue;
 						}
+					}
+
+					if (group.firstVertex > vertices.size() || group.vertexCount > vertices.size() - group.firstVertex)
+					{
+						return false;
 					}
 
 					device->SetRenderState(D3DRS_SRGBWRITEENABLE, static_cast<DWORD>(group.shouldWriteGamma));
@@ -2760,13 +2849,6 @@ namespace Components
 
 					const float materialFlags[4] = { static_cast<float>(isSquared), static_cast<float>(isAlphaCutout), threshold, static_cast<float>(group.isMultiplicative) };
 					device->SetPixelShaderConstantF(0, materialFlags, 1);
-
-					device->SetSamplerState(2, D3DSAMP_MINFILTER, D3DTEXF_ANISOTROPIC);
-					device->SetSamplerState(2, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-					device->SetSamplerState(2, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
-					device->SetSamplerState(2, D3DSAMP_MAXANISOTROPY, 16);
-					device->SetSamplerState(2, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
-					device->SetSamplerState(2, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
 
 					IDirect3DPixelShader9* shader = nullptr;
 
@@ -2864,13 +2946,13 @@ namespace Components
 
 			const DirectX::XMMATRIX leftDoor = DirectX::XMMatrixMultiply(DirectX::XMMatrixMultiply(DirectX::XMMatrixTranslation(60.0f, 510.0f, 0.0f), DirectX::XMMatrixRotationZ(doorAngle)), DirectX::XMMatrixTranslation(-60.0f, -510.0f, 0.0f));
 			SetTransform(device, D3DTS_WORLD, leftDoor);
-			drawGroups(doorLeftGroups, doorLeftVertices, false, true, nullptr, -1);
-			drawGroups(doorLeftGroups, doorLeftVertices, true, true, nullptr, -1);
+			drawGroups(doorLeftGroups, doorLeftVertices, false, true, doorLeftVertexBuffer, -1);
+			drawGroups(doorLeftGroups, doorLeftVertices, true, true, doorLeftVertexBuffer, -1);
 
 			const DirectX::XMMATRIX rightDoor = DirectX::XMMatrixMultiply(DirectX::XMMatrixMultiply(DirectX::XMMatrixTranslation(-60.0f, 510.0f, 0.0f), DirectX::XMMatrixRotationZ(-doorAngle)), DirectX::XMMatrixTranslation(60.0f, -510.0f, 0.0f));
 			SetTransform(device, D3DTS_WORLD, rightDoor);
-			drawGroups(doorRightGroups, doorRightVertices, false, true, nullptr, -1);
-			drawGroups(doorRightGroups, doorRightVertices, true, true, nullptr, -1);
+			drawGroups(doorRightGroups, doorRightVertices, false, true, doorRightVertexBuffer, -1);
+			drawGroups(doorRightGroups, doorRightVertices, true, true, doorRightVertexBuffer, -1);
 
 			SetTransform(device, D3DTS_WORLD, world);
 
@@ -2932,7 +3014,7 @@ namespace Components
 				if (remoteScene)
 				{
 					zombies = remoteScene->zombies;
-					if (priorScene && !directScene)
+					if (priorScene)
 					{
 						const auto span = std::max<DWORD>(1u, remoteScene->now - priorScene->now);
 						const float blend = 1.0f + std::min(1.0f, static_cast<float>(remoteAge) / static_cast<float>(span));
@@ -3434,7 +3516,8 @@ namespace Components
 					}
 				}
 
-				std::vector<MuzzleFlare> muzzleFlares;
+				static std::vector<MuzzleFlare> muzzleFlares;
+				muzzleFlares.clear();
 
 				for (int i = 0; i < count; ++i)
 				{
@@ -3927,9 +4010,13 @@ namespace Components
 				if (!remoteScene && Party::IsHostingParty())
 				{
 					static DWORD lastPublish = 0;
-					if (now != lastPublish)
+					static unsigned int publishedSession = ~0u;
+					static bool wasTransitioning = false;
+					if (now - lastPublish >= 16u || publishedSession != session || wasTransitioning != isInTransition)
 					{
 						lastPublish = now;
+						publishedSession = session;
+						wasTransitioning = isInTransition;
 						const auto raw = nlohmann::json::to_msgpack(nlohmann::json{
 							{ "now", now }, { "phaseOrigin", startTime }, { "transitionElapsed", transitionElapsed },
 							{ "transitioning", isInTransition }, { "baseEye", LobbyPathPoint{currentBaseEye.x, currentBaseEye.y, currentBaseEye.z} },
@@ -3956,8 +4043,10 @@ namespace Components
 				}
 				if (isRendered)
 				{
-					std::vector<LobbyVertex> eyeFlares;
-					std::vector<LobbyVertex> muzzleQuads;
+					static std::vector<LobbyVertex> eyeFlares;
+					static std::vector<LobbyVertex> muzzleQuads;
+					eyeFlares.clear();
+					muzzleQuads.clear();
 					std::vector<LobbyVertex>* flareBatch = &eyeFlares;
 
 					const DirectX::XMVECTOR cameraRight = DirectX::XMVectorSet(viewFloats._11, viewFloats._21, viewFloats._31, 0.0f);
@@ -4504,10 +4593,12 @@ namespace Components
 		const auto* const view = localSceneReader.view;
 		const LONG sequence = view->sequence;
 		MemoryBarrier();
-		if (sequence == 0 || (sequence & 1) || view->size == 0 || view->size > sizeof(view->bytes)) return;
-		const std::string packet(view->bytes, view->size);
+		const DWORD size = view->size;
+		if (sequence == 0 || (sequence & 1) || sequence == localSceneReader.lastReadSequence || size == 0 || size > sizeof(view->bytes)) return;
+		const std::string packet(view->bytes, size);
 		MemoryBarrier();
 		if (sequence != view->sequence) return;
+		localSceneReader.lastReadSequence = sequence;
 		ReceiveSceneSnapshot(packet, true);
 	}
 
@@ -4683,7 +4774,7 @@ namespace Components
 		hasAssets.store(true, std::memory_order_release);
 	}
 
-	bool LobbyScene::DeferLaunch(const std::function<void()>& launch)
+	bool LobbyScene::DeferLaunch(const std::function<void()>& launch, const std::string& mapName)
 	{
 		if (isRunningDeferredLaunch)
 		{
@@ -4703,7 +4794,7 @@ namespace Components
 		}
 
 		const bool wasTransitionActive = IsTransitionActive();
-		StartTransition();
+		StartTransition(mapName);
 		if (!wasTransitionActive && Party::IsHostingParty()) Party::BroadcastLobbyTransition();
 
 		++launchCount;
@@ -4719,7 +4810,8 @@ namespace Components
 			}
 
 			const DWORD elapsed = timeGetTime() - transitionStartTime.load();
-			const bool isWaitingForWhite = IsTransitionActive() && elapsed < LobbyTransition::whiteEndMs;
+			const bool hasWhiteFrame = whiteFrameTransition.load(std::memory_order_acquire) == transitionStartTime.load();
+			const bool isWaitingForWhite = IsTransitionActive() && LobbyTransition::ShouldWaitForWhite(elapsed, hasWhiteFrame);
 
 			if (isWaitingForWhite || Renderer::IsDeviceRecoveryActive())
 			{
@@ -4738,13 +4830,14 @@ namespace Components
 		return true;
 	}
 
-	void LobbyScene::StartTransition()
+	void LobbyScene::StartTransition(const std::string& mapName)
 	{
 		if (!IsSceneReady() || isTransitionActive.load(std::memory_order_acquire))
 		{
 			return;
 		}
 
+		whiteFrameTransition.store(0, std::memory_order_release);
 		transitionStartTime.store(timeGetTime(), std::memory_order_release);
 		isTransitionActive.store(true, std::memory_order_release);
 		didSeeConnecting.store(false, std::memory_order_release);
@@ -4758,15 +4851,12 @@ namespace Components
 		Game::uiContext->cursor.y = -1000.0f;
 		Game::uiContext->isCursorVisible = 0;
 
-		const std::string mapName = Dvar::Var("ui_mapname").Get<std::string>();
+		const std::string map = mapName.empty() ? Dvar::Var("ui_mapname").Get<std::string>() : mapName;
 
-		if (!mapName.empty())
+		if (!map.empty())
 		{
-			D3D9Ex::BeginMapLoading(mapName);
-			FastFiles::PrefetchZone(mapName + "_load");
-			FastFiles::PrefetchZone(mapName);
-			FastFiles::PrefetchZone("patch_" + mapName);
-			FastFiles::PrefetchZone("localized_" + mapName);
+			D3D9Ex::BeginMapLoading(map);
+			Maps::PrefetchMapAssets(map);
 		}
 	}
 

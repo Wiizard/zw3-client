@@ -303,17 +303,21 @@ namespace Components
 		Game::fileHandle_t handle = 0;
 		const int length = Game::FS_FOpenFileReadForThread(this->filePath.data(), &handle, thread);
 
-		if (!handle)
+		if (!handle || length < 0)
 		{
+			if (handle) Game::FS_FCloseFile(handle);
 			return;
 		}
 
 		this->buffer.resize(static_cast<std::size_t>(length));
 
-		[[maybe_unused]] const int bytesRead = Game::FS_Read(this->buffer.data(), length, handle);
-		assert(bytesRead == length);
+		const int bytesRead = Game::FS_Read(this->buffer.data(), length, handle);
 
 		Game::FS_FCloseFile(handle);
+		if (bytesRead != length)
+		{
+			this->buffer.clear();
+		}
 	}
 
 	void FileSystem::RawFile::Read()
@@ -338,9 +342,10 @@ namespace Components
 
 	FileSystem::FileReader::~FileReader()
 	{
-		if (this->Exists() && this->handle)
+		if (this->handle)
 		{
 			Game::FS_FCloseFile(this->handle);
+			this->handle = 0;
 		}
 	}
 
@@ -425,11 +430,17 @@ namespace Components
 		if (this->handle)
 		{
 			Game::FS_FCloseFile(this->handle);
+			this->handle = 0;
 		}
 	}
 
 	Game::FsThread FileSystem::GetCurrentThread()
 	{
+		if (Game::Sys_IsDatabaseThread())
+		{
+			return Game::FS_THREAD_DATABASE;
+		}
+
 		if (Game::Sys_IsRenderThread())
 		{
 			return Game::FS_THREAD_BACKEND;

@@ -16,6 +16,7 @@
 #include "Events.hpp"
 #include "Flags.hpp"
 #include "LobbyScene.hpp"
+#include "Maps.hpp"
 #include "Party.hpp"
 #include "Logger.hpp"
 #include "Renderer.hpp"
@@ -776,6 +777,7 @@ namespace Components
 	static std::mutex prefetchMutex;
 	static std::condition_variable_any prefetchCondition;
 	static std::deque<std::filesystem::path> prefetchQueue;
+	static std::unordered_map<std::string, std::chrono::steady_clock::time_point> completedPrefetches;
 	static std::unordered_set<std::string> scheduledPrefetches;
 	static std::jthread prefetchThread;
 
@@ -783,7 +785,7 @@ namespace Components
 	{
 		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
 
-		std::vector<std::byte> buffer;
+		std::unique_ptr<std::byte[]> buffer;
 
 		while (!stopToken.stop_requested())
 		{
@@ -794,7 +796,7 @@ namespace Components
 
 				if (prefetchQueue.empty())
 				{
-					std::vector<std::byte>().swap(buffer);
+					buffer.reset();
 				}
 
 				const bool hasWork = prefetchCondition.wait(lock, stopToken, []
@@ -813,25 +815,45 @@ namespace Components
 
 			const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 				nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_RANDOM_ACCESS, nullptr);
+			const auto identity = Utils::String::ToLower(path.string());
 
 			if (file == INVALID_HANDLE_VALUE)
 			{
+				std::lock_guard lock(prefetchMutex);
+				scheduledPrefetches.erase(identity);
 				continue;
 			}
 
-			if (buffer.empty())
+			FILE_IO_PRIORITY_HINT_INFO priority{ IoPriorityHintLow };
+			SetFileInformationByHandle(file, FileIoPriorityHintInfo, &priority, sizeof(priority));
+
+			if (!buffer)
 			{
-				buffer.resize(prefetchBufferSize);
+				buffer.reset(new (std::nothrow) std::byte[prefetchBufferSize]);
+				if (!buffer)
+				{
+					CloseHandle(file);
+					std::lock_guard lock(prefetchMutex);
+					scheduledPrefetches.erase(identity);
+					continue;
+				}
 			}
 
 			DWORD bytesRead = 0;
+			BOOL didRead = TRUE;
 
 			while (!stopToken.stop_requested()
-				&& ReadFile(file, buffer.data(), static_cast<DWORD>(buffer.size()), &bytesRead, nullptr) && bytesRead > 0)
+				&& (didRead = ReadFile(file, buffer.get(), prefetchBufferSize, &bytesRead, nullptr)) && bytesRead > 0)
 			{
 			}
 
 			CloseHandle(file);
+			std::lock_guard lock(prefetchMutex);
+			scheduledPrefetches.erase(identity);
+			if (didRead && !stopToken.stop_requested())
+			{
+				completedPrefetches[identity] = std::chrono::steady_clock::now();
+			}
 		}
 	}
 
@@ -848,6 +870,11 @@ namespace Components
 
 		{
 			std::lock_guard lock(prefetchMutex);
+			const auto completed = completedPrefetches.find(identity);
+			if (completed != completedPrefetches.end() && std::chrono::steady_clock::now() - completed->second < 60s)
+			{
+				return;
+			}
 
 			if (!scheduledPrefetches.emplace(identity).second)
 			{
@@ -858,7 +885,16 @@ namespace Components
 
 			if (!prefetchThread.joinable())
 			{
-				prefetchThread = std::jthread(RunPrefetch);
+				try
+				{
+					prefetchThread = std::jthread(RunPrefetch);
+				}
+				catch (const std::system_error&)
+				{
+					prefetchQueue.clear();
+					scheduledPrefetches.clear();
+					return;
+				}
 			}
 		}
 
@@ -877,6 +913,7 @@ namespace Components
 		std::lock_guard lock(prefetchMutex);
 		prefetchQueue.clear();
 		scheduledPrefetches.clear();
+		completedPrefetches.clear();
 	}
 
 	bool FastFiles::HasZW3CommonZone()
@@ -1296,7 +1333,7 @@ namespace Components
 			return;
 		}
 
-		EnqueuePrefetch(path);
+		EnqueuePrefetch(path.is_absolute() ? path : std::filesystem::path(InstallPath()) / path);
 	}
 
 	void FastFiles::PrefetchZone(const std::string& zoneName)
@@ -1752,10 +1789,7 @@ namespace Components
 				selectedAt = now;
 			}
 			if (map.empty() || map == prefetchedMap || now - selectedAt < 250ms) return;
-			PrefetchZone(map + "_load");
-			PrefetchZone(map);
-			PrefetchZone("patch_" + map);
-			PrefetchZone("localized_" + map);
+			Maps::PrefetchMapAssets(map);
 			prefetchedMap = map;
 		}, Scheduler::Pipeline::MAIN, 250ms);
 	}

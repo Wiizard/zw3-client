@@ -33,7 +33,7 @@ namespace Components
 		{
 			std::function<bool()> handler{};
 			std::chrono::milliseconds interval{};
-			std::chrono::high_resolution_clock::time_point lastCall{};
+			std::chrono::steady_clock::time_point lastCall{};
 		};
 
 		using TaskList = std::vector<Task>;
@@ -47,11 +47,11 @@ namespace Components
 		private:
 			Utils::Concurrency::Container<TaskList> newCallbacks;
 			Utils::Concurrency::Container<TaskList, std::recursive_mutex> callbacks;
+			bool isExecuting = false;
 
 			void MergeCallbacks();
 		};
 
-		static volatile bool kill;
 		static std::jthread thread;
 		static TaskPipeline pipelines[];
 

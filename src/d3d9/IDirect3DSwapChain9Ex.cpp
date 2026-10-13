@@ -18,7 +18,13 @@
 
 HRESULT m_IDirect3DSwapChain9Ex::QueryInterface(THIS_ REFIID riid, void** ppvObj)
 {
-	if ((riid == IID_IDirect3DSwapChain9 || riid == IID_IUnknown) && ppvObj)
+	if (!ppvObj)
+	{
+		return E_POINTER;
+	}
+
+	*ppvObj = nullptr;
+	if (riid == IID_IDirect3DSwapChain9 || riid == IID_IUnknown || riid == WrapperID)
 	{
 		AddRef();
 

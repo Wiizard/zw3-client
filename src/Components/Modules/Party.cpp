@@ -2156,7 +2156,7 @@ namespace Components
 			Game::CL_ConnectFromParty(0, &hostInfo, raw, 0, 0, mapName.data(), gameType.data());
 		};
 
-		if (!LobbyScene::DeferLaunch(connectMatch))
+		if (!LobbyScene::DeferLaunch(connectMatch, info.Get("mapname")))
 		{
 			connectMatch();
 		}

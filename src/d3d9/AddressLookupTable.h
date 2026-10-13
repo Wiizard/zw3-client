@@ -2,6 +2,7 @@
 
 #include <unordered_map>
 #include <algorithm>
+#include <mutex>
 
 constexpr UINT MaxIndex = 16;
 
@@ -12,6 +13,7 @@ public:
 	explicit AddressLookupTable(D *pDevice) : pDevice(pDevice) {}
 	~AddressLookupTable()
 	{
+		const std::lock_guard lock(mutex);
 		ConstructorFlag = true;
 
 		for (const auto& cache : g_map)
@@ -70,6 +72,7 @@ public:
 	template <typename T>
 	T *FindAddress(void *Proxy, REFIID riid = IID_IUnknown)
 	{
+		const std::lock_guard lock(mutex);
 		if (!Proxy)
 		{
 			return nullptr;
@@ -96,6 +99,7 @@ public:
 	template <typename T>
 	void SaveAddress(T *Wrapper, void *Proxy)
 	{
+		const std::lock_guard lock(mutex);
 		constexpr UINT CacheIndex = AddressCacheIndex<T>::CacheIndex;
 		if (Wrapper && Proxy)
 		{
@@ -106,6 +110,7 @@ public:
 	template <typename T>
 	void DeleteAddress(T *Wrapper)
 	{
+		const std::lock_guard lock(mutex);
 		if (!Wrapper || ConstructorFlag)
 		{
 			return;
@@ -122,6 +127,7 @@ public:
 	}
 
 private:
+	std::recursive_mutex mutex;
 	bool ConstructorFlag = false;
 	D *const pDevice;
 	std::unordered_map<void*, class AddressLookupTableObject*> g_map[MaxIndex];

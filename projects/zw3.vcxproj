@@ -95,7 +95,7 @@
       <AdditionalIncludeDirectories>..\src;..\build\src;..\lib\include;..\deps\discord-rpc\include;..\deps\json\single_include\nlohmann;..\deps\x64\libtomcrypt\src\headers;..\deps\x64\libtommath;..\deps\libwebp\src;..\deps\mongoose;..\deps\x64\pdcurses;..\deps\protobuf\src;..\deps\x64\rapidjson\include;..\deps\stb;..\deps\x64\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ForcedIncludeFiles>STDInclude.hpp</ForcedIncludeFiles>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
-      <Optimization>MinSpace</Optimization>
+      <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <MinimalRebuild>false</MinimalRebuild>

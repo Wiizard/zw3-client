@@ -5,7 +5,7 @@ class m_IDirect3DSwapChain9Ex : public IDirect3DSwapChain9Ex, public AddressLook
 private:
 	LPDIRECT3DSWAPCHAIN9EX ProxyInterface;
 	m_IDirect3DDevice9Ex* m_pDeviceEx = nullptr;
-	REFIID WrapperID;
+	IID WrapperID;
 
 public:
 	m_IDirect3DSwapChain9Ex(LPDIRECT3DSWAPCHAIN9EX pSwapChain9, m_IDirect3DDevice9Ex* pDevice, REFIID DeviceID = IID_IDirect3DSwapChain9) : ProxyInterface(pSwapChain9), m_pDeviceEx(pDevice), WrapperID(DeviceID)

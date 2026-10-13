@@ -100,16 +100,21 @@ namespace Components
 
 	HRESULT D3D9Ex::D3D9Device::QueryInterface(REFIID riid, void** object)
 	{
-		*object = nullptr;
-
-		const HRESULT result = device->QueryInterface(riid, object);
-
-		if (result == NOERROR)
+		if (!object)
 		{
-			*object = this;
+			return E_POINTER;
 		}
 
-		return result;
+		*object = nullptr;
+		if (riid == __uuidof(IUnknown) || riid == __uuidof(IDirect3DDevice9))
+		{
+			this->AddRef();
+			*object = this;
+			return S_OK;
+		}
+
+		// Ex and vendor interfaces have methods beyond this wrapper's vtable.
+		return device->QueryInterface(riid, object);
 	}
 
 	ULONG D3D9Ex::D3D9Device::AddRef()
@@ -769,16 +774,20 @@ namespace Components
 
 	HRESULT D3D9Ex::D3D9::QueryInterface(REFIID riid, void** object)
 	{
-		*object = nullptr;
-
-		const HRESULT result = direct3D->QueryInterface(riid, object);
-
-		if (result == NOERROR)
+		if (!object)
 		{
-			*object = this;
+			return E_POINTER;
 		}
 
-		return result;
+		*object = nullptr;
+		if (riid == __uuidof(IUnknown) || riid == __uuidof(IDirect3D9))
+		{
+			this->AddRef();
+			*object = this;
+			return S_OK;
+		}
+
+		return direct3D->QueryInterface(riid, object);
 	}
 
 	ULONG D3D9Ex::D3D9::AddRef()

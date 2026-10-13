@@ -7,7 +7,6 @@ namespace Components
 	constexpr bool conditionContinue = false;
 	constexpr bool conditionEnd = true;
 
-	volatile bool Scheduler::kill = false;
 	std::jthread Scheduler::thread;
 	Scheduler::TaskPipeline Scheduler::pipelines[static_cast<int>(Pipeline::COUNT)];
 
@@ -41,7 +40,7 @@ namespace Components
 					std::move_iterator<TaskList::iterator>(pending.begin()),
 					std::move_iterator<TaskList::iterator>(pending.end()));
 
-				pending = {};
+				pending.clear();
 			});
 		});
 	}
@@ -50,12 +49,25 @@ namespace Components
 	{
 		this->callbacks.Access([&](TaskList& tasks)
 		{
+			// A callback can pump the engine and enter this pipeline again.
+			// Merging there would invalidate the outer loop's active task.
+			if (this->isExecuting)
+			{
+				return;
+			}
+
+			struct ExecutionScope
+			{
+				bool& executing;
+				explicit ExecutionScope(bool& value) : executing(value) { executing = true; }
+				~ExecutionScope() { executing = false; }
+			} scope(this->isExecuting);
+
 			this->MergeCallbacks();
+			const auto now = std::chrono::steady_clock::now();
 
 			for (auto task = tasks.begin(); task != tasks.end();)
 			{
-				const auto now = std::chrono::high_resolution_clock::now();
-
 				if ((now - task->lastCall) < task->interval)
 				{
 					++task;
@@ -86,7 +98,7 @@ namespace Components
 		Task task;
 		task.handler = callback;
 		task.interval = delay;
-		task.lastCall = std::chrono::high_resolution_clock::now();
+		task.lastCall = std::chrono::steady_clock::now();
 
 		pipelines[static_cast<int>(type)].Add(std::move(task));
 	}
@@ -162,14 +174,14 @@ namespace Components
 
 	void Scheduler::Sys_SetBlockSystemHotkeys_Hook(int block)
 	{
-		Execute(Pipeline::QUIT);
-
-		kill = true;
+		thread.request_stop();
 
 		if (thread.joinable())
 		{
 			thread.join();
 		}
+
+		Execute(Pipeline::QUIT);
 
 		reinterpret_cast<void(*)(int)>(quitHook.GetOriginal())(block);
 	}
@@ -182,9 +194,9 @@ namespace Components
 		rendererFrameHook.Initialize(ScrPlace_EndFrameCall, ScrPlace_EndFrame_Hook, HOOK_CALL)->Install()->Quick();
 		quitHook.Initialize(Sys_SetBlockSystemHotkeysCall, Sys_SetBlockSystemHotkeys_Hook, HOOK_CALL)->Install()->Quick();
 
-		thread = Utils::Thread::CreateNamedThread("Async Scheduler", []
+		thread = Utils::Thread::CreateNamedThread("Async Scheduler", [](const std::stop_token stopToken)
 		{
-			while (!kill)
+			while (!stopToken.stop_requested())
 			{
 				Execute(Pipeline::ASYNC);
 				std::this_thread::sleep_for(std::chrono::milliseconds(10));

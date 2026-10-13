@@ -225,6 +225,11 @@ namespace Components
 		isDeviceRecoveryActive.store(true, std::memory_order_release);
 		RawMouse::SuspendMouseInput();
 
+		if (!Game::Sys_IsRenderThread())
+		{
+			Game::R_SyncRenderThread();
+		}
+
 		for (const auto& callback : beginRecoverDeviceSignal)
 		{
 			callback();

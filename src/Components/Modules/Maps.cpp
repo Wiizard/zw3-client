@@ -341,6 +341,40 @@ namespace Components
 		}
 	}
 
+	void Maps::PrefetchMapAssets(const std::string& map)
+	{
+		if (map.empty() || Dedicated::IsEnabled() || ZoneBuilder::IsEnabled())
+		{
+			return;
+		}
+
+		if (map.ends_with("_load"))
+		{
+			FastFiles::PrefetchZone(map);
+			return;
+		}
+
+		FastFiles::PrefetchZone(map + "_load");
+		FastFiles::PrefetchZone(map);
+		const auto dependencies = GetDependenciesForMap(map);
+
+		if (dependencies.requiresTeamZones)
+		{
+			FastFiles::PrefetchZone("iw4x_team_" + dependencies.requiredTeams.first);
+			FastFiles::PrefetchZone("iw4x_team_" + dependencies.requiredTeams.second);
+		}
+
+		for (const auto& dependency : dependencies.requiredMaps)
+		{
+			FastFiles::PrefetchZone(dependency);
+		}
+
+		FastFiles::PrefetchZone("patch_" + map);
+		FastFiles::PrefetchZone("localized_" + map);
+		FastFiles::PrefetchPath(std::filesystem::path("main") / "video" / (map + "_load.bik"));
+		FastFiles::PrefetchPath(std::filesystem::path("usermaps") / map / (map + ".iwd"));
+	}
+
 	void Maps::LoadMapZones(Game::XZoneInfo* zoneInfo, unsigned int zoneCount, int sync)
 	{
 		isSPMap = false;

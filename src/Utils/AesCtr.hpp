@@ -14,11 +14,18 @@ namespace Utils
 		AesCtr(const AesCtr&) = delete;
 		AesCtr& operator=(const AesCtr&) = delete;
 
-		~AesCtr() = default;
+		~AesCtr()
+		{
+			this->Reset();
+		}
 
 		bool Start(const std::uint8_t* keyBytes, std::size_t keyLength, const std::uint8_t* iv)
 		{
 			this->Reset();
+			if (!keyBytes || !iv || (keyLength != 16 && keyLength != 24 && keyLength != 32))
+			{
+				return false;
+			}
 
 			if (this->TryStartBCrypt(keyBytes, keyLength))
 			{
@@ -66,6 +73,11 @@ namespace Utils
 
 		bool Crypt(std::uint8_t* data, std::size_t length)
 		{
+			if (!this->isReady || (!data && length))
+			{
+				return false;
+			}
+
 			if (!this->isBCrypt)
 			{
 				return ctr_decrypt(data, data, static_cast<unsigned long>(length), &this->fallback) == CRYPT_OK;

@@ -121,6 +121,8 @@ namespace Components
 	constexpr std::uintptr_t CG_Init_CG_RegisterGraphicsCall = 0x1400D6B9C;
 	constexpr std::uintptr_t CG_RegisterGraphics = 0x1400D9830;
 
+	static thread_local std::unordered_map<std::string, bool> weaponRumbleFiles;
+
 	static bool HasRumbleFile(const char* rumbleName)
 	{
 		const std::string path = std::format("rumble/{}", rumbleName);
@@ -746,7 +748,20 @@ namespace Components
 	{
 		const auto registerRumble = [](const char* rumbleName)
 		{
-			if (rumbleName && *rumbleName && HasRumbleFile(rumbleName))
+			if (!rumbleName || !*rumbleName)
+			{
+				return;
+			}
+
+			// Hundreds of weapons share these names, including missing optional
+			// effects. Probe each name once for this server initialization.
+			const auto [entry, inserted] = weaponRumbleFiles.try_emplace(rumbleName, false);
+			if (inserted)
+			{
+				entry->second = HasRumbleFile(rumbleName);
+			}
+
+			if (entry->second)
 			{
 				G_RumbleIndex(rumbleName);
 			}
@@ -959,6 +974,7 @@ namespace Components
 
 	void Rumble::SV_InitGameProgs_Hk(int savegame, int spawnServerFifthArg)
 	{
+		weaponRumbleFiles.clear();
 		LoadConstantRumbleConfigStrings();
 
 		reinterpret_cast<void(*)(int, int)>(initGameProgsHook.GetOriginal())(savegame, spawnServerFifthArg);

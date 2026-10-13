@@ -18,7 +18,14 @@
 
 HRESULT m_IDirect3DDevice9Ex::QueryInterface(REFIID riid, void** ppvObj)
 {
-	if ((riid == IID_IUnknown || riid == WrapperID) && ppvObj)
+	if (!ppvObj)
+	{
+		return E_POINTER;
+	}
+
+	*ppvObj = nullptr;
+	// An Ex device owns its base interface too; querying the wrapper again would recurse.
+	if (riid == IID_IUnknown || riid == IID_IDirect3DDevice9 || riid == WrapperID)
 	{
 		AddRef();
 

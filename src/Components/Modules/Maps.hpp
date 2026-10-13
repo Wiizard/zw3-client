@@ -75,6 +75,7 @@ namespace Components
 
 		static std::unordered_map<std::string, std::string> ParseCustomMapArena(const std::string& singleMapArena);
 		static void SynchronizeMapDvars(const std::string& rawMapName);
+		static void PrefetchMapAssets(const std::string& map);
 
 		static void HandleAsSPMap();
 

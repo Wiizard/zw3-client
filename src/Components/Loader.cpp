@@ -209,6 +209,7 @@ namespace Components
 		Register(new Toast());
 		Register(new Leaderboard());
 		Register(new UPnP());
+		Register(new Updater());
 		Register(new ZW3Changelog());
 		Register(new ZWNet());
 		Register(new ViewModelFxSetup::Setup());

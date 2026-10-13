@@ -15,4 +15,6 @@ FetchContent_Declare(zlib_ng
 FetchContent_MakeAvailable(zlib_ng)
 set_target_properties(zlib PROPERTIES
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+    # MSBuild selects the configuration directory and expects a fixed filename.
+    DEBUG_POSTFIX ""
 )

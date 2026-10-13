@@ -1,9 +1,11 @@
 #include "STDInclude.hpp"
 
 #include <Utils/InfoString.hpp>
+#include <numbers>
 
 #include "Bots.hpp"
 #include "BotAI/BotAI.hpp"
+#include "BotAI/Iw4.hpp"
 #include "CharacterAssignments.hpp"
 #include "Command.hpp"
 #include "Dvar.hpp"
@@ -282,7 +284,131 @@ namespace Components
 	constexpr std::uintptr_t sentFrameBytes = 0x14650D188;
 	constexpr std::uintptr_t sentWindowBytes = 0x14650D18C;
 
-	static Utils::Hook hooks[11];
+	constexpr std::uintptr_t Scr_SetOrigin_SetClientOriginCall = 0x140164E80;
+	constexpr std::uintptr_t SetClientOrigin = 0x140196E90;
+	constexpr std::uintptr_t CG_UpdateClients_RenameMessageCall = 0x1400E9B94;
+	constexpr std::uintptr_t CG_GameMessage = 0x1400D62B0;
+
+	static Utils::Hook hooks[13];
+
+	static constexpr float crewSpawnSpacing = 128.0f;
+
+	static float CrewSpawnClearance(const Game::gentity_s* self, const float* origin)
+	{
+		float clearance = std::numeric_limits<float>::max();
+
+		for (int clientNum = 0; clientNum < *Game::svs_clientCount; ++clientNum)
+		{
+			const auto* other = Game::svs_clients[clientNum].gentity;
+
+			if (!other || other == self || !other->r.isInUse || !other->client || other->health <= 0
+				|| other->client->sess.sessionState != Game::SESS_STATE_PLAYING
+				|| other->client->sess.cs.team != self->client->sess.cs.team)
+			{
+				continue;
+			}
+
+			const auto* position = other->client->ps.origin;
+
+			if (std::abs(position[2] - origin[2]) < 72.0f)
+			{
+				const float x = position[0] - origin[0];
+				const float y = position[1] - origin[1];
+				clearance = std::min(clearance, x * x + y * y);
+			}
+		}
+
+		return clearance;
+	}
+
+	static bool FindCrewSpawnOrigin(const Game::gentity_s* self, const float* origin, float* result)
+	{
+		if (CrewSpawnClearance(self, origin) >= crewSpawnSpacing * crewSpawnSpacing)
+		{
+			return false;
+		}
+
+		// The scripts can give the whole crew one spawn point. Check a standing
+		// player hull and reachable ground before spreading bots around it.
+		const float bounds[6] = { 0.0f, 0.0f, 35.0f, 15.0f, 15.0f, 35.0f };
+		const int ignore[4] = { self->s.number, -1, 0, 0 };
+		const float start[3] = { origin[0], origin[1], origin[2] + 18.0f };
+		float bestClearance = crewSpawnSpacing * crewSpawnSpacing;
+		bool found = false;
+
+		for (const float radius : { 128.0f, 192.0f, 256.0f })
+		{
+			for (int direction = 0; direction < 8; ++direction)
+			{
+				const float angle = static_cast<float>((direction + self->s.number) % 8) * (std::numbers::pi_v<float> / 4.0f);
+				float candidate[3] = { origin[0] + std::cos(angle) * radius, origin[1] + std::sin(angle) * radius, start[2] };
+				Game::trace_t path{};
+				BotAI::SV_Trace(&path, start, candidate, bounds, ignore, BotAI::maskPlayerSolidNoBodies, 0, nullptr, 1);
+
+				if (path.startsolid || path.allsolid || path.fraction < 1.0f)
+				{
+					continue;
+				}
+
+				const float end[3] = { candidate[0], candidate[1], origin[2] - 64.0f };
+				Game::trace_t ground{};
+				BotAI::SV_Trace(&ground, candidate, end, bounds, ignore, BotAI::maskPlayerSolidNoBodies, 0, nullptr, 1);
+
+				if (ground.startsolid || ground.allsolid || ground.fraction >= 1.0f || ground.normal[2] < 0.7f)
+				{
+					continue;
+				}
+
+				candidate[2] += (end[2] - candidate[2]) * ground.fraction;
+				const float clearance = CrewSpawnClearance(self, candidate);
+
+				if (clearance >= bestClearance)
+				{
+					std::copy_n(candidate, 3, result);
+					bestClearance = clearance;
+					found = true;
+				}
+			}
+
+			if (found)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	static void SetBotOrigin(Game::gentity_s* ent, const float* origin)
+	{
+		float adjustedOrigin[3];
+
+		if (ent && ent->client && CharacterAssignments::IsClientNum(ent->s.number)
+			&& Game::svs_clients[ent->s.number].bIsTestClient
+			&& CharacterAssignments::IsValid(CharacterAssignments::GetClientCharacterId(ent->s.number))
+			&& ent->client->sess.sessionState == Game::SESS_STATE_PLAYING && BotAI::SV_Trace
+			&& FindCrewSpawnOrigin(ent, origin, adjustedOrigin))
+		{
+			origin = adjustedOrigin;
+		}
+
+		Utils::Hook::Call<void(Game::gentity_s*, const float*)>(SetClientOrigin)(ent, origin);
+	}
+
+	extern "C"
+	{
+		void CG_UpdateClients_RenameMessageStub();
+
+		void Bots_RenameMessage(const int localClientNum, const char* message, const char* oldName, const char* newName)
+		{
+			if (std::string_view(oldName).starts_with("[BOT] ") || std::string_view(newName).starts_with("[BOT] "))
+			{
+				return;
+			}
+
+			Utils::Hook::Call<void(int, const char*)>(CG_GameMessage)(localClientNum, message);
+		}
+	}
 
 	struct BotMovementInfo
 	{
@@ -1068,6 +1194,8 @@ namespace Components
 			{ SV_SendMessageToClient_TransmitCall, SV_Netchan_Transmit, reinterpret_cast<void*>(SV_Netchan_Transmit_Hk) },
 			{ SV_Netchan_TransmitNextFragmentCalls[0], SV_Netchan_TransmitNextFragment, reinterpret_cast<void*>(SV_Netchan_TransmitNextFragment_Hk) },
 			{ SV_Netchan_TransmitNextFragmentCalls[1], SV_Netchan_TransmitNextFragment, reinterpret_cast<void*>(SV_SendClientMessages_TransmitNextFragment_Hk) },
+			{ Scr_SetOrigin_SetClientOriginCall, SetClientOrigin, reinterpret_cast<void*>(SetBotOrigin) },
+			{ CG_UpdateClients_RenameMessageCall, CG_GameMessage, reinterpret_cast<void*>(CG_UpdateClients_RenameMessageStub) },
 		};
 
 		static_assert(std::size(sites) + 2 == std::size(hooks));

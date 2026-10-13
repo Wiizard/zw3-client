@@ -1,7 +1,14 @@
 EXTERN Bots_BotUserMove:PROC
 EXTERN Bots_BotUserMoveNext:QWORD
+EXTERN Bots_RenameMessage:PROC
 
 .code
+
+CG_UpdateClients_RenameMessageStub PROC
+	mov r8, rbx
+	lea r9, [rbp + 44h]
+	jmp Bots_RenameMessage
+CG_UpdateClients_RenameMessageStub ENDP
 
 SV_BotUserMove_Stub PROC FRAME
 	push rax

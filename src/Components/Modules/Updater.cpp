@@ -8,13 +8,80 @@
 #include "Menus.hpp"
 #include "Scheduler.hpp"
 #include "UIScript.hpp"
+#include <fstream>
 
 namespace Components
 {
 	constexpr auto* updateManifestUrl = "https://zw3.eu/dl/launcher/game_update.yaml";
 	constexpr auto* installGuideUrl = "https://forum.alterware.dev/t/how-to-install-the-alterware-launcher/56";
-	constexpr auto* currentVersion = "4.0.0";
 	constexpr auto* noChangelog = "No changelog was supplied for this update.";
+
+
+	static std::string ReadCurrentVersion()
+	{
+		HMODULE module = nullptr;
+
+		if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+			reinterpret_cast<LPCWSTR>(&ReadCurrentVersion), &module))
+		{
+			return "";
+		}
+
+		wchar_t modulePath[MAX_PATH]{};
+		const auto length = GetModuleFileNameW(module, modulePath, MAX_PATH);
+
+		if (!length || length >= MAX_PATH)
+		{
+			return "";
+		}
+
+		const auto filePath = std::filesystem::path(modulePath).parent_path() / "zw3/core/ui_mp/common/zw3.inc";
+		std::ifstream file(filePath);
+		std::string line;
+
+		if (!file)
+		{
+			Logger::Print("Could not read ZW3 version file\n");
+			return "";
+		}
+
+		while (std::getline(file, line))
+		{
+			Utils::String::Trim(line);
+
+			if (!line.starts_with("#define GAME_VERSION "))
+			{
+				continue;
+			}
+
+			const auto start = line.find('"');
+			const auto end = line.find('"', start == std::string::npos ? start : start + 1);
+
+			if (start == std::string::npos || end == std::string::npos)
+			{
+				break;
+			}
+
+			auto version = line.substr(start + 1, end - start - 1);
+
+			if (version.starts_with("Version "))
+			{
+				version.erase(0, sizeof("Version ") - 1);
+			}
+
+			return version;
+		}
+
+		Logger::Print("Could not find ZW3 version\n");
+		return "";
+	}
+
+	static const std::string& GetCurrentVersion()
+	{
+		static const std::string version = ReadCurrentVersion();
+		return version;
+	}
+
 
 	struct UpdateVersion
 	{
@@ -144,7 +211,7 @@ namespace Components
 
 		cl_updateAvailable.Set(isAvailable);
 		cl_updateVersion.Set(version);
-		cl_updateCurrentVersion.Set(currentVersion);
+		cl_updateCurrentVersion.Set(GetCurrentVersion());
 		cl_updateChangelog.Set(changelog);
 		cl_updateStatus.Set(status);
 	}
@@ -158,7 +225,7 @@ namespace Components
 
 		Scheduler::Once([]
 		{
-			SetUpdateState(false, "", "", "CHECKING FOR ZW3 UPDATES...");
+			SetUpdateState(false, "", "", "Checking for updates...");
 		}, Scheduler::Pipeline::MAIN);
 
 		const auto result = Utils::WebIO("ZW3", updateManifestUrl).SetTimeout(5000)->Get();
@@ -169,7 +236,7 @@ namespace Components
 
 			Scheduler::Once([]
 			{
-				SetUpdateState(false, "", "", "UPDATE CHECK UNAVAILABLE");
+				SetUpdateState(false, "", "", "Update check failed.");
 				isUpdateCheckRunning = false;
 			}, Scheduler::Pipeline::MAIN);
 
@@ -184,9 +251,24 @@ namespace Components
 
 			Scheduler::Once([]
 			{
-				SetUpdateState(false, "", "", "UPDATE CHECK UNAVAILABLE");
+				SetUpdateState(false, "", "", "Update check failed.");
 				isUpdateCheckRunning = false;
 			}, Scheduler::Pipeline::MAIN);
+
+			return;
+		}
+
+		const auto& currentVersion = GetCurrentVersion();
+
+		if (!TryParseVersion(currentVersion))
+		{
+			Logger::Print("Could not determine the installed ZW3 version\n");
+
+			Scheduler::Once([]
+				{
+					SetUpdateState(false, "", "", "Could not determine installed version.");
+					isUpdateCheckRunning = false;
+				}, Scheduler::Pipeline::MAIN);
 
 			return;
 		}
@@ -305,9 +387,9 @@ namespace Components
 		{
 			cl_updateAvailable = Dvar::Register("cl_updateAvailable", false, Game::DVAR_INTERNAL, "Whether a ZW3 update is available");
 			cl_updateVersion = Dvar::Register("cl_updateVersion", "", Game::DVAR_INTERNAL, "Latest available ZW3 version");
-			cl_updateCurrentVersion = Dvar::Register("cl_updateCurrentVersion", currentVersion, Game::DVAR_INTERNAL, "Installed ZW3 version");
+			cl_updateCurrentVersion = Dvar::Register("cl_updateCurrentVersion", GetCurrentVersion().c_str(), Game::DVAR_INTERNAL, "Installed ZW3 version");
 			cl_updateChangelog = Dvar::Register("cl_updateChangelog", "", Game::DVAR_INTERNAL, "Changelog for the latest ZW3 update");
-			cl_updateStatus = Dvar::Register("cl_updateStatus", "CHECKING FOR ZW3 UPDATES...", Game::DVAR_INTERNAL, "Readable ZW3 updater status");
+			cl_updateStatus = Dvar::Register("cl_updateStatus", "Checking for updates...", Game::DVAR_INTERNAL, "Readable ZW3 updater status");
 
 			Scheduler::Once(CheckForUpdate, Scheduler::Pipeline::ASYNC);
 		});

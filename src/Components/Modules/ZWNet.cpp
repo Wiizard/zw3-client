@@ -6025,9 +6025,9 @@ namespace Components
 			}
 
 			Dvar::Var("zwnet_online_players_known").Set(false);
-			Dvar::Var("zwnet_online_players_text").Set("PLAYERS ONLINE UNAVAILABLE");
+			Dvar::Var("zwnet_online_players_text").Set("Could not fetch online player count.");
 			Dvar::Var("zwnet_running_games_known").Set(false);
-			Dvar::Var("zwnet_running_games_text").Set("RUNNING GAMES UNAVAILABLE");
+			Dvar::Var("zwnet_running_games_text").Set("Could not fetch running game count.");
 		}, Scheduler::Pipeline::MAIN);
 	}
 

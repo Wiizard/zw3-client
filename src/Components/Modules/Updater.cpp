@@ -3,11 +3,14 @@
 #include "Updater.hpp"
 #include "Command.hpp"
 #include "Dvar.hpp"
+#include "Dedicated.hpp"
 #include "Events.hpp"
+#include "LobbyScene.hpp"
 #include "Logger.hpp"
 #include "Menus.hpp"
 #include "Scheduler.hpp"
 #include "UIScript.hpp"
+#include "ZoneBuilder.hpp"
 #include <fstream>
 
 namespace Components
@@ -101,8 +104,11 @@ namespace Components
 	static Dvar::Var cl_updateCurrentVersion;
 	static Dvar::Var cl_updateChangelog;
 	static Dvar::Var cl_updateStatus;
+	static Dvar::Var cl_updatePopupDisabled;
 
 	static std::atomic_bool isUpdateCheckRunning = false;
+	static bool isClientInitialized = false;
+	static bool isStartupUpdateCheckComplete = false;
 
 	static std::optional<UpdateVersion> TryParseVersion(const std::string& text)
 	{
@@ -199,7 +205,8 @@ namespace Components
 		return manifest;
 	}
 
-	static void SetUpdateState(const bool isAvailable, const std::string& version, const std::string& changelog, const std::string& status)
+	static void SetUpdateState(const bool isAvailable, const std::string& version, const std::string& changelog,
+		const std::string& status, const bool isComplete = true)
 	{
 		const bool isRegistered = cl_updateAvailable.IsValid() && cl_updateVersion.IsValid() && cl_updateCurrentVersion.IsValid()
 			&& cl_updateChangelog.IsValid() && cl_updateStatus.IsValid();
@@ -214,6 +221,56 @@ namespace Components
 		cl_updateCurrentVersion.Set(GetCurrentVersion());
 		cl_updateChangelog.Set(changelog);
 		cl_updateStatus.Set(status);
+		isStartupUpdateCheckComplete = isComplete;
+	}
+
+	static bool ShowStartupUpdatePopup()
+	{
+		// Initialization can pump frames before the saved config has finished.
+		if (!isClientInitialized || !isStartupUpdateCheckComplete)
+		{
+			return false;
+		}
+
+		if (!cl_updateAvailable.Get<bool>() || cl_updatePopupDisabled.Get<bool>())
+		{
+			return true;
+		}
+
+		// End the startup prompt if the player has already started connecting.
+		if (Game::CL_GetLocalClientConnectionState(0) >= Game::CA_CONNECTING)
+		{
+			return true;
+		}
+
+		if (LobbyScene::IsStartupLoading() || LobbyScene::IsCinematicActive() || LobbyScene::IsTransitionActive())
+		{
+			return false;
+		}
+
+		const auto* const context = Game::uiContext;
+		if (!context || context->openMenuCount <= 0 || context->openMenuCount > static_cast<int>(ARRAYSIZE(context->menuStack)))
+		{
+			return false;
+		}
+
+		const auto* const top = context->menuStack[context->openMenuCount - 1];
+		if (!top || !top->window.name)
+		{
+			return false;
+		}
+
+		if (_stricmp(top->window.name, "popup_zw3_update") == 0)
+		{
+			return true;
+		}
+
+		if (_stricmp(top->window.name, "main_text") != 0 && _stricmp(top->window.name, "pregame_loaderror") != 0)
+		{
+			return false;
+		}
+
+		return Game::Menus_OpenByName(Game::uiContext, "popup_zw3_update");
 	}
 
 	static void CheckForUpdate()
@@ -225,7 +282,7 @@ namespace Components
 
 		Scheduler::Once([]
 		{
-			SetUpdateState(false, "", "", "Checking for updates...");
+			SetUpdateState(false, "", "", "Checking for updates...", false);
 		}, Scheduler::Pipeline::MAIN);
 
 		const auto result = Utils::WebIO("ZW3", updateManifestUrl).SetTimeout(5000)->Get();
@@ -277,7 +334,7 @@ namespace Components
 
 		Scheduler::Once([latest = *manifest, isAvailable]
 		{
-			std::string status = "ZW3 is up to date.";
+			std::string status = "Zombie Warfare 3 is up to date.";
 
 			if (isAvailable)
 			{
@@ -382,6 +439,7 @@ namespace Components
 	Updater::Updater()
 	{
 		Menus::Add("ui_mp/popup_zw3_update.menu");
+		Events::OnClientInit([] { isClientInitialized = true; });
 
 		Events::OnDvarInit([]
 		{
@@ -390,8 +448,13 @@ namespace Components
 			cl_updateCurrentVersion = Dvar::Register("cl_updateCurrentVersion", GetCurrentVersion().c_str(), Game::DVAR_INTERNAL, "Installed ZW3 version");
 			cl_updateChangelog = Dvar::Register("cl_updateChangelog", "", Game::DVAR_INTERNAL, "Changelog for the latest ZW3 update");
 			cl_updateStatus = Dvar::Register("cl_updateStatus", "Checking for updates...", Game::DVAR_INTERNAL, "Readable ZW3 updater status");
+			cl_updatePopupDisabled = Dvar::Register("cl_updatePopupDisabled", false, Game::DVAR_ARCHIVE, "Do not automatically show the ZW3 update popup at startup");
 
 			Scheduler::Once(CheckForUpdate, Scheduler::Pipeline::ASYNC);
+			if (!Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled())
+			{
+				Scheduler::Schedule(ShowStartupUpdatePopup, Scheduler::Pipeline::MAIN);
+			}
 		});
 
 		UIScript::Add("checkForUpdate", []([[maybe_unused]] const UIScript::Token& token)
@@ -425,6 +488,11 @@ namespace Components
 			}
 
 			Game::Menus_OpenByName(Game::uiContext, "popup_zw3_update");
+		});
+
+		UIScript::Add("neverShowUpdatePopup", []([[maybe_unused]] const UIScript::Token& token)
+		{
+			cl_updatePopupDisabled.Set(true);
 		});
 	}
 }

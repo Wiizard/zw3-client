@@ -36,6 +36,7 @@ namespace Components
 		float appliedAlpha;
 	};
 	static std::unordered_map<Game::windowDef_t*, BorderStyle> requestedBorderSizes;
+	static std::unordered_map<Game::itemDef_s*, float> autoTextRightEdges;
 	static std::unordered_map<std::string, std::string> menuReadCache;
 	static bool isCachingMenuReads = false;
 	struct MenuReadBatch
@@ -2542,6 +2543,7 @@ namespace Components
 		bool hasListBox = false;
 		bool hasEditField = false;
 		bool hasTicker = false;
+		bool hasAutoTextWidth = false;
 
 		ItemExpressions expressions = {};
 		Game::ItemKeyHandler* keyHandlers = nullptr;
@@ -2641,6 +2643,10 @@ namespace Components
 			else if (_stricmp(token, "decoration") == 0)
 			{
 				item->window.staticFlags |= static_cast<int>(Game::WINDOW_STATIC_DECORATION);
+			}
+			else if (_stricmp(token, "autoTextWidth") == 0)
+			{
+				hasAutoTextWidth = true;
 			}
 			else if (_stricmp(token, "autowrapped") == 0)
 			{
@@ -2952,6 +2958,11 @@ namespace Components
 		if (isVisible)
 		{
 			item->window.dynamicFlags[0] |= static_cast<int>(Game::WINDOW_DYNAMIC_VISIBLE);
+		}
+
+		if (hasAutoTextWidth)
+		{
+			autoTextRightEdges[item] = item->window.rectClient.x + item->window.rectClient.w;
 		}
 
 		return true;
@@ -3404,6 +3415,7 @@ namespace Components
 	void Menus::Reset()
 	{
 		requestedBorderSizes.clear();
+		autoTextRightEdges.clear();
 		menuReadCache.clear();
 		if (Game::cgDC)
 		{
@@ -4364,7 +4376,24 @@ namespace Components
 			updateBorder(menu->window);
 			for (int index = 0; index < menu->itemCount; ++index)
 			{
-				if (menu->items[index]) updateBorder(menu->items[index]->window);
+				auto* const item = menu->items[index];
+				if (!item) continue;
+				updateBorder(item->window);
+
+				const auto edge = autoTextRightEdges.find(item);
+				if (edge == autoTextRightEdges.end()) continue;
+
+				// Use the engine's rendered font metrics for both the label and its
+				// clickable bounds, keeping the original right edge fixed.
+				const float width = std::ceil(item->textRect[0].w);
+				auto& window = item->window;
+				if (window.rectClient.w == width) continue;
+
+				const float x = edge->second - width;
+				window.rect.x += x - window.rectClient.x;
+				window.rectClient.x = x;
+				window.rectClient.w = window.rect.w = width;
+				item->textRect[0].w = 0.0f;
 			}
 		}
 		const bool hasName = menu && menu->window.name;

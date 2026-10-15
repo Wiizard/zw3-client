@@ -4,6 +4,7 @@
 #include "Command.hpp"
 #include "FileSystem.hpp"
 #include "Logger.hpp"
+#include "ZombieNavigation.hpp"
 
 namespace Components
 {
@@ -195,6 +196,23 @@ namespace Components
 		return lastScriptRead;
 	}
 
+	static char* ApplyZombieNavigation(const char* filename, char* source)
+	{
+		if (!filename || !source)
+		{
+			return source;
+		}
+		const auto modified = ZombieNavigation::PatchScript(filename, source);
+		if (!modified)
+		{
+			return source;
+		}
+		auto* const buffer = reinterpret_cast<char*(*)(int)>(Utils::Hook::Rebase(Hunk_AllocateTempMemoryHigh))(
+			static_cast<int>(modified->size() + 1));
+		std::memcpy(buffer, modified->c_str(), modified->size() + 1);
+		return buffer;
+	}
+
 	char* RawFiles::Scr_ReadFile_Stub(const char* filename, const char* extFilename)
 	{
 		if (extFilename && std::string_view(extFilename).ends_with(".gsc"))
@@ -208,7 +226,8 @@ namespace Components
 
 		if (length < 0)
 		{
-			return reinterpret_cast<char*(*)(const char*, const char*)>(Utils::Hook::Rebase(Scr_ReadFile_FastFile))(filename, extFilename);
+			return ApplyZombieNavigation(extFilename,
+				reinterpret_cast<char*(*)(const char*, const char*)>(Utils::Hook::Rebase(Scr_ReadFile_FastFile))(filename, extFilename));
 		}
 
 		auto* const buffer = reinterpret_cast<char*(*)(int)>(Utils::Hook::Rebase(Hunk_AllocateTempMemoryHigh))(length + 1);
@@ -218,7 +237,7 @@ namespace Components
 
 		reinterpret_cast<void(*)(std::int64_t)>(Utils::Hook::Rebase(FS_FCloseFile))(file);
 
-		return buffer;
+		return ApplyZombieNavigation(extFilename, buffer);
 	}
 
 	RawFiles::RawFiles()

@@ -180,6 +180,8 @@
     <ClInclude Include="..\src\Components\Modules\BotAI\Navgen\Navgen.hpp" />
     <ClInclude Include="..\src\Components\Modules\BotAI\Waypoints\Waypoints.hpp" />
     <ClInclude Include="..\src\Components\Modules\Bots.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ZombieNavigation.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ZombieNavigationGraph.hpp" />
     <ClInclude Include="..\src\Components\Modules\Branding.hpp" />
     <ClInclude Include="..\src\Components\Modules\Bullet.hpp" />
     <ClInclude Include="..\src\Components\Modules\CardTitles.hpp" />
@@ -217,6 +219,7 @@
     <ClInclude Include="..\src\Components\Modules\GSC\ScriptError.hpp" />
     <ClInclude Include="..\src\Components\Modules\GSC\ScriptExtension.hpp" />
     <ClInclude Include="..\src\Components\Modules\GSC\ScriptPatches.hpp" />
+    <ClInclude Include="..\src\Components\Modules\GSC\UsePress.hpp" />
     <ClInclude Include="..\src\Components\Modules\GSC\ScriptStorage.hpp" />
     <ClInclude Include="..\src\Components\Modules\GSC\String.hpp" />
     <ClInclude Include="..\src\Components\Modules\GSC\UserInfo.hpp" />
@@ -515,6 +518,8 @@
     <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Registry.cpp" />
     <ClCompile Include="..\src\Components\Modules\BotAI\Waypoints\Waypoints.cpp" />
     <ClCompile Include="..\src\Components\Modules\Bots.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ZombieNavigation.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ZombieNavigationScripts.cpp" />
     <ClCompile Include="..\src\Components\Modules\Branding.cpp" />
     <ClCompile Include="..\src\Components\Modules\Bullet.cpp" />
     <ClCompile Include="..\src\Components\Modules\CardTitles.cpp" />

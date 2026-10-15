@@ -89,6 +89,7 @@ namespace Components
 	static bool didPressMouse = false;
 	static bool isMouseHeld = false;
 	static bool isOwningMouse = false;
+	static std::atomic_bool isConsoleKeyHeld = false;
 
 	static float minX = 0.0f;
 	static float minY = 0.0f;
@@ -1585,6 +1586,15 @@ namespace Components
 			return;
 		}
 
+		if (big)
+		{
+			isBig = !isBig;
+			dragTarget = DragTarget::None;
+			didPressMouse = false;
+			isMouseHeld = false;
+			return;
+		}
+
 		SetOpen(false);
 	}
 
@@ -1678,6 +1688,11 @@ namespace Components
 
 	void Console::DrawFrame()
 	{
+		if (!Window::HasFocus())
+		{
+			isConsoleKeyHeld.store(false, std::memory_order_relaxed);
+		}
+
 		AcquireSRWLockExclusive(&lineBufferLock);
 
 		if (pendingLength > 0)
@@ -2034,6 +2049,10 @@ namespace Components
 	bool Console::HandleKey(int key, int down)
 	{
 		FollowEngineClose();
+		if (key == keyConsole && !down)
+		{
+			isConsoleKeyHeld.store(false, std::memory_order_relaxed);
+		}
 
 		for (const auto& observer : keyObservers)
 		{
@@ -2046,14 +2065,17 @@ namespace Components
 		const bool isShiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
 		const bool isControlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
 
-		if (!isOpen)
+		if (key == keyConsole)
 		{
-			if (key == keyConsole && down)
+			if (down && !isConsoleKeyHeld.exchange(true, std::memory_order_relaxed))
 			{
 				ToggleMode(isShiftDown);
-				return true;
 			}
+			return true;
+		}
 
+		if (!isOpen)
+		{
 			return false;
 		}
 
@@ -2083,10 +2105,6 @@ namespace Components
 
 		switch (key)
 		{
-		case keyConsole:
-			ToggleMode(isShiftDown);
-			return true;
-
 		case keyEscape:
 			SetOpen(false);
 			return true;

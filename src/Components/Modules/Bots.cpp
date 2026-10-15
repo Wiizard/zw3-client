@@ -15,6 +15,7 @@
 #include "ModelCache.hpp"
 #include "Network.hpp"
 #include "Scheduler.hpp"
+#include "ZombieNavigation.hpp"
 
 #include "GSC/Script.hpp"
 
@@ -783,6 +784,8 @@ namespace Components
 
 	void Bots::AddScriptMethods()
 	{
+		ZombieNavigation::RegisterScriptFunctions();
+
 		GSC::Script::AddMethod("GetZW3Character", [](const Game::scr_entref_t entref)
 		{
 			const auto* ent = GSC::Script::Scr_GetPlayerEntity(entref);

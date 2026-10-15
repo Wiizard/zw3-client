@@ -909,6 +909,12 @@ namespace Components
 				const auto name = std::format("con_gameMsgWindow{}Filter", index);
 				if (!Game::Dvar_FindVar(name.c_str())) continue;
 				const auto original = Dvar::Var(name).Get<std::string>();
+				// The primary feed also accepts join, rename and script notices.
+				if (index == 0)
+				{
+					if (!original.empty()) Dvar::Var(name).Set(std::string{});
+					continue;
+				}
 				std::istringstream channels(original);
 				std::string channel;
 				std::string filtered;

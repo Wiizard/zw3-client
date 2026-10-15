@@ -240,6 +240,12 @@
     <ClInclude Include="..\src\Components\Modules\Bots.hpp">
       <Filter>Components\Modules</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ZombieNavigation.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ZombieNavigationGraph.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\Components\Modules\Branding.hpp">
       <Filter>Components\Modules</Filter>
     </ClInclude>
@@ -349,6 +355,9 @@
       <Filter>Components\Modules\GSC</Filter>
     </ClInclude>
     <ClInclude Include="..\src\Components\Modules\GSC\ScriptPatches.hpp">
+      <Filter>Components\Modules\GSC</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\GSC\UsePress.hpp">
       <Filter>Components\Modules\GSC</Filter>
     </ClInclude>
     <ClInclude Include="..\src\Components\Modules\GSC\ScriptStorage.hpp">
@@ -1237,6 +1246,12 @@
       <Filter>Components\Modules\BotAI\Waypoints</Filter>
     </ClCompile>
     <ClCompile Include="..\src\Components\Modules\Bots.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ZombieNavigation.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ZombieNavigationScripts.cpp">
       <Filter>Components\Modules</Filter>
     </ClCompile>
     <ClCompile Include="..\src\Components\Modules\Branding.cpp">

@@ -1964,7 +1964,8 @@ namespace Game
 		int buttons;
 		int oldbuttons;
 		int latched_buttons;
-		char pad3[0xC8];
+		int buttonsSinceLastFrame;
+		char pad3[0xC4];
 		unsigned short useHoldEntity;
 		char pad4[0x2];
 		int useHoldTime;
@@ -1977,6 +1978,7 @@ namespace Game
 	AssertOffset(gclient_s, buttons, 0x33A0);
 	AssertOffset(gclient_s, oldbuttons, 0x33A4);
 	AssertOffset(gclient_s, latched_buttons, 0x33A8);
+	AssertOffset(gclient_s, buttonsSinceLastFrame, 0x33AC);
 	AssertOffset(gclient_s, useHoldEntity, 0x3474);
 	AssertOffset(gclient_s, useHoldTime, 0x3478);
 

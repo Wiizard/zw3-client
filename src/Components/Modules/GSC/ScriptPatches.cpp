@@ -2,10 +2,67 @@
 
 #include "ScriptPatches.hpp"
 #include "Script.hpp"
+#include "UsePress.hpp"
+#include "../Events.hpp"
 #include "../Logger.hpp"
 
 namespace Components::GSC
 {
+	namespace
+	{
+		constexpr std::uintptr_t ClientThinkReal = 0x140193190;
+		constexpr std::uintptr_t ClientThinkRealCalls[] = { 0x140193140, 0x1401942E7, 0x14019687B };
+		constexpr int useButtons = Game::CMD_BUTTON_ACTIVATE | Game::CMD_BUTTON_USE_RELOAD;
+		std::array<UsePress, Game::MAX_CLIENTS> usePresses;
+		std::array<Utils::Hook, std::size(ClientThinkRealCalls)> useInputHooks;
+		bool useInputInstalled = false;
+
+		void ClientThinkReal_Hk(Game::gentity_s* entity, Game::usercmd_s* command)
+		{
+			Utils::Hook::Call<void(Game::gentity_s*, Game::usercmd_s*)>(ClientThinkReal)(entity, command);
+			const auto clientNum = entity - Game::g_entities;
+			if (entity->client && clientNum >= 0 && clientNum < static_cast<std::ptrdiff_t>(usePresses.size()))
+			{
+				// Observe every accepted command, including releases between script polls.
+				usePresses[clientNum].Update((entity->client->buttons & useButtons) != 0);
+			}
+		}
+
+		void InstallUseInput()
+		{
+			for (const auto site : ClientThinkRealCalls)
+				if (!Utils::Hook::BranchesTo(site, ClientThinkReal, HOOK_CALL)) return;
+			for (std::size_t index = 0; index < useInputHooks.size(); ++index)
+			{
+				if (!useInputHooks[index].Initialize(ClientThinkRealCalls[index], ClientThinkReal_Hk, HOOK_CALL)->Install()->IsInstalled())
+				{
+					for (auto& hook : useInputHooks) hook.Uninstall();
+					return;
+				}
+			}
+			for (auto& hook : useInputHooks) hook.Quick();
+			useInputInstalled = true;
+			Events::OnVMShutdown([] { usePresses = {}; });
+			Events::OnClientDisconnect([](const int clientNum)
+			{
+				if (clientNum >= 0 && clientNum < static_cast<int>(usePresses.size())) usePresses[clientNum] = {};
+			});
+		}
+
+		void ConsumeUse(const Game::scr_entref_t entref)
+		{
+			auto* const entity = Script::Scr_GetPlayerEntity(entref);
+			if (!entity || entref.entnum >= usePresses.size())
+			{
+				Game::Scr_AddBool(false);
+				return;
+			}
+			const auto* const client = entity->client;
+			const bool active = ((client->buttons | client->buttonsSinceLastFrame) & useButtons) != 0;
+			Game::Scr_AddBool(useInputInstalled ? usePresses[entref.entnum].Consume(active) : active);
+		}
+	}
+
 	constexpr std::uintptr_t g_hudelems = 0x141781120;
 	constexpr std::size_t hudElemSize = 180;
 	constexpr std::size_t hudElemText = 132;
@@ -104,6 +161,8 @@ namespace Components::GSC
 
 	ScriptPatches::ScriptPatches()
 	{
+		InstallUseInput();
+		Script::AddMethod("ZW3ConsumeUse", ConsumeUse);
 		Script::AddFunction("map", GScr_Map);
 
 		if (Utils::Hook::Get<std::uintptr_t>(tableLookupIStringByRowEntry + 8) != Utils::Hook::Rebase(Scr_TableLookupByRow))

@@ -449,14 +449,27 @@ namespace Components
 
 	static std::uint16_t FieldIndex(std::uint16_t record, const char* name)
 	{
-		const auto& r = Record(record);
-
-		for (std::uint16_t i = 0; i < r.fieldCount; ++i)
+		static const auto fieldIndices = []
 		{
-			if (std::strcmp(zoneFields[r.firstField + i].name, name) == 0)
+			std::array<std::unordered_map<std::string_view, std::uint16_t>, std::size(zoneRecords)> indices;
+			for (std::size_t entry = 0; entry < indices.size(); ++entry)
 			{
-				return static_cast<std::uint16_t>(r.firstField + i);
+				const auto& layout = zoneRecords[entry];
+				indices[entry].reserve(layout.fieldCount);
+				for (std::uint16_t i = 0; i < layout.fieldCount; ++i)
+				{
+					const auto index = static_cast<std::uint16_t>(layout.firstField + i);
+					indices[entry].emplace(zoneFields[index].name, index);
+				}
 			}
+			return indices;
+		}();
+
+		const auto& r = Record(record);
+		const auto found = fieldIndices[record].find(name);
+		if (found != fieldIndices[record].end())
+		{
+			return found->second;
 		}
 
 		Fail(std::format("{} has no field {}", r.name, name));
@@ -628,7 +641,7 @@ namespace Components
 			it = reader.regions.erase(it);
 		}
 
-		reader.regions[addr] = { size32, type, dest, rule };
+		reader.regions.emplace_hint(it, addr, Region{ size32, type, dest, rule });
 	}
 
 	static const IW4xRule* RuleFor(std::uint16_t type)
@@ -2754,16 +2767,24 @@ namespace Components
 
 	static std::vector<std::int16_t> DecodeIma(const std::uint8_t* data, std::uint32_t length, std::uint32_t channels, std::uint32_t blockAlign)
 	{
+		if (!data || (channels != 1 && channels != 2) || blockAlign < 4 * channels)
+		{
+			Fail("invalid ADPCM channel count or block alignment");
+		}
+
 		std::vector<std::int16_t> out;
 		const auto framesPerBlock = (blockAlign - 4 * channels) * 2 / channels + 1;
+		const auto sampleCount = static_cast<std::size_t>(framesPerBlock) * channels;
+		std::vector<std::int16_t> frames(sampleCount);
+		const auto blocks = (static_cast<std::size_t>(length) + blockAlign - 1) / blockAlign;
+		out.reserve(blocks * sampleCount);
 
-		for (std::uint32_t offset = 0; offset + 4 * channels <= length; offset += blockAlign)
+		for (std::size_t offset = 0; offset + 4 * channels <= length; offset += blockAlign)
 		{
-			const auto blockLength = std::min(blockAlign, length - offset);
+			const auto blockLength = std::min<std::size_t>(blockAlign, length - offset);
 			const auto* block = data + offset;
 			std::int32_t predictor[2]{};
 			std::int32_t stepIndex[2]{};
-			std::vector<std::int16_t> frames(static_cast<std::size_t>(framesPerBlock) * channels);
 
 			for (std::uint32_t c = 0; c < channels; ++c)
 			{
@@ -3461,22 +3482,23 @@ namespace Components
 			return 0;
 		}
 
-		if (block == 0)
-		{
-			return size32 + planSlack;
-		}
-
+		std::uint64_t planned = size32;
 		if (block == 3)
 		{
-			return size32 + size32 / 2 + planSlack;
+			planned += size32 / 2;
 		}
-
-		if (block == 6 || block == 7)
+		else if (block != 0 && block != 6 && block != 7)
 		{
-			return size32 + planSlack;
+			planned *= 2;
 		}
 
-		return 2 * size32 + planSlack;
+		planned += planSlack;
+		if (planned > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
+		{
+			Fail("a converted zone block exceeds the engine's allocation limit");
+		}
+
+		return static_cast<std::uint32_t>(planned);
 	}
 
 	static bool Is32BitAssetList(const std::uint8_t* list)

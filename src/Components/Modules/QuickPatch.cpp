@@ -902,6 +902,31 @@ namespace Components
 
 	QuickPatch::QuickPatch()
 	{
+		const auto removeKillfeed = []
+		{
+			for (int index = 0; index < 4; ++index)
+			{
+				const auto name = std::format("con_gameMsgWindow{}Filter", index);
+				if (!Game::Dvar_FindVar(name.c_str())) continue;
+				const auto original = Dvar::Var(name).Get<std::string>();
+				std::istringstream channels(original);
+				std::string channel;
+				std::string filtered;
+				bool changed = false;
+				while (channels >> channel)
+				{
+					if (channel == "obituary") { changed = true; continue; }
+					if (!filtered.empty()) filtered += ' ';
+					filtered += channel;
+				}
+				if (changed) Dvar::Var(name).Set(filtered);
+			}
+		};
+		if (!Dedicated::IsEnabled())
+		{
+			Events::OnClientInit(removeKillfeed);
+			Events::OnCGameInit(removeKillfeed);
+		}
 		Command::Add("unlockstats", UnlockStats);
 
 		if (Utils::Hook::Get<std::uintptr_t>(sv_pure) != Utils::Hook::Rebase(sv_pureConstant))

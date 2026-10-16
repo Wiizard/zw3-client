@@ -4,7 +4,7 @@ class m_IDirect3D9Ex : public IDirect3D9Ex
 {
 private:
 	LPDIRECT3D9EX ProxyInterface;
-	REFIID WrapperID;
+	IID WrapperID;
 
 public:
 	m_IDirect3D9Ex(LPDIRECT3D9EX pDirect3D, REFIID DeviceID) : ProxyInterface(pDirect3D), WrapperID(DeviceID) { }

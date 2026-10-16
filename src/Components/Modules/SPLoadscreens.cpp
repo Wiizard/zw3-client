@@ -192,21 +192,7 @@ namespace Components
 
 		D3D9Ex::BeginMapLoading(map);
 
-		const bool isLoadZone = map.ends_with("_load");
-
-		if (!map.empty() && !isLoadZone)
-		{
-			FastFiles::PrefetchZone(map + "_load");
-		}
-
-		FastFiles::PrefetchZone(map);
-
-		if (!map.empty() && !isLoadZone)
-		{
-			FastFiles::PrefetchZone("patch_" + map);
-		}
-
-		FastFiles::PrefetchPath(std::filesystem::path("main") / "video" / (map + "_load.bik"));
+		Maps::PrefetchMapAssets(map);
 
 		if (LobbyScene::IsTransitionActive())
 		{

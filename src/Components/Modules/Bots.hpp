@@ -23,6 +23,9 @@ namespace Components
 		static std::array<std::string, Game::MAX_CLIENTS> botIcons;
 
 		static bool SynchronizeBotIdentity(int clientNum, bool refreshClientInfo);
+		static void ClientBegin_Hk(int clientNum);
+		static void ClientNotify_Hk(int clientNum);
+		static void ClientSpawn_Hk(Game::gentity_s* ent, const float* origin, const float* angles);
 
 		using botData = std::pair<std::string, std::string>;
 

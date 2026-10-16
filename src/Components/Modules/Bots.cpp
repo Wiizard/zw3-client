@@ -1,15 +1,18 @@
 #include "STDInclude.hpp"
 
 #include <Utils/InfoString.hpp>
+#include <numbers>
 
 #include "Bots.hpp"
 #include "BotAI/BotAI.hpp"
+#include "BotAI/Iw4.hpp"
 #include "CharacterAssignments.hpp"
 #include "Command.hpp"
 #include "Dvar.hpp"
 #include "Events.hpp"
 #include "FileSystem.hpp"
 #include "Logger.hpp"
+#include "ModelCache.hpp"
 #include "Network.hpp"
 #include "Scheduler.hpp"
 
@@ -128,7 +131,10 @@ namespace Components
 
 		auto& client = Game::svs_clients[clientNum];
 
-		if (client.header.state < Game::CS_CONNECTED || !client.bIsTestClient)
+		const bool isConnectingBot = CharacterAssignments::IsBotReserved(clientNum)
+			&& client.header.netchan.remoteAddress.type == Game::NA_BOT;
+
+		if (client.header.state < Game::CS_CONNECTED || (!client.bIsTestClient && !isConnectingBot))
 		{
 			return false;
 		}
@@ -282,7 +288,277 @@ namespace Components
 	constexpr std::uintptr_t sentFrameBytes = 0x14650D188;
 	constexpr std::uintptr_t sentWindowBytes = 0x14650D18C;
 
-	static Utils::Hook hooks[11];
+	constexpr std::uintptr_t Scr_SetOrigin_SetClientOriginCall = 0x140164E80;
+	constexpr std::uintptr_t SetClientOrigin = 0x140196E90;
+	constexpr std::uintptr_t CG_UpdateClients_RenameMessageCall = 0x1400E9B94;
+	constexpr std::uintptr_t CG_GameMessage = 0x1400D62B0;
+	constexpr std::uintptr_t SV_AddTestClient_ClientBeginCall = 0x140236F14;
+	constexpr std::uintptr_t ClientBegin = 0x140196390;
+	constexpr std::uintptr_t SV_AddTestClient_ClientNotifyCall = 0x140236F37;
+	constexpr std::uintptr_t ClientNotify = 0x140195D80;
+	constexpr std::uintptr_t Scr_Spawn_ClientSpawnCall = 0x140197F94;
+	constexpr std::uintptr_t ClientSpawn = 0x140196410;
+	constexpr std::uintptr_t Scr_SetModel_SetModelCall = 0x140179EAA;
+	constexpr std::uintptr_t G_SetModel = 0x1401AC270;
+	constexpr std::uintptr_t G_DObjUpdate = 0x1401AAB80;
+	constexpr std::uintptr_t Scr_Attach_EntAttachCall = 0x140181726;
+	constexpr std::uintptr_t G_EntAttach = 0x1401AAE70;
+	constexpr std::uintptr_t Scr_Detach_EntDetachCall = 0x14017A281;
+	constexpr std::uintptr_t G_EntDetach = 0x1401AB090;
+
+	static Utils::Hook hooks[19];
+	static std::array<unsigned short, 5> crewModelIndices{};
+
+	struct SuppressedBotHead
+	{
+		std::string model;
+		unsigned int tag;
+	};
+
+	static std::array<std::vector<SuppressedBotHead>, Game::MAX_CLIENTS> suppressedBotHeads;
+
+	static unsigned short CrewBotModelIndex(const Game::gentity_s* ent)
+	{
+		if (!ent || !ent->client || !CharacterAssignments::IsClientNum(ent->s.number)
+			|| !Game::svs_clients[ent->s.number].bIsTestClient || !ModelCache::cachedModelsReallocated)
+		{
+			return 0;
+		}
+
+		auto character = CharacterAssignments::GetClientCharacterId(ent->s.number);
+
+		if (!CharacterAssignments::IsValid(character))
+		{
+			character = CharacterAssignments::ResolveClientCharacter(ent->s.number);
+		}
+
+		const char* modelName = nullptr;
+
+		switch (character)
+		{
+		case CharacterAssignments::Character::Richtofen: modelName = "zw3_richtofen_hd"; break;
+		case CharacterAssignments::Character::Dempsey: modelName = "zw3_dempsey_hd"; break;
+		case CharacterAssignments::Character::Nikolai: modelName = "zw3_nikolai_hd"; break;
+		case CharacterAssignments::Character::Takeo: modelName = "zw3_takeo_hd"; break;
+		default: return 0;
+		}
+
+		auto& index = crewModelIndices[static_cast<std::size_t>(character)];
+		auto** const models = ModelCache::cachedModelsReallocated;
+
+		if (index && models[index] && std::strcmp(models[index]->name, modelName) == 0)
+		{
+			return index;
+		}
+
+		index = 0;
+
+		// Only use models already precached by the current map's zombie scripts.
+		for (unsigned short candidate = 1; candidate < ModelCache::SERVER_MODEL_LIMIT; ++candidate)
+		{
+			if (models[candidate] && std::strcmp(models[candidate]->name, modelName) == 0)
+			{
+				index = candidate;
+				break;
+			}
+		}
+
+		return index;
+	}
+
+	static void SetCrewBotModel(Game::gentity_s* ent, const char* model)
+	{
+		if (const auto index = CrewBotModelIndex(ent))
+		{
+			model = ModelCache::cachedModelsReallocated[index]->name;
+		}
+
+		Utils::Hook::Call<void(Game::gentity_s*, const char*)>(G_SetModel)(ent, model);
+	}
+
+	static int AttachCrewBotModel(Game::gentity_s* ent, const char* model, const unsigned int tag, const int ignoreCollision)
+	{
+		if (std::string_view(model).starts_with("head_") && CrewBotModelIndex(ent))
+		{
+			// Crew bodies include their heads. The class script still detaches its
+			// temporary soldier head later, so remember it for that cleanup.
+			auto& heads = suppressedBotHeads[ent->s.number];
+
+			if (std::ranges::none_of(heads, [=](const SuppressedBotHead& head) { return head.model == model && head.tag == tag; }))
+			{
+				heads.push_back({ model, tag });
+			}
+
+			return 1;
+		}
+
+		return Utils::Hook::Call<int(Game::gentity_s*, const char*, unsigned int, int)>(G_EntAttach)(ent, model, tag, ignoreCollision);
+	}
+
+	static int DetachCrewBotModel(Game::gentity_s* ent, const char* model, const unsigned int tag)
+	{
+		if (ent && CharacterAssignments::IsClientNum(ent->s.number))
+		{
+			auto& heads = suppressedBotHeads[ent->s.number];
+			const auto found = std::ranges::find_if(heads, [=](const SuppressedBotHead& head) { return head.model == model && head.tag == tag; });
+
+			if (found != heads.end())
+			{
+				heads.erase(found);
+				return 1;
+			}
+		}
+
+		return Utils::Hook::Call<int(Game::gentity_s*, const char*, unsigned int)>(G_EntDetach)(ent, model, tag);
+	}
+
+	void Bots::ClientBegin_Hk(const int clientNum)
+	{
+		SynchronizeBotIdentity(clientNum, true);
+		Utils::Hook::Call<void(int)>(ClientBegin)(clientNum);
+	}
+
+	void Bots::ClientNotify_Hk(const int clientNum)
+	{
+		SynchronizeBotIdentity(clientNum, true);
+		Utils::Hook::Call<void(int)>(ClientNotify)(clientNum);
+	}
+
+	void Bots::ClientSpawn_Hk(Game::gentity_s* ent, const float* origin, const float* angles)
+	{
+		if (CharacterAssignments::IsClientNum(ent->s.number))
+		{
+			suppressedBotHeads[ent->s.number].clear();
+		}
+
+		SynchronizeBotIdentity(ent->s.number, true);
+		Utils::Hook::Call<void(Game::gentity_s*, const float*, const float*)>(ClientSpawn)(ent, origin, angles);
+
+		if (const auto index = CrewBotModelIndex(ent))
+		{
+			ent->model = index;
+			Utils::Hook::Call<void(Game::gentity_s*, int)>(G_DObjUpdate)(ent, 1);
+		}
+	}
+
+	static constexpr float crewSpawnSpacing = 128.0f;
+
+	static float CrewSpawnClearance(const Game::gentity_s* self, const float* origin)
+	{
+		float clearance = std::numeric_limits<float>::max();
+
+		for (int clientNum = 0; clientNum < *Game::svs_clientCount; ++clientNum)
+		{
+			const auto* other = Game::svs_clients[clientNum].gentity;
+
+			if (!other || other == self || !other->r.isInUse || !other->client || other->health <= 0
+				|| other->client->sess.sessionState != Game::SESS_STATE_PLAYING
+				|| other->client->sess.cs.team != self->client->sess.cs.team)
+			{
+				continue;
+			}
+
+			const auto* position = other->client->ps.origin;
+
+			if (std::abs(position[2] - origin[2]) < 72.0f)
+			{
+				const float x = position[0] - origin[0];
+				const float y = position[1] - origin[1];
+				clearance = std::min(clearance, x * x + y * y);
+			}
+		}
+
+		return clearance;
+	}
+
+	static bool FindCrewSpawnOrigin(const Game::gentity_s* self, const float* origin, float* result)
+	{
+		if (CrewSpawnClearance(self, origin) >= crewSpawnSpacing * crewSpawnSpacing)
+		{
+			return false;
+		}
+
+		// The scripts can give the whole crew one spawn point. Check a standing
+		// player hull and reachable ground before spreading bots around it.
+		const float bounds[6] = { 0.0f, 0.0f, 35.0f, 15.0f, 15.0f, 35.0f };
+		const int ignore[4] = { self->s.number, -1, 0, 0 };
+		const float start[3] = { origin[0], origin[1], origin[2] + 18.0f };
+		float bestClearance = crewSpawnSpacing * crewSpawnSpacing;
+		bool found = false;
+
+		for (const float radius : { 128.0f, 192.0f, 256.0f })
+		{
+			for (int direction = 0; direction < 8; ++direction)
+			{
+				const float angle = static_cast<float>((direction + self->s.number) % 8) * (std::numbers::pi_v<float> / 4.0f);
+				float candidate[3] = { origin[0] + std::cos(angle) * radius, origin[1] + std::sin(angle) * radius, start[2] };
+				Game::trace_t path{};
+				BotAI::SV_Trace(&path, start, candidate, bounds, ignore, BotAI::maskPlayerSolidNoBodies, 0, nullptr, 1);
+
+				if (path.startsolid || path.allsolid || path.fraction < 1.0f)
+				{
+					continue;
+				}
+
+				const float end[3] = { candidate[0], candidate[1], origin[2] - 64.0f };
+				Game::trace_t ground{};
+				BotAI::SV_Trace(&ground, candidate, end, bounds, ignore, BotAI::maskPlayerSolidNoBodies, 0, nullptr, 1);
+
+				if (ground.startsolid || ground.allsolid || ground.fraction >= 1.0f || ground.normal[2] < 0.7f)
+				{
+					continue;
+				}
+
+				candidate[2] += (end[2] - candidate[2]) * ground.fraction;
+				const float clearance = CrewSpawnClearance(self, candidate);
+
+				if (clearance >= bestClearance)
+				{
+					std::copy_n(candidate, 3, result);
+					bestClearance = clearance;
+					found = true;
+				}
+			}
+
+			if (found)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	static void SetBotOrigin(Game::gentity_s* ent, const float* origin)
+	{
+		float adjustedOrigin[3];
+
+		if (ent && ent->client && CharacterAssignments::IsClientNum(ent->s.number)
+			&& Game::svs_clients[ent->s.number].bIsTestClient
+			&& CharacterAssignments::IsValid(CharacterAssignments::GetClientCharacterId(ent->s.number))
+			&& ent->client->sess.sessionState == Game::SESS_STATE_PLAYING && BotAI::SV_Trace
+			&& FindCrewSpawnOrigin(ent, origin, adjustedOrigin))
+		{
+			origin = adjustedOrigin;
+		}
+
+		Utils::Hook::Call<void(Game::gentity_s*, const float*)>(SetClientOrigin)(ent, origin);
+	}
+
+	extern "C"
+	{
+		void CG_UpdateClients_RenameMessageStub();
+
+		void Bots_RenameMessage(const int localClientNum, const char* message, const char* oldName, const char* newName)
+		{
+			if (std::string_view(oldName).starts_with("[BOT] ") || std::string_view(newName).starts_with("[BOT] "))
+			{
+				return;
+			}
+
+			Utils::Hook::Call<void(int, const char*)>(CG_GameMessage)(localClientNum, message);
+		}
+	}
 
 	struct BotMovementInfo
 	{
@@ -403,11 +679,8 @@ namespace Components
 
 	int Bots::BuildConnectString(char* buffer, const char* connectString, int num, int, int protocol, int checksum, int statVer, int stats, int port)
 	{
+		CharacterAssignments::PruneStaleBotReservations(Game::Sys_Milliseconds());
 		const char* pendingName = BotAI::BotAI::PendingName();
-		if (pendingName)
-		{
-			return _snprintf_s(buffer, 0x400, _TRUNCATE, connectString, num, pendingName, "None", "", protocol, checksum, statVer, stats, port);
-		}
 
 		auto selected = GetPendingBotCharacter(port);
 
@@ -444,7 +717,7 @@ namespace Components
 			}
 		}
 
-		std::string botName = std::format("[BOT] Bot{}", num);
+		std::string botName = pendingName ? pendingName : std::format("[BOT] Bot{}", num);
 		std::string botIcon = "None";
 
 		if (CharacterAssignments::IsValid(selected))
@@ -986,6 +1259,12 @@ namespace Components
 
 	void Bots::CleanBotArray()
 	{
+		pendingBotIdentities.clear();
+		crewModelIndices.fill(0);
+		for (auto& heads : suppressedBotHeads)
+		{
+			heads.clear();
+		}
 		ZeroMemory(&botAi, sizeof(botAi));
 
 		for (std::size_t i = 0; i < std::extent_v<decltype(botAi)>; ++i)
@@ -1072,6 +1351,14 @@ namespace Components
 			{ SV_SendMessageToClient_TransmitCall, SV_Netchan_Transmit, reinterpret_cast<void*>(SV_Netchan_Transmit_Hk) },
 			{ SV_Netchan_TransmitNextFragmentCalls[0], SV_Netchan_TransmitNextFragment, reinterpret_cast<void*>(SV_Netchan_TransmitNextFragment_Hk) },
 			{ SV_Netchan_TransmitNextFragmentCalls[1], SV_Netchan_TransmitNextFragment, reinterpret_cast<void*>(SV_SendClientMessages_TransmitNextFragment_Hk) },
+			{ Scr_SetOrigin_SetClientOriginCall, SetClientOrigin, reinterpret_cast<void*>(SetBotOrigin) },
+			{ CG_UpdateClients_RenameMessageCall, CG_GameMessage, reinterpret_cast<void*>(CG_UpdateClients_RenameMessageStub) },
+			{ SV_AddTestClient_ClientBeginCall, ClientBegin, reinterpret_cast<void*>(ClientBegin_Hk) },
+			{ SV_AddTestClient_ClientNotifyCall, ClientNotify, reinterpret_cast<void*>(ClientNotify_Hk) },
+			{ Scr_Spawn_ClientSpawnCall, ClientSpawn, reinterpret_cast<void*>(ClientSpawn_Hk) },
+			{ Scr_SetModel_SetModelCall, G_SetModel, reinterpret_cast<void*>(SetCrewBotModel) },
+			{ Scr_Attach_EntAttachCall, G_EntAttach, reinterpret_cast<void*>(AttachCrewBotModel) },
+			{ Scr_Detach_EntDetachCall, G_EntDetach, reinterpret_cast<void*>(DetachCrewBotModel) },
 		};
 
 		static_assert(std::size(sites) + 2 == std::size(hooks));
@@ -1170,6 +1457,13 @@ namespace Components
 			}
 
 			const int clientNum = static_cast<int>(client - Game::svs_clients);
+
+			if (!CharacterAssignments::IsClientNum(clientNum))
+			{
+				return;
+			}
+
+			suppressedBotHeads[clientNum].clear();
 			const Utils::InfoString info(client->userinfo);
 
 			const auto encodedCharacter = CharacterAssignments::Parse(info.Get("zw3char"));
@@ -1183,7 +1477,7 @@ namespace Components
 
 			ResetDownState(clientNum);
 
-			const bool isSmartBot = client->bIsTestClient || CharacterAssignments::IsValid(encodedCharacter);
+			const bool isSmartBot = client->bIsTestClient || client->header.netchan.remoteAddress.type == Game::NA_BOT;
 
 			if (!isSmartBot)
 			{
@@ -1265,6 +1559,7 @@ namespace Components
 			}
 
 			botAi[clientNum].active = false;
+			suppressedBotHeads[clientNum].clear();
 			botDisplayNames[clientNum].clear();
 			botIcons[clientNum].clear();
 			CharacterAssignments::ClearClientSlot(clientNum);

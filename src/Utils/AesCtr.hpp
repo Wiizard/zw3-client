@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bcrypt.h>
+#include <emmintrin.h>
 
 #pragma comment(lib, "Bcrypt.lib")
 
@@ -13,11 +14,18 @@ namespace Utils
 		AesCtr(const AesCtr&) = delete;
 		AesCtr& operator=(const AesCtr&) = delete;
 
-		~AesCtr() = default;
+		~AesCtr()
+		{
+			this->Reset();
+		}
 
 		bool Start(const std::uint8_t* keyBytes, std::size_t keyLength, const std::uint8_t* iv)
 		{
 			this->Reset();
+			if (!keyBytes || !iv || (keyLength != 16 && keyLength != 24 && keyLength != 32))
+			{
+				return false;
+			}
 
 			if (this->TryStartBCrypt(keyBytes, keyLength))
 			{
@@ -65,6 +73,11 @@ namespace Utils
 
 		bool Crypt(std::uint8_t* data, std::size_t length)
 		{
+			if (!this->isReady || (!data && length))
+			{
+				return false;
+			}
+
 			if (!this->isBCrypt)
 			{
 				return ctr_decrypt(data, data, static_cast<unsigned long>(length), &this->fallback) == CRYPT_OK;
@@ -114,9 +127,11 @@ namespace Utils
 					return false;
 				}
 
-				for (std::size_t i = 0; i < blocks * blockSize; ++i)
+				for (std::size_t i = 0; i < blocks * blockSize; i += blockSize)
 				{
-					data[i] ^= this->stream[i];
+					const auto input = _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i));
+					const auto keyStream = _mm_loadu_si128(reinterpret_cast<const __m128i*>(this->stream.data() + i));
+					_mm_storeu_si128(reinterpret_cast<__m128i*>(data + i), _mm_xor_si128(input, keyStream));
 				}
 
 				std::memcpy(this->pad.data(), this->stream.data() + (blocks - 1) * blockSize, blockSize);

@@ -9,6 +9,12 @@ namespace Components::LobbyTransition
 	inline constexpr unsigned int whiteEndMs = tauntHoldMs + 2800;
 	inline constexpr unsigned int cameraEndMs = tauntHoldMs + 3400;
 	inline constexpr unsigned int endMs = tauntHoldMs + 3600;
+	inline constexpr unsigned int whiteFrameGraceMs = 250;
+
+	constexpr bool ShouldWaitForWhite(unsigned int elapsedMs, bool hasWhiteFrame)
+	{
+		return elapsedMs < whiteEndMs || (!hasWhiteFrame && elapsedMs < whiteEndMs + whiteFrameGraceMs);
+	}
 
 	constexpr float Progress(unsigned int elapsedMs, unsigned int startMs, unsigned int finishMs)
 	{
@@ -51,4 +57,8 @@ namespace Components::LobbyTransition
 	static_assert(BlackOpacity(whiteEndMs) == 0.0f);
 	static_assert(BlackOpacity(endMs) == 1.0f);
 	static_assert(CameraProgress(tauntHoldMs) == 0.0f && CameraProgress(cameraEndMs) == 1.0f);
+	static_assert(ShouldWaitForWhite(whiteEndMs - 1, true));
+	static_assert(ShouldWaitForWhite(whiteEndMs, false));
+	static_assert(!ShouldWaitForWhite(whiteEndMs, true));
+	static_assert(!ShouldWaitForWhite(whiteEndMs + whiteFrameGraceMs, false));
 }

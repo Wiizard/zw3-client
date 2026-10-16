@@ -18,7 +18,13 @@
 
 HRESULT m_IDirect3D9Ex::QueryInterface(REFIID riid, void** ppvObj)
 {
-	if ((riid == IID_IUnknown || riid == WrapperID) && ppvObj)
+	if (!ppvObj)
+	{
+		return E_POINTER;
+	}
+
+	*ppvObj = nullptr;
+	if (riid == IID_IUnknown || riid == IID_IDirect3D9 || riid == WrapperID)
 	{
 		AddRef();
 

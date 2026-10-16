@@ -16,6 +16,7 @@
 #include "Events.hpp"
 #include "Flags.hpp"
 #include "LobbyScene.hpp"
+#include "Maps.hpp"
 #include "Party.hpp"
 #include "Logger.hpp"
 #include "Renderer.hpp"
@@ -776,6 +777,7 @@ namespace Components
 	static std::mutex prefetchMutex;
 	static std::condition_variable_any prefetchCondition;
 	static std::deque<std::filesystem::path> prefetchQueue;
+	static std::unordered_map<std::string, std::chrono::steady_clock::time_point> completedPrefetches;
 	static std::unordered_set<std::string> scheduledPrefetches;
 	static std::jthread prefetchThread;
 
@@ -783,7 +785,7 @@ namespace Components
 	{
 		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
 
-		std::vector<std::byte> buffer;
+		std::unique_ptr<std::byte[]> buffer;
 
 		while (!stopToken.stop_requested())
 		{
@@ -794,7 +796,7 @@ namespace Components
 
 				if (prefetchQueue.empty())
 				{
-					std::vector<std::byte>().swap(buffer);
+					buffer.reset();
 				}
 
 				const bool hasWork = prefetchCondition.wait(lock, stopToken, []
@@ -813,25 +815,45 @@ namespace Components
 
 			const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 				nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_RANDOM_ACCESS, nullptr);
+			const auto identity = Utils::String::ToLower(path.string());
 
 			if (file == INVALID_HANDLE_VALUE)
 			{
+				std::lock_guard lock(prefetchMutex);
+				scheduledPrefetches.erase(identity);
 				continue;
 			}
 
-			if (buffer.empty())
+			FILE_IO_PRIORITY_HINT_INFO priority{ IoPriorityHintLow };
+			SetFileInformationByHandle(file, FileIoPriorityHintInfo, &priority, sizeof(priority));
+
+			if (!buffer)
 			{
-				buffer.resize(prefetchBufferSize);
+				buffer.reset(new (std::nothrow) std::byte[prefetchBufferSize]);
+				if (!buffer)
+				{
+					CloseHandle(file);
+					std::lock_guard lock(prefetchMutex);
+					scheduledPrefetches.erase(identity);
+					continue;
+				}
 			}
 
 			DWORD bytesRead = 0;
+			BOOL didRead = TRUE;
 
 			while (!stopToken.stop_requested()
-				&& ReadFile(file, buffer.data(), static_cast<DWORD>(buffer.size()), &bytesRead, nullptr) && bytesRead > 0)
+				&& (didRead = ReadFile(file, buffer.get(), prefetchBufferSize, &bytesRead, nullptr)) && bytesRead > 0)
 			{
 			}
 
 			CloseHandle(file);
+			std::lock_guard lock(prefetchMutex);
+			scheduledPrefetches.erase(identity);
+			if (didRead && !stopToken.stop_requested())
+			{
+				completedPrefetches[identity] = std::chrono::steady_clock::now();
+			}
 		}
 	}
 
@@ -848,6 +870,11 @@ namespace Components
 
 		{
 			std::lock_guard lock(prefetchMutex);
+			const auto completed = completedPrefetches.find(identity);
+			if (completed != completedPrefetches.end() && std::chrono::steady_clock::now() - completed->second < 60s)
+			{
+				return;
+			}
 
 			if (!scheduledPrefetches.emplace(identity).second)
 			{
@@ -858,7 +885,16 @@ namespace Components
 
 			if (!prefetchThread.joinable())
 			{
-				prefetchThread = std::jthread(RunPrefetch);
+				try
+				{
+					prefetchThread = std::jthread(RunPrefetch);
+				}
+				catch (const std::system_error&)
+				{
+					prefetchQueue.clear();
+					scheduledPrefetches.clear();
+					return;
+				}
 			}
 		}
 
@@ -877,6 +913,7 @@ namespace Components
 		std::lock_guard lock(prefetchMutex);
 		prefetchQueue.clear();
 		scheduledPrefetches.clear();
+		completedPrefetches.clear();
 	}
 
 	bool FastFiles::HasZW3CommonZone()
@@ -1140,23 +1177,26 @@ namespace Components
 
 		if (isDev)
 		{
-			Logger::Print("Skipping zw3/zw3.ff because -dev is enabled.\n");
+			Logger::Print("Skipping zw3/zw3.ff and zw3/zw3_assets.ff because -dev is enabled.\n");
 		}
 		else
 		{
-			const std::string zw3Zone = std::format("{}\\zw3\\zw3.ff", InstallPath());
-
-			if (!Utils::IO::FileExists(zw3Zone))
+			for (const char* const zoneName : { "zw3", "zw3_assets" })
 			{
-				ExitWithZW3Error(std::format("Missing 'zw3.ff':\n{}\n\nPlease run the Zombie Warfare 3 Launcher to verify game files or place it inside the zw3 folder.", zw3Zone));
-			}
+				const auto zonePath = std::format("{}\\zw3\\{}.ff", InstallPath(), zoneName);
 
-			if (!Zones::IsReady())
-			{
-				ExitWithZW3Error(std::format("'zw3.ff' cannot be read:\n{}\n\nIt is a 32 bit zone and this build's 32 bit zone reader did not start. See iw4x\\iw4x.log.", zw3Zone));
-			}
+				if (!Utils::IO::FileExists(zonePath))
+				{
+					ExitWithZW3Error(std::format("Missing '{}.ff':\n{}\n\nPlease run the Zombie Warfare 3 Launcher to verify game files or place it inside the zw3 folder.", zoneName, zonePath));
+				}
 
-			zones.push_back({ "zw3", 1, 0 });
+				if (!Zones::IsReady())
+				{
+					ExitWithZW3Error(std::format("'{}.ff' cannot be read:\n{}\n\nIt is a 32 bit zone and this build's 32 bit zone reader did not start. See iw4x\\iw4x.log.", zoneName, zonePath));
+				}
+
+				zones.push_back({ zoneName, 1, 0 });
+			}
 		}
 
 		LoadDLCUIZones(zones.data(), static_cast<unsigned int>(zones.size()), sync);
@@ -1296,7 +1336,7 @@ namespace Components
 			return;
 		}
 
-		EnqueuePrefetch(path);
+		EnqueuePrefetch(path.is_absolute() ? path : std::filesystem::path(InstallPath()) / path);
 	}
 
 	void FastFiles::PrefetchZone(const std::string& zoneName)
@@ -1501,6 +1541,7 @@ namespace Components
 				if (!Flags::HasFlag("dev"))
 				{
 					PrefetchZone("zw3");
+					PrefetchZone("zw3_assets");
 				}
 
 				PrefetchZone("iw4x_patch_mp");
@@ -1752,10 +1793,7 @@ namespace Components
 				selectedAt = now;
 			}
 			if (map.empty() || map == prefetchedMap || now - selectedAt < 250ms) return;
-			PrefetchZone(map + "_load");
-			PrefetchZone(map);
-			PrefetchZone("patch_" + map);
-			PrefetchZone("localized_" + map);
+			Maps::PrefetchMapAssets(map);
 			prefetchedMap = map;
 		}, Scheduler::Pipeline::MAIN, 250ms);
 	}

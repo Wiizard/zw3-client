@@ -714,7 +714,7 @@ namespace Components
 	constexpr std::uintptr_t CL_Vid_Restart_f_ConfigureCall = 0x1400FDE64;
 	constexpr std::uintptr_t R_ConfigureRenderer = 0x1400334D0;
 	constexpr std::size_t gfxConfigDisplayMode = 0x58;
-	constexpr int displayModeWindowed = 2;
+	constexpr int displayModeNoBorder = 1;
 
 	constexpr std::uintptr_t R_InitGraphicsApi_EnumModesCall = 0x140032792;
 	constexpr std::uintptr_t R_EnumDisplayModes = 0x1400316F0;
@@ -726,7 +726,7 @@ namespace Components
 
 	static void CL_InitRef_Hk(std::uint8_t* config)
 	{
-		*reinterpret_cast<int*>(config + gfxConfigDisplayMode) = displayModeWindowed;
+		*reinterpret_cast<int*>(config + gfxConfigDisplayMode) = displayModeNoBorder;
 
 		reinterpret_cast<void(*)(std::uint8_t*)>(Utils::Hook::Rebase(R_ConfigureRenderer))(config);
 	}
@@ -968,7 +968,7 @@ namespace Components
 			restartConfigureRendererHook.Uninstall();
 			enumDisplayModesHook.Uninstall();
 
-			Logger::Error("quickpatch: CL_InitRef or R_InitGraphicsApi does not read as expected, first launch stays fullscreen\n");
+			Logger::Error("quickpatch: CL_InitRef or R_InitGraphicsApi does not read as expected, r_displayMode defaults to fullscreen\n");
 		}
 		else
 		{

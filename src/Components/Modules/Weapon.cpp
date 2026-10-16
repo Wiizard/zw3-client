@@ -1333,76 +1333,87 @@ namespace Components
 		std::uint32_t replacement;
 	};
 
+	constexpr std::uint32_t limitDivideMagic = 0x1B4E81B5;
+	constexpr std::uint8_t divideShift = 9;
+	constexpr std::uint8_t newDivideShift = 10;
+	constexpr std::uint64_t limitDivideScale = 1ull << (32 + newDivideShift);
+
+	static_assert(limitDivideMagic < 0x80000000u);
+	static_assert(static_cast<std::uint64_t>(limitDivideMagic) * Weapon::WEAPON_LIMIT >= limitDivideScale);
+	static_assert(static_cast<std::uint64_t>(limitDivideMagic) * Weapon::WEAPON_LIMIT - limitDivideScale <= (1ull << newDivideShift));
+
+	constexpr std::uint32_t obituaryWeaponBase = static_cast<std::uint32_t>(-static_cast<std::int32_t>(Weapon::WEAPON_LIMIT + 8));
+
 	static const LimitImmediate limitImmediates[] =
 	{
-		{ 0x1400891BB, 2, 0x578, 0x960 },
-		{ 0x14008A3F0, 2, 0x578, 0x960 },
-		{ 0x14008AB44, 2, 0x578, 0x960 },
-		{ 0x14008D693, 2, 0x578, 0x960 },
-		{ 0x1400D551B, 2, 0x578, 0x960 },
-		{ 0x1400E33B4, 2, 0x578, 0x960 },
-		{ 0x1400E33E2, 2, 0x578, 0x960 },
-		{ 0x1400E3498, 2, 0x578, 0x960 },
-		{ 0x14016C36E, 2, 0x578, 0x960 },
-		{ 0x14016C5AB, 3, 0x578, 0x960 },
-		{ 0x14016D588, 2, 0x578, 0x960 },
-		{ 0x14016D7C4, 2, 0x578, 0x960 },
-		{ 0x14016DE8A, 2, 0x578, 0x960 },
-		{ 0x14016DF42, 2, 0x578, 0x960 },
-		{ 0x14016E024, 2, 0x578, 0x960 },
-		{ 0x14016E843, 3, 0x578, 0x960 },
-		{ 0x14016EDFC, 3, 0x578, 0x960 },
-		{ 0x14016EF44, 2, 0x578, 0x960 },
-		{ 0x14016F0A4, 2, 0x578, 0x960 },
-		{ 0x14017DA7F, 2, 0x578, 0x960 },
-		{ 0x14018C15B, 2, 0x578, 0x960 },
-		{ 0x14018C320, 2, 0x578, 0x960 },
-		{ 0x14018C36F, 2, 0x578, 0x960 },
-		{ 0x140194FEF, 2, 0x578, 0x960 },
-		{ 0x14019506B, 2, 0x578, 0x960 },
-		{ 0x1400AEFDC, 2, 0x578, 0x960 },
-		{ 0x1400AEFF5, 2, 0xFFFFFA80, 0xFFFFF698 },
-		{ 0x1400D695E, 2, 0x578, 0x960 },
-		{ 0x1400C49BA, 1, 0x578, 0x960 },
-		{ 0x1401A39EC, 1, 0x578, 0x960 },
-		{ 0x1400DB150, 1, 0x577, 0x95F },
-		{ 0x1400AD449, 1, 0x576, 0x95E },
-		{ 0x14009C27D, 2, 0x2BC0, 0x4B00 },
-		{ 0x14009C291, 2, 0x2BC0, 0x4B00 },
-		{ 0x14009C2A5, 2, 0x2BC0, 0x4B00 },
-		{ 0x14009C2B9, 2, 0x2BC0, 0x4B00 },
-		{ 0x14009C2CD, 2, 0x2BC0, 0x4B00 },
-		{ 0x1400D652B, 3, 0x13240, 0x20D00 },
-		{ 0x1400D6532, 2, 0x13240, 0x20D00 },
-		{ 0x1400D6553, 2, 0x8340, 0xE100 },
-		{ 0x1400DA1EF, 2, 0x8340, 0xE100 },
-		{ 0x1400DA203, 3, 0x13240, 0x20D00 },
-		{ 0x1400DA20A, 2, 0x13240, 0x20D00 },
-		{ 0x1400891AA, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x14008AB33, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x1400D5508, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x1400D552D, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x1400E33A3, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x1400E33D0, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x1400E347B, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x14016C349, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x14016D572, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x14016D7B3, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x14016DE79, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x14016DF29, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x14016E013, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x14016ECC9, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x14016EDE4, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x14016EF33, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x14016EF6B, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x14016F093, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x14016F0D3, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x14017DA67, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x14018C14A, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x14018C309, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x14018C35E, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x140194FDE, 1, 0x5D9F7391, 0x1B4E81B5 },
-		{ 0x140195054, 1, 0x5D9F7391, 0x1B4E81B5 },
+		{ 0x1400891BB, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x14008A3F0, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x14008AB44, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x14008D693, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x1400D551B, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x1400E33B4, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x1400E33E2, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x1400E3498, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x14016C36E, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x14016C5AB, 3, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x14016D588, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x14016D7C4, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x14016DE8A, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x14016DF42, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x14016E024, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x14016E843, 3, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x14016EDFC, 3, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x14016EF44, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x14016F0A4, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x14017DA7F, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x14018C15B, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x14018C320, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x14018C36F, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x140194FEF, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x14019506B, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x1400AEFDC, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x1400AEFF5, 2, 0xFFFFFA80, obituaryWeaponBase },
+		{ 0x1400D695E, 2, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x1400C49BA, 1, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x1401A39EC, 1, 0x578, Weapon::WEAPON_LIMIT },
+		{ 0x1400DB150, 1, 0x577, Weapon::WEAPON_LIMIT - 1 },
+		{ 0x1400AD449, 1, 0x576, Weapon::WEAPON_LIMIT - 2 },
+		{ 0x14009C27D, 2, 0x2BC0, Weapon::WEAPON_LIMIT * 8 },
+		{ 0x14009C291, 2, 0x2BC0, Weapon::WEAPON_LIMIT * 8 },
+		{ 0x14009C2A5, 2, 0x2BC0, Weapon::WEAPON_LIMIT * 8 },
+		{ 0x14009C2B9, 2, 0x2BC0, Weapon::WEAPON_LIMIT * 8 },
+		{ 0x14009C2CD, 2, 0x2BC0, Weapon::WEAPON_LIMIT * 8 },
+		{ 0x1400D652B, 3, 0x13240, Weapon::WEAPON_LIMIT * 0x38 },
+		{ 0x1400D6532, 2, 0x13240, Weapon::WEAPON_LIMIT * 0x38 },
+		{ 0x1400D6553, 2, 0x8340, Weapon::WEAPON_LIMIT * 24 },
+		{ 0x1400DA1EF, 2, 0x8340, Weapon::WEAPON_LIMIT * 24 },
+		{ 0x1400DA203, 3, 0x13240, Weapon::WEAPON_LIMIT * 0x38 },
+		{ 0x1400DA20A, 2, 0x13240, Weapon::WEAPON_LIMIT * 0x38 },
+		{ 0x1400891AA, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x14008AB33, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x1400D5508, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x1400D552D, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x1400E33A3, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x1400E33D0, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x1400E347B, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x14016C349, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x14016D572, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x14016D7B3, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x14016DE79, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x14016DF29, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x14016E013, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x14016ECC9, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x14016EDE4, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x14016EF33, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x14016EF6B, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x14016F093, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x14016F0D3, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x14017DA67, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x14018C14A, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x14018C309, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x14018C35E, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x140194FDE, 1, 0x5D9F7391, limitDivideMagic },
+		{ 0x140195054, 1, 0x5D9F7391, limitDivideMagic },
 	};
 
 	struct LimitShift
@@ -1419,9 +1430,6 @@ namespace Components
 		{ 0x14016EF3A, 2 }, { 0x14016EF7A, 2 }, { 0x14016F09A, 2 }, { 0x14016F0DB, 2 }, { 0x14017DA75, 2 },
 		{ 0x14018C151, 2 }, { 0x14018C316, 2 }, { 0x14018C365, 2 }, { 0x140194FE5, 2 }, { 0x140195061, 2 },
 	};
-
-	constexpr std::uint8_t divideShift = 9;
-	constexpr std::uint8_t newDivideShift = 8;
 
 	bool Weapon::RaiseLimit()
 	{
@@ -1460,6 +1468,131 @@ namespace Components
 	bool Weapon::IsLimitRaised()
 	{
 		return weaponSlotCount == WEAPON_LIMIT;
+	}
+
+	constexpr std::uint32_t weaponIndexBits = 14;
+	constexpr std::uint32_t itemIndexBits = 18;
+	constexpr std::uint32_t weaponModelLimit = 16;
+	constexpr std::int32_t eventParmBitsCode = -93;
+	constexpr std::uintptr_t msgBitMasks = 0x140425500;
+
+	constexpr std::uint32_t cursorHintWeaponBase = 4;
+
+	static_assert(Weapon::WEAPON_LIMIT + cursorHintWeaponBase <= (1u << weaponIndexBits));
+	static_assert(Weapon::WEAPON_LIMIT * weaponModelLimit <= (1u << itemIndexBits));
+
+	struct NetFieldWidth
+	{
+		std::uintptr_t field;
+		std::uint32_t offset;
+		std::uint32_t bits;
+		std::uint32_t newBits;
+	};
+
+	static const NetFieldWidth weaponNetFields[] =
+	{
+		{ 0x1403961D0, 692, 11, weaponIndexBits },
+		{ 0x1403961E8, 696, 11, weaponIndexBits },
+		{ 0x140396320, 680, 11, weaponIndexBits },
+		{ 0x140396968, 64, 11, weaponIndexBits },
+		{ 0x140396470, 404, 11, weaponIndexBits },
+		{ 0x140396AB8, 1120, 11, weaponIndexBits },
+		{ 0x140396FC8, 1124, 11, weaponIndexBits },
+		{ 0x140396A70, 1128, 11, weaponIndexBits },
+		{ 0x140396D88, 1132, 11, weaponIndexBits },
+		{ 0x140395150, 144, 11, weaponIndexBits },
+		{ 0x140393958, 144, 15, itemIndexBits },
+		{ 0x140395690, 144, 15, itemIndexBits },
+	};
+
+	enum class OperandWidth
+	{
+		Byte,
+		Dword,
+	};
+
+	struct MessageBitsSite
+	{
+		std::uintptr_t address;
+		std::uint8_t length;
+		std::uint8_t operandOffset;
+		OperandWidth width;
+		std::uint8_t bytes[6];
+		std::int32_t replacement;
+	};
+
+	static constexpr std::int32_t MaskDisplacement(std::uintptr_t site, std::uint8_t length)
+	{
+		return static_cast<std::int32_t>(msgBitMasks + weaponIndexBits * sizeof(std::uint32_t) - (site + length));
+	}
+
+	constexpr std::int32_t eventParmBits = static_cast<std::int32_t>(weaponIndexBits) - eventParmBitsCode;
+	constexpr std::int32_t weaponBits = static_cast<std::int32_t>(weaponIndexBits);
+	constexpr std::int32_t weaponMask = (1 << weaponIndexBits) - 1;
+
+	static_assert(eventParmBits <= INT8_MAX);
+
+	static const MessageBitsSite messageBitsSites[] =
+	{
+		{ 0x140203513, 3, 2, OperandWidth::Byte, { 0x8D, 0x53, 0x68 }, eventParmBits },
+		{ 0x14020813B, 4, 3, OperandWidth::Byte, { 0x44, 0x8D, 0x46, 0x68 }, eventParmBits },
+		{ 0x14020462F, 4, 3, OperandWidth::Byte, { 0x41, 0x83, 0xFB, 0x0B }, weaponBits },
+		{ 0x140204AB5, 4, 3, OperandWidth::Byte, { 0x41, 0x83, 0xFB, 0x0B }, weaponBits },
+		{ 0x140204F48, 4, 3, OperandWidth::Byte, { 0x41, 0x83, 0xFB, 0x0B }, weaponBits },
+		{ 0x140204638, 6, 2, OperandWidth::Dword, { 0x81, 0xFB, 0xFF, 0x07, 0x00, 0x00 }, weaponMask },
+		{ 0x140204F51, 6, 2, OperandWidth::Dword, { 0x81, 0xFB, 0xFF, 0x07, 0x00, 0x00 }, weaponMask },
+		{ 0x140208DB1, 6, 2, OperandWidth::Dword, { 0x41, 0xB8, 0x0B, 0x00, 0x00, 0x00 }, weaponBits },
+		{ 0x1402091EF, 6, 2, OperandWidth::Dword, { 0x41, 0xB8, 0x0B, 0x00, 0x00, 0x00 }, weaponBits },
+		{ 0x1402092C9, 6, 2, OperandWidth::Dword, { 0x41, 0xB8, 0x0B, 0x00, 0x00, 0x00 }, weaponBits },
+		{ 0x1402062E9, 6, 2, OperandWidth::Dword, { 0x41, 0xB8, 0x0B, 0x00, 0x00, 0x00 }, weaponBits },
+		{ 0x140206317, 6, 2, OperandWidth::Dword, { 0x41, 0xB8, 0x0B, 0x00, 0x00, 0x00 }, weaponBits },
+		{ 0x140206345, 6, 2, OperandWidth::Dword, { 0x41, 0xB8, 0x0B, 0x00, 0x00, 0x00 }, weaponBits },
+		{ 0x14020575F, 5, 1, OperandWidth::Dword, { 0xBA, 0x0B, 0x00, 0x00, 0x00 }, weaponBits },
+		{ 0x14020578D, 5, 1, OperandWidth::Dword, { 0xBA, 0x0B, 0x00, 0x00, 0x00 }, weaponBits },
+		{ 0x1402057BB, 5, 1, OperandWidth::Dword, { 0xBA, 0x0B, 0x00, 0x00, 0x00 }, weaponBits },
+		{ 0x14020576C, 6, 2, OperandWidth::Dword, { 0x8B, 0x0D, 0xBA, 0xFD, 0x21, 0x00 }, MaskDisplacement(0x14020576C, 6) },
+		{ 0x14020579A, 6, 2, OperandWidth::Dword, { 0x8B, 0x0D, 0x8C, 0xFD, 0x21, 0x00 }, MaskDisplacement(0x14020579A, 6) },
+		{ 0x1402057C8, 6, 2, OperandWidth::Dword, { 0x8B, 0x0D, 0x5E, 0xFD, 0x21, 0x00 }, MaskDisplacement(0x1402057C8, 6) },
+	};
+
+	bool Weapon::WidenNetFields()
+	{
+		for (const NetFieldWidth& field : weaponNetFields)
+		{
+			if (Utils::Hook::Get<std::uint32_t>(field.field + 8) != field.offset || Utils::Hook::Get<std::uint32_t>(field.field + 16) != field.bits)
+			{
+				Logger::Error("weapon: the net field at 0x{:X} does not read as expected, weapons past 2047 cannot be held\n", field.field);
+				return false;
+			}
+		}
+
+		for (const MessageBitsSite& site : messageBitsSites)
+		{
+			if (!Utils::Hook::MatchesBytes(site.address, site.bytes, site.length))
+			{
+				Logger::Error("weapon: 0x{:X} does not read as expected, weapons past 2047 cannot be held\n", site.address);
+				return false;
+			}
+		}
+
+		for (const NetFieldWidth& field : weaponNetFields)
+		{
+			Utils::Hook::Set<std::uint32_t>(field.field + 16, field.newBits);
+		}
+
+		for (const MessageBitsSite& site : messageBitsSites)
+		{
+			if (site.width == OperandWidth::Byte)
+			{
+				Utils::Hook::Set<std::int8_t>(site.address + site.operandOffset, static_cast<std::int8_t>(site.replacement));
+			}
+			else
+			{
+				Utils::Hook::Set<std::int32_t>(site.address + site.operandOffset, site.replacement);
+			}
+		}
+
+		return true;
 	}
 
 	unsigned int Weapon::BG_GetWeaponIndexForName_Hook(const char* name, void(*registerCallback)(unsigned int))
@@ -1522,9 +1655,9 @@ namespace Components
 	{
 		if (!Flags::HasFlag("steamdemo") && !Flags::HasFlag("retaildemo"))
 		{
-			if (MoveLimitArrays() && RebuildAmmoCounts())
+			if (MoveLimitArrays() && RebuildAmmoCounts() && RaiseLimit())
 			{
-				RaiseLimit();
+				WidenNetFields();
 			}
 		}
 

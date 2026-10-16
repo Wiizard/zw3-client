@@ -51,7 +51,12 @@ namespace Components
 		using Callback = std::function<void(Address&, const std::string&)>;
 		using RawCallback = std::function<void(Game::netadr_t*, Game::msg_t*)>;
 
+		static constexpr int BASEGAME_MAX_MSGLEN = 0x20000;
+		static constexpr int MAX_MSGLEN = 0x80000;
+
 		Network();
+
+		static int MessageLength();
 
 		static const char* AdrToString(const Address& address, bool withPort = true);
 

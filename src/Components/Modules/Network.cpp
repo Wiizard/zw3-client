@@ -720,6 +720,135 @@ namespace Components
 		Utils::Hook::Set<std::uint8_t>(CL_InitOnceForAllClients_MaxPacketsDefault + 2, 125);
 	}
 
+	struct MessageLengthSite
+	{
+		std::uintptr_t address;
+		std::uint8_t length;
+		std::uint8_t operandOffset;
+		std::uint8_t bytes[10];
+		std::uint32_t replacement;
+	};
+
+	constexpr std::uint32_t largeLocalPoolSize = 0x600000;
+
+	static const MessageLengthSite messageLengthSites[] =
+	{
+		{ 0x140238C8D, 5, 1, { 0xBA, 0x00, 0x00, 0x02, 0x00 }, Network::MAX_MSGLEN },
+		{ 0x140238D00, 6, 2, { 0x41, 0xB8, 0x00, 0x00, 0x02, 0x00 }, Network::MAX_MSGLEN },
+		{ 0x14024245A, 5, 1, { 0xBA, 0x00, 0x00, 0x02, 0x00 }, Network::MAX_MSGLEN },
+		{ 0x1402070D6, 6, 2, { 0x81, 0xFF, 0x00, 0x00, 0x02, 0x00 }, Network::MAX_MSGLEN },
+		{ 0x1401F4037, 5, 1, { 0xBA, 0x00, 0x00, 0x02, 0x00 }, Network::MAX_MSGLEN },
+		{ 0x1401F404E, 6, 2, { 0x41, 0xB8, 0x00, 0x00, 0x02, 0x00 }, Network::MAX_MSGLEN },
+		{ 0x140100CBC, 5, 1, { 0xBA, 0x00, 0x00, 0x02, 0x00 }, Network::MAX_MSGLEN },
+		{ 0x140100CE7, 6, 2, { 0x41, 0xB8, 0x00, 0x00, 0x02, 0x00 }, Network::MAX_MSGLEN },
+		{ 0x140100D06, 6, 2, { 0x81, 0xF9, 0x00, 0x00, 0x02, 0x00 }, Network::MAX_MSGLEN },
+		{ 0x140100D30, 6, 2, { 0x41, 0xB9, 0x00, 0x00, 0x02, 0x00 }, Network::MAX_MSGLEN },
+		{ 0x1400FCC93, 5, 1, { 0xBA, 0x00, 0x00, 0x02, 0x00 }, Network::MAX_MSGLEN },
+		{ 0x1400FCD06, 6, 2, { 0x41, 0xB8, 0x00, 0x00, 0x02, 0x00 }, Network::MAX_MSGLEN },
+		{ 0x1400FCDF2, 5, 1, { 0xBA, 0x00, 0x00, 0x02, 0x00 }, Network::MAX_MSGLEN },
+		{ 0x1400FCE0F, 5, 1, { 0xBA, 0x00, 0x00, 0x02, 0x00 }, Network::MAX_MSGLEN },
+		{ 0x1400FCF74, 6, 2, { 0x41, 0xB8, 0x00, 0x00, 0x02, 0x00 }, Network::MAX_MSGLEN },
+		{ 0x14027F146, 5, 1, { 0xBA, 0x00, 0x00, 0x18, 0x00 }, largeLocalPoolSize },
+		{ 0x14027F174, 10, 6, { 0xC7, 0x05, 0x7A, 0x69, 0x3D, 0x06, 0x00, 0x00, 0x18, 0x00 }, largeLocalPoolSize },
+		{ 0x14027F17E, 10, 6, { 0xC7, 0x05, 0x6C, 0x69, 0x3D, 0x06, 0x00, 0x00, 0x18, 0x00 }, largeLocalPoolSize },
+		{ 0x14027F060, 10, 6, { 0xC7, 0x05, 0x8A, 0x6A, 0x3D, 0x06, 0x00, 0x00, 0x18, 0x00 }, largeLocalPoolSize },
+	};
+
+	constexpr std::uintptr_t Netchan_Setup = 0x140207010;
+	constexpr std::uintptr_t SV_DirectConnect_NetchanSetupCall = 0x140237D72;
+	constexpr std::uintptr_t ReconnectMigratedClient_NetchanSetupCall = 0x140236B6F;
+	constexpr std::uintptr_t CL_ConnectionlessPacket_NetchanSetupCall = 0x1400F9B5D;
+	constexpr std::uintptr_t SV_DirectConnect_OutgoingSize = 0x140237D5C;
+	constexpr std::uintptr_t ReconnectMigratedClient_OutgoingSize = 0x140236B5D;
+	constexpr std::uintptr_t CL_ConnectionlessPacket_IncomingSize = 0x1400F9B30;
+	static const std::uint8_t serverOutgoingSize[] = { 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x02, 0x00 };
+	static const std::uint8_t clientIncomingSize[] = { 0xC7, 0x44, 0x24, 0x38, 0x00, 0x00, 0x02, 0x00 };
+
+	using Netchan_Setup_t = void(*)(int, void*, void*, int, char*, int, char*, int);
+
+	static Utils::Hook directConnectSetupHook;
+	static Utils::Hook migratedClientSetupHook;
+	static Utils::Hook connectionlessSetupHook;
+
+	static std::unordered_map<void*, std::unique_ptr<char[]>> serverOutgoingBuffers;
+	static std::unique_ptr<char[]> clientIncomingBuffer;
+	static int messageLength = Network::BASEGAME_MAX_MSGLEN;
+
+	static void Netchan_Setup_ServerHook(int sock, void* chan, void* address, int qport, char*, int, char* incoming, int incomingSize)
+	{
+		std::unique_ptr<char[]>& outgoing = serverOutgoingBuffers[chan];
+
+		if (!outgoing)
+		{
+			outgoing = std::make_unique<char[]>(Network::MAX_MSGLEN);
+		}
+
+		reinterpret_cast<Netchan_Setup_t>(Utils::Hook::Rebase(Netchan_Setup))(sock, chan, address, qport, outgoing.get(), Network::MAX_MSGLEN, incoming, incomingSize);
+	}
+
+	static void Netchan_Setup_ClientHook(int sock, void* chan, void* address, int qport, char* outgoing, int outgoingSize, char*, int)
+	{
+		reinterpret_cast<Netchan_Setup_t>(Utils::Hook::Rebase(Netchan_Setup))(sock, chan, address, qport, outgoing, outgoingSize, clientIncomingBuffer.get(), Network::MAX_MSGLEN);
+	}
+
+	static void RaiseMessageLength()
+	{
+		bool isExpected = Utils::Hook::BranchesTo(SV_DirectConnect_NetchanSetupCall, Netchan_Setup, HOOK_CALL)
+			&& Utils::Hook::BranchesTo(ReconnectMigratedClient_NetchanSetupCall, Netchan_Setup, HOOK_CALL)
+			&& Utils::Hook::BranchesTo(CL_ConnectionlessPacket_NetchanSetupCall, Netchan_Setup, HOOK_CALL)
+			&& Utils::Hook::MatchesBytes(SV_DirectConnect_OutgoingSize, serverOutgoingSize, sizeof(serverOutgoingSize))
+			&& Utils::Hook::MatchesBytes(ReconnectMigratedClient_OutgoingSize, serverOutgoingSize, sizeof(serverOutgoingSize))
+			&& Utils::Hook::MatchesBytes(CL_ConnectionlessPacket_IncomingSize, clientIncomingSize, sizeof(clientIncomingSize));
+
+		for (const MessageLengthSite& site : messageLengthSites)
+		{
+			isExpected = isExpected && Utils::Hook::MatchesBytes(site.address, site.bytes, site.length);
+		}
+
+		if (!isExpected)
+		{
+			Logger::Error("network: a message length site does not read as expected, messages stay at 128 KB\n");
+			return;
+		}
+
+		clientIncomingBuffer = std::make_unique<char[]>(Network::MAX_MSGLEN);
+
+		bool isSeated = directConnectSetupHook.Initialize(SV_DirectConnect_NetchanSetupCall, reinterpret_cast<void*>(Netchan_Setup_ServerHook), HOOK_CALL)
+			->Install()->IsInstalled();
+
+		isSeated = migratedClientSetupHook.Initialize(ReconnectMigratedClient_NetchanSetupCall, reinterpret_cast<void*>(Netchan_Setup_ServerHook), HOOK_CALL)
+			->Install()->IsInstalled() && isSeated;
+
+		isSeated = connectionlessSetupHook.Initialize(CL_ConnectionlessPacket_NetchanSetupCall, reinterpret_cast<void*>(Netchan_Setup_ClientHook), HOOK_CALL)
+			->Install()->IsInstalled() && isSeated;
+
+		if (!isSeated)
+		{
+			directConnectSetupHook.Uninstall();
+			migratedClientSetupHook.Uninstall();
+			connectionlessSetupHook.Uninstall();
+			clientIncomingBuffer.reset();
+			Logger::Error("network: could not seat the Netchan_Setup hooks, messages stay at 128 KB\n");
+			return;
+		}
+
+		directConnectSetupHook.Quick();
+		migratedClientSetupHook.Quick();
+		connectionlessSetupHook.Quick();
+
+		for (const MessageLengthSite& site : messageLengthSites)
+		{
+			Utils::Hook::Set<std::uint32_t>(site.address + site.operandOffset, site.replacement);
+		}
+
+		messageLength = Network::MAX_MSGLEN;
+	}
+
+	int Network::MessageLength()
+	{
+		return messageLength;
+	}
+
 	static void DisableUnusedPackets()
 	{
 		const bool isExpected = Utils::Hook::MatchesBytes(CL_ConnectionlessPacket_SteamAuthJnz, steamAuthJnz, sizeof(steamAuthJnz))
@@ -1808,6 +1937,7 @@ namespace Components
 	Network::Network()
 	{
 		RaiseLimits();
+		RaiseMessageLength();
 		DisableUnusedPackets();
 		SetBuildNumber();
 		DisableLSP();

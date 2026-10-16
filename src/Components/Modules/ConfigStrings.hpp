@@ -6,7 +6,8 @@ namespace Components
 	{
 	public:
 		static constexpr int DEV_DVAR_CONFIGSTRINGS_CAPACITY = 512;
-		static constexpr int MAX_CONFIGSTRINGS = 5883 + 1 + DEV_DVAR_CONFIGSTRINGS_CAPACITY * 2;
+		static constexpr int SCRIPT_MODEL_ANIM_LIMIT = 1024;
+		static constexpr int MAX_CONFIGSTRINGS = 13083 + 1 + DEV_DVAR_CONFIGSTRINGS_CAPACITY * 2 + SCRIPT_MODEL_ANIM_LIMIT;
 
 		ConfigStrings();
 
@@ -20,6 +21,7 @@ namespace Components
 
 	private:
 		static void PatchConfigStrings();
+		static bool PatchGameStateIndexBits();
 		static void PatchModelConfigStrings();
 		static void PatchServerConfigStrings();
 		static void PatchServerModelConfigStrings();
@@ -33,5 +35,8 @@ namespace Components
 
 		static void PatchDevDvarConfigStrings();
 		static void SV_SetConfig_Hook(int start, int max, int bit);
+
+		static void PatchScriptModelAnims();
+		static int G_FindScriptModelAnimIndex(const char* name, int start, int max, int create, const char* errorName);
 	};
 }

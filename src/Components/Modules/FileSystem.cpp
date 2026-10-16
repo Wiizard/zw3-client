@@ -1085,9 +1085,69 @@ namespace Components
 		return BASEGAME;
 	}
 
+	static bool isCommandLineGameApplied = false;
+
+	static std::string FindCommandLineGame()
+	{
+		int count = 0;
+		wchar_t** const arguments = CommandLineToArgvW(GetCommandLineW(), &count);
+
+		if (!arguments)
+		{
+			return {};
+		}
+
+		std::string game;
+
+		for (int i = 1; i + 1 < count; ++i)
+		{
+			const std::string name = Utils::String::ToLower(Utils::String::Convert(arguments[i]));
+
+			if (name != "fs_game")
+			{
+				continue;
+			}
+
+			const std::string command = Utils::String::ToLower(Utils::String::Convert(arguments[i - 1]));
+
+			if (command == "+set" || command == "set" || command == "+seta" || command == "seta")
+			{
+				game = Utils::String::Convert(arguments[i + 1]);
+			}
+		}
+
+		LocalFree(arguments);
+		return game;
+	}
+
+	static void ApplyCommandLineGame()
+	{
+		if (isCommandLineGameApplied)
+		{
+			return;
+		}
+
+		isCommandLineGameApplied = true;
+
+		if (!*Game::fs_gameDirVar || *(*Game::fs_gameDirVar)->current.string)
+		{
+			return;
+		}
+
+		const std::string game = FindCommandLineGame();
+
+		if (game.empty())
+		{
+			return;
+		}
+
+		Game::Dvar_SetString(*Game::fs_gameDirVar, game.data());
+	}
+
 	void FileSystem::FS_RegisterDvars_Stub()
 	{
 		reinterpret_cast<void(*)()>(registerDvarsHook.GetOriginal())();
+		ApplyCommandLineGame();
 
 		Game::dvar_t* const basegame = Game::Dvar_FindVar("fs_basegame");
 

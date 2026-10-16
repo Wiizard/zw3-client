@@ -2,6 +2,7 @@
 
 #include "Huffman.hpp"
 #include "Logger.hpp"
+#include "Network.hpp"
 
 namespace Components
 {
@@ -20,7 +21,6 @@ namespace Components
 	constexpr std::uintptr_t MSG_WriteBitsCompress = 0x1402029E0;
 
 	constexpr int clientBufferSize = 0x800;
-	constexpr int serverBufferSize = 0x20000;
 
 	int Huffman::Decompress_Hook(const unsigned char* from, int fromSize, unsigned char* to, int maxOut)
 	{
@@ -34,12 +34,12 @@ namespace Components
 
 	int Huffman::CL_Record_f_Compress(bool, const unsigned char* from, unsigned char* to, int fromSize)
 	{
-		return Utils::Huffman::Compress(from, to, fromSize, serverBufferSize);
+		return Utils::Huffman::Compress(from, to, fromSize, Network::MessageLength());
 	}
 
 	int Huffman::SV_SendMessageToClient_Compress(bool, const unsigned char* from, unsigned char* to, int fromSize)
 	{
-		return Utils::Huffman::Compress(from, to, fromSize, serverBufferSize);
+		return Utils::Huffman::Compress(from, to, fromSize, Network::MessageLength());
 	}
 
 	int Huffman::MSG_ReadBitsCompress_Stub(const unsigned char*, int, unsigned char*, int)

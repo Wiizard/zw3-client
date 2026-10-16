@@ -720,6 +720,14 @@ namespace Components
 			return;
 		}
 
+		if (!Dvar::Var("sv_running").Get<bool>())
+		{
+			for (int clientNum = 0; clientNum < static_cast<int>(Game::MAX_CLIENTS); ++clientNum)
+			{
+				CharacterAssignments::ClearClientSlot(clientNum);
+			}
+		}
+
 		std::unordered_set<std::uint64_t> activeXuids;
 
 		for (const auto& participant : participants)

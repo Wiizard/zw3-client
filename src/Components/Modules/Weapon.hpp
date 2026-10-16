@@ -8,7 +8,7 @@ namespace Components
 	{
 	public:
 		static constexpr unsigned int BASEGAME_WEAPON_LIMIT = 1400;
-		static constexpr unsigned int WEAPON_LIMIT = 2400;
+		static constexpr unsigned int WEAPON_LIMIT = 9600;
 
 		Weapon();
 
@@ -21,6 +21,7 @@ namespace Components
 		static void* CG_ClearCg_Hook(void* dest, int value, std::size_t size);
 		static bool RebuildAmmoCounts();
 		static bool RaiseLimit();
+		static bool WidenNetFields();
 		static int BG_GetMaxPickupableAmmo_Hk(Game::playerState_s* ps, unsigned int weapon);
 		static int BG_GetTotalAmmoReserve_Hk(const Game::playerState_s* ps, unsigned int weapon);
 

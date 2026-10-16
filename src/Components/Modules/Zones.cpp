@@ -2665,7 +2665,12 @@ namespace Components
 		if (!size)
 		{
 			Task task;
-			TakePending(dest, task);
+
+			if (TakePending(dest, task))
+			{
+				RunDeferred(task.fieldAddr, nullptr, 0);
+			}
+
 			return 0;
 		}
 

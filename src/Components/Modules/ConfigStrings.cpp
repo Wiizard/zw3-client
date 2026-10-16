@@ -10,16 +10,22 @@
 
 namespace Components
 {
+	constexpr int MAX_GAMESTATE_CHARS = 0x80000;
+
 	struct ReallocatedGameState
 	{
 		int stringOffsets[ConfigStrings::MAX_CONFIGSTRINGS];
-		char stringData[131072];
+		char stringData[MAX_GAMESTATE_CHARS];
 		int dataCount;
 	};
 
-	static_assert(sizeof(ReallocatedGameState::stringOffsets) == 0x6BF0);
-	static_assert(offsetof(ReallocatedGameState, dataCount) == 0x26BF0);
-	static_assert(sizeof(ReallocatedGameState) == 0x26BF4);
+	static_assert(sizeof(ReallocatedGameState::stringOffsets) == 0xEC70);
+	static_assert(offsetof(ReallocatedGameState, dataCount) == 0x8EC70);
+	static_assert(sizeof(ReallocatedGameState) == 0x8EC74);
+
+	constexpr std::int32_t gameStateIndexBits = 14;
+
+	static_assert(ConfigStrings::MAX_CONFIGSTRINGS <= (1 << gameStateIndexBits));
 
 	constexpr std::uintptr_t imageBase = 0x140000000;
 	constexpr std::uintptr_t CL_ParseGamestate = 0x1400FFC70;
@@ -36,6 +42,7 @@ namespace Components
 		OffsetsSize,
 		ConfigStringCount,
 		LastConfigString,
+		StringDataSize,
 	};
 
 	struct GameStateSite
@@ -110,6 +117,9 @@ namespace Components
 
 		{ 0x1400F3F49, 7, 3, SiteKind::LastConfigString, { 0x41, 0x81, 0xFF, 0xF2, 0x10, 0x00, 0x00 } },
 		{ 0x1400FFF1A, 6, 2, SiteKind::LastConfigString, { 0x81, 0xFD, 0xF2, 0x10, 0x00, 0x00 } },
+
+		{ 0x1400F4053, 5, 1, SiteKind::StringDataSize, { 0x3D, 0x00, 0x00, 0x02, 0x00 } },
+		{ 0x1400FFFF4, 5, 1, SiteKind::StringDataSize, { 0x3D, 0x00, 0x00, 0x02, 0x00 } },
 	};
 
 	static bool TryEncodeOperand(const GameStateSite& site, const ReallocatedGameState* gameState, std::int32_t& operand)
@@ -147,6 +157,9 @@ namespace Components
 		case SiteKind::LastConfigString:
 			encoded = ConfigStrings::MAX_CONFIGSTRINGS - 1;
 			break;
+		case SiteKind::StringDataSize:
+			encoded = MAX_GAMESTATE_CHARS;
+			break;
 		}
 
 		if (encoded < INT32_MIN || encoded > INT32_MAX)
@@ -155,6 +168,50 @@ namespace Components
 		}
 
 		operand = static_cast<std::int32_t>(encoded);
+		return true;
+	}
+
+	struct IndexBitsSite
+	{
+		std::uintptr_t address;
+		std::uint8_t length;
+		std::uint8_t operandOffset;
+		std::uint8_t operandSize;
+		std::uint8_t bytes[6];
+	};
+
+	static const IndexBitsSite gameStateIndexBitsSites[] =
+	{
+		{ 0x140238FC2, 6, 2, 4, { 0x41, 0xB8, 0x0D, 0x00, 0x00, 0x00 } },
+		{ 0x140239013, 6, 2, 4, { 0x41, 0xB8, 0x0D, 0x00, 0x00, 0x00 } },
+		{ 0x1400FD115, 6, 2, 4, { 0x41, 0xB8, 0x0D, 0x00, 0x00, 0x00 } },
+		{ 0x1400FD171, 6, 2, 4, { 0x41, 0xB8, 0x0D, 0x00, 0x00, 0x00 } },
+		{ 0x1400FFF10, 4, 3, 1, { 0x41, 0x83, 0xFB, 0x0D } },
+	};
+
+	bool ConfigStrings::PatchGameStateIndexBits()
+	{
+		for (const IndexBitsSite& site : gameStateIndexBitsSites)
+		{
+			if (!Utils::Hook::MatchesBytes(site.address, site.bytes, site.length))
+			{
+				Logger::Error("configstrings: 0x{:X} does not read as expected, the configstring tables stay at 4339\n", site.address);
+				return false;
+			}
+		}
+
+		for (const IndexBitsSite& site : gameStateIndexBitsSites)
+		{
+			if (site.operandSize == 1)
+			{
+				Utils::Hook::Set<std::uint8_t>(site.address + site.operandOffset, static_cast<std::uint8_t>(gameStateIndexBits));
+			}
+			else
+			{
+				Utils::Hook::Set<std::int32_t>(site.address + site.operandOffset, gameStateIndexBits);
+			}
+		}
+
 		return true;
 	}
 
@@ -200,25 +257,28 @@ namespace Components
 		isClientTableRaised = true;
 	}
 
-	constexpr int BASEGAME_MAX_CONFIGSTRINGS = 4139;
+	constexpr int CS_WEAPONFILES = 2939;
 	constexpr int CS_MODELS_LAST = 0x664;
-	constexpr int EXTRA_WEAPONS_LAST = BASEGAME_MAX_CONFIGSTRINGS + 1200 - 1;
+	constexpr int EXTRA_WEAPONS_LAST = CS_WEAPONFILES + static_cast<int>(Weapon::WEAPON_LIMIT) - 1;
 	constexpr int EXTRA_MODELCACHE_FIRST = EXTRA_WEAPONS_LAST + 1;
 	constexpr int EXTRA_MODELCACHE_LAST = EXTRA_MODELCACHE_FIRST + ModelCache::ADDITIONAL_GMODELS;
 
-	static_assert(EXTRA_MODELCACHE_FIRST == 5339);
-	static_assert(EXTRA_MODELCACHE_LAST == 5851);
+	static_assert(EXTRA_MODELCACHE_FIRST == 12539);
+	static_assert(EXTRA_MODELCACHE_LAST == 13051);
 
 	constexpr int RUMBLE_FIRST = EXTRA_MODELCACHE_LAST + 1;
 	constexpr int RUMBLE_LAST = RUMBLE_FIRST + Gamepad::RUMBLE_CONFIGSTRINGS_COUNT - 2;
 
-	static_assert(RUMBLE_FIRST == 5852);
-	static_assert(RUMBLE_LAST == 5882);
+	static_assert(RUMBLE_FIRST == 13052);
+	static_assert(RUMBLE_LAST == 13082);
 
 	constexpr int DEV_DVAR_CONFIGSTRINGS_FIRST = RUMBLE_FIRST + Gamepad::RUMBLE_CONFIGSTRINGS_COUNT;
 
-	static_assert(DEV_DVAR_CONFIGSTRINGS_FIRST == 5884);
-	static_assert(DEV_DVAR_CONFIGSTRINGS_FIRST + ConfigStrings::DEV_DVAR_CONFIGSTRINGS_CAPACITY * 2 == ConfigStrings::MAX_CONFIGSTRINGS);
+	static_assert(DEV_DVAR_CONFIGSTRINGS_FIRST == 13084);
+
+	constexpr int SCRIPT_MODEL_ANIMS_FIRST = DEV_DVAR_CONFIGSTRINGS_FIRST + ConfigStrings::DEV_DVAR_CONFIGSTRINGS_CAPACITY * 2;
+
+	static_assert(SCRIPT_MODEL_ANIMS_FIRST + ConfigStrings::SCRIPT_MODEL_ANIM_LIMIT == ConfigStrings::MAX_CONFIGSTRINGS);
 
 	constexpr std::uintptr_t modelNameCalls[] = { 0x1400E9BB4, 0x1400E9C4A, 0x1400EA1FA };
 
@@ -258,7 +318,6 @@ namespace Components
 		return Game::CL_GetConfigString(index);
 	}
 
-	constexpr int CS_WEAPONFILES_EXTRA = 2939;
 	constexpr int X64_LAST_CONFIGSTRING = 4338;
 
 	void ConfigStrings::CG_ConfigStringModified_Hook(int localClientNum)
@@ -271,7 +330,7 @@ namespace Components
 
 			if (index > X64_LAST_CONFIGSTRING && index <= EXTRA_WEAPONS_LAST)
 			{
-				Game::CG_SetupWeaponDef(localClientNum, static_cast<unsigned int>(index - CS_WEAPONFILES_EXTRA));
+				Game::CG_SetupWeaponDef(localClientNum, static_cast<unsigned int>(index - CS_WEAPONFILES));
 				return;
 			}
 		}
@@ -653,6 +712,69 @@ namespace Components
 		}
 	}
 
+	constexpr std::uintptr_t G_FindConfigstringIndex = 0x1401AB590;
+	constexpr std::uintptr_t GScr_PrecacheMpAnim_FindCall = 0x1401A4687;
+	constexpr std::uintptr_t ScriptEntCmd_ScriptModelPlayAnim_FindCall = 0x140183F64;
+	constexpr std::uintptr_t CG_UpdateScriptModelAnim_ConfigStringAdd = 0x1400CB9F4;
+	constexpr std::uintptr_t scriptMoverAnimIndexField = 0x140394BB8;
+	constexpr std::uint32_t scriptMoverAnimIndexOffset = 92;
+	constexpr std::uint32_t baseScriptMoverAnimIndexBits = 6;
+	constexpr std::uint32_t scriptMoverAnimIndexBits = 10;
+
+	static_assert(ConfigStrings::SCRIPT_MODEL_ANIM_LIMIT <= (1 << scriptMoverAnimIndexBits));
+
+	static const std::uint8_t scriptModelAnimConfigStringAdd[] = { 0x81, 0xC1, 0xCA, 0x0F, 0x00, 0x00 };
+
+	static Utils::Hook precacheMpAnimHook;
+	static Utils::Hook scriptModelPlayAnimHook;
+
+	int ConfigStrings::G_FindScriptModelAnimIndex(const char* name, int, int, int create, const char* errorName)
+	{
+		const auto findIndex = reinterpret_cast<int(*)(const char*, int, int, int, const char*)>(Utils::Hook::Rebase(G_FindConfigstringIndex));
+		return findIndex(name, SCRIPT_MODEL_ANIMS_FIRST, SCRIPT_MODEL_ANIM_LIMIT, create, errorName);
+	}
+
+	void ConfigStrings::PatchScriptModelAnims()
+	{
+		if (!HasRaisedTables())
+		{
+			Logger::Error("configstrings: the tables were not raised, so script model anims stay at 62\n");
+			return;
+		}
+
+		const bool isExpected = Utils::Hook::BranchesTo(GScr_PrecacheMpAnim_FindCall, G_FindConfigstringIndex, HOOK_CALL)
+			&& Utils::Hook::BranchesTo(ScriptEntCmd_ScriptModelPlayAnim_FindCall, G_FindConfigstringIndex, HOOK_CALL)
+			&& Utils::Hook::MatchesBytes(CG_UpdateScriptModelAnim_ConfigStringAdd, scriptModelAnimConfigStringAdd, sizeof(scriptModelAnimConfigStringAdd))
+			&& Utils::Hook::Get<std::uint32_t>(scriptMoverAnimIndexField + 8) == scriptMoverAnimIndexOffset
+			&& Utils::Hook::Get<std::uint32_t>(scriptMoverAnimIndexField + 16) == baseScriptMoverAnimIndexBits;
+
+		if (!isExpected)
+		{
+			Logger::Error("configstrings: a script model anim site does not read as expected, left alone, so script model anims stay at 62\n");
+			return;
+		}
+
+		bool isSeated = precacheMpAnimHook.Initialize(GScr_PrecacheMpAnim_FindCall, reinterpret_cast<void*>(G_FindScriptModelAnimIndex), HOOK_CALL)
+			->Install()->IsInstalled();
+
+		isSeated = scriptModelPlayAnimHook.Initialize(ScriptEntCmd_ScriptModelPlayAnim_FindCall, reinterpret_cast<void*>(G_FindScriptModelAnimIndex), HOOK_CALL)
+			->Install()->IsInstalled() && isSeated;
+
+		if (!isSeated)
+		{
+			precacheMpAnimHook.Uninstall();
+			scriptModelPlayAnimHook.Uninstall();
+			Logger::Error("configstrings: could not seat the script model anim hooks, so script model anims stay at 62\n");
+			return;
+		}
+
+		precacheMpAnimHook.Quick();
+		scriptModelPlayAnimHook.Quick();
+
+		Utils::Hook::Set<std::int32_t>(CG_UpdateScriptModelAnim_ConfigStringAdd + 2, SCRIPT_MODEL_ANIMS_FIRST);
+		Utils::Hook::Set<std::uint32_t>(scriptMoverAnimIndexField + 16, scriptMoverAnimIndexBits);
+	}
+
 	bool ConfigStrings::HasRaisedTables()
 	{
 		return isClientTableRaised && serverConfigStrings != nullptr;
@@ -685,10 +807,16 @@ namespace Components
 
 	ConfigStrings::ConfigStrings()
 	{
+		if (!PatchGameStateIndexBits())
+		{
+			return;
+		}
+
 		PatchConfigStrings();
 		PatchModelConfigStrings();
 		PatchServerConfigStrings();
 		PatchServerModelConfigStrings();
 		PatchDevDvarConfigStrings();
+		PatchScriptModelAnims();
 	}
 }

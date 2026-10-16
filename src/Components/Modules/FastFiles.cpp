@@ -1177,23 +1177,26 @@ namespace Components
 
 		if (isDev)
 		{
-			Logger::Print("Skipping zw3/zw3.ff because -dev is enabled.\n");
+			Logger::Print("Skipping zw3/zw3.ff and zw3/zw3_assets.ff because -dev is enabled.\n");
 		}
 		else
 		{
-			const std::string zw3Zone = std::format("{}\\zw3\\zw3.ff", InstallPath());
-
-			if (!Utils::IO::FileExists(zw3Zone))
+			for (const char* const zoneName : { "zw3", "zw3_assets" })
 			{
-				ExitWithZW3Error(std::format("Missing 'zw3.ff':\n{}\n\nPlease run the Zombie Warfare 3 Launcher to verify game files or place it inside the zw3 folder.", zw3Zone));
-			}
+				const auto zonePath = std::format("{}\\zw3\\{}.ff", InstallPath(), zoneName);
 
-			if (!Zones::IsReady())
-			{
-				ExitWithZW3Error(std::format("'zw3.ff' cannot be read:\n{}\n\nIt is a 32 bit zone and this build's 32 bit zone reader did not start. See iw4x\\iw4x.log.", zw3Zone));
-			}
+				if (!Utils::IO::FileExists(zonePath))
+				{
+					ExitWithZW3Error(std::format("Missing '{}.ff':\n{}\n\nPlease run the Zombie Warfare 3 Launcher to verify game files or place it inside the zw3 folder.", zoneName, zonePath));
+				}
 
-			zones.push_back({ "zw3", 1, 0 });
+				if (!Zones::IsReady())
+				{
+					ExitWithZW3Error(std::format("'{}.ff' cannot be read:\n{}\n\nIt is a 32 bit zone and this build's 32 bit zone reader did not start. See iw4x\\iw4x.log.", zoneName, zonePath));
+				}
+
+				zones.push_back({ zoneName, 1, 0 });
+			}
 		}
 
 		LoadDLCUIZones(zones.data(), static_cast<unsigned int>(zones.size()), sync);
@@ -1538,6 +1541,7 @@ namespace Components
 				if (!Flags::HasFlag("dev"))
 				{
 					PrefetchZone("zw3");
+					PrefetchZone("zw3_assets");
 				}
 
 				PrefetchZone("iw4x_patch_mp");

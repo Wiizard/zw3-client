@@ -175,6 +175,7 @@ namespace Components
 		{ "weather", "zw3_pref_weather", 1, 2, "Saved weather preference", "SaveWeatherSetting" },
 		{ "dayNightCycle", "zw3_pref_dayNightCycle", 1, 1, "Saved day and night preference", "SaveDayNightCycleSetting" },
 		{ "bg_omnimovement", "zw3_pref_bg_omnimovement", 1, 1, "Saved omnimovement preference", "SaveOmnimovementSetting" },
+		{ "aetherWorldEvents", "zw3_pref_aetherWorldEvents", 1, 1, "Saved Aether World event preference", "SaveAetherWorldEventsSetting" },
 		{ "ui_hitmarker", "zw3_pref_ui_hitmarker", 1, 1, "Saved hitmarker preference", "SaveHitmarkerSetting" },
 		{ "ui_zombiecounter", "zw3_pref_ui_zombiecounter", 0, 1, "Saved zombie counter preference", "SaveZombieCounterSetting" },
 		{ "ui_showdamage", "zw3_pref_ui_showdamage", 1, 1, "Saved damage visibility preference", "SaveShowDamageSetting" },
@@ -2848,6 +2849,7 @@ namespace Components
 			Dvar::Register("weather", 1, 0, 2, Game::DVAR_NONE, "Select weather effects");
 			Dvar::Register("dayNightCycle", 1, 0, 1, Game::DVAR_NONE, "Toggle the day and night cycle");
 			Dvar::Register("bg_omnimovement", 1, 0, 1, Game::DVAR_NONE, "Toggle omnimovement");
+			Dvar::Register("aetherWorldEvents", 1, 0, 1, Game::DVAR_CODINFO, "Toggle random Aether World events");
 			Dvar::Register("addBots", 0, 0, 3, Game::DVAR_CODINFO, "Change the amount of bots");
 			Game::Dvar_RegisterEnum("partyPrivacy", partyPrivacyNames, 0, Game::DVAR_CODINFO, "Party privacy");
 

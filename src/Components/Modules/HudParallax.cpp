@@ -10,6 +10,7 @@ namespace Components
 	Dvar::Var HudParallax::cg_hudParallaxMenus;
 	Dvar::Var HudParallax::cg_hudParallaxHudElems;
 	Dvar::Var HudParallax::cg_hudParallaxUnanchored;
+	Dvar::Var HudParallax::cg_hudParallaxIgnore;
 	Dvar::Var HudParallax::cg_hudParallaxViewRate;
 	Dvar::Var HudParallax::cg_hudParallaxAnimRate;
 	Dvar::Var HudParallax::cg_hudParallaxLinearForward;
@@ -32,6 +33,12 @@ namespace Components
 	constexpr std::uintptr_t CG_Draw2D_Menu_PaintViewportCalls[] = { 0x1400D0ECC, 0x1400D0F91 };
 	constexpr std::uintptr_t Menu_PaintViewport = 0x1402664E0;
 
+	constexpr std::uintptr_t SCR_UpdateScreen_CG_DrawFullScreenUICall = 0x140101D25;
+	constexpr std::uintptr_t CG_DrawFullScreenUI = 0x1400D1BB0;
+
+	constexpr std::uintptr_t UI_OwnerDraw_CG_OwnerDrawCall = 0x140270155;
+	constexpr std::uintptr_t CG_OwnerDraw = 0x1400DDFC0;
+
 	constexpr std::uintptr_t ScrPlace_ApplyRect = 0x1400F23B0;
 	constexpr std::uintptr_t ScrPlace_ApplyRectWithoutSplitScreenScaling = 0x1400F24E0;
 	constexpr std::uintptr_t ScrPlace_ApplyRectClamped_ScrPlace_ApplyRectWithoutSplitScreenScalingCall = 0x1400F2403;
@@ -52,6 +59,13 @@ namespace Components
 	constexpr std::uintptr_t hudElemPlace_floorfCallX = 0x1400B2110;
 	constexpr std::uintptr_t hudElemPlace_floorfCallY = 0x1400B212D;
 
+	constexpr std::uintptr_t CG_ServerMaterialName = 0x1400DF5A0;
+
+	constexpr std::size_t hudElemType = 0x0;
+	constexpr std::size_t hudElemMaterialIndex = 0x4C;
+	constexpr int hudElemTypeMaterial = 4;
+	constexpr unsigned int materialNameSize = 64;
+
 	constexpr std::uintptr_t AnglesToAxis = 0x14027E1F0;
 	constexpr std::uintptr_t AxisToAngles = 0x1402793F0;
 
@@ -68,8 +82,27 @@ namespace Components
 	constexpr float pi = 3.14159265f;
 	constexpr float bobCycleSteps = 255.0f;
 
+	static const char* const ignoredMaterials[] =
+	{
+		"damage_feedback",
+		"damage_feedback_j",
+		"damage_feedback_endgame",
+		"scavenger_pickup",
+	};
+
+	static const int ignoredOwnerDraws[] =
+	{
+		71,
+		72,
+		80,
+		113,
+	};
+
 	using CG_Draw2D_t = void(*)(int localClientNum);
 	using Menu_PaintViewport_t = void(*)(void* dc);
+	using CG_DrawFullScreenUI_t = void(*)(int localClientNum);
+	using CG_OwnerDraw_t = void(*)(int localClientNum, float* parentRect, float x, float y, std::uint64_t w, std::uint64_t h, std::uint64_t horzAlign, std::uint64_t vertAlign, std::uint64_t special, std::uint64_t scale, std::uint64_t ownerDraw, std::uint64_t ownerDrawFlags, std::uint64_t align, std::uint64_t font, std::uint64_t textScale, std::uint64_t color, std::uint64_t material, std::uint64_t textStyle, std::uint64_t textAlignMode);
+	using CG_ServerMaterialName_t = bool(*)(int localClientNum, int materialIndex, char* buffer, unsigned int bufferSize);
 	using ScrPlace_ApplyRect_t = void(*)(const float* placement, float* x, float* y, float* w, float* h, int horzAlign, int vertAlign);
 	using ScrPlace_ApplyAxis_t = float(*)(const float* placement, float position, int align);
 	using HudElemPlace_t = void(*)(int localClientNum, const void* hudElem, float* origin, void* layout);
@@ -98,8 +131,10 @@ namespace Components
 	static float offsetY = 0.0f;
 	static bool isUnanchoredMoved = false;
 	static bool isHudElemMoved = false;
+	static bool isIgnoring = false;
 
 	static thread_local bool isPaintingMenus = false;
+	static thread_local bool isHudElemIgnored = false;
 	static thread_local float rectAppliedX = 0.0f;
 	static thread_local float rectAppliedY = 0.0f;
 	static thread_local float hudElemAppliedX = 0.0f;
@@ -109,6 +144,8 @@ namespace Components
 
 	static Utils::Hook draw2DHook;
 	static Utils::Hook paintViewportHooks[std::size(CG_Draw2D_Menu_PaintViewportCalls)];
+	static Utils::Hook fullScreenUIHook;
+	static Utils::Hook ownerDrawHook;
 	static Utils::Hook applyRectHook;
 	static Utils::Hook applyRectClampedHook;
 	static Utils::Hook containsPointHook;
@@ -154,6 +191,40 @@ namespace Components
 		return align < firstUnanchoredAlign || align > lastUnanchoredAlign;
 	}
 
+	static bool IsIgnoredHudElem(int localClientNum, const void* hudElem)
+	{
+		const auto* const fields = static_cast<const std::uint8_t*>(hudElem);
+
+		if (*reinterpret_cast<const int*>(fields + hudElemType) != hudElemTypeMaterial)
+		{
+			return false;
+		}
+
+		char materialName[materialNameSize];
+		const int materialIndex = *reinterpret_cast<const int*>(fields + hudElemMaterialIndex);
+		const auto serverMaterialName = reinterpret_cast<CG_ServerMaterialName_t>(Utils::Hook::Rebase(CG_ServerMaterialName));
+
+		if (!serverMaterialName(localClientNum, materialIndex, materialName, materialNameSize))
+		{
+			return false;
+		}
+
+		for (const auto* const ignored : ignoredMaterials)
+		{
+			if (_stricmp(materialName, ignored) == 0)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	static bool IsIgnoredOwnerDraw(int ownerDraw)
+	{
+		return std::ranges::find(ignoredOwnerDraws, ownerDraw) != std::end(ignoredOwnerDraws);
+	}
+
 	static void SeedSamples(const Game::cg_s* cg, const float* cameraAngles, std::chrono::steady_clock::time_point now)
 	{
 		motion.time = cg->time;
@@ -184,6 +255,7 @@ namespace Components
 
 		isUnanchoredMoved = cg_hudParallaxUnanchored.Get<bool>();
 		isHudElemMoved = cg_hudParallaxHudElems.Get<bool>();
+		isIgnoring = cg_hudParallaxIgnore.Get<bool>();
 
 		float cameraAngles[3];
 		reinterpret_cast<AxisToAngles_t>(Utils::Hook::Rebase(AxisToAngles))(&cg->refdef.view.axis[0][0], cameraAngles);
@@ -366,6 +438,29 @@ namespace Components
 		isPaintingMenus = false;
 	}
 
+	void HudParallax::CG_DrawFullScreenUI_Hk(int localClientNum)
+	{
+		isPaintingMenus = cg_hudParallax.Get<bool>() && cg_hudParallaxMenus.Get<bool>();
+
+		reinterpret_cast<CG_DrawFullScreenUI_t>(Utils::Hook::Rebase(CG_DrawFullScreenUI))(localClientNum);
+
+		isPaintingMenus = false;
+	}
+
+	void HudParallax::CG_OwnerDraw_Hk(int localClientNum, float* parentRect, float x, float y, std::uint64_t w, std::uint64_t h, std::uint64_t horzAlign, std::uint64_t vertAlign, std::uint64_t special, std::uint64_t scale, std::uint64_t ownerDraw, std::uint64_t ownerDrawFlags, std::uint64_t align, std::uint64_t font, std::uint64_t textScale, std::uint64_t color, std::uint64_t material, std::uint64_t textStyle, std::uint64_t textAlignMode)
+	{
+		const bool wasPaintingMenus = isPaintingMenus;
+
+		if (isIgnoring && IsIgnoredOwnerDraw(static_cast<int>(ownerDraw)))
+		{
+			isPaintingMenus = false;
+		}
+
+		reinterpret_cast<CG_OwnerDraw_t>(Utils::Hook::Rebase(CG_OwnerDraw))(localClientNum, parentRect, x, y, w, h, horzAlign, vertAlign, special, scale, ownerDraw, ownerDrawFlags, align, font, textScale, color, material, textStyle, textAlignMode);
+
+		isPaintingMenus = wasPaintingMenus;
+	}
+
 	void HudParallax::ScrPlace_ApplyRect_Hk(const float* placement, float* x, float* y, float* w, float* h, int horzAlign, int vertAlign)
 	{
 		reinterpret_cast<ScrPlace_ApplyRect_t>(Utils::Hook::Rebase(ScrPlace_ApplyRectWithoutSplitScreenScaling))(placement, x, y, w, h, horzAlign, vertAlign);
@@ -397,7 +492,7 @@ namespace Components
 
 		hudElemAppliedX = 0.0f;
 
-		if (!isHudElemMoved)
+		if (!isHudElemMoved || isHudElemIgnored)
 		{
 			return placed;
 		}
@@ -417,7 +512,7 @@ namespace Components
 
 		hudElemAppliedY = 0.0f;
 
-		if (!isHudElemMoved)
+		if (!isHudElemMoved || isHudElemIgnored)
 		{
 			return placed;
 		}
@@ -457,8 +552,11 @@ namespace Components
 	{
 		hudElemHeldX = 0.0f;
 		hudElemHeldY = 0.0f;
+		isHudElemIgnored = isIgnoring && IsIgnoredHudElem(localClientNum, hudElem);
 
 		reinterpret_cast<HudElemPlace_t>(Utils::Hook::Rebase(hudElemPlace))(localClientNum, hudElem, origin, layout);
+
+		isHudElemIgnored = false;
 
 		origin[0] += hudElemHeldX;
 		origin[1] += hudElemHeldY;
@@ -470,6 +568,7 @@ namespace Components
 		cg_hudParallaxMenus = Dvar::Register("cg_hudParallaxMenus", true, Game::DVAR_ARCHIVE, "Move the hud menus");
 		cg_hudParallaxHudElems = Dvar::Register("cg_hudParallaxHudElems", true, Game::DVAR_ARCHIVE, "Move the script hud elements");
 		cg_hudParallaxUnanchored = Dvar::Register("cg_hudParallaxUnanchored", false, Game::DVAR_ARCHIVE, "Also move items aligned fullscreen or without scaling");
+		cg_hudParallaxIgnore = Dvar::Register("cg_hudParallaxIgnore", true, Game::DVAR_ARCHIVE, "Keep the hit marker, scavenger icon and hints still");
 
 		cg_hudParallaxViewRate = Dvar::Register("cg_hudParallaxViewRate", -0.12f, -100.0f, 100.0f, Game::DVAR_NONE, "How much turning the view moves the hud, negative lags behind");
 		cg_hudParallaxAnimRate = Dvar::Register("cg_hudParallaxAnimRate", -1.5f, -100.0f, 100.0f, Game::DVAR_NONE, "How much camera animation moves the hud, negative lags behind");
@@ -481,16 +580,18 @@ namespace Components
 		cg_hudParallaxSmoothing = Dvar::Register("cg_hudParallaxSmoothing", 7.0f, 0.01f, 1000.0f, Game::DVAR_NONE, "How fast the hud follows its target, per second");
 		cg_hudParallaxMaxPitch = Dvar::Register("cg_hudParallaxMaxPitch", 4.5f, 0.0f, 360.0f, Game::DVAR_NONE, "Largest vertical offset, in degrees");
 		cg_hudParallaxMaxYaw = Dvar::Register("cg_hudParallaxMaxYaw", 4.5f, 0.0f, 360.0f, Game::DVAR_NONE, "Largest horizontal offset, in degrees");
-		cg_hudParallaxScale = Dvar::Register("cg_hudParallaxScale", 0.75f, 0.0f, 100.0f, Game::DVAR_NONE, "Scale on the final offset");
+		cg_hudParallaxScale = Dvar::Register("cg_hudParallaxScale", 0.3f, 0.0f, 100.0f, Game::DVAR_NONE, "Scale on the final offset");
 		cg_hudParallaxSnapDistance = Dvar::Register("cg_hudParallaxSnapDistance", 128.0f, 0.0f, 1000000.0f, Game::DVAR_NONE, "Camera move in one frame, in units, treated as a cut and not as motion");
-		cg_hudParallaxBobPitch = Dvar::Register("cg_hudParallaxBobPitch", 0.25f, 0.0f, 10.0f, Game::DVAR_NONE, "Degrees of pitch per unit of the view bob's height, so the hud sways with each step");
-		cg_hudParallaxBobYaw = Dvar::Register("cg_hudParallaxBobYaw", 0.1f, 0.0f, 10.0f, Game::DVAR_NONE, "Degrees of yaw per unit of the view bob's side motion");
+		cg_hudParallaxBobPitch = Dvar::Register("cg_hudParallaxBobPitch", 0.125f, 0.0f, 10.0f, Game::DVAR_NONE, "Degrees of pitch per unit of the view bob's height, so the hud sways with each step");
+		cg_hudParallaxBobYaw = Dvar::Register("cg_hudParallaxBobYaw", 0.05f, 0.0f, 10.0f, Game::DVAR_NONE, "Degrees of yaw per unit of the view bob's side motion");
 		cg_hudParallaxSnapAngle = Dvar::Register("cg_hudParallaxSnapAngle", 30.0f, 0.0f, 360.0f, Game::DVAR_NONE, "Camera turn in one frame not made by aiming, in degrees, treated as a cut and not as motion");
 	}
 
 	HudParallax::HudParallax()
 	{
 		bool isExpected = Utils::Hook::BranchesTo(R_RenderScene_CG_Draw2DCall, CG_Draw2D, HOOK_CALL)
+			&& Utils::Hook::BranchesTo(SCR_UpdateScreen_CG_DrawFullScreenUICall, CG_DrawFullScreenUI, HOOK_CALL)
+			&& Utils::Hook::BranchesTo(UI_OwnerDraw_CG_OwnerDrawCall, CG_OwnerDraw, HOOK_CALL)
 			&& Utils::Hook::BranchesTo(ScrPlace_ApplyRect, ScrPlace_ApplyRectWithoutSplitScreenScaling, HOOK_JUMP)
 			&& Utils::Hook::BranchesTo(ScrPlace_ApplyRectClamped_ScrPlace_ApplyRectWithoutSplitScreenScalingCall, ScrPlace_ApplyRectWithoutSplitScreenScaling, HOOK_CALL)
 			&& Utils::Hook::BranchesTo(Rect_ContainsPoint_ScrPlace_ApplyRectCall, ScrPlace_ApplyRect, HOOK_CALL)
@@ -547,6 +648,8 @@ namespace Components
 			{ &applyYHook, GetHudElemOrg_ScrPlace_ApplyYCall, reinterpret_cast<void*>(ScrPlace_ApplyY_Hk), HOOK_CALL },
 			{ &paintViewportHooks[0], CG_Draw2D_Menu_PaintViewportCalls[0], reinterpret_cast<void*>(Menu_PaintViewport_Hk), HOOK_CALL },
 			{ &paintViewportHooks[1], CG_Draw2D_Menu_PaintViewportCalls[1], reinterpret_cast<void*>(Menu_PaintViewport_Hk), HOOK_CALL },
+			{ &fullScreenUIHook, SCR_UpdateScreen_CG_DrawFullScreenUICall, reinterpret_cast<void*>(CG_DrawFullScreenUI_Hk), HOOK_CALL },
+			{ &ownerDrawHook, UI_OwnerDraw_CG_OwnerDrawCall, reinterpret_cast<void*>(CG_OwnerDraw_Hk), HOOK_CALL },
 			{ &draw2DHook, R_RenderScene_CG_Draw2DCall, reinterpret_cast<void*>(CG_Draw2D_Hk), HOOK_CALL },
 		};
 

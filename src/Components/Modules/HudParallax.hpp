@@ -14,6 +14,7 @@ namespace Components
 		static Dvar::Var cg_hudParallaxMenus;
 		static Dvar::Var cg_hudParallaxHudElems;
 		static Dvar::Var cg_hudParallaxUnanchored;
+		static Dvar::Var cg_hudParallaxIgnore;
 		static Dvar::Var cg_hudParallaxViewRate;
 		static Dvar::Var cg_hudParallaxAnimRate;
 		static Dvar::Var cg_hudParallaxLinearForward;
@@ -35,6 +36,8 @@ namespace Components
 
 		static void CG_Draw2D_Hk(int localClientNum);
 		static void Menu_PaintViewport_Hk(void* dc);
+		static void CG_DrawFullScreenUI_Hk(int localClientNum);
+		static void CG_OwnerDraw_Hk(int localClientNum, float* parentRect, float x, float y, std::uint64_t w, std::uint64_t h, std::uint64_t horzAlign, std::uint64_t vertAlign, std::uint64_t special, std::uint64_t scale, std::uint64_t ownerDraw, std::uint64_t ownerDrawFlags, std::uint64_t align, std::uint64_t font, std::uint64_t textScale, std::uint64_t color, std::uint64_t material, std::uint64_t textStyle, std::uint64_t textAlignMode);
 		static void ScrPlace_ApplyRect_Hk(const float* placement, float* x, float* y, float* w, float* h, int horzAlign, int vertAlign);
 		static float ScrPlace_ApplyX_Hk(const float* placement, float x, int horzAlign);
 		static float ScrPlace_ApplyY_Hk(const float* placement, float y, int vertAlign);

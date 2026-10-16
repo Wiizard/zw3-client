@@ -189,6 +189,7 @@ namespace Components
 	constexpr std::uintptr_t Sys_Quit_Sys_DestroyConsoleCall = 0x1402A58E6;
 
 	constexpr UINT asyncConsoleFlush = WM_APP;
+	constexpr std::uintptr_t consoleLogoId = 1;
 	constexpr std::size_t asyncConsoleCapacity = 0x3FFF;
 
 	static std::jthread asyncConsoleThread;
@@ -2328,6 +2329,39 @@ namespace Components
 			localClientNum, channel, text, duration, pixelWidth, color, flags);
 	}
 
+	static HBITMAP TryLoadConsoleLogo()
+	{
+		const std::string file = Utils::IO::ReadFile("zw3/data/images/logo.bmp");
+
+		if (file.size() < sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER))
+		{
+			return nullptr;
+		}
+
+		const auto* const fileHeader = reinterpret_cast<const BITMAPFILEHEADER*>(file.data());
+		const auto* const info = reinterpret_cast<const BITMAPINFO*>(file.data() + sizeof(BITMAPFILEHEADER));
+		const BITMAPINFOHEADER& header = info->bmiHeader;
+
+		if (fileHeader->bfType != 0x4D42 || header.biWidth <= 0 || header.biHeight == 0 || header.biBitCount == 0)
+		{
+			return nullptr;
+		}
+
+		const std::size_t stride = ((static_cast<std::size_t>(header.biWidth) * header.biBitCount + 31) / 32) * 4;
+		const std::size_t pixelBytes = stride * static_cast<std::size_t>(std::abs(header.biHeight));
+
+		if (sizeof(BITMAPFILEHEADER) + header.biSize > fileHeader->bfOffBits || fileHeader->bfOffBits + pixelBytes > file.size())
+		{
+			return nullptr;
+		}
+
+		const HDC screen = GetDC(nullptr);
+		const HBITMAP logo = CreateDIBitmap(screen, &header, CBM_INIT, file.data() + fileHeader->bfOffBits, info, DIB_RGB_COLORS);
+		ReleaseDC(nullptr, screen);
+
+		return logo;
+	}
+
 	void Console::ShowAsyncConsole()
 	{
 		asyncConsoleThread = std::jthread(ConsoleRunner);
@@ -2349,6 +2383,18 @@ namespace Components
 		const auto inputProc = static_cast<LONG_PTR>(Utils::Hook::Rebase(Sys_ConsoleInputProc));
 		const LONG_PTR editProc = SetWindowLongPtrA(inputBox, GWLP_WNDPROC, inputProc);
 		*reinterpret_cast<LONG_PTR*>(Utils::Hook::Rebase(consoleInputBoxProc)) = editProc;
+
+		if (!GetDlgItem(consoleWindow, static_cast<int>(consoleLogoId)))
+		{
+			const HBITMAP logo = TryLoadConsoleLogo();
+
+			if (logo)
+			{
+				const HWND logoBox = CreateWindowExA(0, "Static", nullptr, WS_CHILD | WS_VISIBLE | SS_BITMAP, 5, 5, 0, 0,
+					consoleWindow, reinterpret_cast<HMENU>(consoleLogoId), GetModuleHandleA(nullptr), nullptr);
+				SendMessageA(logoBox, STM_SETIMAGE, IMAGE_BITMAP, reinterpret_cast<LPARAM>(logo));
+			}
+		}
 
 		asyncConsoleWindow = consoleWindow;
 

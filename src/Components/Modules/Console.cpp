@@ -177,6 +177,30 @@ namespace Components
 
 	static Utils::Hook sysErrorHook;
 
+	constexpr std::uintptr_t s_wcd = 0x14678D8B0;
+	constexpr std::uintptr_t consoleInputBox = 0x14678D8D0;
+	constexpr std::uintptr_t consoleInputBoxProc = 0x14678DEE0;
+	constexpr std::uintptr_t Sys_ShowConsole = 0x1402A9830;
+	constexpr std::uintptr_t Sys_DestroyConsole = 0x1402A9790;
+	constexpr std::uintptr_t Sys_ConsoleInputProc = 0x1402A91F0;
+	constexpr std::uintptr_t Conbuf_AppendText = 0x1402A9050;
+	constexpr std::uintptr_t Sys_ConsoleInputProc_PrintCall = 0x1402A92B4;
+	constexpr std::uintptr_t Sys_ConsoleInputProc_PrintThunk = 0x1402A57C0;
+	constexpr std::uintptr_t Sys_Quit_Sys_DestroyConsoleCall = 0x1402A58E6;
+
+	constexpr UINT asyncConsoleFlush = WM_APP;
+	constexpr std::size_t asyncConsoleCapacity = 0x3FFF;
+
+	static std::jthread asyncConsoleThread;
+	static std::atomic<HWND> asyncConsoleWindow = nullptr;
+	static std::atomic_bool isAsyncConsoleEnabled = false;
+	static std::atomic_bool isAsyncConsoleClosing = false;
+	static std::string asyncConsolePending;
+	static SRWLOCK asyncConsoleLock = SRWLOCK_INIT;
+
+	static Utils::Hook asyncConsoleEchoHook;
+	static Utils::Hook asyncConsoleDestroyHook;
+
 	static void StdOutError(const char* fmt, ...)
 	{
 		char buffer[4096]{};
@@ -723,6 +747,11 @@ namespace Components
 		}
 
 		PrintCurses(text);
+
+		if (isAsyncConsoleEnabled)
+		{
+			FeedAsyncConsole(text);
+		}
 
 		Logger::NetworkLog(text, false);
 
@@ -2299,6 +2328,115 @@ namespace Components
 			localClientNum, channel, text, duration, pixelWidth, color, flags);
 	}
 
+	void Console::ShowAsyncConsole()
+	{
+		asyncConsoleThread = std::jthread(ConsoleRunner);
+	}
+
+	void Console::ConsoleRunner()
+	{
+		reinterpret_cast<void(*)()>(Utils::Hook::Rebase(Sys_ShowConsole))();
+
+		const HWND consoleWindow = *reinterpret_cast<HWND*>(Utils::Hook::Rebase(s_wcd));
+		const HWND inputBox = *reinterpret_cast<HWND*>(Utils::Hook::Rebase(consoleInputBox));
+
+		if (!consoleWindow || !inputBox)
+		{
+			Logger::Error("console: Sys_ShowConsole made no window, -console has no console\n");
+			return;
+		}
+
+		const auto inputProc = static_cast<LONG_PTR>(Utils::Hook::Rebase(Sys_ConsoleInputProc));
+		const LONG_PTR editProc = SetWindowLongPtrA(inputBox, GWLP_WNDPROC, inputProc);
+		*reinterpret_cast<LONG_PTR*>(Utils::Hook::Rebase(consoleInputBoxProc)) = editProc;
+
+		asyncConsoleWindow = consoleWindow;
+
+		if (isAsyncConsoleClosing)
+		{
+			PostMessageA(consoleWindow, WM_CLOSE, 0, 0);
+		}
+
+		FlushAsyncConsole();
+
+		MSG message;
+
+		while (GetMessageA(&message, nullptr, 0, 0) > 0)
+		{
+			if (message.message == asyncConsoleFlush)
+			{
+				FlushAsyncConsole();
+				continue;
+			}
+
+			TranslateMessage(&message);
+			DispatchMessageA(&message);
+		}
+
+		asyncConsoleWindow = nullptr;
+		reinterpret_cast<void(*)()>(Utils::Hook::Rebase(Sys_DestroyConsole))();
+
+		if (!isAsyncConsoleClosing)
+		{
+			RequestShutdown(3000);
+		}
+	}
+
+	void Console::FlushAsyncConsole()
+	{
+		std::string text;
+
+		AcquireSRWLockExclusive(&asyncConsoleLock);
+		text.swap(asyncConsolePending);
+		ReleaseSRWLockExclusive(&asyncConsoleLock);
+
+		if (text.empty())
+		{
+			return;
+		}
+
+		reinterpret_cast<void(*)(char*)>(Utils::Hook::Rebase(Conbuf_AppendText))(text.data());
+	}
+
+	void Console::DestroyAsyncConsole()
+	{
+		isAsyncConsoleClosing = true;
+
+		const HWND consoleWindow = asyncConsoleWindow;
+
+		if (consoleWindow)
+		{
+			PostMessageA(consoleWindow, WM_CLOSE, 0, 0);
+		}
+
+		if (asyncConsoleThread.joinable())
+		{
+			asyncConsoleThread.join();
+		}
+	}
+
+	void Console::FeedAsyncConsole(const char* text)
+	{
+		AcquireSRWLockExclusive(&asyncConsoleLock);
+
+		const bool wasEmpty = asyncConsolePending.empty();
+		asyncConsolePending.append(text);
+
+		if (asyncConsolePending.size() > asyncConsoleCapacity)
+		{
+			asyncConsolePending.erase(0, asyncConsolePending.size() - asyncConsoleCapacity);
+		}
+
+		ReleaseSRWLockExclusive(&asyncConsoleLock);
+
+		const HWND consoleWindow = asyncConsoleWindow;
+
+		if (wasEmpty && consoleWindow)
+		{
+			PostMessageA(consoleWindow, asyncConsoleFlush, 0, 0);
+		}
+	}
+
 	void Console::RequestShutdown(DWORD watchdogDelayMs)
 	{
 		if (isShutdownRequested.exchange(true))
@@ -2395,6 +2533,34 @@ namespace Components
 
 				Events::OnDvarInit(Create);
 				Scheduler::Loop(RefreshStatus, Scheduler::Pipeline::MAIN);
+			}
+		}
+		else if (Flags::HasFlag("console"))
+		{
+			const bool isExpected = Utils::Hook::BranchesTo(Sys_ConsoleInputProc_PrintCall, Sys_ConsoleInputProc_PrintThunk, HOOK_CALL)
+				&& Utils::Hook::BranchesTo(Sys_Quit_Sys_DestroyConsoleCall, Sys_DestroyConsole, HOOK_CALL);
+
+			bool isSeated = false;
+
+			if (isExpected)
+			{
+				isSeated = asyncConsoleEchoHook.Initialize(Sys_ConsoleInputProc_PrintCall, reinterpret_cast<void*>(Utils::Hook::Rebase(Conbuf_AppendText)), HOOK_CALL)->Install()->IsInstalled();
+				isSeated = asyncConsoleDestroyHook.Initialize(Sys_Quit_Sys_DestroyConsoleCall, DestroyAsyncConsole, HOOK_CALL)->Install()->IsInstalled() && isSeated;
+			}
+
+			if (!isSeated)
+			{
+				asyncConsoleEchoHook.Uninstall();
+				asyncConsoleDestroyHook.Uninstall();
+				Logger::Error("console: Sys_ConsoleInputProc or Sys_Quit does not read as expected, -console has no console\n");
+			}
+			else
+			{
+				asyncConsoleEchoHook.Quick();
+				asyncConsoleDestroyHook.Quick();
+
+				isAsyncConsoleEnabled = true;
+				Events::OnDvarInit(ShowAsyncConsole);
 			}
 		}
 

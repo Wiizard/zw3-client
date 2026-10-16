@@ -41,6 +41,12 @@ namespace Components
 		static void StartShutdownWatchdog(DWORD watchdogDelayMs);
 		static BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType);
 
+		static void ShowAsyncConsole();
+		static void ConsoleRunner();
+		static void FlushAsyncConsole();
+		static void DestroyAsyncConsole();
+		static void FeedAsyncConsole(const char* text);
+
 		static void Create();
 		static const char* Input();
 		static void Error(const char* fmt, ...);

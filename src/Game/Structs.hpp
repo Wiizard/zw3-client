@@ -2063,13 +2063,20 @@ namespace Game
 		char modelType;
 		char svFlags;
 		char isInUse;
-		char pad0[0x34];
+		float boxMidPoint[3];
+		float boxHalfSize[3];
+		int contents;
+		float absMidPoint[3];
+		float absHalfSize[3];
 		float currentOrigin[3];
 		float currentAngles[3];
 		char pad1[0x8];
 	};
 
 	AssertSize(entityShared_t, 0x58);
+	AssertOffset(entityShared_t, boxMidPoint, 0x4);
+	AssertOffset(entityShared_t, contents, 0x1C);
+	AssertOffset(entityShared_t, absMidPoint, 0x20);
 	AssertOffset(entityShared_t, currentOrigin, 0x38);
 
 	enum entityFlag

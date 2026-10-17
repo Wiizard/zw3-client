@@ -23,6 +23,7 @@ namespace Components
 
 		static const Game::dvar_t* bg_playerEjection;
 		static const Game::dvar_t* bg_playerCollision;
+		static const Game::dvar_t* bg_brushModelEjection;
 
 		static void Jump_ClearState_Hk(Game::playerState_s* ps);
 
@@ -36,6 +37,7 @@ namespace Components
 		static void GScr_IsSprinting(Game::scr_entref_t entref);
 
 		static int StuckInClient_Hk(Game::gentity_s* self);
+		static int StuckInBrushModel(Game::gentity_s* self);
 		static void CM_TransformedCapsuleTrace_Hk(Game::trace_t* results, const float* start, const float* end, const Game::Bounds* bounds, const Game::Bounds* capsule, int contents, const float* origin, const float* angles);
 	};
 }

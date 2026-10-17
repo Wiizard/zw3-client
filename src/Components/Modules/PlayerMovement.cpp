@@ -116,6 +116,23 @@ namespace Components
 	constexpr std::uintptr_t ClientEndFrame_StuckInClientCall = 0x140192EFA;
 	constexpr std::uintptr_t StuckInClient = 0x140195A20;
 
+	constexpr std::uintptr_t CM_TransformedBrushModelTrace = 0x1401EF6F0;
+	constexpr std::uintptr_t G_TraceCapsule = 0x14019F560;
+	constexpr std::uintptr_t G_crandom = 0x1401ACA10;
+	constexpr std::uintptr_t g_speed = 0x1417CDE00;
+
+	// ClientThink_real 0x140193707
+	constexpr int MASK_PLAYERSOLID = 0x2810011;
+	constexpr int MASK_PLAYERSOLID_NOBODY = 0x810011;
+
+	// from StuckInClient
+	constexpr int POF_PLAYER = 0x1000;
+	constexpr int PMF_TIME_KNOCKBACK = 0x80;
+	constexpr int ejectTime = 300;
+
+	constexpr char modelTypeBrush = 4;
+	constexpr float maxEjectLift = 24.0f;
+
 	constexpr std::uintptr_t CM_TransformedCapsuleTraceCalls[] = { 0x140233D96, 0x1400C9D5E };
 	constexpr std::uintptr_t CM_TransformedCapsuleTrace = 0x1401EFF60;
 
@@ -189,6 +206,7 @@ namespace Components
 
 	const Game::dvar_t* PlayerMovement::bg_playerEjection;
 	const Game::dvar_t* PlayerMovement::bg_playerCollision;
+	const Game::dvar_t* PlayerMovement::bg_brushModelEjection;
 	const Game::dvar_t* PlayerMovement::bg_rocketJump;
 	const Game::dvar_t* PlayerMovement::bg_rocketJumpScale;
 	const Game::dvar_t* PlayerMovement::bg_climbAnything;
@@ -238,12 +256,121 @@ namespace Components
 
 	int PlayerMovement::StuckInClient_Hk(Game::gentity_s* self)
 	{
-		if (bg_playerEjection->current.enabled)
+		if (bg_playerEjection->current.enabled && reinterpret_cast<decltype(&StuckInClient_Hk)>(Utils::Hook::Rebase(StuckInClient))(self))
 		{
-			return reinterpret_cast<decltype(&StuckInClient_Hk)>(Utils::Hook::Rebase(StuckInClient))(self);
+			return 1;
+		}
+
+		if (bg_brushModelEjection->current.enabled)
+		{
+			return StuckInBrushModel(self);
 		}
 
 		return 0;
+	}
+
+	static bool IsInBrushModel(const Game::gentity_s* brush, const float* origin, const Game::Bounds* bounds)
+	{
+		Game::trace_t trace{};
+		trace.fraction = 1.0f;
+
+		Utils::Hook::Call<void(Game::trace_t*, const float*, const float*, const Game::Bounds*, unsigned int, int, const float*, const float*)>(CM_TransformedBrushModelTrace)
+			(&trace, origin, origin, bounds, brush->s.index, MASK_PLAYERSOLID_NOBODY, brush->r.currentOrigin, brush->r.currentAngles);
+
+		return trace.allsolid || trace.startsolid;
+	}
+
+	static bool IsClear(const Game::gentity_s* self, const float* origin, const Game::Bounds* bounds)
+	{
+		Game::trace_t trace{};
+		trace.fraction = 1.0f;
+
+		Utils::Hook::Call<void(Game::trace_t*, const float*, const float*, const Game::Bounds*, int, int)>(G_TraceCapsule)
+			(&trace, origin, origin, bounds, self->s.number, MASK_PLAYERSOLID);
+
+		return !trace.allsolid && !trace.startsolid;
+	}
+
+	// StuckInClient for brush models (zombie hitboxes)
+	int PlayerMovement::StuckInBrushModel(Game::gentity_s* self)
+	{
+		auto* const client = self->client;
+
+		if (!client || !(client->ps.otherFlags & POF_PLAYER) || client->sess.sessionState != Game::SESS_STATE_PLAYING
+			|| ((self->r.contents - 0x2000000) & 0xFDFFFFFF) != 0 || Game::SV_IsTestClient(self->s.number))
+		{
+			return 0;
+		}
+
+		auto& ps = client->ps;
+		Game::Bounds bounds{};
+		std::memcpy(bounds.midPoint, self->r.boxMidPoint, sizeof(bounds.midPoint));
+		std::memcpy(bounds.halfSize, self->r.boxHalfSize, sizeof(bounds.halfSize));
+
+		const Game::gentity_s* brush = nullptr;
+
+		for (int i = 0; i < Game::level->num_entities; ++i)
+		{
+			const auto* const ent = &Game::g_entities[i];
+
+			if (ent == self || !ent->r.isLinked || ent->r.modelType != modelTypeBrush || !ent->s.index || !(ent->r.contents & MASK_PLAYERSOLID_NOBODY))
+			{
+				continue;
+			}
+
+			if (std::fabs(ent->r.absMidPoint[0] - self->r.absMidPoint[0]) > ent->r.absHalfSize[0] + self->r.absHalfSize[0]
+				|| std::fabs(ent->r.absMidPoint[1] - self->r.absMidPoint[1]) > ent->r.absHalfSize[1] + self->r.absHalfSize[1]
+				|| std::fabs(ent->r.absMidPoint[2] - self->r.absMidPoint[2]) > ent->r.absHalfSize[2] + self->r.absHalfSize[2])
+			{
+				continue;
+			}
+
+			if (IsInBrushModel(ent, ps.origin, &bounds))
+			{
+				brush = ent;
+				break;
+			}
+		}
+
+		if (!brush)
+		{
+			return 0;
+		}
+
+		float dir[2] =
+		{
+			ps.origin[0] - brush->r.currentOrigin[0] + Utils::Hook::Call<float()>(G_crandom)(),
+			ps.origin[1] - brush->r.currentOrigin[1] + Utils::Hook::Call<float()>(G_crandom)(),
+		};
+
+		Game::Vec2Normalize(dir);
+
+		// abs box is padded by 1
+		const float top = brush->r.absMidPoint[2] + brush->r.absHalfSize[2] - 1.0f;
+		const float lift = top - (ps.origin[2] + bounds.midPoint[2] - bounds.halfSize[2]);
+
+		float lifted[3] = { ps.origin[0], ps.origin[1], ps.origin[2] + lift + 0.125f };
+
+		const float reach = std::max(brush->r.absHalfSize[0], brush->r.absHalfSize[1]) + std::max(bounds.halfSize[0], bounds.halfSize[1]);
+		float beside[3] = { brush->r.absMidPoint[0] + dir[0] * reach, brush->r.absMidPoint[1] + dir[1] * reach, ps.origin[2] };
+
+		if (lift > 0.0f && lift <= maxEjectLift && IsClear(self, lifted, &bounds))
+		{
+			std::memcpy(ps.origin, lifted, sizeof(lifted));
+		}
+		else if (IsClear(self, beside, &bounds))
+		{
+			std::memcpy(ps.origin, beside, sizeof(beside));
+		}
+
+		const auto speed = static_cast<float>(Utils::Hook::Get<const Game::dvar_t*>(g_speed)->current.integer);
+
+		ps.velocity[0] = dir[0] * speed;
+		ps.velocity[1] = dir[1] * speed;
+		ps.pm_time = ejectTime;
+		ps.pm_flags |= PMF_TIME_KNOCKBACK;
+
+		return 1;
 	}
 
 	void PlayerMovement::CM_TransformedCapsuleTrace_Hk(Game::trace_t* results, const float* start, const float* end, const Game::Bounds* bounds, const Game::Bounds* capsule, int contents, const float* origin, const float* angles)
@@ -465,6 +592,7 @@ namespace Components
 			PlayerMovement_bg_bunnyHopAuto = Game::Dvar_RegisterBool("bg_bunnyHopAuto", false, Game::DVAR_CODINFO, "Constantly jump when holding space");
 			bg_playerEjection = Game::Dvar_RegisterBool("bg_playerEjection", false, Game::DVAR_CODINFO, "Push intersecting players away from each other");
 			bg_playerCollision = Game::Dvar_RegisterBool("bg_playerCollision", false, Game::DVAR_CODINFO, "Push intersecting players away from each other");
+			bg_brushModelEjection = Game::Dvar_RegisterBool("bg_brushModelEjection", true, Game::DVAR_CODINFO, "Push players out of brush models they are stuck in");
 
 			std::size_t gateCount = 0;
 			isSeated = gateHooks[gateCount++].Initialize(ClientEndFrame_StuckInClientCall, reinterpret_cast<void*>(StuckInClient_Hk), HOOK_CALL)->Install()->IsInstalled();

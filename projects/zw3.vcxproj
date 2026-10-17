@@ -182,6 +182,7 @@
     <ClInclude Include="..\src\Components\Modules\Bots.hpp" />
     <ClInclude Include="..\src\Components\Modules\Branding.hpp" />
     <ClInclude Include="..\src\Components\Modules\Bullet.hpp" />
+    <ClInclude Include="..\src\Components\Modules\CrateCollision.hpp" />
     <ClInclude Include="..\src\Components\Modules\CardTitles.hpp" />
     <ClInclude Include="..\src\Components\Modules\Ceg.hpp" />
     <ClInclude Include="..\src\Components\Modules\Changelog.hpp" />
@@ -517,6 +518,7 @@
     <ClCompile Include="..\src\Components\Modules\Bots.cpp" />
     <ClCompile Include="..\src\Components\Modules\Branding.cpp" />
     <ClCompile Include="..\src\Components\Modules\Bullet.cpp" />
+    <ClCompile Include="..\src\Components\Modules\CrateCollision.cpp" />
     <ClCompile Include="..\src\Components\Modules\CardTitles.cpp" />
     <ClCompile Include="..\src\Components\Modules\Ceg.cpp" />
     <ClCompile Include="..\src\Components\Modules\Changelog.cpp" />

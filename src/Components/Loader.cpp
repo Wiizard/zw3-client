@@ -5,6 +5,7 @@
 #include "Modules/Auth.hpp"
 #include "Modules/Bans.hpp"
 #include "Modules/Bullet.hpp"
+#include "Modules/CrateCollision.hpp"
 #include "Modules/BotAI/BotAI.hpp"
 #include "Modules/Bots.hpp"
 #include "Modules/Console.hpp"
@@ -190,6 +191,7 @@ namespace Components
 		Register(new Discord());
 		Register(new ArenaLength());
 		Register(new Bullet());
+		Register(new CrateCollision());
 		Register(new Discovery());
 		Register(new Elevators());
 		Register(new Lean());

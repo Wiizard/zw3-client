@@ -246,6 +246,9 @@
     <ClInclude Include="..\src\Components\Modules\Bullet.hpp">
       <Filter>Components\Modules</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\CrateCollision.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\Components\Modules\CardTitles.hpp">
       <Filter>Components\Modules</Filter>
     </ClInclude>
@@ -1243,6 +1246,9 @@
       <Filter>Components\Modules</Filter>
     </ClCompile>
     <ClCompile Include="..\src\Components\Modules\Bullet.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\CrateCollision.cpp">
       <Filter>Components\Modules</Filter>
     </ClCompile>
     <ClCompile Include="..\src\Components\Modules\CardTitles.cpp">

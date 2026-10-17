@@ -122,6 +122,7 @@ namespace Components
 	constexpr std::uintptr_t clsState = 0x1406CECF8;
 	constexpr int connectionActive = 9;
 	constexpr std::uintptr_t cg_drawMaterial = 0x1406BCE80;
+	constexpr std::uintptr_t cg_drawViewpos = 0x14058B898;
 
 	constexpr std::uintptr_t player_debugHealthFlags = 0x14008BF8C;
 	constexpr std::uintptr_t player_debugHealth = 0x140440E70;
@@ -215,6 +216,23 @@ namespace Components
 		}
 	}
 
+	// registered by CG_RegisterDvars, never drawn in MP
+	void Debug::CG_DrawViewpos(int localClientNum)
+	{
+		constexpr float scale = 0.25f;
+		constexpr float margin = 10.0f;
+
+		const auto* const ps = reinterpret_cast<const Game::playerState_s*>(Utils::Hook::Rebase(cgArray));
+		const auto* const placement = Game::ScrPlace_GetActivePlacement(localClientNum);
+		auto* const font = Game::UI_GetFontHandle(placement, 6, scale);
+
+		const auto* const text = Utils::String::VA("(%.0f, %.0f, %.0f) : %.0f, %.0f",
+			ps->origin[0], ps->origin[1], ps->origin[2], ps->viewangles[0], ps->viewangles[1]);
+
+		const auto width = static_cast<float>(Game::UI_TextWidth(text, std::numeric_limits<int>::max(), font, scale));
+		Game::UI_DrawText(placement, text, std::numeric_limits<int>::max(), font, -width - margin, 20.0f, 3, 1, scale, white, 3);
+	}
+
 	void Debug::CG_DrawDebugOverlays_Hk()
 	{
 		constexpr int localClientNum = 0;
@@ -222,6 +240,13 @@ namespace Components
 		if (!Utils::Hook::Get<int>(fullScreenUiFlag) || Utils::Hook::Get<int>(clsState) != connectionActive)
 		{
 			return;
+		}
+
+		const auto* const drawViewpos = Utils::Hook::Get<const Game::dvar_t*>(cg_drawViewpos);
+
+		if (drawViewpos && drawViewpos->current.enabled)
+		{
+			CG_DrawViewpos(localClientNum);
 		}
 
 		const auto* const drawMaterial = Utils::Hook::Get<const Game::dvar_t*>(cg_drawMaterial);

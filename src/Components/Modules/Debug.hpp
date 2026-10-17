@@ -15,6 +15,7 @@ namespace Components
 
 		static void CG_Debug_DrawPSFlags(int localClientNum);
 		static void CG_DrawDebugPlayerHealth(int localClientNum);
+		static void CG_DrawViewpos(int localClientNum);
 		static void CG_Debug_DrawFontTest(int localClientNum);
 
 		static void CG_DrawDebugOverlays_Hk();

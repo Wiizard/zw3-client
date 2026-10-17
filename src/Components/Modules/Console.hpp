@@ -21,6 +21,7 @@ namespace Components
 		static void OnKey(const KeyObserver& observer);
 
 		static void Print(const char* text);
+		static void AddDvarHint(const char* name, const char* hint);
 
 		static void FreeNativeConsole();
 
@@ -84,6 +85,7 @@ namespace Components
 		static void* FindCommand(const char* name);
 		static void DvarValueString(void* dvar, int valueOffset, char* out, std::size_t outSize);
 		static const char* FindBuiltinDescription(const char* name);
+		static const char* FindDvarHint(const char* name);
 
 		static void SetOpen(bool open);
 		static void FollowEngineClose();

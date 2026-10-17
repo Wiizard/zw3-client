@@ -1,6 +1,7 @@
 #include "STDInclude.hpp"
 
 #include "Debug.hpp"
+#include "Console.hpp"
 #include "Events.hpp"
 #include "Logger.hpp"
 #include "Scheduler.hpp"
@@ -123,6 +124,15 @@ namespace Components
 	constexpr int connectionActive = 9;
 	constexpr std::uintptr_t cg_drawMaterial = 0x1406BCE80;
 	constexpr std::uintptr_t cg_drawViewpos = 0x14058B898;
+	constexpr std::uintptr_t CG_GetPlayerViewOrigin = 0x1400C3C90;
+	constexpr std::uintptr_t CG_RegisterDvars_DrawViewposCall = 0x1400D7803;
+	constexpr std::uintptr_t Dvar_RegisterBool_Engine = 0x140285C70;
+
+	constexpr int viewposEye = 1;
+	constexpr int viewposFeet = 2;
+	constexpr int viewposBoth = 3;
+
+	static Utils::Hook drawViewposHook;
 
 	constexpr std::uintptr_t player_debugHealthFlags = 0x14008BF8C;
 	constexpr std::uintptr_t player_debugHealth = 0x140440E70;
@@ -216,21 +226,45 @@ namespace Components
 		}
 	}
 
-	// registered by CG_RegisterDvars, never drawn in MP
-	void Debug::CG_DrawViewpos(int localClientNum)
+	// bool in the exe, never drawn in MP
+	Game::dvar_t* Debug::Dvar_RegisterDrawViewpos(const char* dvarName, [[maybe_unused]] bool value, unsigned int flags, [[maybe_unused]] const char* description)
+	{
+		Console::AddDvarHint(dvarName, "  1: eye\n  2: feet\n  3: both");
+		return Game::Dvar_RegisterInt(dvarName, 0, 0, viewposBoth, flags, "Draw viewpos: 1 eye, 2 feet, 3 both");
+	}
+
+	void Debug::CG_DrawViewpos(int localClientNum, int mode)
 	{
 		constexpr float scale = 0.25f;
 		constexpr float margin = 10.0f;
+		constexpr float rowHeight = 12.0f;
 
 		const auto* const ps = reinterpret_cast<const Game::playerState_s*>(Utils::Hook::Rebase(cgArray));
 		const auto* const placement = Game::ScrPlace_GetActivePlacement(localClientNum);
 		auto* const font = Game::UI_GetFontHandle(placement, 6, scale);
 
-		const auto* const text = Utils::String::VA("(%.0f, %.0f, %.0f) : %.0f, %.0f",
-			ps->origin[0], ps->origin[1], ps->origin[2], ps->viewangles[0], ps->viewangles[1]);
+		std::vector<std::string> rows;
 
-		const auto width = static_cast<float>(Game::UI_TextWidth(text, std::numeric_limits<int>::max(), font, scale));
-		Game::UI_DrawText(placement, text, std::numeric_limits<int>::max(), font, -width - margin, 20.0f, 3, 1, scale, white, 3);
+		if (mode == viewposEye || mode == viewposBoth)
+		{
+			float eye[3]{};
+			Utils::Hook::Call<void(int, const Game::playerState_s*, float*)>(CG_GetPlayerViewOrigin)(localClientNum, ps, eye);
+			rows.emplace_back(Utils::String::VA("(%.0f, %.0f, %.0f) : %.0f, %.0f (eye)", eye[0], eye[1], eye[2], ps->viewangles[0], ps->viewangles[1]));
+		}
+
+		if (mode == viewposFeet || mode == viewposBoth)
+		{
+			rows.emplace_back(Utils::String::VA("(%.0f, %.0f, %.0f) (feet)", ps->origin[0], ps->origin[1], ps->origin[2]));
+		}
+
+		float y = 20.0f;
+
+		for (const auto& row : rows)
+		{
+			const auto width = static_cast<float>(Game::UI_TextWidth(row.data(), std::numeric_limits<int>::max(), font, scale));
+			Game::UI_DrawText(placement, row.data(), std::numeric_limits<int>::max(), font, -width - margin, y, 3, 1, scale, white, 3);
+			y += rowHeight;
+		}
 	}
 
 	void Debug::CG_DrawDebugOverlays_Hk()
@@ -244,9 +278,9 @@ namespace Components
 
 		const auto* const drawViewpos = Utils::Hook::Get<const Game::dvar_t*>(cg_drawViewpos);
 
-		if (drawViewpos && drawViewpos->current.enabled)
+		if (drawViewpos && drawViewpos->current.integer)
 		{
-			CG_DrawViewpos(localClientNum);
+			CG_DrawViewpos(localClientNum, drawViewpos->current.integer);
 		}
 
 		const auto* const drawMaterial = Utils::Hook::Get<const Game::dvar_t*>(cg_drawMaterial);
@@ -320,6 +354,13 @@ namespace Components
 		}
 
 		Utils::Hook::PointLeaAt(Com_Assert_fLea, reinterpret_cast<void*>(assertHandler));
+
+		if (!Utils::Hook::BranchesTo(CG_RegisterDvars_DrawViewposCall, Dvar_RegisterBool_Engine, false)
+			|| !drawViewposHook.Initialize(CG_RegisterDvars_DrawViewposCall, reinterpret_cast<void*>(Dvar_RegisterDrawViewpos), HOOK_CALL)->Install()->IsInstalled())
+		{
+			drawViewposHook.Uninstall();
+			Logger::Error("debug: CG_RegisterDvars does not read as expected, cg_drawViewpos stays a bool\n");
+		}
 		Utils::Hook::Set<std::uint32_t>(player_debugHealthFlags + 2, Game::DVAR_NONE);
 
 		Events::OnDvarInit(CL_InitDebugDvars);

@@ -1428,6 +1428,36 @@ namespace Components
 		}
 	}
 
+	// the exe keeps no dvar descriptions
+	static std::vector<std::pair<std::string, std::string>> dvarHints;
+
+	void Console::AddDvarHint(const char* name, const char* hint)
+	{
+		for (auto& [dvar, text] : dvarHints)
+		{
+			if (_stricmp(dvar.data(), name) == 0)
+			{
+				text = hint;
+				return;
+			}
+		}
+
+		dvarHints.emplace_back(name, hint);
+	}
+
+	const char* Console::FindDvarHint(const char* name)
+	{
+		for (const auto& [dvar, hint] : dvarHints)
+		{
+			if (_stricmp(dvar.data(), name) == 0)
+			{
+				return hint.data();
+			}
+		}
+
+		return nullptr;
+	}
+
 	const char* Console::FindBuiltinDescription(const char* name)
 	{
 		for (const auto& builtin : builtins)
@@ -2008,7 +2038,17 @@ namespace Components
 			std::snprintf(clampedName, sizeof(clampedName), "%s", detailName);
 			char clampedValue[valueClamp + 1];
 
-			DrawHintBox(hintX, hintY, 2);
+			std::vector<std::string> hintLines;
+
+			if (const char* const hint = FindDvarHint(detailName))
+			{
+				for (const auto line : std::views::split(std::string_view(hint), '\n'))
+				{
+					hintLines.emplace_back(line.begin(), line.end());
+				}
+			}
+
+			DrawHintBox(hintX, hintY, 2 + static_cast<int>(hintLines.size()));
 			DrawHintText(clampedName, hintX, hintY, dvarNameColor);
 			std::snprintf(clampedValue, sizeof(clampedValue), "%s", value);
 			DrawHintText(clampedValue, valueX, hintY, dvarValueColor);
@@ -2016,6 +2056,12 @@ namespace Components
 			std::snprintf(clampedValue, sizeof(clampedValue), "%s", resetValue);
 			DrawHintText("  default", hintX, hintY + fontH, descriptionColor);
 			DrawHintText(clampedValue, valueX, hintY + fontH, descriptionColor);
+
+			for (std::size_t i = 0; i < hintLines.size(); ++i)
+			{
+				DrawHintText(hintLines[i].data(), hintX, hintY + fontH * static_cast<float>(2 + i), descriptionColor);
+			}
+
 			return;
 		}
 

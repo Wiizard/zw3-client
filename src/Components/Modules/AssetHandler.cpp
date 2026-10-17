@@ -520,6 +520,62 @@ namespace Components
 		}
 	}
 
+	constexpr std::uintptr_t DB_GetMaterialAtIndex = 0x14012DD30;
+	constexpr std::uintptr_t materialLess = 0x140051950;
+	static const Utils::Hook::LeaSite materialLessLea = { 0x14001D448, { 0x4C, 0x8D, 0x0D }, materialLess };
+	constexpr int techniqueLit = 9;
+
+	static Game::MaterialTechniqueSet* DrawnTechniqueSet(const Game::Material* material)
+	{
+		auto* const techniqueSet = material->techniqueSet;
+
+		if (techniqueSet->remappedTechniqueSet)
+		{
+			return techniqueSet->remappedTechniqueSet;
+		}
+
+		return techniqueSet;
+	}
+
+	static bool MaterialLess(unsigned int left, unsigned int right)
+	{
+		const auto materialAt = reinterpret_cast<Game::Material*(*)(unsigned int)>(Utils::Hook::Rebase(DB_GetMaterialAtIndex));
+		const Game::Material* const leftMaterial = materialAt(left);
+		const Game::Material* const rightMaterial = materialAt(right);
+
+		if (leftMaterial->info.sortKey == rightMaterial->info.sortKey)
+		{
+			const bool isLeftLit = DrawnTechniqueSet(leftMaterial)->techniques[techniqueLit] != nullptr;
+			const bool isRightLit = DrawnTechniqueSet(rightMaterial)->techniques[techniqueLit] != nullptr;
+
+			if (isLeftLit != isRightLit)
+			{
+				return isLeftLit;
+			}
+		}
+
+		return reinterpret_cast<bool(*)(unsigned int, unsigned int)>(Utils::Hook::Rebase(materialLess))(left, right);
+	}
+
+	static void GuardMaterialSort()
+	{
+		if (!Utils::Hook::IsLeaIntact(materialLessLea))
+		{
+			Logger::Error("assethandler: R_BeginFrame's material sort does not read as expected, a lit and an unlit material in one sort key still crash it\n");
+			return;
+		}
+
+		const auto stub = Utils::Hook::Trampoline(Utils::Hook::Rebase(materialLessLea.address), reinterpret_cast<std::uintptr_t>(MaterialLess));
+
+		if (!stub || !Utils::Hook::CanLeaReach(materialLessLea, reinterpret_cast<void*>(stub)))
+		{
+			Logger::Error("assethandler: no room for the material sort's guard beside the image, a lit and an unlit material in one sort key still crash it\n");
+			return;
+		}
+
+		Utils::Hook::PointLeaAt(materialLessLea, reinterpret_cast<void*>(stub));
+	}
+
 	static bool RaiseMaterialPool()
 	{
 		bool isExpected = AreLeasIntact(materialPoolLeas) && AreLeasIntact(rgpListLeas) && AreLeasIntact(rgpStartsLeas)
@@ -2156,6 +2212,7 @@ namespace Components
 		}
 
 		const bool isMaterialSortRaised = RaiseMaterialPool();
+		GuardMaterialSort();
 		const bool isDrawSurfKeyWide = WidenDrawSurfKey();
 
 		if (isDrawSurfKeyWide)

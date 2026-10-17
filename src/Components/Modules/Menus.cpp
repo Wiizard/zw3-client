@@ -486,7 +486,6 @@ namespace Components
 		zw3_ui_news_counter.Set("0 / 0");
 		zw3_ui_news_image.Set("");
 		zw3_ui_news_has_image.Set(false);
-		zw3_ui_news_loading.Set(false);
 
 		ApplyNewsTileTitles();
 		ApplyNewsImageMaterialToMenu(nullptr);
@@ -646,8 +645,9 @@ namespace Components
 		{
 			if (items.empty())
 			{
-				ClearNews();
 				isNewsFetching.store(false);
+				ClearNews();
+				zw3_ui_news_loading.Set(false);
 				return;
 			}
 
@@ -671,16 +671,15 @@ namespace Components
 			zw3_ui_news_hover.Set(false);
 			zw3_ui_news_image.Set("");
 			zw3_ui_news_has_image.Set(false);
-			zw3_ui_news_loading.Set(false);
-
-			isNewsFetching.store(false);
 
 			newsElapsedMs = 0;
 			lastNewsUpdate = 0;
 			holdNewsUntil = 0;
 			wasNewsHovered = false;
 
-			Scheduler::Once(ApplyNewsItem, Scheduler::Pipeline::MAIN);
+			ApplyNewsItem();
+			isNewsFetching.store(false);
+			zw3_ui_news_loading.Set(false);
 		}, Scheduler::Pipeline::MAIN);
 	}
 

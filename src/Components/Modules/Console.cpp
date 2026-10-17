@@ -1646,6 +1646,12 @@ namespace Components
 			return;
 		}
 
+		if (big)
+		{
+			isBig = !isBig;
+			return;
+		}
+
 		SetOpen(false);
 	}
 

@@ -1550,7 +1550,8 @@ namespace Components
 		std::snprintf(firstToken, sizeof(firstToken), "%.*s",
 			static_cast<int>(std::strcspn(command, " 	")), command);
 
-		if (*firstToken && !FindCommand(firstToken) && !FindDvar(firstToken))
+		if (*firstToken && !FindCommand(firstToken) && !FindDvar(firstToken)
+			&& Game::CL_GetLocalClientConnectionState(0) < Game::CA_CONNECTED)
 		{
 			Print(Utils::String::VA("unknown command or dvar: %s\n", firstToken));
 			return;

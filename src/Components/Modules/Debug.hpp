@@ -10,13 +10,16 @@ namespace Components
 	private:
 		static const Game::dvar_t* debugOverlay;
 		static const Game::dvar_t* bug_name;
+		static const Game::dvar_t* cg_drawLookAt;
 
 		static std::string BuildFlagsString(int flags, std::span<const char* const> names);
 
 		static void CG_Debug_DrawPSFlags(int localClientNum);
 		static void CG_DrawDebugPlayerHealth(int localClientNum);
 		static Game::dvar_t* Dvar_RegisterDrawViewpos(const char* dvarName, bool value, unsigned int flags, const char* description);
-		static void CG_DrawViewpos(int localClientNum, int mode);
+		static void CG_DrawViewpos(int localClientNum, int mode, std::vector<std::string>& rows);
+		static void CG_DrawLookAt(int localClientNum, int mode, std::vector<std::string>& rows);
+		static void DrawCornerRows(int localClientNum, const std::vector<std::string>& rows);
 		static void CG_Debug_DrawFontTest(int localClientNum);
 
 		static void CG_DrawDebugOverlays_Hk();

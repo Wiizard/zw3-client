@@ -2098,7 +2098,10 @@ namespace Game
 		char pad2[0x5];
 		unsigned short script_classname;
 		unsigned short classname;
-		char pad3[0xE];
+		unsigned short script_linkName;
+		unsigned short target;
+		unsigned short targetname;
+		char pad3[0x8];
 		int flags;
 		char pad4[0x14];
 		int health;
@@ -2112,6 +2115,7 @@ namespace Game
 	AssertOffset(gentity_s, active, 0x17C);
 	AssertOffset(gentity_s, script_classname, 0x182);
 	AssertOffset(gentity_s, classname, 0x184);
+	AssertOffset(gentity_s, targetname, 0x18A);
 	AssertOffset(gentity_s, flags, 0x194);
 	AssertOffset(gentity_s, health, 0x1AC);
 

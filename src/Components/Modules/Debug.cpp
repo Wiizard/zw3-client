@@ -10,6 +10,7 @@ namespace Components
 {
 	const Game::dvar_t* Debug::debugOverlay = nullptr;
 	const Game::dvar_t* Debug::bug_name = nullptr;
+	const Game::dvar_t* Debug::cg_drawLookAt = nullptr;
 
 	static const char* const pmFlagNames[] =
 	{
@@ -132,6 +133,41 @@ namespace Components
 	constexpr int viewposFeet = 2;
 	constexpr int viewposBoth = 3;
 
+	constexpr std::uintptr_t CG_LocationalTrace = 0x1400CA0C0;
+	constexpr std::uintptr_t CM_TraceStaticModel = 0x1401EB790;
+	constexpr std::uintptr_t AngleVectors = 0x14027E000;
+	constexpr std::uintptr_t Com_SurfaceTypeToName = 0x14028DF60;
+	constexpr std::uintptr_t cgs_gameModels = 0x1405876A0;
+	constexpr std::uintptr_t cm_numStaticModels = 0x141BD3198;
+	constexpr std::uintptr_t cm_staticModelList = 0x141BD31A0;
+
+	constexpr int MASK_SHOT = 0x2806831;
+	constexpr int MASK_ALL = -1;
+
+	constexpr int lookAtMaterial = 1;
+	constexpr int lookAtObject = 2;
+	constexpr int lookAtPoint = 3;
+	constexpr int lookAtAll = 4;
+	constexpr int lookAtClips = 5;
+	constexpr int ENTITYNUM_WORLD = 2046;
+	constexpr int ET_GENERAL = 0;
+	constexpr int ET_SCRIPTMOVER = 6;
+	constexpr int brushSolid = 0xFFFFFF;
+	constexpr int scriptMoverModel = 0x140;
+	constexpr int surfaceTypeShift = 20;
+	constexpr int surfaceTypeMask = 0x1F;
+	constexpr float lookAtRange = 8192.0f;
+
+	struct cStaticModel_s
+	{
+		Game::XModel* xmodel;
+		float origin[3];
+		float invScaledAxis[3][3];
+		Game::Bounds absBounds;
+	};
+
+	AssertSize(cStaticModel_s, 0x50);
+
 	static Utils::Hook drawViewposHook;
 
 	constexpr std::uintptr_t player_debugHealthFlags = 0x14008BF8C;
@@ -233,17 +269,9 @@ namespace Components
 		return Game::Dvar_RegisterInt(dvarName, 0, 0, viewposBoth, flags, "Draw viewpos: 1 eye, 2 feet, 3 both");
 	}
 
-	void Debug::CG_DrawViewpos(int localClientNum, int mode)
+	void Debug::CG_DrawViewpos(int localClientNum, int mode, std::vector<std::string>& rows)
 	{
-		constexpr float scale = 0.25f;
-		constexpr float margin = 10.0f;
-		constexpr float rowHeight = 12.0f;
-
 		const auto* const ps = reinterpret_cast<const Game::playerState_s*>(Utils::Hook::Rebase(cgArray));
-		const auto* const placement = Game::ScrPlace_GetActivePlacement(localClientNum);
-		auto* const font = Game::UI_GetFontHandle(placement, 6, scale);
-
-		std::vector<std::string> rows;
 
 		if (mode == viewposEye || mode == viewposBoth)
 		{
@@ -256,6 +284,243 @@ namespace Components
 		{
 			rows.emplace_back(Utils::String::VA("(%.0f, %.0f, %.0f) (feet)", ps->origin[0], ps->origin[1], ps->origin[2]));
 		}
+	}
+
+	static bool RayHitsBounds(const float* start, const float* delta, const Game::Bounds& bounds)
+	{
+		float enter = 0.0f;
+		float exit = 1.0f;
+
+		for (int axis = 0; axis < 3; ++axis)
+		{
+			const float min = bounds.midPoint[axis] - bounds.halfSize[axis];
+			const float max = bounds.midPoint[axis] + bounds.halfSize[axis];
+
+			if (std::fabs(delta[axis]) < 0.0001f)
+			{
+				if (start[axis] < min || start[axis] > max)
+				{
+					return false;
+				}
+
+				continue;
+			}
+
+			float entry = (min - start[axis]) / delta[axis];
+			float leave = (max - start[axis]) / delta[axis];
+
+			if (entry > leave)
+			{
+				std::swap(entry, leave);
+			}
+
+			enter = std::max(enter, entry);
+			exit = std::min(exit, leave);
+
+			if (enter > exit)
+			{
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	// static model hits come back as world, so retrace them to get the one hit
+	static const char* StaticModelAt(const float* start, const float* end, float fraction, int mask)
+	{
+		const auto count = Utils::Hook::Get<unsigned int>(cm_numStaticModels);
+		const auto* const models = Utils::Hook::Get<const cStaticModel_s*>(cm_staticModelList);
+		const float delta[3] = { end[0] - start[0], end[1] - start[1], end[2] - start[2] };
+
+		float best = 1.0f;
+		const char* name = nullptr;
+
+		for (unsigned int i = 0; i < count; ++i)
+		{
+			const auto& model = models[i];
+
+			if (!model.xmodel || !RayHitsBounds(start, delta, model.absBounds))
+			{
+				continue;
+			}
+
+			Game::trace_t trace{};
+			trace.fraction = 1.0f;
+			Utils::Hook::Call<void(const cStaticModel_s*, Game::trace_t*, const float*, const float*, int)>(CM_TraceStaticModel)(&model, &trace, start, end, mask);
+
+			if (trace.fraction < best)
+			{
+				best = trace.fraction;
+				name = model.xmodel->name;
+			}
+		}
+
+		return name && std::fabs(best - fraction) < 0.0001f ? name : nullptr;
+	}
+
+	static const char* const eTypeNames[] =
+	{
+		"general", "player", "player corpse", "item", "missile", "invisible", "script mover", "sound blend",
+		"fx", "loop fx", "primary light", "turret", "helicopter", "plane", "vehicle", "vehicle collmap",
+		"vehicle corpse", "vehicle spawner",
+	};
+
+	static void AddEntityRows(int localClientNum, int entNum, std::vector<std::string>& rows)
+	{
+		const auto* const cent = Game::CG_GetEntity(localClientNum, entNum);
+		const int eType = cent->nextState.eType;
+
+		if (eType >= 0 && eType < static_cast<int>(std::size(eTypeNames)))
+		{
+			rows.emplace_back(Utils::String::VA("entity %d: %s", entNum, eTypeNames[eType]));
+		}
+		else
+		{
+			rows.emplace_back(Utils::String::VA("entity %d: eType %d", entNum, eType));
+		}
+
+		const auto* const sv_running = *Game::com_sv_running;
+
+		if (sv_running && sv_running->current.enabled)
+		{
+			const auto* const ent = &Game::g_entities[entNum];
+
+			if (ent->r.isInUse)
+			{
+				rows.emplace_back(Utils::String::VA("classname: %s", Game::SL_ConvertToString(ent->classname)));
+
+				if (ent->targetname)
+				{
+					rows.emplace_back(Utils::String::VA("targetname: %s", Game::SL_ConvertToString(ent->targetname)));
+				}
+
+				if (ent->target)
+				{
+					rows.emplace_back(Utils::String::VA("target: %s", Game::SL_ConvertToString(ent->target)));
+				}
+
+				if (ent->health)
+				{
+					rows.emplace_back(Utils::String::VA("health: %d", ent->health));
+				}
+			}
+		}
+
+		if (cent->nextState.solid == brushSolid)
+		{
+			rows.emplace_back(Utils::String::VA("brush: *%d", cent->nextState.index));
+		}
+
+		if (eType != ET_GENERAL && eType != ET_SCRIPTMOVER)
+		{
+			return;
+		}
+
+		const int modelIndex = eType == ET_SCRIPTMOVER
+			? *reinterpret_cast<const int*>(reinterpret_cast<const char*>(cent) + scriptMoverModel)
+			: cent->nextState.index;
+
+		const auto* const xmodel = reinterpret_cast<Game::XModel* const*>(Utils::Hook::Rebase(cgs_gameModels))[modelIndex];
+
+		if (modelIndex > 0 && xmodel)
+		{
+			rows.emplace_back(Utils::String::VA("model: %s", xmodel->name));
+		}
+	}
+
+	void Debug::CG_DrawLookAt(int localClientNum, int mode, std::vector<std::string>& rows)
+	{
+		const bool showMaterial = mode == lookAtMaterial || mode >= lookAtAll;
+		const bool showObject = mode == lookAtObject || mode >= lookAtAll;
+		const bool showPoint = mode == lookAtPoint || mode >= lookAtAll;
+		const int mask = mode == lookAtClips ? MASK_ALL : MASK_SHOT;
+
+		const auto* const ps = reinterpret_cast<const Game::playerState_s*>(Utils::Hook::Rebase(cgArray));
+
+		float start[3]{};
+		Utils::Hook::Call<void(int, const Game::playerState_s*, float*)>(CG_GetPlayerViewOrigin)(localClientNum, ps, start);
+
+		float forward[3]{};
+		Utils::Hook::Call<void(const float*, float*, float*, float*)>(AngleVectors)(ps->viewangles, forward, nullptr, nullptr);
+
+		const float end[3] =
+		{
+			start[0] + forward[0] * lookAtRange,
+			start[1] + forward[1] * lookAtRange,
+			start[2] + forward[2] * lookAtRange,
+		};
+
+		Game::trace_t trace{};
+		trace.fraction = 1.0f;
+		Utils::Hook::Call<void(Game::trace_t*, const float*, const float*, int, int)>(CG_LocationalTrace)(&trace, start, end, ps->clientNum, mask);
+
+		if (trace.fraction >= 1.0f)
+		{
+			rows.emplace_back("nothing");
+			return;
+		}
+
+		if (showMaterial)
+		{
+			rows.emplace_back(Utils::String::VA("material: %s", trace.material ? trace.material : "none"));
+
+			const int surfaceType = (trace.surfaceFlags >> surfaceTypeShift) & surfaceTypeMask;
+			rows.emplace_back(Utils::String::VA("surface: %s, contents: 0x%X",
+				Utils::Hook::Call<const char*(int)>(Com_SurfaceTypeToName)(surfaceType), trace.contents));
+		}
+
+		if (showObject)
+		{
+			switch (trace.hitType)
+			{
+			case Game::TRACE_HITTYPE_ENTITY:
+				if (trace.hitId != ENTITYNUM_WORLD)
+				{
+					AddEntityRows(localClientNum, trace.hitId, rows);
+				}
+				else if (const char* const name = StaticModelAt(start, end, trace.fraction, mask))
+				{
+					rows.emplace_back(Utils::String::VA("static model: %s", name));
+				}
+				else
+				{
+					rows.emplace_back("world");
+				}
+				break;
+			case Game::TRACE_HITTYPE_DYNENT_MODEL:
+			case Game::TRACE_HITTYPE_DYNENT_BRUSH:
+				rows.emplace_back(Utils::String::VA("dynent %d", trace.hitId));
+				break;
+			case Game::TRACE_HITTYPE_GLASS:
+				rows.emplace_back(Utils::String::VA("glass %d", trace.hitId));
+				break;
+			default:
+				break;
+			}
+		}
+
+		if (!showPoint)
+		{
+			return;
+		}
+
+		rows.emplace_back(Utils::String::VA("normal: (%.2f, %.2f, %.2f)", trace.normal[0], trace.normal[1], trace.normal[2]));
+		rows.emplace_back(Utils::String::VA("(%.0f, %.0f, %.0f) %.0f units",
+			start[0] + (end[0] - start[0]) * trace.fraction,
+			start[1] + (end[1] - start[1]) * trace.fraction,
+			start[2] + (end[2] - start[2]) * trace.fraction,
+			lookAtRange * trace.fraction));
+	}
+
+	void Debug::DrawCornerRows(int localClientNum, const std::vector<std::string>& rows)
+	{
+		constexpr float scale = 0.25f;
+		constexpr float margin = 10.0f;
+		constexpr float rowHeight = 12.0f;
+
+		const auto* const placement = Game::ScrPlace_GetActivePlacement(localClientNum);
+		auto* const font = Game::UI_GetFontHandle(placement, 6, scale);
 
 		float y = 20.0f;
 
@@ -276,12 +541,20 @@ namespace Components
 			return;
 		}
 
+		std::vector<std::string> rows;
 		const auto* const drawViewpos = Utils::Hook::Get<const Game::dvar_t*>(cg_drawViewpos);
 
 		if (drawViewpos && drawViewpos->current.integer)
 		{
-			CG_DrawViewpos(localClientNum, drawViewpos->current.integer);
+			CG_DrawViewpos(localClientNum, drawViewpos->current.integer, rows);
 		}
+
+		if (cg_drawLookAt && cg_drawLookAt->current.integer)
+		{
+			CG_DrawLookAt(localClientNum, cg_drawLookAt->current.integer, rows);
+		}
+
+		DrawCornerRows(localClientNum, rows);
 
 		const auto* const drawMaterial = Utils::Hook::Get<const Game::dvar_t*>(cg_drawMaterial);
 
@@ -332,6 +605,8 @@ namespace Components
 
 		debugOverlay = Game::Dvar_RegisterEnum("debugOverlay", debugOverlayNames, 0, Game::DVAR_NONE, "Toggles the display of various debug info.");
 		bug_name = Game::Dvar_RegisterString("bug_name", "bug0", Game::DVAR_NONE, "Name appended to the copied console log");
+		cg_drawLookAt = Game::Dvar_RegisterInt("cg_drawLookAt", 0, 0, lookAtClips, Game::DVAR_NONE, "Draw what the crosshair is on");
+		Console::AddDvarHint("cg_drawLookAt", "  1: material\n  2: object\n  3: hit point\n  4: all\n  5: all, clips too");
 	}
 
 	Debug::Debug()

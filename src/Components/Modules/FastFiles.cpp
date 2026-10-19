@@ -713,7 +713,42 @@ namespace Components
 			return memFileReadAhead.Read(stream, flush);
 		}
 
-		return ::inflate(stream, flush);
+		if (stream->next_out)
+		{
+			return ::inflate(stream, flush);
+		}
+
+		thread_local std::array<Bytef, 0x10000> scratch;
+
+		const uInt requested = stream->avail_out;
+		uInt remaining = requested;
+		int result = Z_OK;
+
+		while (remaining)
+		{
+			const auto chunk = std::min<uInt>(remaining, static_cast<uInt>(scratch.size()));
+
+			stream->next_out = scratch.data();
+			stream->avail_out = chunk;
+
+			result = ::inflate(stream, flush);
+			remaining -= chunk - stream->avail_out;
+
+			if (result != Z_OK || stream->avail_out)
+			{
+				break;
+			}
+		}
+
+		stream->next_out = nullptr;
+		stream->avail_out = remaining;
+
+		if (result == Z_BUF_ERROR && remaining != requested)
+		{
+			result = Z_OK;
+		}
+
+		return result;
 	}
 
 	static int ModernInflateEnd(z_streamp stream)

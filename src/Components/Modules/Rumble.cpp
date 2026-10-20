@@ -377,11 +377,9 @@ namespace Components
 	{
 		const auto logError = [](const std::string& message)
 		{
-			if ((*Game::com_sv_running)->current.enabled)
-			{
-				Logger::Fatal("{}", message);
-			}
-			else
+			static std::unordered_set<std::string> reported;
+
+			if (reported.insert(message).second)
 			{
 				Logger::Warning("{}", message);
 			}

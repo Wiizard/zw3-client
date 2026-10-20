@@ -133,6 +133,26 @@ namespace Components
 	constexpr int viewposFeet = 2;
 	constexpr int viewposBoth = 3;
 
+	// registered by the exe, never drawn in MP
+	constexpr std::uintptr_t cg_drawFPS = 0x140587508;
+	constexpr std::uintptr_t cg_drawFPSLabels = 0x1406BCE60;
+
+	constexpr int drawFpsSimpleRanges = 2;
+	constexpr int drawFpsVerbose = 3;
+	constexpr int drawFpsVerboseViewpos = 4;
+
+	constexpr int fpsSampleCount = 32;
+	constexpr float fpsScale = 0.75f;
+	constexpr float fpsOffsetX = 5.0f;
+	constexpr float fpsOffsetY = -5.0f;
+	constexpr float degreesPerRadian = 57.29577951308232f;
+
+	static int fpsPreviousMs = 0;
+	static bool hasFpsPreviousMs = false;
+	static int fpsFrameTimes[fpsSampleCount]{};
+	static int fpsIndex = 0;
+	static bool hasFullFpsWindow = false;
+
 	constexpr std::uintptr_t CG_LocationalTrace = 0x1400CA0C0;
 	constexpr std::uintptr_t CM_TraceStaticModel = 0x1401EB790;
 	constexpr std::uintptr_t AngleVectors = 0x14027E000;
@@ -513,7 +533,166 @@ namespace Components
 			lookAtRange * trace.fraction));
 	}
 
-	void Debug::DrawCornerRows(int localClientNum, const std::vector<std::string>& rows)
+	static void ResetFpsWindow()
+	{
+		hasFpsPreviousMs = false;
+		hasFullFpsWindow = false;
+		fpsIndex = 0;
+	}
+
+	static void SampleFrameTime()
+	{
+		const int now = Game::Sys_Milliseconds();
+
+		if (!hasFpsPreviousMs)
+		{
+			fpsPreviousMs = now;
+			hasFpsPreviousMs = true;
+			return;
+		}
+
+		fpsFrameTimes[fpsIndex] = now - fpsPreviousMs;
+		fpsPreviousMs = now;
+
+		fpsIndex = (fpsIndex + 1) % fpsSampleCount;
+
+		if (fpsIndex == 0)
+		{
+			hasFullFpsWindow = true;
+		}
+	}
+
+	// UI text scales are against a 48 pixel font, so undo that to scale the font's own size
+	static float UiScaleOf(const Game::Font_s* font)
+	{
+		return fpsScale * static_cast<float>(font->pixelHeight) / 48.0f;
+	}
+
+	// value ends at x, label starts there
+	static void DrawFpsRow(const float* placement, Game::Font_s* font, const char* value, const char* label, float x, float y, const float* color)
+	{
+		constexpr int maxChars = std::numeric_limits<int>::max();
+		constexpr float labelColor[] = { 1.0f, 1.0f, 1.0f, 0.75f };
+
+		const float scale = UiScaleOf(font);
+		const auto width = static_cast<float>(Game::UI_TextWidth(value, maxChars, font, scale));
+		Game::UI_DrawText(placement, value, maxChars, font, x - width, y, 3, 1, scale, color, 0);
+
+		if (label)
+		{
+			Game::UI_DrawText(placement, label, maxChars, font, x, y, 3, 1, scale, labelColor, 0);
+		}
+	}
+
+	// returns the baseline of the last row drawn, 0 when nothing is
+	float Debug::CG_DrawFPS(int localClientNum)
+	{
+		SampleFrameTime();
+
+		const auto* const drawFps = Utils::Hook::Get<const Game::dvar_t*>(cg_drawFPS);
+
+		if (!drawFps || drawFps->current.integer <= 0 || !hasFullFpsWindow)
+		{
+			return 0.0f;
+		}
+
+		auto* const font = Game::R_RegisterFont("fonts/bigDevFont", 0);
+
+		if (!font)
+		{
+			return 0.0f;
+		}
+
+		int minTime = std::numeric_limits<int>::max();
+		int maxTime = 0;
+		int total = 0;
+
+		for (const int frameTime : fpsFrameTimes)
+		{
+			total += frameTime;
+			minTime = std::min(minTime, frameTime);
+			maxTime = std::max(maxTime, frameTime);
+		}
+
+		const float average = static_cast<float>(total) / static_cast<float>(fpsSampleCount);
+
+		float variance = 0.0f;
+
+		for (const int frameTime : fpsFrameTimes)
+		{
+			variance += std::fabs(static_cast<float>(frameTime) - average);
+		}
+
+		variance /= static_cast<float>(fpsSampleCount);
+
+		total = std::max(total, 1);
+		minTime = std::max(minTime, 1);
+		const int slowestTime = std::max(maxTime, 1);
+
+		const int fpsMin = static_cast<int>(std::lrint(1000.0f / static_cast<float>(slowestTime)));
+		const int fpsMax = static_cast<int>(std::lrint(1000.0f / static_cast<float>(minTime)));
+		const int fps = static_cast<int>(std::lrint(1000.0f * fpsSampleCount / static_cast<float>(total)));
+		const float msPerFrame = static_cast<float>(total) / static_cast<float>(fpsSampleCount);
+
+		// red under 55, white from 65
+		const float frac = std::clamp(static_cast<float>(fps - 55) / 10.0f, 0.0f, 1.0f);
+		const float fpsColor[] = { 1.0f, frac, frac, 1.0f };
+
+		const int level = drawFps->current.integer;
+		const auto* const placement = Game::ScrPlace_GetActivePlacement(localClientNum);
+
+		const auto* const drawLabels = Utils::Hook::Get<const Game::dvar_t*>(cg_drawFPSLabels);
+		const bool shouldDrawLabels = drawLabels && drawLabels->current.enabled;
+
+		const float lineHeight = static_cast<float>(Game::R_TextHeight(font)) * fpsScale;
+		const float lineStep = static_cast<float>(static_cast<int>(lineHeight)) * fpsScale;
+
+		float x = fpsOffsetX;
+
+		if (shouldDrawLabels)
+		{
+			x -= static_cast<float>(Game::UI_TextWidth(" cg ms/frame", std::numeric_limits<int>::max(), font, UiScaleOf(font)));
+		}
+
+		float y = fpsOffsetY + lineHeight;
+
+		const char* fpsText = Utils::String::VA("%i", fps);
+
+		if (level >= drawFpsSimpleRanges)
+		{
+			fpsText = Utils::String::VA("(%i-%i, %i) %i", fpsMin, fpsMax, static_cast<int>(std::lrint(variance)), fps);
+		}
+
+		DrawFpsRow(placement, font, fpsText, shouldDrawLabels ? " FPS" : nullptr, x, y, fpsColor);
+
+		if (level < drawFpsVerbose)
+		{
+			return y;
+		}
+
+		y += lineStep;
+		DrawFpsRow(placement, font, Utils::String::VA("(%i-%i) %1.2f", minTime, maxTime, msPerFrame),
+			shouldDrawLabels ? " cg ms/frame" : nullptr, x, y, white);
+
+		if (level < drawFpsVerboseViewpos)
+		{
+			return y;
+		}
+
+		const auto& view = reinterpret_cast<const Game::cg_s*>(Utils::Hook::Rebase(cgArray))->refdef.view;
+		const float* const forward = view.axis[0];
+		const float flatLength = std::sqrt(forward[0] * forward[0] + forward[1] * forward[1]);
+		const float pitch = std::atan2(-forward[2], flatLength) * degreesPerRadian;
+		const float yaw = std::atan2(forward[1], forward[0]) * degreesPerRadian;
+
+		y += lineStep;
+		DrawFpsRow(placement, font, Utils::String::VA("(%.0f, %.0f, %.0f) %.0f %.0f", view.org[0], view.org[1], view.org[2], pitch, yaw),
+			shouldDrawLabels ? " viewpos" : nullptr, x, y, white);
+
+		return y;
+	}
+
+	void Debug::DrawCornerRows(int localClientNum, const std::vector<std::string>& rows, float top)
 	{
 		constexpr float scale = 0.25f;
 		constexpr float margin = 10.0f;
@@ -522,7 +701,7 @@ namespace Components
 		const auto* const placement = Game::ScrPlace_GetActivePlacement(localClientNum);
 		auto* const font = Game::UI_GetFontHandle(placement, 6, scale);
 
-		float y = 20.0f;
+		float y = std::max(20.0f, top + rowHeight);
 
 		for (const auto& row : rows)
 		{
@@ -538,8 +717,11 @@ namespace Components
 
 		if (!Utils::Hook::Get<int>(fullScreenUiFlag) || Utils::Hook::Get<int>(clsState) != connectionActive)
 		{
+			ResetFpsWindow();
 			return;
 		}
+
+		const float fpsBottom = CG_DrawFPS(localClientNum);
 
 		std::vector<std::string> rows;
 		const auto* const drawViewpos = Utils::Hook::Get<const Game::dvar_t*>(cg_drawViewpos);
@@ -554,7 +736,7 @@ namespace Components
 			CG_DrawLookAt(localClientNum, cg_drawLookAt->current.integer, rows);
 		}
 
-		DrawCornerRows(localClientNum, rows);
+		DrawCornerRows(localClientNum, rows, fpsBottom);
 
 		const auto* const drawMaterial = Utils::Hook::Get<const Game::dvar_t*>(cg_drawMaterial);
 
@@ -607,6 +789,8 @@ namespace Components
 		bug_name = Game::Dvar_RegisterString("bug_name", "bug0", Game::DVAR_NONE, "Name appended to the copied console log");
 		cg_drawLookAt = Game::Dvar_RegisterInt("cg_drawLookAt", 0, 0, lookAtClips, Game::DVAR_NONE, "Draw what the crosshair is on");
 		Console::AddDvarHint("cg_drawLookAt", "  1: material\n  2: object\n  3: hit point\n  4: all\n  5: all, clips too");
+		Console::AddDvarHint("cg_drawFPS", "  1: simple\n  2: simple ranges\n  3: verbose\n  4: verbose + viewpos");
+		Console::AddDvarHint("cg_drawFPSLabels", "  draw labels beside cg_drawFPS");
 	}
 
 	Debug::Debug()

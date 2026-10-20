@@ -19,7 +19,8 @@ namespace Components
 		static Game::dvar_t* Dvar_RegisterDrawViewpos(const char* dvarName, bool value, unsigned int flags, const char* description);
 		static void CG_DrawViewpos(int localClientNum, int mode, std::vector<std::string>& rows);
 		static void CG_DrawLookAt(int localClientNum, int mode, std::vector<std::string>& rows);
-		static void DrawCornerRows(int localClientNum, const std::vector<std::string>& rows);
+		static float CG_DrawFPS(int localClientNum);
+		static void DrawCornerRows(int localClientNum, const std::vector<std::string>& rows, float top);
 		static void CG_Debug_DrawFontTest(int localClientNum);
 
 		static void CG_DrawDebugOverlays_Hk();

@@ -22,6 +22,7 @@
 #include "Network.hpp"
 #include "Party.hpp"
 #include "Renderer.hpp"
+#include "Remix/Remix.hpp"
 #include "Scheduler.hpp"
 #include "Sound.hpp"
 #include "ZoneBuilder.hpp"
@@ -2560,6 +2561,8 @@ namespace Components
 			isFrameReady.store(false, std::memory_order_release);
 			return;
 		}
+
+		Remix::Remix::BeginUiDrawing(device);
 
 		bool isRendered = false;
 		float whiteOpacity = 0.0f;

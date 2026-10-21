@@ -15,6 +15,7 @@
 #include "Modules/Ceg.hpp"
 #include "Modules/Changelog.hpp"
 #include "Modules/D3D9Ex.hpp"
+#include "Modules/Remix/Remix.hpp"
 #include "Modules/Debug.hpp"
 #include "Modules/Dedicated.hpp"
 #include "Modules/Discord.hpp"
@@ -186,6 +187,7 @@ namespace Components
 		Register(new Download());
 		Register(new Theatre());
 		Register(new D3D9Ex());
+		Register(new Remix::Remix());
 		Register(new Debug());
 		Register(new Dedicated());
 		Register(new Discord());

@@ -61,7 +61,7 @@
       <PrecompiledHeaderFile>STDInclude.hpp</PrecompiledHeaderFile>
       <WarningLevel>Level4</WarningLevel>
       <PreprocessorDefinitions>_WINDOWS;WIN32;_WIN64;DEBUG;_DEBUG;LTC_NO_FAST;LTC_NO_PROTOTYPES;LTC_NO_RSA_BLINDING;LTC_NO_FILE;ARGTYPE=4;LTM_DESC;__STDC_IEC_559__;MP_NO_DEV_URANDOM;RAPIDJSON_HAS_STDSTRING;ZLIB_CONST;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\src;..\build\src;..\lib\include;..\deps\discord-rpc\include;..\deps\json\single_include\nlohmann;..\deps\x64\libtomcrypt\src\headers;..\deps\x64\libtommath;..\deps\libwebp\src;..\deps\mongoose;..\deps\x64\pdcurses;..\deps\protobuf\src;..\deps\x64\rapidjson\include;..\deps\stb;..\deps\x64\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\src;..\build\src;..\lib\include;..\deps\discord-rpc\include;..\deps\json\single_include\nlohmann;..\deps\x64\libtomcrypt\src\headers;..\deps\x64\libtommath;..\deps\libwebp\src;..\deps\mongoose;..\deps\x64\pdcurses;..\deps\protobuf\src;..\deps\x64\rapidjson\include;..\deps\stb;..\deps\remix_api\include;..\deps\toml11\include;..\deps\xxhash;..\deps\imgui;..\deps\x64\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ForcedIncludeFiles>STDInclude.hpp</ForcedIncludeFiles>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <Optimization>Disabled</Optimization>
@@ -73,7 +73,7 @@
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>_WINDOWS;WIN32;_WIN64;DEBUG;_DEBUG;LTC_NO_FAST;LTC_NO_PROTOTYPES;LTC_NO_RSA_BLINDING;LTC_NO_FILE;ARGTYPE=4;LTM_DESC;__STDC_IEC_559__;MP_NO_DEV_URANDOM;RAPIDJSON_HAS_STDSTRING;ZLIB_CONST;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\src;..\build\src;..\lib\include;..\deps\discord-rpc\include;..\deps\json\single_include\nlohmann;..\deps\x64\libtomcrypt\src\headers;..\deps\x64\libtommath;..\deps\libwebp\src;..\deps\mongoose;..\deps\x64\pdcurses;..\deps\protobuf\src;..\deps\x64\rapidjson\include;..\deps\stb;..\deps\x64\zlib;$(ProjectDir)..\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\src;..\build\src;..\lib\include;..\deps\discord-rpc\include;..\deps\json\single_include\nlohmann;..\deps\x64\libtomcrypt\src\headers;..\deps\x64\libtommath;..\deps\libwebp\src;..\deps\mongoose;..\deps\x64\pdcurses;..\deps\protobuf\src;..\deps\x64\rapidjson\include;..\deps\stb;..\deps\remix_api\include;..\deps\toml11\include;..\deps\xxhash;..\deps\imgui;..\deps\x64\zlib;$(ProjectDir)..\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -92,7 +92,7 @@
       <PrecompiledHeaderFile>STDInclude.hpp</PrecompiledHeaderFile>
       <WarningLevel>Level4</WarningLevel>
       <PreprocessorDefinitions>_WINDOWS;WIN32;_WIN64;NDEBUG;LTC_NO_FAST;LTC_NO_PROTOTYPES;LTC_NO_RSA_BLINDING;LTC_NO_FILE;ARGTYPE=4;LTM_DESC;__STDC_IEC_559__;MP_NO_DEV_URANDOM;RAPIDJSON_HAS_STDSTRING;ZLIB_CONST;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\src;..\build\src;..\lib\include;..\deps\discord-rpc\include;..\deps\json\single_include\nlohmann;..\deps\x64\libtomcrypt\src\headers;..\deps\x64\libtommath;..\deps\libwebp\src;..\deps\mongoose;..\deps\x64\pdcurses;..\deps\protobuf\src;..\deps\x64\rapidjson\include;..\deps\stb;..\deps\x64\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\src;..\build\src;..\lib\include;..\deps\discord-rpc\include;..\deps\json\single_include\nlohmann;..\deps\x64\libtomcrypt\src\headers;..\deps\x64\libtommath;..\deps\libwebp\src;..\deps\mongoose;..\deps\x64\pdcurses;..\deps\protobuf\src;..\deps\x64\rapidjson\include;..\deps\stb;..\deps\remix_api\include;..\deps\toml11\include;..\deps\xxhash;..\deps\imgui;..\deps\x64\zlib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ForcedIncludeFiles>STDInclude.hpp</ForcedIncludeFiles>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <Optimization>MaxSpeed</Optimization>
@@ -109,7 +109,7 @@
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>_WINDOWS;WIN32;_WIN64;NDEBUG;LTC_NO_FAST;LTC_NO_PROTOTYPES;LTC_NO_RSA_BLINDING;LTC_NO_FILE;ARGTYPE=4;LTM_DESC;__STDC_IEC_559__;MP_NO_DEV_URANDOM;RAPIDJSON_HAS_STDSTRING;ZLIB_CONST;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\src;..\build\src;..\lib\include;..\deps\discord-rpc\include;..\deps\json\single_include\nlohmann;..\deps\x64\libtomcrypt\src\headers;..\deps\x64\libtommath;..\deps\libwebp\src;..\deps\mongoose;..\deps\x64\pdcurses;..\deps\protobuf\src;..\deps\x64\rapidjson\include;..\deps\stb;..\deps\x64\zlib;$(ProjectDir)..\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\src;..\build\src;..\lib\include;..\deps\discord-rpc\include;..\deps\json\single_include\nlohmann;..\deps\x64\libtomcrypt\src\headers;..\deps\x64\libtommath;..\deps\libwebp\src;..\deps\mongoose;..\deps\x64\pdcurses;..\deps\protobuf\src;..\deps\x64\rapidjson\include;..\deps\stb;..\deps\remix_api\include;..\deps\toml11\include;..\deps\xxhash;..\deps\imgui;..\deps\x64\zlib;$(ProjectDir)..\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -163,6 +163,38 @@
     <ClInclude Include="..\src\Components\Modules\AssetInterfaces\ImenuDef_t.hpp" />
     <ClInclude Include="..\src\Components\Modules\Auth.hpp" />
     <ClInclude Include="..\src\Components\Modules\Bans.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Api.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Camo.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Core.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Culling.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\DebugDraw.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Device.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Dxt.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Engine.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\FixedFunction.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Fog.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Hook.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Iw4.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Lights.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Look.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Menu.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\MapEditor.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\MapSettings.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Markers.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\MotionTracker.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Options.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Outdoor.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\PatchCalls.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\PbrMaterials.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Profiler.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Read.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Remix.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Scene.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Settings.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Sky.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\TextureTags.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Triggers.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\Weather.hpp" />
     <ClInclude Include="..\src\Components\Modules\BotAI\BotAI.hpp" />
     <ClInclude Include="..\src\Components\Modules\BotAI\BotControl.hpp" />
     <ClInclude Include="..\src\Components\Modules\BotAI\Control\Ai.hpp" />
@@ -458,6 +490,126 @@
     <ClCompile Include="..\src\Components\Modules\Auth.cpp" />
     <ClCompile Include="..\src\Components\Modules\Bans.cpp" />
     <ClCompile Include="..\src\Components\Modules\BotAI\BotAI.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Remix\Api.cpp">
+      <ObjectFileName>$(IntDir)\RemixApi.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Camo.cpp">
+      <ObjectFileName>$(IntDir)\RemixCamo.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Core.cpp">
+      <ObjectFileName>$(IntDir)\RemixCore.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Culling.cpp">
+      <ObjectFileName>$(IntDir)\RemixCulling.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\DebugDraw.cpp">
+      <ObjectFileName>$(IntDir)\RemixDebugDraw.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Device.cpp">
+      <ObjectFileName>$(IntDir)\RemixDevice.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Dxt.cpp">
+      <ObjectFileName>$(IntDir)\RemixDxt.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Engine.cpp">
+      <ObjectFileName>$(IntDir)\RemixEngine.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\FixedFunction.cpp">
+      <ObjectFileName>$(IntDir)\RemixFixedFunction.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Fog.cpp">
+      <ObjectFileName>$(IntDir)\RemixFog.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Hook.cpp">
+      <ObjectFileName>$(IntDir)\RemixHook.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Lights.cpp">
+      <ObjectFileName>$(IntDir)\RemixLights.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Look.cpp">
+      <ObjectFileName>$(IntDir)\RemixLook.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Menu.cpp">
+      <ObjectFileName>$(IntDir)\RemixMenu.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\deps\imgui\imgui.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="..\deps\imgui\imgui_draw.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="..\deps\imgui\imgui_tables.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="..\deps\imgui\imgui_widgets.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="..\deps\imgui\imgui_impl_dx9.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="..\deps\imgui\imgui_impl_win32.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\MapEditor.cpp">
+      <ObjectFileName>$(IntDir)\RemixMapEditor.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\MapSettings.cpp">
+      <ObjectFileName>$(IntDir)\RemixMapSettings.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Markers.cpp">
+      <ObjectFileName>$(IntDir)\RemixMarkers.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\MotionTracker.cpp">
+      <ObjectFileName>$(IntDir)\RemixMotionTracker.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Options.cpp">
+      <ObjectFileName>$(IntDir)\RemixOptions.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Outdoor.cpp">
+      <ObjectFileName>$(IntDir)\RemixOutdoor.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\PatchCalls.cpp">
+      <ObjectFileName>$(IntDir)\RemixPatchCalls.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\PbrMaterials.cpp">
+      <ObjectFileName>$(IntDir)\RemixPbrMaterials.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Profiler.cpp">
+      <ObjectFileName>$(IntDir)\RemixProfiler.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Remix.cpp">
+      <ObjectFileName>$(IntDir)\RemixRemix.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Scene.cpp">
+      <ObjectFileName>$(IntDir)\RemixScene.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Settings.cpp">
+      <ObjectFileName>$(IntDir)\RemixSettings.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Sky.cpp">
+      <ObjectFileName>$(IntDir)\RemixSky.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\TextureTags.cpp">
+      <ObjectFileName>$(IntDir)\RemixTextureTags.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Triggers.cpp">
+      <ObjectFileName>$(IntDir)\RemixTriggers.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Weather.cpp">
+      <ObjectFileName>$(IntDir)\RemixWeather.obj</ObjectFileName>
+    </ClCompile>
     <ClCompile Include="..\src\Components\Modules\BotAI\Control\Ai.cpp" />
     <ClCompile Include="..\src\Components\Modules\BotAI\Control\Combat.cpp" />
     <ClCompile Include="..\src\Components\Modules\BotAI\Control\Engine.cpp" />

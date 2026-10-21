@@ -30,8 +30,13 @@ namespace Components
 
 	constexpr int contentsSolid = 1;
 
-	// stock care_package brush
-	constexpr Game::Bounds crateBounds = { { -1.0f, 0.25f, 0.0f }, { 30.0f, 17.75f, 16.0f } };
+	// stock care_package brush, scaled down so zombie hitboxes fit through tight spots
+	constexpr float crateScale = 0.75f;
+	constexpr Game::Bounds crateBounds =
+	{
+		{ -1.0f * crateScale, 0.25f * crateScale, 0.0f * crateScale },
+		{ 30.0f * crateScale, 17.75f * crateScale, 16.0f * crateScale },
+	};
 
 #pragma pack(push, 1)
 	struct cLeaf_t

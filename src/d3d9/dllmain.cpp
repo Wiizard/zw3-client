@@ -59,7 +59,7 @@ BOOL APIENTRY DllMain(HINSTANCE instance, DWORD reason, LPVOID )
 				MB_ICONERROR);
 		}
 
-		LoadLibraryExA("iw4dlss5.dll", nullptr, LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+		// LoadLibraryExA("iw4dlss5.dll", nullptr, LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
 
 		return TRUE;
 	}

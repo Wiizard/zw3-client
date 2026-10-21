@@ -46,6 +46,7 @@
 namespace Components
 {
 	bool AssetHandler::isInstalled = false;
+	bool AssetHandler::isDrawSurfKeyWide = false;
 	std::vector<std::function<AssetHandler::LoadCallback>> AssetHandler::loadCallbacks;
 	std::unordered_map<unsigned int, std::vector<std::function<AssetHandler::LoadCallback>>> AssetHandler::typeLoadCallbacks;
 	std::map<unsigned int, std::vector<std::function<AssetHandler::FindCallback>>> AssetHandler::findCallbacks;
@@ -1283,6 +1284,11 @@ namespace Components
 		return isInstalled;
 	}
 
+	bool AssetHandler::IsDrawSurfKeyWide()
+	{
+		return isDrawSurfKeyWide;
+	}
+
 	void AssetHandler::OnLoad(const std::function<LoadCallback>& callback)
 	{
 		loadCallbacks.push_back(callback);
@@ -2213,7 +2219,7 @@ namespace Components
 
 		const bool isMaterialSortRaised = RaiseMaterialPool();
 		GuardMaterialSort();
-		const bool isDrawSurfKeyWide = WidenDrawSurfKey();
+		isDrawSurfKeyWide = WidenDrawSurfKey();
 
 		if (isDrawSurfKeyWide)
 		{

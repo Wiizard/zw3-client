@@ -8,6 +8,7 @@
 #include "LobbyScene.hpp"
 #include "Logger.hpp"
 #include "Window.hpp"
+#include "Remix/Remix.hpp"
 
 namespace Components
 {
@@ -289,7 +290,7 @@ namespace Components
 			mouseEvent |= 0x10u;
 		}
 
-		if (m_rawinput.Get<bool>())
+		if (m_rawinput.Get<bool>() && inRawInput)
 		{
 			if (mouseEvent == 0)
 			{
@@ -373,6 +374,14 @@ namespace Components
 
 	bool RawMouse::ToggleRawInput(bool enable)
 	{
+		// raw input has one target window per device in a process: remix's menu reads the mouse through its own input
+		// sink window, and registering (or removing) the mouse here takes that away so its menu never sees a click.
+		// the game falls back to the legacy cursor mouse, which the sink leaves alone
+		if (Remix::Remix::IsActive())
+		{
+			return false;
+		}
+
 		enable = enable && Window::HasFocus() && !Window::IsLoadingScreenMovable() && !Window::IsDragging();
 
 		if (!m_rawinput.Get<bool>())
@@ -392,7 +401,7 @@ namespace Components
 			}
 		}
 
-		constexpr DWORD flags = RIDEV_NOLEGACY;
+		const DWORD flags = RIDEV_NOLEGACY;
 
 		RAWINPUTDEVICE rid[1];
 		rid[0].usUsagePage = HID_USAGE_PAGE_GENERIC;

@@ -10,6 +10,9 @@
     <Filter Include="Components\Modules\AssetInterfaces">
       <UniqueIdentifier>{729C625F-4BCE-49C2-8A63-7D03C312D867}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Components\Modules\Remix">
+      <UniqueIdentifier>{7F732268-DBB2-45F4-8AB1-9B748111D8BD}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Components\Modules\BotAI">
       <UniqueIdentifier>{71BA6553-5DDF-B4D3-862A-9A6372AEB3F1}</UniqueIdentifier>
     </Filter>
@@ -188,6 +191,102 @@
     </ClInclude>
     <ClInclude Include="..\src\Components\Modules\Bans.hpp">
       <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Api.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Camo.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Core.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Culling.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\DebugDraw.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Device.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Dxt.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Engine.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\FixedFunction.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Fog.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Hook.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Iw4.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Lights.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Look.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Menu.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\MapEditor.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\MapSettings.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Markers.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\MotionTracker.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Options.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Outdoor.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\PatchCalls.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\PbrMaterials.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Profiler.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Read.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Remix.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Scene.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Settings.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Sky.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\TextureTags.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Triggers.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\Weather.hpp">
+      <Filter>Components\Modules\Remix</Filter>
     </ClInclude>
     <ClInclude Include="..\src\Components\Modules\BotAI\BotAI.hpp">
       <Filter>Components\Modules\BotAI</Filter>
@@ -1067,6 +1166,114 @@
     </ClCompile>
     <ClCompile Include="..\src\Components\Modules\BotAI\BotAI.cpp">
       <Filter>Components\Modules\BotAI</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Api.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Camo.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Core.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Culling.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\DebugDraw.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Device.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Dxt.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Engine.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\FixedFunction.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Fog.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Hook.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Lights.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Look.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Menu.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\imgui\imgui.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\imgui\imgui_draw.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\imgui\imgui_tables.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\imgui\imgui_widgets.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\imgui\imgui_impl_dx9.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\deps\imgui\imgui_impl_win32.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\MapEditor.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\MapSettings.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Markers.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\MotionTracker.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Options.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Outdoor.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\PatchCalls.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\PbrMaterials.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Profiler.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Remix.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Scene.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Settings.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Sky.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\TextureTags.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Triggers.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\Weather.cpp">
+      <Filter>Components\Modules\Remix</Filter>
     </ClCompile>
     <ClCompile Include="..\src\Components\Modules\BotAI\Control\Ai.cpp">
       <Filter>Components\Modules\BotAI\Control</Filter>

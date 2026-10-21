@@ -46,6 +46,8 @@ namespace Components
 
 		static bool IsInstalled();
 
+		static bool IsDrawSurfKeyWide();
+
 		static void OnLoad(const std::function<LoadCallback>& callback);
 
 		static bool OnFind(unsigned int type, const std::function<FindCallback>& callback);
@@ -71,6 +73,7 @@ namespace Components
 
 	private:
 		static bool isInstalled;
+		static bool isDrawSurfKeyWide;
 		static std::vector<std::function<LoadCallback>> loadCallbacks;
 		static std::unordered_map<unsigned int, std::vector<std::function<LoadCallback>>> typeLoadCallbacks;
 		static std::map<unsigned int, std::vector<std::function<FindCallback>>> findCallbacks;

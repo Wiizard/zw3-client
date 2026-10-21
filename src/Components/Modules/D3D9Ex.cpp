@@ -8,6 +8,7 @@
 #include "Renderer.hpp"
 #include "Scheduler.hpp"
 #include "Window.hpp"
+#include "Remix/Remix.hpp"
 
 #include <Utils/StagedTextureUpload.hpp>
 
@@ -914,6 +915,11 @@ namespace Components
 
 	IDirect3D9* WINAPI D3D9Ex::Direct3DCreate9Stub(UINT sdkVersion)
 	{
+		if (IDirect3D9* const remix = Remix::Remix::TryCreateDirect3D(sdkVersion))
+		{
+			return remix;
+		}
+
 		if (IsD3D9ExEnabled())
 		{
 			IDirect3D9Ex* direct3D = nullptr;
@@ -931,7 +937,7 @@ namespace Components
 
 	bool D3D9Ex::IsD3D9ExEnabled()
 	{
-		return r_useD3D9Ex.IsValid() && r_useD3D9Ex.Get<bool>();
+		return !Remix::Remix::IsActive() && r_useD3D9Ex.IsValid() && r_useD3D9Ex.Get<bool>();
 	}
 
 	void D3D9Ex::BeginMapLoading(const std::string& map)

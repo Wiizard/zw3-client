@@ -1,0 +1,1313 @@
+#include "STDInclude.hpp"
+
+#include "Lights.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <string>
+
+#define XXH_INLINE_ALL
+#include <xxhash.h>
+
+#include "Core.hpp"
+#include "Engine.hpp"
+#include "Iw4.hpp"
+#include "Api.hpp"
+#include "FixedFunction.hpp"
+#include "PbrMaterials.hpp"
+#include "Look.hpp"
+#include "MapSettings.hpp"
+#include "Read.hpp"
+#include "Scene.hpp"
+#include "Triggers.hpp"
+
+namespace Components::Remix
+{
+	static constexpr std::uint64_t sunHash = 0x4D57325F53554E31ull;
+	static constexpr std::uint64_t mapLightHashBase = 0x4D57325F4C495431ull;
+	static constexpr float sunAngularDiameterDeg = 0.5f;
+	static constexpr float noonElevationDeg = 70.0f;
+	static constexpr float degreesPerHour = 15.0f;
+	static constexpr float minimumTimeOfDayElevationDeg = 2.0f;
+	static constexpr float sunsetStartDeg = 8.0f;
+	static constexpr float sunsetEndDeg = -2.0f;
+	static constexpr float warmBelowDeg = 30.0f;
+	static constexpr float sphereRadius = 4.0f;
+	static constexpr float minimumLightBrightness = 0.0f;
+	static constexpr float maximumLightBrightness = 8.0f;
+	static constexpr float matchDistanceOfRadius = 0.5f;
+	static constexpr int maxMapLights = 256;
+	static constexpr std::uint64_t dynamicLightHashBase = 0x4D57325F444C5431ull;
+	static constexpr int maxDynamicLights = 32;
+	static constexpr std::size_t dynamicLightCompareBytes = 0x34;
+	static constexpr float dynamicLightBrightness = 0.25f;
+	static constexpr std::uint64_t fixtureLightHashBase = 0x4D57325F46495854ull;
+	static constexpr int maxFixtureLights = 384;
+	static constexpr float fixtureRange = 200.0f;
+	static constexpr float fixtureColour[3] = { 1.0f, 0.9f, 0.75f };
+	static constexpr std::uint64_t laserLightHashBase = 0x4D57325F4C415352ull;
+	static constexpr int maxLaserLights = 16;
+	static constexpr float laserBeamRadius = 0.5f;
+	static constexpr float laserColour[3] = { 1.0f, 0.12f, 0.08f };
+	static constexpr std::uint64_t authoredLightHashBase = 0x4D57325F41555448ull;
+	static constexpr std::uint64_t attachedLightHashBase = 0x4D57325F41545448ull;
+	static constexpr int maxAuthoredLights = 256;
+
+	static const remixapi_Interface* api = nullptr;
+
+	static remixapi_LightHandle sunLight = nullptr;
+	static float submittedSun[7] = {};
+	static SunSettings sunSettings;
+
+	static remixapi_LightHandle mapLights[maxMapLights];
+	static int mapLightCount = 0;
+	static std::vector<MapLightInfo> mapLightInfo;
+	static unsigned mapLightsSettingsVersion = 0;
+	static unsigned mapLightsTuningVersion = 0;
+	static LightTuning tuning;
+	static unsigned tuningVersion = 1;
+	static std::uintptr_t mapLightsWorld = 0;
+	static float mapLightsBrightness = 1.0f;
+	static float mapLightsColourScale = 1.0f;
+	static float lightBrightness = 1.0f;
+	static bool isAllEffectLights = true;
+
+	static remixapi_LightHandle dynamicLights[maxDynamicLights];
+	static unsigned char submittedDynamic[maxDynamicLights][dynamicLightCompareBytes];
+	static float submittedDynamicScale[maxDynamicLights];
+	static bool isDynamicDrawn[maxDynamicLights];
+
+	static LightStats stats;
+
+	static remixapi_LightHandle fixtureLights[maxFixtureLights];
+	static int fixtureLightCount = 0;
+	static unsigned fixtureLightsSpots = 0;
+	static unsigned fixtureLightsVersion = 0;
+	static float fixtureLightsBrightness = 0.0f;
+
+	static remixapi_LightHandle laserLights[maxLaserLights];
+	static int laserLightCount = 0;
+
+	struct AuthoredInstance
+	{
+		AuthoredLight shape;
+		float position[3] = {};
+		float direction[3] = {};
+		std::uint64_t hash = 0;
+		remixapi_LightHandle handle = nullptr;
+	};
+
+	static std::vector<AuthoredInstance> authoredInstances;
+	static unsigned authoredSettingsVersion = 0;
+	static std::uintptr_t authoredWorld = 0;
+	static float authoredBrightness = 0.0f;
+	static ULONGLONG authoredStartMs = 0;
+
+	static float SrgbToLinear(float channel)
+	{
+		if (channel <= 0.03928f)
+		{
+			return channel / 12.92f;
+		}
+
+		return std::pow((channel + 0.055f) / 1.055f, 2.4f);
+	}
+
+	static void LightColourToLinear(const float* colour, float colourScale, float* linear)
+	{
+		float peak = 1.0f;
+
+		for (int channel = 0; channel < 3; ++channel)
+		{
+			peak = std::max(peak, colour[channel] * colourScale);
+		}
+
+		for (int channel = 0; channel < 3; ++channel)
+		{
+			linear[channel] = SrgbToLinear(colour[channel] * colourScale / peak) * peak;
+		}
+	}
+
+	static void DestroyMapLights()
+	{
+		for (int i = 0; i < mapLightCount; ++i)
+		{
+			api->DestroyLight(mapLights[i]);
+		}
+
+		mapLightCount = 0;
+		mapLightsWorld = 0;
+		stats.mapLights = 0;
+	}
+
+	static SunSettings GetEffectiveSun()
+	{
+		SunSettings sun = sunSettings;
+		const MapSunOverride& mapSun = GetMapSettings().sun;
+
+		if (mapSun.brightness)
+		{
+			sun.brightness = *mapSun.brightness;
+		}
+
+		if (mapSun.maxRadiance)
+		{
+			sun.isCapped = true;
+			sun.maxRadiance = *mapSun.maxRadiance;
+		}
+
+		if (mapSun.hasTint)
+		{
+			for (int channel = 0; channel < 3; ++channel)
+			{
+				sun.tint[channel] = mapSun.tint[channel];
+			}
+		}
+
+		if (mapSun.hasDirection)
+		{
+			sun.isDirectionOverridden = true;
+			sun.yawDeg = mapSun.yawDeg;
+			sun.pitchDeg = mapSun.pitchDeg;
+		}
+
+		return sun;
+	}
+
+	static void SubmitSun(std::uintptr_t backEnd, std::uintptr_t world, float colourScale)
+	{
+		if (GetLookSettings().isNight)
+		{
+			stats.hasSun = false;
+			return;
+		}
+
+		const SunSettings effectiveSun = GetEffectiveSun();
+
+		float direction[3];
+		std::memcpy(direction, reinterpret_cast<const void*>(backEnd + Iw4::backEndSunDirection), sizeof(direction));
+
+		const float length = std::sqrt(direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2]);
+
+		if (length < 0.001f)
+		{
+			stats.hasSun = false;
+			return;
+		}
+
+		const auto lastSun = ReadAt<std::uint32_t>(world + Iw4::worldLastSunPrimaryLightIndex);
+		const auto lightCount = ReadAt<std::uint32_t>(world + Iw4::worldPrimaryLightCount);
+		const std::uintptr_t lights = backEnd + Iw4::backEndPrimaryLights;
+
+		float colour[3] = { 1.0f, 1.0f, 1.0f };
+
+		for (std::uint32_t i = 1; i <= lastSun && i < lightCount; ++i)
+		{
+			const std::uintptr_t light = lights + i * Iw4::gfxLightStride;
+
+			float lightDirection[3];
+			std::memcpy(lightDirection, reinterpret_cast<const void*>(light + Iw4::gfxLightDir), sizeof(lightDirection));
+
+			const bool isSameDirection = std::fabs(lightDirection[0] - direction[0]) < 0.0001f
+				&& std::fabs(lightDirection[1] - direction[1]) < 0.0001f
+				&& std::fabs(lightDirection[2] - direction[2]) < 0.0001f;
+
+			if (isSameDirection)
+			{
+				std::memcpy(colour, reinterpret_cast<const void*>(light + Iw4::gfxLightColor), sizeof(colour));
+				break;
+			}
+		}
+
+		float radiance[3];
+		float peak = 0.0f;
+
+		for (int channel = 0; channel < 3; ++channel)
+		{
+			stats.mapSunRadiance[channel] = SrgbToLinear(colour[channel] * colourScale);
+			radiance[channel] = SrgbToLinear(colour[channel] * effectiveSun.tint[channel] * colourScale) * effectiveSun.brightness;
+			peak = std::max(peak, radiance[channel]);
+		}
+
+		if (effectiveSun.isCapped && peak > effectiveSun.maxRadiance)
+		{
+			for (int channel = 0; channel < 3; ++channel)
+			{
+				radiance[channel] *= effectiveSun.maxRadiance / peak;
+			}
+		}
+
+		float travel[3] = {
+			-direction[0] / length,
+			-direction[1] / length,
+			-direction[2] / length,
+		};
+
+		const LookSettings look = GetLookSettings();
+
+		if (look.isTimeOfDay)
+		{
+			const float degToRad = 3.14159265f / 180.0f;
+			const float elevationDeg = noonElevationDeg * std::sin(3.14159265f * (look.timeOfDayHours - 6.0f) / 12.0f);
+			const float mapAzimuthDeg = std::atan2(-travel[1], -travel[0]) / degToRad;
+			const float yaw = (mapAzimuthDeg + (look.timeOfDayHours - 12.0f) * degreesPerHour) * degToRad;
+			const float pitch = std::max(elevationDeg, minimumTimeOfDayElevationDeg) * degToRad;
+
+			travel[0] = -std::cos(pitch) * std::cos(yaw);
+			travel[1] = -std::cos(pitch) * std::sin(yaw);
+			travel[2] = -std::sin(pitch);
+
+			const float daylight = std::clamp((elevationDeg - sunsetEndDeg) / (sunsetStartDeg - sunsetEndDeg), 0.0f, 1.0f);
+			const float warmth = std::clamp(1.0f - elevationDeg / warmBelowDeg, 0.0f, 1.0f);
+			const float sunsetTint[3] = { 1.0f, 1.0f - 0.45f * warmth, 1.0f - 0.7f * warmth };
+
+			for (int channel = 0; channel < 3; ++channel)
+			{
+				radiance[channel] *= sunsetTint[channel] * daylight;
+			}
+		}
+
+		if (effectiveSun.isDirectionOverridden && !look.isTimeOfDay)
+		{
+			const float degToRad = 3.14159265f / 180.0f;
+			const float yaw = effectiveSun.yawDeg * degToRad;
+			const float pitch = effectiveSun.pitchDeg * degToRad;
+
+			travel[0] = -std::cos(pitch) * std::cos(yaw);
+			travel[1] = -std::cos(pitch) * std::sin(yaw);
+			travel[2] = -std::sin(pitch);
+		}
+
+		float volumetricScale = 1.0f;
+
+		if (look.isGodRays)
+		{
+			volumetricScale = look.godRayStrength;
+		}
+
+		const float sun[7] = {
+			travel[0],
+			travel[1],
+			travel[2],
+			radiance[0],
+			radiance[1],
+			radiance[2],
+			volumetricScale,
+		};
+
+		if (!sunLight || std::memcmp(sun, submittedSun, sizeof(sun)) != 0)
+		{
+			if (sunLight)
+			{
+				api->DestroyLight(sunLight);
+				sunLight = nullptr;
+			}
+
+			remixapi_LightInfoDistantEXT distant{};
+			distant.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_DISTANT_EXT;
+			distant.direction = { sun[0], sun[1], sun[2] };
+			distant.angularDiameterDegrees = sunAngularDiameterDeg;
+			distant.volumetricRadianceScale = sun[6];
+
+			remixapi_LightInfo info{};
+			info.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
+			info.pNext = &distant;
+			info.hash = sunHash;
+			info.radiance = { sun[3], sun[4], sun[5] };
+
+			if (api->CreateLight(&info, &sunLight) != REMIXAPI_ERROR_CODE_SUCCESS)
+			{
+				sunLight = nullptr;
+				stats.hasSun = false;
+				return;
+			}
+
+			std::memcpy(submittedSun, sun, sizeof(sun));
+			std::memcpy(stats.sunRadiance, sun + 3, sizeof(stats.sunRadiance));
+			std::memcpy(stats.sunDirection, sun, sizeof(stats.sunDirection));
+
+			Log() << "remix: sun light direction " << sun[0] << " " << sun[1] << " " << sun[2] << ", radiance "
+				  << sun[3] << " " << sun[4] << " " << sun[5];
+		}
+
+		api->DrawLightInstance(sunLight);
+		stats.hasSun = true;
+	}
+
+	static const LightOverride* FindLightOverride(const MapSettings& mapSettings, std::uint64_t hash)
+	{
+		for (const LightOverride& change : mapSettings.lightOverrides)
+		{
+			if (change.hash == hash)
+			{
+				return &change;
+			}
+		}
+
+		return nullptr;
+	}
+
+	static void BuildMapLights(std::uintptr_t backEnd, std::uintptr_t world, float colourScale)
+	{
+		const std::uintptr_t mapIdentity = GetMapIdentity();
+		const bool isNewMap = mapIdentity != mapLightsWorld;
+
+		DestroyMapLights();
+		mapLightsWorld = mapIdentity;
+		mapLightsBrightness = lightBrightness;
+		mapLightsColourScale = colourScale;
+		mapLightsSettingsVersion = GetMapSettingsVersion();
+		mapLightsTuningVersion = tuningVersion;
+		mapLightInfo.clear();
+		stats.ignoredMapLights = 0;
+		stats.changedMapLights = 0;
+
+		const auto lastSun = ReadAt<std::uint32_t>(world + Iw4::worldLastSunPrimaryLightIndex);
+		const auto lightCount = ReadAt<std::uint32_t>(world + Iw4::worldPrimaryLightCount);
+		const std::uintptr_t lights = backEnd + Iw4::backEndPrimaryLights;
+
+		const std::string mapName = GetMapName();
+		const std::uint64_t mapSeed = XXH3_64bits_withSeed(mapName.data(), mapName.size(), mapLightHashBase);
+		const MapSettings& mapSettings = GetMapSettings();
+
+		for (std::uint32_t i = lastSun + 1; i < lightCount && mapLightCount < maxMapLights; ++i)
+		{
+			const std::uintptr_t light = lights + i * Iw4::gfxLightStride;
+			const auto type = ReadAt<std::uint8_t>(light + Iw4::gfxLightType);
+
+			if (type != Iw4::gfxLightTypeSpot && type != Iw4::gfxLightTypeOmni)
+			{
+				continue;
+			}
+
+			float colour[3];
+			float direction[3];
+			float origin[3];
+			std::memcpy(colour, reinterpret_cast<const void*>(light + Iw4::gfxLightColor), sizeof(colour));
+			std::memcpy(direction, reinterpret_cast<const void*>(light + Iw4::gfxLightDir), sizeof(direction));
+			std::memcpy(origin, reinterpret_cast<const void*>(light + Iw4::gfxLightOrigin), sizeof(origin));
+
+			const float radius = ReadAt<float>(light + Iw4::gfxLightRadius);
+			const float cosOuter = std::clamp(ReadAt<float>(light + Iw4::gfxLightCosHalfFovOuter), -1.0f, 1.0f);
+			const float cosInner = std::clamp(ReadAt<float>(light + Iw4::gfxLightCosHalfFovInner), -1.0f, 1.0f);
+
+			const std::int32_t placement[4] = {
+				static_cast<std::int32_t>(std::lround(origin[0])),
+				static_cast<std::int32_t>(std::lround(origin[1])),
+				static_cast<std::int32_t>(std::lround(origin[2])),
+				static_cast<std::int32_t>(type),
+			};
+
+			std::uint64_t hash = XXH3_64bits_withSeed(placement, sizeof(placement), mapSeed);
+
+			for (const MapLightInfo& earlier : mapLightInfo)
+			{
+				if (earlier.hash == hash)
+				{
+					hash = XXH3_64bits_withSeed(&i, sizeof(i), hash);
+					break;
+				}
+			}
+
+			const bool isSpot = type == Iw4::gfxLightTypeSpot;
+
+			MapLightInfo info;
+			info.hash = hash;
+			std::memcpy(info.origin, origin, sizeof(origin));
+			info.radius = radius;
+			info.isSpot = isSpot;
+			info.isIgnored = std::find(mapSettings.ignoredLights.begin(), mapSettings.ignoredLights.end(), hash)
+				!= mapSettings.ignoredLights.end();
+
+			const LightOverride* change = FindLightOverride(mapSettings, hash);
+			info.isChanged = change != nullptr;
+			mapLightInfo.push_back(info);
+
+			if (info.isIgnored)
+			{
+				++stats.ignoredMapLights;
+				continue;
+			}
+
+			float typeBrightness = tuning.omniBrightness;
+
+			if (isSpot)
+			{
+				typeBrightness = tuning.spotBrightness;
+			}
+
+			float lightSize = tuning.sphereRadius;
+			float coneDeg = std::acos(cosOuter) * 57.2957795f + tuning.coneOffsetDeg;
+			float softness = std::max(0.0f, cosInner - cosOuter) + tuning.softnessOffset;
+			float focus = tuning.focusExponent;
+			float volumetric = tuning.volumetric;
+			float overrideBrightness = 1.0f;
+
+			if (change)
+			{
+				++stats.changedMapLights;
+
+				if (change->hasColour)
+				{
+					std::memcpy(colour, change->colour, sizeof(colour));
+				}
+
+				if (change->brightness)
+				{
+					overrideBrightness = *change->brightness;
+				}
+
+				if (change->radius)
+				{
+					lightSize = *change->radius;
+				}
+
+				if (change->coneDeg)
+				{
+					coneDeg = *change->coneDeg;
+				}
+
+				if (change->softness)
+				{
+					softness = *change->softness;
+				}
+
+				if (change->focus)
+				{
+					focus = *change->focus;
+				}
+
+				if (change->volumetric)
+				{
+					volumetric = *change->volumetric;
+				}
+			}
+
+			lightSize = std::max(lightSize, 0.1f);
+
+			const float brightness = lightBrightness * typeBrightness * overrideBrightness;
+			const float matchDistance = matchDistanceOfRadius * radius;
+			const float radianceScale = (matchDistance * matchDistance) / (lightSize * lightSize) * brightness;
+
+			float linear[3];
+			LightColourToLinear(colour, colourScale, linear);
+
+			const float peak = std::max({ linear[0], linear[1], linear[2] }) * brightness;
+
+			if (!change && peak < tuning.dimLightCutoff)
+			{
+				continue;
+			}
+
+			remixapi_LightInfoSphereEXT sphere{};
+			sphere.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
+			sphere.position = { origin[0], origin[1], origin[2] };
+			sphere.radius = lightSize;
+			sphere.volumetricRadianceScale = volumetric;
+
+			const float directionLength = std::sqrt(direction[0] * direction[0] + direction[1] * direction[1]
+				+ direction[2] * direction[2]);
+
+			if (isSpot && directionLength > 0.001f)
+			{
+				sphere.shaping_hasvalue = 1;
+				sphere.shaping_value.direction = {
+					-direction[0] / directionLength,
+					-direction[1] / directionLength,
+					-direction[2] / directionLength,
+				};
+				sphere.shaping_value.coneAngleDegrees = std::clamp(coneDeg, 1.0f, 179.0f);
+				sphere.shaping_value.coneSoftness = std::clamp(softness, 0.0f, 1.0f);
+				sphere.shaping_value.focusExponent = std::max(focus, 0.0f);
+			}
+
+			remixapi_LightInfo lightInfo{};
+			lightInfo.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
+			lightInfo.pNext = &sphere;
+			lightInfo.hash = hash;
+			lightInfo.radiance = { linear[0] * radianceScale, linear[1] * radianceScale, linear[2] * radianceScale };
+
+			remixapi_LightHandle handle = nullptr;
+
+			if (api->CreateLight(&lightInfo, &handle) == REMIXAPI_ERROR_CODE_SUCCESS && handle)
+			{
+				mapLights[mapLightCount] = handle;
+				++mapLightCount;
+			}
+		}
+
+		stats.mapLights = mapLightCount;
+
+		if (isNewMap)
+		{
+			Log() << "remix: " << mapLightCount << " map lights (spot and omni primary lights) sent to Remix, "
+				  << lastSun << " sun light(s) on this map, " << stats.ignoredMapLights << " ignored and "
+				  << stats.changedMapLights << " changed by the map settings";
+		}
+	}
+
+	static void DestroyDynamicLights()
+	{
+		for (int slot = 0; slot < maxDynamicLights; ++slot)
+		{
+			if (dynamicLights[slot])
+			{
+				api->DestroyLight(dynamicLights[slot]);
+				dynamicLights[slot] = nullptr;
+			}
+
+			isDynamicDrawn[slot] = false;
+		}
+
+		stats.dynamicLights = 0;
+	}
+
+	static bool IsRendererSingleThreaded()
+	{
+		const auto smpBackend = ReadAt<std::uintptr_t>(Engine::RebaseAddress(Engine::CurrentBuild().r_smp_backendDvar));
+
+		return smpBackend && ReadAt<std::uint8_t>(smpBackend + Iw4::dvarValueOffset) == 0;
+	}
+
+	static void SubmitDynamicLights(std::uintptr_t backEnd, std::uintptr_t world, std::uintptr_t viewInfo, float colourScale)
+	{
+		std::uint32_t first = ReadAt<std::uint32_t>(world + Iw4::worldPrimaryLightCount);
+		std::uint32_t end = ReadAt<std::uint32_t>(viewInfo + Iw4::viewInfoShadowableLightCount);
+		std::uintptr_t lights = backEnd + Iw4::backEndPrimaryLights;
+
+		if (isAllEffectLights && IsRendererSingleThreaded())
+		{
+			const Iw4::GameBuild& build = Engine::CurrentBuild();
+
+			first = 0;
+			end = std::min(ReadAt<std::uint32_t>(Engine::RebaseAddress(build.sceneAddedLightCount)),
+				Iw4::maxSceneAddedLights);
+			lights = Engine::RebaseAddress(build.sceneAddedLight);
+		}
+
+		bool isDrawnNow[maxDynamicLights] = {};
+		int drawn = 0;
+
+		for (std::uint32_t i = first; i < end && i - first < static_cast<std::uint32_t>(maxDynamicLights); ++i)
+		{
+			const int slot = static_cast<int>(i - first);
+			const std::uintptr_t light = lights + i * Iw4::gfxLightStride;
+			const auto type = ReadAt<std::uint8_t>(light + Iw4::gfxLightType);
+
+			if (type != Iw4::gfxLightTypeSpot && type != Iw4::gfxLightTypeOmni)
+			{
+				continue;
+			}
+
+			float colour[3];
+			std::memcpy(colour, reinterpret_cast<const void*>(light + Iw4::gfxLightColor), sizeof(colour));
+
+			for (float& channel : colour)
+			{
+				channel = std::max(channel, 0.0f);
+			}
+
+			if (std::max({ colour[0], colour[1], colour[2] }) <= 0.0f)
+			{
+				continue;
+			}
+
+			const float submitScale = colourScale * lightBrightness;
+			const bool hasChanged = std::memcmp(reinterpret_cast<const void*>(light), submittedDynamic[slot],
+				dynamicLightCompareBytes) != 0 || submittedDynamicScale[slot] != submitScale;
+
+			if (!dynamicLights[slot] || !isDynamicDrawn[slot] || hasChanged)
+			{
+				float direction[3];
+				float origin[3];
+				std::memcpy(direction, reinterpret_cast<const void*>(light + Iw4::gfxLightDir), sizeof(direction));
+				std::memcpy(origin, reinterpret_cast<const void*>(light + Iw4::gfxLightOrigin), sizeof(origin));
+
+				const float radius = ReadAt<float>(light + Iw4::gfxLightRadius);
+				const float cosOuter = std::clamp(ReadAt<float>(light + Iw4::gfxLightCosHalfFovOuter), -1.0f, 1.0f);
+				const float cosInner = std::clamp(ReadAt<float>(light + Iw4::gfxLightCosHalfFovInner), -1.0f, 1.0f);
+
+				const float matchDistance = matchDistanceOfRadius * radius;
+				const float radianceScale = (matchDistance * matchDistance) / (sphereRadius * sphereRadius) * lightBrightness;
+
+				remixapi_LightInfoSphereEXT sphere{};
+				sphere.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
+				sphere.position = { origin[0], origin[1], origin[2] };
+				sphere.radius = sphereRadius;
+				sphere.volumetricRadianceScale = 1.0f;
+
+				const float directionLength = std::sqrt(direction[0] * direction[0] + direction[1] * direction[1]
+					+ direction[2] * direction[2]);
+
+				if (type == Iw4::gfxLightTypeSpot && directionLength > 0.001f)
+				{
+					sphere.shaping_hasvalue = 1;
+					sphere.shaping_value.direction = {
+						-direction[0] / directionLength,
+						-direction[1] / directionLength,
+						-direction[2] / directionLength,
+					};
+					sphere.shaping_value.coneAngleDegrees = std::acos(cosOuter) * 57.2957795f;
+					sphere.shaping_value.coneSoftness = std::max(0.0f, cosInner - cosOuter);
+					sphere.shaping_value.focusExponent = 0.0f;
+				}
+
+				float linear[3];
+				LightColourToLinear(colour, colourScale, linear);
+
+				const float dynamicScale = radianceScale * dynamicLightBrightness;
+
+				remixapi_LightInfo info{};
+				info.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
+				info.pNext = &sphere;
+				info.hash = dynamicLightHashBase + static_cast<std::uint64_t>(slot);
+				info.radiance = { linear[0] * dynamicScale, linear[1] * dynamicScale, linear[2] * dynamicScale };
+
+				if (dynamicLights[slot])
+				{
+					api->DestroyLight(dynamicLights[slot]);
+					dynamicLights[slot] = nullptr;
+				}
+
+				remixapi_LightHandle handle = nullptr;
+
+				if (api->CreateLight(&info, &handle) != REMIXAPI_ERROR_CODE_SUCCESS || !handle)
+				{
+					continue;
+				}
+
+				dynamicLights[slot] = handle;
+				std::memcpy(submittedDynamic[slot], reinterpret_cast<const void*>(light), dynamicLightCompareBytes);
+				submittedDynamicScale[slot] = submitScale;
+				++stats.dynamicLightUpdates;
+			}
+
+			api->DrawLightInstance(dynamicLights[slot]);
+			isDrawnNow[slot] = true;
+			++drawn;
+		}
+
+		std::memcpy(isDynamicDrawn, isDrawnNow, sizeof(isDynamicDrawn));
+		stats.dynamicLights = drawn;
+	}
+
+	static void DestroyFixtureLights()
+	{
+		for (int i = 0; i < fixtureLightCount; ++i)
+		{
+			api->DestroyLight(fixtureLights[i]);
+		}
+
+		fixtureLightCount = 0;
+		fixtureLightsVersion = 0;
+		stats.fixtureLights = 0;
+	}
+
+	static void SubmitFixtureLights()
+	{
+		const LookSettings look = GetLookSettings();
+
+		if (!look.isFixtureLights)
+		{
+			if (fixtureLightCount > 0)
+			{
+				DestroyFixtureLights();
+			}
+
+			return;
+		}
+
+		const unsigned spots = GetSurfaceSpotsVersion();
+		const unsigned version = GetFixtureVersion() + GetLampLightVersion() * 65536u + 1;
+		const float brightness = look.fixtureBrightness * lightBrightness;
+		const bool isStale = spots != fixtureLightsSpots || version != fixtureLightsVersion
+			|| brightness != fixtureLightsBrightness;
+
+		if (isStale)
+		{
+			DestroyFixtureLights();
+			fixtureLightsSpots = spots;
+			fixtureLightsVersion = version;
+			fixtureLightsBrightness = brightness;
+
+			const float matchDistance = matchDistanceOfRadius * fixtureRange;
+			const float radianceScale = (matchDistance * matchDistance) / (sphereRadius * sphereRadius) * brightness;
+
+			for (const FixtureSpot& spot : CollectFixtureSpots())
+			{
+				if (fixtureLightCount >= maxFixtureLights)
+				{
+					break;
+				}
+
+				remixapi_LightInfoSphereEXT sphere{};
+				sphere.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
+				sphere.position = { spot.position[0], spot.position[1], spot.position[2] };
+				sphere.radius = sphereRadius;
+				sphere.volumetricRadianceScale = 1.0f;
+
+				remixapi_LightInfo info{};
+				info.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
+				info.pNext = &sphere;
+				info.hash = fixtureLightHashBase + static_cast<std::uint64_t>(fixtureLightCount);
+				info.radiance = { fixtureColour[0] * radianceScale, fixtureColour[1] * radianceScale,
+					fixtureColour[2] * radianceScale };
+
+				remixapi_LightHandle handle = nullptr;
+
+				if (api->CreateLight(&info, &handle) != REMIXAPI_ERROR_CODE_SUCCESS || !handle)
+				{
+					continue;
+				}
+
+				fixtureLights[fixtureLightCount] = handle;
+				++fixtureLightCount;
+			}
+
+			stats.fixtureLights = fixtureLightCount;
+		}
+
+		for (int i = 0; i < fixtureLightCount; ++i)
+		{
+			api->DrawLightInstance(fixtureLights[i]);
+		}
+	}
+
+	static void DestroyLaserLights()
+	{
+		for (int i = 0; i < laserLightCount; ++i)
+		{
+			api->DestroyLight(laserLights[i]);
+		}
+
+		laserLightCount = 0;
+	}
+
+	static void SubmitLaserLights()
+	{
+		DestroyLaserLights();
+		stats.laserLights = 0;
+
+		const Iw4::GameBuild& build = Engine::CurrentBuild();
+
+		if (!GetLookSettings().isLaserLights || build.g_postLightCount == 0 || build.g_postLightInfo == 0)
+		{
+			return;
+		}
+
+		const std::uint32_t count = std::min(ReadAt<std::uint32_t>(Engine::RebaseAddress(build.g_postLightCount)),
+			Iw4::maxPostLights);
+		const std::uintptr_t entries = Engine::RebaseAddress(build.g_postLightInfo);
+
+		for (std::uint32_t i = 0; i < count && laserLightCount < maxLaserLights; ++i)
+		{
+			const std::uintptr_t entry = entries + i * Iw4::postLightStride;
+			float begin[3];
+			float end[3];
+			std::memcpy(begin, reinterpret_cast<const void*>(entry + Iw4::postLightBegin), sizeof(begin));
+			std::memcpy(end, reinterpret_cast<const void*>(entry + Iw4::postLightEnd), sizeof(end));
+			const float range = ReadAt<float>(entry + Iw4::postLightRadius);
+
+			const float axis[3] = { end[0] - begin[0], end[1] - begin[1], end[2] - begin[2] };
+			const float length = std::sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
+
+			if (length < 0.01f || !(range > 0.0f))
+			{
+				continue;
+			}
+
+			const float matchDistance = matchDistanceOfRadius * range;
+			const float radianceScale = (matchDistance * matchDistance) / (laserBeamRadius * laserBeamRadius) * lightBrightness
+				* dynamicLightBrightness;
+
+			remixapi_LightInfoCylinderEXT cylinder{};
+			cylinder.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_CYLINDER_EXT;
+			cylinder.position = { (begin[0] + end[0]) * 0.5f, (begin[1] + end[1]) * 0.5f, (begin[2] + end[2]) * 0.5f };
+			cylinder.radius = laserBeamRadius;
+			cylinder.axis = { axis[0] / length, axis[1] / length, axis[2] / length };
+			cylinder.axisLength = length;
+			cylinder.volumetricRadianceScale = 1.0f;
+
+			remixapi_LightInfo info{};
+			info.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
+			info.pNext = &cylinder;
+			info.hash = laserLightHashBase + static_cast<std::uint64_t>(laserLightCount);
+			info.radiance = { laserColour[0] * radianceScale, laserColour[1] * radianceScale, laserColour[2] * radianceScale };
+
+			remixapi_LightHandle handle = nullptr;
+
+			if (api->CreateLight(&info, &handle) != REMIXAPI_ERROR_CODE_SUCCESS || !handle)
+			{
+				continue;
+			}
+
+			laserLights[laserLightCount] = handle;
+			++laserLightCount;
+			api->DrawLightInstance(handle);
+		}
+
+		stats.laserLights = laserLightCount;
+	}
+
+	static void DestroyAuthoredLights()
+	{
+		for (AuthoredInstance& instance : authoredInstances)
+		{
+			if (instance.handle)
+			{
+				api->DestroyLight(instance.handle);
+				instance.handle = nullptr;
+			}
+		}
+
+		authoredInstances.clear();
+		stats.authoredLights = 0;
+		stats.animatedLights = 0;
+	}
+
+	static void PlaceOnModel(const float* axis, float scale, const float* origin, const AuthoredLight& shape,
+		AuthoredInstance& instance)
+	{
+		for (int component = 0; component < 3; ++component)
+		{
+			instance.position[component] = origin[component]
+				+ (shape.position[0] * axis[component] + shape.position[1] * axis[3 + component]
+					+ shape.position[2] * axis[6 + component]) * scale;
+
+			instance.direction[component] = shape.direction[0] * axis[component]
+				+ shape.direction[1] * axis[3 + component] + shape.direction[2] * axis[6 + component];
+		}
+	}
+
+	static void CollectAuthoredLights(std::uintptr_t world, std::uint64_t mapSeed)
+	{
+		const MapSettings& mapSettings = GetMapSettings();
+
+		for (const AuthoredLight& shape : mapSettings.addedLights)
+		{
+			if (authoredInstances.size() >= static_cast<std::size_t>(maxAuthoredLights))
+			{
+				break;
+			}
+
+			AuthoredInstance instance;
+			instance.shape = shape;
+			std::memcpy(instance.position, shape.position, sizeof(instance.position));
+			std::memcpy(instance.direction, shape.direction, sizeof(instance.direction));
+
+			const std::uint64_t index = authoredInstances.size();
+			instance.hash = XXH3_64bits_withSeed(&index, sizeof(index), mapSeed ^ authoredLightHashBase);
+			authoredInstances.push_back(instance);
+		}
+
+		if (mapSettings.attachedLights.empty())
+		{
+			return;
+		}
+
+		const auto drawInsts = ReadAt<std::uintptr_t>(world + Iw4::worldSModelDrawInsts);
+		const auto modelCount = ReadAt<std::uint32_t>(world + Iw4::worldSModelCount);
+
+		if (!drawInsts)
+		{
+			return;
+		}
+
+		for (std::uint32_t model = 0; model < modelCount; ++model)
+		{
+			const std::uintptr_t drawInst = drawInsts + model * Iw4::smodelDrawInstStride;
+			const auto xModel = ReadAt<std::uintptr_t>(drawInst + Iw4::smodelDrawInstModel);
+
+			if (!xModel)
+			{
+				continue;
+			}
+
+			const auto* modelName = ReadAt<const char*>(xModel + Iw4::xModelName);
+
+			if (!modelName)
+			{
+				continue;
+			}
+
+			for (std::size_t rule = 0; rule < mapSettings.attachedLights.size(); ++rule)
+			{
+				const AuthoredLight& shape = mapSettings.attachedLights[rule];
+
+				if (_stricmp(shape.model.c_str(), modelName) != 0)
+				{
+					continue;
+				}
+
+				if (authoredInstances.size() >= static_cast<std::size_t>(maxAuthoredLights))
+				{
+					return;
+				}
+
+				float origin[3];
+				float axis[9];
+				std::memcpy(origin, reinterpret_cast<const void*>(drawInst + Iw4::smodelDrawInstOrigin), sizeof(origin));
+				std::memcpy(axis, reinterpret_cast<const void*>(drawInst + Iw4::smodelDrawInstAxis), sizeof(axis));
+				const float scale = ReadAt<float>(drawInst + Iw4::smodelDrawInstScale);
+
+				AuthoredInstance instance;
+				instance.shape = shape;
+				PlaceOnModel(axis, scale, origin, shape, instance);
+
+				const std::uint64_t key[2] = { static_cast<std::uint64_t>(model), static_cast<std::uint64_t>(rule) };
+				instance.hash = XXH3_64bits_withSeed(key, sizeof(key), mapSeed ^ attachedLightHashBase);
+				authoredInstances.push_back(instance);
+			}
+		}
+	}
+
+	static void EvaluateKeyframes(const AuthoredLight& shape, float seconds, float& intensity, float* colour)
+	{
+		intensity = shape.intensity;
+		std::memcpy(colour, shape.colour, sizeof(float) * 3);
+
+		const std::vector<LightKeyframe>& keyframes = shape.keyframes;
+
+		if (keyframes.size() < 2)
+		{
+			return;
+		}
+
+		const float length = keyframes.back().timeSeconds;
+
+		if (length <= 0.0f)
+		{
+			return;
+		}
+
+		float time = std::min(seconds, length);
+
+		if (shape.isLooped)
+		{
+			time = std::fmod(seconds, length);
+		}
+
+		std::size_t next = 1;
+
+		while (next < keyframes.size() - 1 && keyframes[next].timeSeconds < time)
+		{
+			++next;
+		}
+
+		const LightKeyframe& before = keyframes[next - 1];
+		const LightKeyframe& after = keyframes[next];
+		const float span = after.timeSeconds - before.timeSeconds;
+		float blend = 1.0f;
+
+		if (span > 0.0f)
+		{
+			blend = std::clamp((time - before.timeSeconds) / span, 0.0f, 1.0f);
+		}
+
+		intensity *= before.intensity + (after.intensity - before.intensity) * blend;
+
+		for (int channel = 0; channel < 3; ++channel)
+		{
+			float from = shape.colour[channel];
+			float to = shape.colour[channel];
+
+			if (before.hasColour)
+			{
+				from = before.colour[channel];
+			}
+
+			if (after.hasColour)
+			{
+				to = after.colour[channel];
+			}
+
+			colour[channel] = from + (to - from) * blend;
+		}
+	}
+
+	static bool TryCreateAuthoredLight(AuthoredInstance& instance, float intensity, const float* colour)
+	{
+		const AuthoredLight& shape = instance.shape;
+
+		remixapi_LightInfoSphereEXT sphere{};
+		sphere.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
+		sphere.position = { instance.position[0], instance.position[1], instance.position[2] };
+		sphere.radius = std::max(shape.radius, 0.1f);
+		sphere.volumetricRadianceScale = shape.volumetric;
+
+		const float length = std::sqrt(instance.direction[0] * instance.direction[0]
+			+ instance.direction[1] * instance.direction[1] + instance.direction[2] * instance.direction[2]);
+
+		if (shape.hasDirection && length > 0.001f)
+		{
+			sphere.shaping_hasvalue = 1;
+			sphere.shaping_value.direction = {
+				instance.direction[0] / length,
+				instance.direction[1] / length,
+				instance.direction[2] / length,
+			};
+			sphere.shaping_value.coneAngleDegrees = std::clamp(shape.coneDeg, 1.0f, 179.0f);
+			sphere.shaping_value.coneSoftness = std::clamp(shape.softness, 0.0f, 1.0f);
+			sphere.shaping_value.focusExponent = std::max(shape.focus, 0.0f);
+		}
+
+		const float scale = intensity * lightBrightness;
+
+		remixapi_LightInfo info{};
+		info.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
+		info.pNext = &sphere;
+		info.hash = instance.hash;
+		info.radiance = { colour[0] * scale, colour[1] * scale, colour[2] * scale };
+
+		remixapi_LightHandle handle = nullptr;
+
+		if (api->CreateLight(&info, &handle) != REMIXAPI_ERROR_CODE_SUCCESS || !handle)
+		{
+			return false;
+		}
+
+		instance.handle = handle;
+		return true;
+	}
+
+	static void SubmitAuthoredLights(std::uintptr_t world)
+	{
+		const std::uintptr_t mapIdentity = GetMapIdentity();
+		const bool isStale = authoredSettingsVersion != GetMapSettingsVersion() || authoredWorld != mapIdentity
+			|| authoredBrightness != lightBrightness;
+
+		if (isStale)
+		{
+			DestroyAuthoredLights();
+			authoredSettingsVersion = GetMapSettingsVersion();
+			authoredWorld = mapIdentity;
+			authoredBrightness = lightBrightness;
+			authoredStartMs = GetTickCount64();
+
+			const std::string mapName = GetMapName();
+			const std::uint64_t mapSeed = XXH3_64bits_withSeed(mapName.data(), mapName.size(), mapLightHashBase);
+			CollectAuthoredLights(world, mapSeed);
+
+			if (!authoredInstances.empty())
+			{
+				Log() << "remix: " << authoredInstances.size() << " lights added by the map settings for " << mapName;
+			}
+		}
+
+		const float seconds = static_cast<float>(GetTickCount64() - authoredStartMs) / 1000.0f;
+		int drawn = 0;
+		int animated = 0;
+
+		for (AuthoredInstance& instance : authoredInstances)
+		{
+			if (!instance.shape.trigger.empty() && !IsTriggerActive(instance.shape.trigger))
+			{
+				continue;
+			}
+
+			const bool isAnimated = instance.shape.keyframes.size() >= 2;
+
+			if (isAnimated && instance.handle)
+			{
+				api->DestroyLight(instance.handle);
+				instance.handle = nullptr;
+			}
+
+			if (!instance.handle)
+			{
+				float intensity = 0.0f;
+				float colour[3];
+				EvaluateKeyframes(instance.shape, seconds, intensity, colour);
+
+				if (!TryCreateAuthoredLight(instance, intensity, colour))
+				{
+					continue;
+				}
+			}
+
+			api->DrawLightInstance(instance.handle);
+			++drawn;
+
+			if (isAnimated)
+			{
+				++animated;
+			}
+		}
+
+		stats.authoredLights = drawn;
+		stats.animatedLights = animated;
+	}
+
+	void SubmitSceneLights(IDirect3DDevice9* device, const void* viewInfo)
+	{
+		api = TryGetApi(device);
+
+		if (!api)
+		{
+			return;
+		}
+
+		if (!stats.isApiReady)
+		{
+			stats.isApiReady = true;
+			Log() << "remix: the map's sun and lights go to Remix as real lights through its API";
+		}
+
+		const Iw4::GameBuild& build = Engine::CurrentBuild();
+
+		if (build.backEndData == 0 || build.gfxWorld == 0 || build.r_diffuseColorScaleDvar == 0)
+		{
+			return;
+		}
+
+		const auto backEnd = ReadAt<std::uintptr_t>(Engine::RebaseAddress(build.backEndData));
+		const auto world = ReadAt<std::uintptr_t>(Engine::RebaseAddress(build.gfxWorld));
+		const auto colourScaleDvar = ReadAt<std::uintptr_t>(Engine::RebaseAddress(build.r_diffuseColorScaleDvar));
+
+		if (!backEnd || !world || !colourScaleDvar)
+		{
+			return;
+		}
+
+		const float colourScale = ReadAt<float>(colourScaleDvar + Iw4::dvarValueOffset);
+
+		SubmitSun(backEnd, world, colourScale);
+
+		if (GetMapIdentity() != mapLightsWorld || mapLightsBrightness != lightBrightness
+			|| mapLightsColourScale != colourScale || mapLightsSettingsVersion != GetMapSettingsVersion()
+			|| mapLightsTuningVersion != tuningVersion)
+		{
+			BuildMapLights(backEnd, world, colourScale);
+		}
+
+		for (int i = 0; i < mapLightCount; ++i)
+		{
+			api->DrawLightInstance(mapLights[i]);
+		}
+
+		SubmitFixtureLights();
+		SubmitLaserLights();
+		SubmitAuthoredLights(world);
+
+		if (viewInfo)
+		{
+			SubmitDynamicLights(backEnd, world, reinterpret_cast<std::uintptr_t>(viewInfo), colourScale);
+		}
+
+		++stats.submittedFrames;
+	}
+
+	void ReleaseLights()
+	{
+		stats.hasSun = false;
+
+		if (!api)
+		{
+			ForgetApiDevice();
+			return;
+		}
+
+		if (sunLight)
+		{
+			api->DestroyLight(sunLight);
+			sunLight = nullptr;
+		}
+
+		DestroyMapLights();
+		DestroyDynamicLights();
+		DestroyFixtureLights();
+		DestroyLaserLights();
+		DestroyAuthoredLights();
+		authoredSettingsVersion = 0;
+
+		ForgetApiDevice();
+		stats.hasSun = false;
+	}
+
+	void SetLightTuning(const LightTuning& settings)
+	{
+		LightTuning clamped = settings;
+		clamped.spotBrightness = std::clamp(settings.spotBrightness, 0.0f, 8.0f);
+		clamped.omniBrightness = std::clamp(settings.omniBrightness, 0.0f, 8.0f);
+		clamped.sphereRadius = std::clamp(settings.sphereRadius, 0.5f, 32.0f);
+		clamped.coneOffsetDeg = std::clamp(settings.coneOffsetDeg, -45.0f, 45.0f);
+		clamped.softnessOffset = std::clamp(settings.softnessOffset, -1.0f, 1.0f);
+		clamped.focusExponent = std::clamp(settings.focusExponent, 0.0f, 8.0f);
+		clamped.volumetric = std::clamp(settings.volumetric, 0.0f, 8.0f);
+		clamped.dimLightCutoff = std::clamp(settings.dimLightCutoff, 0.0f, 100.0f);
+
+		if (std::memcmp(&clamped, &tuning, sizeof(tuning)) != 0)
+		{
+			tuning = clamped;
+			++tuningVersion;
+		}
+	}
+
+	LightTuning GetLightTuning()
+	{
+		return tuning;
+	}
+
+	std::vector<MapLightInfo> GetMapLightInfo()
+	{
+		std::vector<MapLightInfo> result = mapLightInfo;
+
+		for (const AuthoredInstance& instance : authoredInstances)
+		{
+			MapLightInfo info;
+			info.hash = instance.hash;
+			std::memcpy(info.origin, instance.position, sizeof(info.origin));
+			info.radius = instance.shape.radius;
+			info.isSpot = instance.shape.hasDirection;
+			info.isAuthored = true;
+			result.push_back(info);
+		}
+
+		return result;
+	}
+
+	void SetLightBrightness(float brightness)
+	{
+		lightBrightness = std::clamp(brightness, minimumLightBrightness, maximumLightBrightness);
+	}
+
+	float GetLightBrightness()
+	{
+		return lightBrightness;
+	}
+
+	void SetSunSettings(const SunSettings& settings)
+	{
+		sunSettings = settings;
+		sunSettings.brightness = std::clamp(settings.brightness, 0.0f, 8.0f);
+		sunSettings.maxRadiance = std::clamp(settings.maxRadiance, 0.0f, 40.0f);
+		sunSettings.pitchDeg = std::clamp(settings.pitchDeg, -10.0f, 90.0f);
+
+		for (int channel = 0; channel < 3; ++channel)
+		{
+			sunSettings.tint[channel] = std::clamp(settings.tint[channel], 0.0f, 1.0f);
+		}
+	}
+
+	SunSettings GetSunSettings()
+	{
+		return sunSettings;
+	}
+
+	void SetAllEffectLights(bool isEnabled)
+	{
+		isAllEffectLights = isEnabled;
+	}
+
+	bool IsAllEffectLights()
+	{
+		return isAllEffectLights;
+	}
+
+	LightStats GetLightStats()
+	{
+		return stats;
+	}
+}

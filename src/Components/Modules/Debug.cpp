@@ -5,6 +5,7 @@
 #include "Events.hpp"
 #include "Logger.hpp"
 #include "Scheduler.hpp"
+#include "Remix/Remix.hpp"
 
 namespace Components
 {
@@ -661,6 +662,15 @@ namespace Components
 		if (level >= drawFpsSimpleRanges)
 		{
 			fpsText = Utils::String::VA("(%i-%i, %i) %i", fpsMin, fpsMax, static_cast<int>(std::lrint(variance)), fps);
+		}
+
+		// with RTX Remix the frames on screen can outnumber the game's, DLSS frame generation adds its own
+		if (Remix::Remix::IsActive() && Remix::Remix::IsEnabled())
+		{
+			if (const int presentedFps = Remix::Remix::GetPresentedFps(); presentedFps >= 0)
+			{
+				fpsText = Utils::String::VA("%s | %i RTX", fpsText, presentedFps);
+			}
 		}
 
 		DrawFpsRow(placement, font, fpsText, shouldDrawLabels ? " FPS" : nullptr, x, y, fpsColor);

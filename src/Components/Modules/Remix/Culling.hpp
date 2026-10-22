@@ -39,6 +39,10 @@ namespace Components::Remix
 
 	bool TrySetCullingLevel(CullingLevel level);
 
+	int GetCameraCell();
+
+	int CellForPoint(const float* point);
+
 	void SetMapCullingLevel(std::optional<int> level);
 
 	void SetCullingTuning(const CullingTuning& tuning);

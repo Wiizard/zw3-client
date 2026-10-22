@@ -15,6 +15,7 @@ namespace Components::Remix
 		std::vector<AuthoredLight> addedLights;
 		std::vector<MapMarker> markers;
 		std::vector<CullingArea> cullingAreas;
+		std::vector<MapZone> zones;
 	};
 
 	MapDraft& GetMapDraft();
@@ -28,4 +29,6 @@ namespace Components::Remix
 	bool TryAppendMapDraft(std::string& message);
 
 	bool TryCopyToClipboard(const std::string& text);
+
+	bool TryWriteMapSurvey(std::string& message);
 }

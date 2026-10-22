@@ -215,6 +215,12 @@
     <ClInclude Include="..\src\Components\Modules\Branding.hpp" />
     <ClInclude Include="..\src\Components\Modules\Bullet.hpp" />
     <ClInclude Include="..\src\Components\Modules\CrateCollision.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ClipMap.hpp" />
+    <ClInclude Include="..\src\Components\Modules\CollmapCollision.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ZombieCollision.hpp" />
+    <ClInclude Include="..\src\Components\Modules\ClipDebug.hpp" />
+    <ClInclude Include="..\src\Components\Modules\EntityHealthbar.hpp" />
+    <ClInclude Include="..\src\Components\Modules\DamageFeedback.hpp" />
     <ClInclude Include="..\src\Components\Modules\CardTitles.hpp" />
     <ClInclude Include="..\src\Components\Modules\Ceg.hpp" />
     <ClInclude Include="..\src\Components\Modules\Changelog.hpp" />
@@ -671,6 +677,11 @@
     <ClCompile Include="..\src\Components\Modules\Branding.cpp" />
     <ClCompile Include="..\src\Components\Modules\Bullet.cpp" />
     <ClCompile Include="..\src\Components\Modules\CrateCollision.cpp" />
+    <ClCompile Include="..\src\Components\Modules\CollmapCollision.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ZombieCollision.cpp" />
+    <ClCompile Include="..\src\Components\Modules\ClipDebug.cpp" />
+    <ClCompile Include="..\src\Components\Modules\EntityHealthbar.cpp" />
+    <ClCompile Include="..\src\Components\Modules\DamageFeedback.cpp" />
     <ClCompile Include="..\src\Components\Modules\CardTitles.cpp" />
     <ClCompile Include="..\src\Components\Modules\Ceg.cpp" />
     <ClCompile Include="..\src\Components\Modules\Changelog.cpp" />

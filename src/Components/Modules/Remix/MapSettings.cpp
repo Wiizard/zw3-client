@@ -635,8 +635,88 @@ namespace Components::Remix
 		return end != text.c_str() && *end == '\0';
 	}
 
-	// [materials] cutout = ["mc/mtl_p_pent_curtains"]: opaque materials whose colour map has holes, alpha tested in
-	// Remix so the holes are not drawn black
+	static void ReadZones(const toml::value& root)
+	{
+		const toml::value* zones = FindKey(root, "zones");
+
+		if (!zones || !zones->is_array())
+		{
+			return;
+		}
+
+		for (const toml::value& entry : zones->as_array())
+		{
+			MapZone zone;
+
+			if (const toml::value* name = FindKey(entry, "name"); name && name->is_string())
+			{
+				zone.name = name->as_string();
+			}
+
+			if (const toml::value* cells = FindKey(entry, "cells"); cells && cells->is_array())
+			{
+				for (const toml::value& cell : cells->as_array())
+				{
+					if (cell.is_integer())
+					{
+						zone.cells.push_back(static_cast<int>(cell.as_integer()));
+					}
+				}
+			}
+
+			zone.hasBox = TryReadVector(entry, "min", zone.boxMin, 3) && TryReadVector(entry, "max", zone.boxMax, 3);
+
+			if (zone.cells.empty() && !zone.hasBox)
+			{
+				LogWarn() << "remix: zone '" << zone.name << "' has no cells and no min/max box, it is skipped";
+				continue;
+			}
+
+			float number = 0.0f;
+
+			if (TryReadNumber(entry, "exposure_ev", number))
+			{
+				zone.exposureEv = number;
+			}
+
+			if (TryReadNumber(entry, "shadow_lift", number))
+			{
+				zone.shadowLift = number;
+			}
+
+			if (TryReadNumber(entry, "effect_glow", number))
+			{
+				zone.effectGlow = number;
+			}
+
+			if (TryReadNumber(entry, "lamp_brightness", number) || TryReadNumber(entry, "fixture_brightness", number))
+			{
+				zone.lampBrightness = number;
+			}
+
+			zone.hasLampColour = TryReadVector(entry, "lamp_colour", zone.lampColour, 3);
+
+			if (TryReadNumber(entry, "contrast", number))
+			{
+				zone.contrast = number;
+			}
+
+			if (TryReadNumber(entry, "saturation", number))
+			{
+				zone.saturation = number;
+			}
+
+			zone.hasTint = TryReadVector(entry, "tint", zone.tint, 3);
+
+			if (TryReadNumber(entry, "blend_seconds", number))
+			{
+				zone.blendSeconds = std::max(number, 0.0f);
+			}
+
+			settings.zones.push_back(zone);
+		}
+	}
+
 	static void ReadMaterials(const toml::value& root)
 	{
 		const toml::value* materials = FindKey(root, "materials");
@@ -912,6 +992,7 @@ namespace Components::Remix
 		ReadTriggers(root, false);
 		ReadTextures(root);
 		ReadMaterials(root);
+		ReadZones(root);
 
 		Log() << "remix: map settings for " << mapName << " loaded, " << settings.remixOptions.size()
 			  << " Remix options, " << settings.dvars.size() << " dvars, " << settings.ignoredLights.size()
@@ -922,7 +1003,6 @@ namespace Components::Remix
 
 	static std::vector<std::pair<std::uint64_t, TextureTag>> appliedTextureTags;
 
-	// remix keeps texture tag lists as sets: a bare hash adds to the set and a leading minus takes it out again
 	static void ApplyTextureTags(IDirect3DDevice9* device, const std::vector<std::pair<std::uint64_t, TextureTag>>& tags)
 	{
 		const remixapi_Interface* api = TryGetApi(device);

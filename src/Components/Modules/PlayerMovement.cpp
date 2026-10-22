@@ -1,7 +1,9 @@
 #include "STDInclude.hpp"
 
 #include "PlayerMovement.hpp"
+#include "CollmapCollision.hpp"
 #include "Events.hpp"
+#include "ZombieCollision.hpp"
 #include "GSC/Script.hpp"
 #include "Logger.hpp"
 
@@ -121,11 +123,9 @@ namespace Components
 	constexpr std::uintptr_t G_crandom = 0x1401ACA10;
 	constexpr std::uintptr_t g_speed = 0x1417CDE00;
 
-	// ClientThink_real 0x140193707
 	constexpr int MASK_PLAYERSOLID = 0x2810011;
 	constexpr int MASK_PLAYERSOLID_NOBODY = 0x810011;
 
-	// from StuckInClient
 	constexpr int POF_PLAYER = 0x1000;
 	constexpr int PMF_TIME_KNOCKBACK = 0x80;
 	constexpr int ejectTime = 300;
@@ -291,7 +291,6 @@ namespace Components
 		return !trace.allsolid && !trace.startsolid;
 	}
 
-	// StuckInClient for brush models (zombie hitboxes)
 	int PlayerMovement::StuckInBrushModel(Game::gentity_s* self)
 	{
 		auto* const client = self->client;
@@ -345,7 +344,6 @@ namespace Components
 
 		Game::Vec2Normalize(dir);
 
-		// abs box is padded by 1
 		const float top = brush->r.absMidPoint[2] + brush->r.absHalfSize[2] - 1.0f;
 		const float lift = top - (ps.origin[2] + bounds.midPoint[2] - bounds.halfSize[2]);
 
@@ -375,6 +373,16 @@ namespace Components
 
 	void PlayerMovement::CM_TransformedCapsuleTrace_Hk(Game::trace_t* results, const float* start, const float* end, const Game::Bounds* bounds, const Game::Bounds* capsule, int contents, const float* origin, const float* angles)
 	{
+		if (CollmapCollision::ClipToEntity(results, start, end, bounds, contents, origin))
+		{
+			return;
+		}
+
+		if (ZombieCollision::ClipToEntity(results, start, end, bounds, capsule, contents, origin, angles))
+		{
+			return;
+		}
+
 		if (bg_playerCollision->current.enabled)
 		{
 			reinterpret_cast<decltype(&CM_TransformedCapsuleTrace_Hk)>(Utils::Hook::Rebase(CM_TransformedCapsuleTrace))(results, start, end, bounds, capsule, contents, origin, angles);
@@ -402,7 +410,9 @@ namespace Components
 			}
 		}
 
+		ZombieCollision::BeginPmove(pm);
 		reinterpret_cast<decltype(&PmoveSingle_Stub)>(Utils::Hook::Rebase(PmoveSingle))(pm);
+		ZombieCollision::EndPmove();
 	}
 
 	void PlayerMovement::PM_CheckLadderMove_Stub(Game::pmove_s* pm, Game::pml_t* pml)
@@ -591,7 +601,7 @@ namespace Components
 			PlayerMovement_bg_disableLandingSlowdown = Game::Dvar_RegisterBool("bg_disableLandingSlowdown", false, Game::DVAR_CODINFO, "Toggle landing slowdown");
 			PlayerMovement_bg_bunnyHopAuto = Game::Dvar_RegisterBool("bg_bunnyHopAuto", false, Game::DVAR_CODINFO, "Constantly jump when holding space");
 			bg_playerEjection = Game::Dvar_RegisterBool("bg_playerEjection", false, Game::DVAR_CODINFO, "Push intersecting players away from each other");
-			bg_playerCollision = Game::Dvar_RegisterBool("bg_playerCollision", false, Game::DVAR_CODINFO, "Push intersecting players away from each other");
+			bg_playerCollision = Game::Dvar_RegisterBool("bg_playerCollision", true, Game::DVAR_CODINFO, "Push intersecting players away from each other");
 			bg_brushModelEjection = Game::Dvar_RegisterBool("bg_brushModelEjection", true, Game::DVAR_CODINFO, "Push players out of brush models they are stuck in");
 
 			std::size_t gateCount = 0;

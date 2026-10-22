@@ -174,6 +174,11 @@ namespace Components::Remix::Menu
 
 			if (isOurWindow && ShouldSwallow(message->message))
 			{
+				if (message->message == WM_KEYDOWN || message->message == WM_SYSKEYDOWN)
+				{
+					TranslateMessage(message);
+				}
+
 				message->message = WM_NULL;
 			}
 		}
@@ -433,18 +438,24 @@ namespace Components::Remix::Menu
 		else if (!lightStats.hasSun)
 		{
 			rows.push_back({ "Remix lights", CheckState::Working, Format(
-				"API ready, no sun on this map or stage, %d map lights, %d fixture lights (up to 384)", lightStats.mapLights,
-				lightStats.fixtureLights) });
+				"API ready, no sun on this map or stage, %d map lights, %d fixture lights (%d nearest drawn)",
+				lightStats.mapLights, lightStats.fixtureLights, lightStats.drawnFixtureLights) });
 		}
 		else
 		{
 			rows.push_back({ "Remix lights", CheckState::Working, Format(
-				"sun radiance %.2f %.2f %.2f, %d map lights, %d fixture lights (up to 384), %d dynamic lights now (%llu updates), submitted %llu"
-				" frames",
+				"sun radiance %.2f %.2f %.2f, %d map lights, %d fixture lights (%d nearest drawn), %d dynamic lights now (%llu"
+				" updates), submitted %llu frames",
 				lightStats.sunRadiance[0], lightStats.sunRadiance[1], lightStats.sunRadiance[2],
-				lightStats.mapLights, lightStats.fixtureLights, lightStats.dynamicLights, lightStats.dynamicLightUpdates,
+				lightStats.mapLights, lightStats.fixtureLights, lightStats.drawnFixtureLights, lightStats.dynamicLights,
+				lightStats.dynamicLightUpdates,
 				lightStats.submittedFrames) });
 		}
+
+		rows.push_back({ "Remix light churn", CheckState::Working, Format(
+			"%llu alive (%llu made, %llu freed this session), fixture lights rebuilt %llu times",
+			lightStats.lightsCreated - lightStats.lightsDestroyed, lightStats.lightsCreated, lightStats.lightsDestroyed,
+			lightStats.fixtureRebuilds) });
 
 		const FogStats fogStats = GetFogStats();
 
@@ -747,7 +758,17 @@ namespace Components::Remix::Menu
 		}
 
 		ImGui::SetItemTooltip("Scales the lights the map places and the lights effects cast: fire, glowsticks,"
-							  " muzzle flashes and explosions.");
+							  " muzzle flashes and explosions. Converted Black Ops and World at War maps have no map"
+							  " lights, so there it only changes effect lights; use Lit fixtures and Glow brightness.");
+
+		float glowBrightness = GetGlowBrightness();
+
+		if (ImGui::SliderFloat("Glow brightness", &glowBrightness, 0.0f, 8.0f, "x%.2f"))
+		{
+			SetGlowBrightness(glowBrightness);
+		}
+
+		ImGui::SetItemTooltip("Scales every glowing surface live: lamps, screens, signs, reticles and fire.");
 
 		isChanged |= ImGui::Checkbox("Lit fixtures", &look.isFixtureLights);
 		ImGui::SetItemTooltip("Lamps, fluorescent tubes, signs and screens glow from their bright parts and each cluster"
@@ -756,6 +777,15 @@ namespace Components::Remix::Menu
 		if (look.isFixtureLights)
 		{
 			isChanged |= ImGui::SliderFloat("Fixture brightness", &look.fixtureBrightness, 0.0f, 4.0f, "x%.2f");
+
+			isChanged |= ImGui::SliderFloat("Fixture light offset", &look.fixtureOffset, 0.0f, 32.0f, "%.0f units");
+			ImGui::SetItemTooltip("Moves each fixture's light out from the lamp into the room. The wall right behind a"
+								  " lamp gets far less light (it falls with the square of the distance), so it stops"
+								  " bleaching white, while the rest of the room is lit about the same.");
+
+			isChanged |= ImGui::SliderFloat("Fixture light size", &look.fixtureSize, 1.0f, 24.0f, "%.0f units");
+			ImGui::SetItemTooltip("A bigger light spreads the same amount of light over a larger glow: softer hot spots and"
+								  " shadows near the lamp, the same brightness across the room.");
 		}
 		isChanged |= ImGui::Checkbox("Laser light", &look.isLaserLights);
 		ImGui::SetItemTooltip("The glow along a laser beam becomes a real red light that lights walls and players."
@@ -795,21 +825,26 @@ namespace Components::Remix::Menu
 		ImGui::SeparatorText("Exposure");
 
 		isChanged |= ImGui::Checkbox("Auto exposure", &look.isAutoExposure);
-		ImGui::SetItemTooltip("Remix adapts the exposure like an eye or camera. Off holds a fixed exposure, so dark"
-							  " areas stay dark and bright ones stay bright.");
+		ImGui::SetItemTooltip("Remix adapts the exposure like an eye or camera, so the whole image brightens or darkens"
+							  " with what is in view. Off (the default) holds a fixed exposure: set it with Exposure (EV)"
+							  " and use Save for this map.");
 
-		isChanged |= ImGui::SliderFloat("Darkest adapt (EV)", &look.exposureMinEv, -8.0f, 0.0f, "%.1f");
-		ImGui::SetItemTooltip("How far auto exposure may darken the image in bright scenes.");
+		if (look.isAutoExposure)
+		{
+			isChanged |= ImGui::SliderFloat("Darkest adapt (EV)", &look.exposureMinEv, -8.0f, 0.0f, "%.1f");
+			ImGui::SetItemTooltip("How far auto exposure may darken the image in bright scenes.");
 
-		isChanged |= ImGui::SliderFloat("Brightest adapt (EV)", &look.exposureMaxEv, 0.0f, 10.0f, "%.1f");
-		ImGui::SetItemTooltip("How far auto exposure may brighten dark scenes. Lower keeps night and indoor areas dark.");
+			isChanged |= ImGui::SliderFloat("Brightest adapt (EV)", &look.exposureMaxEv, 0.0f, 10.0f, "%.1f");
+			ImGui::SetItemTooltip("How far auto exposure may brighten dark scenes. Lower keeps night and indoor areas"
+								  " dark.");
 
-		isChanged |= ImGui::SliderFloat("Adapt speed", &look.exposureSpeed, 0.1f, 10.0f, "%.1f");
-		ImGui::SetItemTooltip("How quickly exposure follows the scene, like eyes adjusting after going outside.");
+			isChanged |= ImGui::SliderFloat("Adapt speed", &look.exposureSpeed, 0.1f, 10.0f, "%.1f");
+			ImGui::SetItemTooltip("How quickly exposure follows the scene, like eyes adjusting after going outside.");
+		}
 
 		ImGui::SeparatorText("Tonemapping");
 
-		static const char* tonemappers[] = { "Global (colour grading)", "Local (default)" };
+		static const char* tonemappers[] = { "Global (default, colour grading)", "Local" };
 		isChanged |= ImGui::Combo("Tonemapper", &look.tonemapper, tonemappers, 2);
 		ImGui::SetItemTooltip("Local balances bright and dark areas separately, like an HDR photo. Global is a single"
 							  " curve for the whole image and is the one that does contrast, saturation and tint.");
@@ -836,6 +871,11 @@ namespace Components::Remix::Menu
 			isChanged |= ImGui::SliderFloat("Exposure (EV)", &look.exposureBiasEv, -5.0f, 5.0f, "%.2f");
 			ImGui::SetItemTooltip("Brightens or darkens the whole image in camera stops.");
 
+			isChanged |= ImGui::Checkbox("Steady tone curve", &look.isSteadyToneCurve);
+			ImGui::SetItemTooltip("On keeps one fixed curve, so the image only changes when the lighting does. Off lets"
+								  " Remix rebuild the curve every frame from what is on screen, which can pump and flicker"
+								  " as you look around.");
+
 			isChanged |= ImGui::Checkbox("Film curve (ACES)", &look.isGlobalAces);
 			ImGui::SetItemTooltip("Finishes with the ACES film curve used in film and many games.");
 
@@ -854,6 +894,30 @@ namespace Components::Remix::Menu
 									  " for night.");
 			}
 		}
+
+		isChanged |= ImGui::SliderFloat("Outdoor exposure (EV)", &look.outdoorEv, -3.0f, 5.0f, "%+.2f");
+		ImGui::SetItemTooltip("Added to the exposure while you stand outdoors, easing in over about a second as you walk"
+							  " out. It follows where you are, not where you look, so a dark night yard can be brightened"
+							  " without blowing out lit rooms. Uses the map's outdoor mask; Save for this map keeps it.");
+
+		{
+			const OutdoorExposureState outdoor = GetOutdoorExposureState();
+
+			if (!outdoor.hasOutdoorMask)
+			{
+				ImGui::TextDisabled("This map has no outdoor mask, so outdoor exposure cannot tell inside from out.");
+			}
+			else
+			{
+				ImGui::TextDisabled("You are %s (outdoor share %.0f%%)", outdoor.isOutdoors ? "outdoors" : "indoors",
+					outdoor.blend * 100.0f);
+			}
+		}
+
+		isChanged |= ImGui::SliderFloat("Shadow lift", &look.shadowLift, 0.0f, 0.5f, "%.2f");
+		ImGui::SetItemTooltip("Brightens the dark parts of the picture and leaves the bright parts almost alone, for"
+							  " maps that are too dark in places. Keep it low (0.05 to 0.15), high values look washed"
+							  " out. More light bounces (Quality tab) is the realistic way to fill dark rooms.");
 
 		ImGui::SeparatorText("Camera effects");
 
@@ -958,6 +1022,10 @@ namespace Components::Remix::Menu
 			isChanged |= ImGui::SliderFloat("Rain amount", &look.rainAmount, 0.0f, 10.0f, "%.1f");
 			ImGui::SetItemTooltip("1 is a steady shower, 10 is a downpour (about ten thousand drops).");
 		}
+
+		isChanged |= ImGui::Checkbox("Rain drops on screen", &look.isScreenDrops);
+		ImGui::SetItemTooltip("Water drops gather on the lens while you are out in the rain, run down and dry off"
+							  " indoors. Follows the map's rain and Rain on any map.");
 		static const char* wetModes[] = { "Off", "When it rains", "Always" };
 		isChanged |= ImGui::Combo("Wet world", &look.wetMode, wetModes, 3);
 		ImGui::SetItemTooltip("Wet surfaces are darker and glossier. When it rains follows the map's own rain and Rain"
@@ -1007,17 +1075,31 @@ namespace Components::Remix::Menu
 
 		ImGui::SeparatorText("Glow");
 
-		float glowBrightness = GetGlowBrightness();
+		bool areLampFlaresHidden = AreLampFlaresHidden();
 
-		if (ImGui::SliderFloat("Glow brightness", &glowBrightness, 0.0f, 8.0f, "x%.2f"))
+		if (ImGui::Checkbox("Hide floating lamp flares", &areLampFlaresHidden))
 		{
-			SetGlowBrightness(glowBrightness);
+			SetLampFlaresHidden(areLampFlaresHidden);
 		}
 
-		ImGui::SetItemTooltip("Scales every glowing surface live: lamps, screens, signs, reticles and fire.");
+		ImGui::SetItemTooltip("Leaves out the glow sprites the game pushes toward your eye (lamp flares), which Remix draws"
+							  " floating beside the lamp. The zombie eye glow uses the same kind of sprite: untick to see"
+							  " whether it brings the eyes back.");
+
+		isChanged |= ImGui::Checkbox("Steady smoke and fog", &look.isSteadyTransparency);
+		ImGui::SetItemTooltip("On blends smoke, fog sheets and other faint see-through effects normally. Off lets Remix"
+							  " dither them per pixel (rtx.enableStochasticAlphaBlend), which can flicker, most of all"
+							  " with DLSS on Ultra Performance.");
 
 		isChanged |= ImGui::SliderFloat("Effect glow", &look.effectGlow, 0.0f, 5.0f, "%.2f");
 		ImGui::SetItemTooltip("How brightly additive and screen-blended effects glow: mist, smoke glows, muzzle flashes, lasers. Remix's default is 0.20 (rtx.emissiveBlendOverrideEmissiveIntensity).");
+
+		isChanged |= ImGui::SliderFloat("Zombie eye brightness", &look.eyeGlowBrightness, 0.0f, 8.0f, "x%.2f");
+		ImGui::SetItemTooltip("How bright the zombies' glowing eyes are. Above 1 the glow is drawn several times over, so"
+							  " it also lights more strongly through Effect glow.");
+
+		isChanged |= ImGui::SliderFloat("Zombie eye size", &look.eyeGlowSize, 0.25f, 4.0f, "x%.2f");
+		ImGui::SetItemTooltip("How big the zombies' eye glow is around each eye.");
 
 		float trackerBrightness = GetTrackerBrightness();
 
@@ -1249,7 +1331,6 @@ namespace Components::Remix::Menu
 
 			isChanged = true;
 
-			// the extras outside the look settings cost as much as the path tracing ones
 			SetEffectCullingDisabled(false);
 			SetAllEffectLights(false);
 			SetOffscreenWorldEnabled(false);
@@ -1275,6 +1356,29 @@ namespace Components::Remix::Menu
 			look = LookSettings{};
 			SetSkyScale(1.0f);
 			isChanged = true;
+		}
+
+		isChanged |= ImGui::Checkbox("Opacity micromaps", &look.isOpacityMicromaps);
+		ImGui::SetItemTooltip("Remix's faster tracing of see-through cut-outs (fences, cloth, leaves). Off by default: on"
+							  " converted maps it baked block-shaped holes into curtains and flags. On is a little faster"
+							  " on maps with lots of foliage.");
+
+		ImGui::SeparatorText("CPU");
+
+		Core::Config& threadConfig = Core::MutableConfig();
+
+		if (ImGui::Checkbox("Multi-threaded renderer (experimental)", &threadConfig.remixThreadedRenderer))
+		{
+			ApplyThreadedRenderer(threadConfig.remixThreadedRenderer);
+		}
+
+		ImGui::SetItemTooltip("Draws each frame on its own thread while the game builds the next one, which raises the"
+							  " frame rate when the CPU is the limit. Remix is not built for this, so it can crash: untick"
+							  " if the game crashes or freezes. Save keeps it.");
+
+		if (!IsRenderFrameLocked())
+		{
+			ImGui::TextDisabled("Not available: the render thread hooks did not install (see the log)");
 		}
 
 		ImGui::SeparatorText("Path tracing");
@@ -1402,6 +1506,7 @@ namespace Components::Remix::Menu
 	static std::string mapEditorMessage;
 	static bool isLabellingLights = false;
 	static int editedLightIndex = -1;
+	static std::uint64_t editedFixtureHash = 0;
 	static LightOverride editedLight;
 	static AuthoredLight newLight;
 	static int newMarkerId = 1;
@@ -1460,7 +1565,28 @@ namespace Components::Remix::Menu
 
 			ImU32 colour = IM_COL32(255, 220, 60, 255);
 
-			if (light.info.isAuthored)
+			if (light.info.isFixture)
+			{
+				std::snprintf(label, sizeof(label), "fx %04llX (%.0f)%s",
+					static_cast<unsigned long long>(light.info.hash & 0xFFFF), light.distance,
+					light.info.isIgnored ? " off" : "");
+				colour = IM_COL32(255, 150, 40, 255);
+
+				if (light.info.isIgnored)
+				{
+					colour = IM_COL32(255, 40, 40, 255);
+				}
+				else if (light.info.isChanged)
+				{
+					colour = IM_COL32(60, 120, 255, 255);
+				}
+
+				if (light.info.hash == editedFixtureHash)
+				{
+					colour = IM_COL32(255, 255, 255, 255);
+				}
+			}
+			else if (light.info.isAuthored)
 			{
 				colour = IM_COL32(60, 255, 90, 255);
 			}
@@ -1491,12 +1617,9 @@ namespace Components::Remix::Menu
 		const std::vector<NearbyLight> nearby = CollectNearbyLights(camera, 12);
 
 		ImGui::Checkbox("Label nearby lights", &isLabellingLights);
-		ImGui::SetItemTooltip("Writes each nearby light's hash on screen, the key a map file uses to change it.");
-
-		if (isLabellingLights)
-		{
-			DrawLightLabels(nearby);
-		}
+		ImGui::SetItemTooltip("Writes each nearby light's id on screen and stays on with the menu closed. Orange labels"
+							  " are lit fixtures (fx id and distance): blue once changed, red when switched off, white"
+							  " while you edit it.");
 
 		if (ImGui::BeginTable("nearby lights", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit))
 		{
@@ -1511,7 +1634,12 @@ namespace Components::Remix::Menu
 
 				ImGui::TableNextColumn();
 
-				if (light.info.isAuthored)
+				if (light.info.isFixture)
+				{
+					ImGui::Text("fx %04llX%s", static_cast<unsigned long long>(light.info.hash & 0xFFFF),
+						light.info.isIgnored ? " off" : "");
+				}
+				else if (light.info.isAuthored)
 				{
 					ImGui::TextUnformatted("added");
 				}
@@ -1529,7 +1657,14 @@ namespace Components::Remix::Menu
 
 				ImGui::TableNextColumn();
 
-				if (!light.info.isAuthored)
+				if (light.info.isFixture)
+				{
+					if (ImGui::SmallButton("Edit"))
+					{
+						editedFixtureHash = light.info.hash;
+					}
+				}
+				else if (!light.info.isAuthored)
 				{
 					if (ImGui::SmallButton("Ignore"))
 					{
@@ -1551,6 +1686,81 @@ namespace Components::Remix::Menu
 			}
 
 			ImGui::EndTable();
+		}
+
+		if (ImGui::Button("Edit nearest fixture"))
+		{
+			for (const NearbyLight& light : nearby)
+			{
+				if (light.info.isFixture)
+				{
+					editedFixtureHash = light.info.hash;
+					break;
+				}
+			}
+		}
+
+		ImGui::SetItemTooltip("Lit fixtures are edited live: every change shows at once. Save to map file keeps it for"
+							  " the next time the map loads.");
+
+		if (editedFixtureHash != 0)
+		{
+			ImGui::SeparatorText("Edit fixture (live)");
+			ImGui::Text("fx %04llX   0x%016llX%s", static_cast<unsigned long long>(editedFixtureHash & 0xFFFF),
+				static_cast<unsigned long long>(editedFixtureHash), HasLiveFixtureEdit(editedFixtureHash) ? "  (edited)" : "");
+
+			FixtureEdit edit = GetFixtureEdit(editedFixtureHash);
+			bool isEditChanged = ImGui::Checkbox("Light on##fx", &edit.isOn);
+			isEditChanged |= ImGui::SliderFloat("Brightness##fx", &edit.brightness, 0.0f, 16.0f, "x%.2f");
+			isEditChanged |= ImGui::Checkbox("Replace colour##fx", &edit.hasColour);
+
+			if (edit.hasColour)
+			{
+				isEditChanged |= ImGui::ColorEdit3("Colour##fx", edit.colour, ImGuiColorEditFlags_NoInputs);
+			}
+
+			isEditChanged |= ImGui::SliderFloat("Size##fx", &edit.size, 0.5f, 64.0f, "%.1f");
+			ImGui::SetItemTooltip("The size of the glowing sphere. Bigger gives softer shadows; the light's total"
+								  " brightness stays the same.");
+
+			if (isEditChanged)
+			{
+				SetFixtureEdit(editedFixtureHash, edit);
+			}
+
+			if (ImGui::Button("Save to map file##fx"))
+			{
+				if (!edit.isOn)
+				{
+					draft.ignoredLights.push_back(editedFixtureHash);
+				}
+				else
+				{
+					LightOverride change;
+					change.hash = editedFixtureHash;
+					change.brightness = edit.brightness;
+					change.hasColour = edit.hasColour;
+					std::memcpy(change.colour, edit.colour, sizeof(change.colour));
+					change.radius = edit.size;
+					draft.lightOverrides.push_back(change);
+				}
+
+				mapEditorMessage = "Added to the draft below; Add to map file writes it.";
+			}
+
+			ImGui::SameLine();
+
+			if (ImGui::Button("Undo edit##fx"))
+			{
+				ForgetFixtureEdit(editedFixtureHash);
+			}
+
+			ImGui::SameLine();
+
+			if (ImGui::Button("Done##fx"))
+			{
+				editedFixtureHash = 0;
+			}
 		}
 
 		if (editedLightIndex >= 0)
@@ -1598,6 +1808,69 @@ namespace Components::Remix::Menu
 			{
 				editedLightIndex = -1;
 			}
+		}
+
+		ImGui::SeparatorText("Zones");
+
+		{
+			LookSettings zoneLook = GetLookSettings();
+
+			if (ImGui::Checkbox("Use map zones", &zoneLook.isMapZones))
+			{
+				SetLookSettings(zoneLook);
+			}
+
+			ImGui::SetItemTooltip("The map file's [[zones]]: per-room exposure, shadow lift, effect glow, colour grade and"
+								  " lamp colours. Off uses your own menu values everywhere; the zones stay in the file.");
+		}
+
+		{
+			const ZoneState zoneState = GetZoneState();
+			ImGui::Text("Camera cell %d, zone: %s", zoneState.cell,
+				zoneState.zoneName.empty() ? "none (global settings)" : zoneState.zoneName.c_str());
+			ImGui::TextDisabled("now: exposure %+.2f EV on the map's, shadow lift %.2f, effect glow %.2f",
+				zoneState.exposureEv, zoneState.shadowLift, zoneState.effectGlow);
+
+			{
+				const LightStats lampStats = GetLightStats();
+				ImGui::TextDisabled("lamps: %d of %d placed in a cell (zone lamp settings apply to those)",
+					lampStats.fixturesInCells, lampStats.fixtureLights);
+			}
+
+			if (zoneState.isGrading)
+			{
+				ImGui::TextDisabled("grade: contrast %.2f, saturation %.2f, tint %.2f %.2f %.2f (global tonemapper)",
+					zoneState.contrast, zoneState.saturation, zoneState.tint[0], zoneState.tint[1], zoneState.tint[2]);
+			}
+
+			if (ImGui::Button("Add zone for this cell") && zoneState.cell >= 0)
+			{
+				const LookSettings current = GetLookSettings();
+				MapZone zone;
+				zone.name = "cell_" + std::to_string(zoneState.cell);
+				zone.cells.push_back(zoneState.cell);
+				zone.exposureEv = 0.0f;
+				zone.shadowLift = current.shadowLift;
+				zone.effectGlow = current.effectGlow;
+				draft.zones.push_back(zone);
+				mapEditorMessage = "Zone for cell " + std::to_string(zoneState.cell)
+					+ " added to the draft with the current Shadow lift and Effect glow; set exposure_ev (stops"
+					  " brighter or darker than the rest of the map) in the draft or the map file.";
+			}
+
+			ImGui::SetItemTooltip("Set Shadow lift and Effect glow for this room first (outside any zone), then add: the zone"
+								  " keeps them for this cell, with exposure_ev = 0 to raise or lower in stops. Add to map"
+								  " file writes it; Reload map file applies an edited file.");
+
+			ImGui::SameLine();
+
+			if (ImGui::Button("Survey map"))
+			{
+				TryWriteMapSurvey(mapEditorMessage);
+			}
+
+			ImGui::SetItemTooltip("Writes zw3_remix_survey_<map>.txt in the game folder: every cell with its size,"
+								  " neighbours, materials, models, fixtures and how much of it is outdoors.");
 		}
 
 		ImGui::SeparatorText("Add at the camera");
@@ -2199,8 +2472,6 @@ namespace Components::Remix::Menu
 			isOpen = !isOpen;
 		}
 
-		// Remix's own menu (ALT+X) reads the window's messages itself, but the game keeps pulling the cursor back to
-		// the centre, so the game mouse is let go while it is open, the same as for this menu
 		const bool isRemixChord = hookedWindow && GetForegroundWindow() == GetAncestor(hookedWindow, GA_ROOT)
 			&& IsHeld(VK_MENU) && IsHeld('X');
 
@@ -2214,6 +2485,14 @@ namespace Components::Remix::Menu
 		if (isOpen)
 		{
 			DrawWindow();
+		}
+
+		float labelCamera[3];
+
+		if (isLabellingLights && TryGetCameraOrigin(labelCamera))
+		{
+			constexpr std::size_t maxLabelledLights = 24;
+			DrawLightLabels(CollectNearbyLights(labelCamera, maxLabelledLights));
 		}
 
 		SetMenuOwnsInput(isOpen);

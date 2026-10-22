@@ -1,15 +1,17 @@
 #pragma once
 
+#include <string>
+
 namespace Components::Remix
 {
 	struct LookSettings
 	{
 		int tonemapper = 0;
 
-		bool isAutoExposure = true;
-		float exposureMinEv = -2.0f;
-		float exposureMaxEv = 5.0f;
-		float exposureSpeed = 3.0f;
+		bool isAutoExposure = false;
+		float exposureMinEv = -1.0f;
+		float exposureMaxEv = 2.0f;
+		float exposureSpeed = 1.0f;
 
 		float localExposure = 0.75f;
 		float localShadows = 2.0f;
@@ -22,7 +24,8 @@ namespace Components::Remix
 		float contrast = 1.0f;
 		float saturation = 1.0f;
 		float colourBalance[3] = { 1.0f, 1.0f, 1.0f };
-		bool isGlobalAces = false;
+		bool isGlobalAces = true;
+		bool isSteadyToneCurve = true;
 
 		bool isBloom = true;
 		float bloomIntensity = 1.0f;
@@ -63,12 +66,15 @@ namespace Components::Remix
 		bool isLaserLights = false;
 		bool isFixtureLights = true;
 		float fixtureBrightness = 1.0f;
+		float fixtureOffset = 0.0f;
+		float fixtureSize = 4.0f;
 		bool isPuddles = false;
 		bool isParallax = false;
 		float parallaxDepth = 1.0f;
 		int wetMode = 0;
 		bool isRainEverywhere = false;
 		float rainAmount = 1.0f;
+		bool isScreenDrops = true;
 		bool isTimeOfDay = false;
 		float timeOfDayHours = 17.5f;
 		bool isNight = false;
@@ -78,6 +84,13 @@ namespace Components::Remix
 		bool isMirror = false;
 		float mirrorMetal = 0.0f;
 		float effectGlow = 0.2f;
+		float shadowLift = 0.0f;
+		float eyeGlowBrightness = 1.0f;
+		float eyeGlowSize = 1.0f;
+		bool isMapZones = true;
+		bool isSteadyTransparency = true;
+		float outdoorEv = 0.0f;
+		bool isOpacityMicromaps = false;
 		bool isSkyReprojected = false;
 	};
 
@@ -88,4 +101,30 @@ namespace Components::Remix
 	void UpdateLook(IDirect3DDevice9* device);
 
 	bool IsWetActive();
+
+	struct OutdoorExposureState
+	{
+		bool hasOutdoorMask;
+		bool isOutdoors;
+		float blend;
+	};
+
+	OutdoorExposureState GetOutdoorExposureState();
+
+	struct ZoneState
+	{
+		int cell;
+		std::string zoneName;
+		float exposureEv;
+		float shadowLift;
+		float effectGlow;
+		float contrast;
+		float saturation;
+		float tint[3];
+		bool isGrading;
+	};
+
+	ZoneState GetZoneState();
+
+	float GetEffectiveShadowLift();
 }

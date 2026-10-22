@@ -4,6 +4,11 @@
 #include "Core.hpp"
 #include "Hook.hpp"
 
+#include <mutex>
+#include <vector>
+
+#include "Read.hpp"
+
 #include "Components/Modules/AssetHandler.hpp"
 #include "Components/Modules/Dedicated.hpp"
 
@@ -15,6 +20,11 @@ namespace Components::Remix::Engine
 	static PrePostCallback prePostCallback = nullptr;
 	static bool hasAttemptedPrePost = false;
 	static bool isPrePostInstalled = false;
+
+	static std::mutex mainThreadMutex;
+	static std::vector<std::function<void()>> mainThreadTasks;
+	static DWORD mainThreadId = 0;
+	static unsigned mainFrameNumber = 0;
 
 	const Iw4::GameBuild& CurrentBuild()
 	{
@@ -34,7 +44,6 @@ namespace Components::Remix::Engine
 		return stock;
 	}
 
-	// zw3 may move the material pool and raise its size, so the live pool comes from DB_XAssetPool, not g_MaterialPool
 	MaterialPool CurrentMaterialPool()
 	{
 		MaterialPool result{};
@@ -60,8 +69,58 @@ namespace Components::Remix::Engine
 			return false;
 		}
 
-		Game::Dvar_SetFromStringByName(name, value);
+		RunOnMainThread([name = std::string(name), value = std::string(value)]
+		{
+			Game::Dvar_SetFromStringByName(name.c_str(), value.c_str());
+		});
+
 		return true;
+	}
+
+	bool IsRendererThreaded()
+	{
+		const auto smpBackend = ReadAt<std::uintptr_t>(RebaseAddress(CurrentBuild().r_smp_backendDvar));
+		return smpBackend && ReadAt<std::uint8_t>(smpBackend + Iw4::dvarValueOffset) != 0;
+	}
+
+	void RunOnMainThread(std::function<void()> task)
+	{
+		const bool isMainThread = mainThreadId != 0 && mainThreadId == GetCurrentThreadId();
+
+		{
+			const std::lock_guard lock(mainThreadMutex);
+
+			if (!isMainThread || !mainThreadTasks.empty())
+			{
+				mainThreadTasks.push_back(std::move(task));
+				return;
+			}
+		}
+
+		task();
+	}
+
+	void RunMainThreadTasks()
+	{
+		mainThreadId = GetCurrentThreadId();
+		++mainFrameNumber;
+
+		std::vector<std::function<void()>> tasks;
+
+		{
+			const std::lock_guard lock(mainThreadMutex);
+			tasks.swap(mainThreadTasks);
+		}
+
+		for (const std::function<void()>& task : tasks)
+		{
+			task();
+		}
+	}
+
+	unsigned MainFrameNumber()
+	{
+		return mainFrameNumber;
 	}
 
 	bool EngineAddressable()
@@ -79,7 +138,6 @@ namespace Components::Remix::Engine
 		return Utils::Hook::Rebase(idbAddress);
 	}
 
-	// remix draws its own post stack, so the engine's sun post effects (glow, grading, dof) are skipped
 	static void __fastcall SunPostEffectsDetour(int localClient, int unused)
 	{
 		if (prePostCallback)

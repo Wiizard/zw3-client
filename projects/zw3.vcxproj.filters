@@ -348,6 +348,24 @@
     <ClInclude Include="..\src\Components\Modules\CrateCollision.hpp">
       <Filter>Components\Modules</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ClipMap.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\CollmapCollision.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ZombieCollision.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\ClipDebug.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\EntityHealthbar.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\DamageFeedback.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\Components\Modules\CardTitles.hpp">
       <Filter>Components\Modules</Filter>
     </ClInclude>
@@ -1456,6 +1474,21 @@
       <Filter>Components\Modules</Filter>
     </ClCompile>
     <ClCompile Include="..\src\Components\Modules\CrateCollision.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\CollmapCollision.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ZombieCollision.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\ClipDebug.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\EntityHealthbar.cpp">
+      <Filter>Components\Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\DamageFeedback.cpp">
       <Filter>Components\Modules</Filter>
     </ClCompile>
     <ClCompile Include="..\src\Components\Modules\CardTitles.cpp">

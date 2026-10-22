@@ -127,10 +127,18 @@ namespace Components::Remix
 
 	static void __fastcall StandardDrawDetour(void* viewInfo)
 	{
-		D3DMATRIX view;
-		D3DMATRIX projection;
+		D3DMATRIX view{};
+		D3DMATRIX projection{};
 
 		const bool isScene = sceneDevice && viewInfo && !didFault && TryReadSceneView(viewInfo, view, projection);
+
+		{
+			char text[200];
+			std::snprintf(text, sizeof(text), "RB_StandardDrawCommands: %s (projection %.3f %.3f %.3f %.3f %.3f)%s",
+				isScene ? "scene view, camera handed to Remix" : "other view, camera NOT handed over", projection._11,
+				projection._22, projection._33, projection._43, projection._34, didFault ? ", view read faulted earlier" : "");
+			Device::NoteFrameEvent(text);
+		}
 
 		if (isScene)
 		{
@@ -282,6 +290,29 @@ namespace Components::Remix
 		return applied;
 	}
 
+	static int InstallGpuSyncPollPatches()
+	{
+		int applied = 0;
+
+		for (const Iw4::BytePatch& patch : Engine::CurrentBuild().gpuSyncPollFlushPatches)
+		{
+			if (patch.address == 0)
+			{
+				continue;
+			}
+
+			if (Hook::PatchBytes(Engine::RebaseAddress(patch.address), patch.original, patch.replacement, patch.size))
+			{
+				++applied;
+			}
+		}
+
+		Log() << "remix: " << applied << " of 4 gpu sync poll patches applied, the main thread polls the sync queries"
+				 " without D3DGETDATA_FLUSH so it never flushes Remix's device while the render thread is drawing";
+
+		return applied;
+	}
+
 	using PostEffects = void(__fastcall*)(void*);
 
 	static PostEffects originalPostEffects = nullptr;
@@ -392,6 +423,55 @@ namespace Components::Remix
 		return mapColourGradeStrength;
 	}
 
+	using RenderThreadCall = void(__fastcall*)(void*, void*, void*);
+
+	static RenderThreadCall originalRenderCommandFrame = nullptr;
+	static RenderThreadCall originalRenderThreadUpdateScreen = nullptr;
+	static bool isRenderFrameLocked = false;
+
+	static void __fastcall RenderCommandFrameDetour(void* first, void* second, void* third)
+	{
+		Device::EnterRenderFrame();
+		originalRenderCommandFrame(first, second, third);
+		Device::LeaveRenderFrame();
+	}
+
+	static void __fastcall RenderThreadUpdateScreenDetour(void* first, void* second, void* third)
+	{
+		Device::EnterRenderFrame();
+		originalRenderThreadUpdateScreen(first, second, third);
+		Device::LeaveRenderFrame();
+	}
+
+	static bool InstallRenderFrameLock()
+	{
+		const Iw4::GameBuild& build = Engine::CurrentBuild();
+
+		const bool isFrameLocked = TryPatchCallGroup(build.renderCommandFrameCalls, 3,
+			reinterpret_cast<const void*>(&RenderCommandFrameDetour), reinterpret_cast<void**>(&originalRenderCommandFrame));
+		const bool isScreenLocked = TryPatchCallGroup(&build.renderThreadUpdateScreenCall, 1,
+			reinterpret_cast<const void*>(&RenderThreadUpdateScreenDetour),
+			reinterpret_cast<void**>(&originalRenderThreadUpdateScreen));
+
+		isRenderFrameLocked = isFrameLocked && isScreenLocked && Device::IsQueryPollGuarded();
+
+		Log() << "remix: render thread frames locked against gpu sync polls (frames " << isFrameLocked << ", loading screen "
+			  << isScreenLocked << ", queries " << Device::IsQueryPollGuarded() << "), the renderer can run on its own"
+			  " thread: " << isRenderFrameLocked;
+
+		return isRenderFrameLocked;
+	}
+
+	bool IsRenderFrameLocked()
+	{
+		return isRenderFrameLocked;
+	}
+
+	void ApplyThreadedRenderer(bool isThreaded)
+	{
+		Engine::SetDvar("r_smp_backend", isThreaded && isRenderFrameLocked ? "1" : "0");
+	}
+
 	static void __fastcall EmissivePassDetour(void* viewInfo)
 	{
 		if (!sceneDevice)
@@ -412,9 +492,11 @@ namespace Components::Remix
 		sceneDevice->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
 		sceneDevice->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
 
+		Device::NoteFrameEvent("effects pass begins");
 		Device::BeginEffectBlendRemap(sceneDevice);
 		originalEmissivePass(viewInfo);
 		Device::EndEffectBlendRemap(sceneDevice);
+		Device::NoteFrameEvent("effects pass ends");
 
 		sceneDevice->SetTextureStageState(0, D3DTSS_ALPHAOP, alphaOperation);
 		sceneDevice->SetTextureStageState(0, D3DTSS_ALPHAARG1, alphaArgument1);
@@ -639,6 +721,8 @@ namespace Components::Remix
 		Log() << "remix: handing the scene camera to Remix at the start of RB_StandardDrawCommands";
 
 		stats.suppressedPasses = SuppressHiddenPasses();
+		InstallGpuSyncPollPatches();
+		InstallRenderFrameLock();
 		InstallPostEffectsHook();
 		stats.isEffectAlphaHooked = InstallEffectAlphaHook();
 		stats.isMotionTrackerHooked = InstallMotionTrackerHooks();
@@ -769,6 +853,8 @@ namespace Components::Remix
 			return;
 		}
 
+		Device::AdvanceFrameCapture();
+
 		sceneDevice = device;
 		stats.hasDevice = device != nullptr;
 
@@ -839,7 +925,7 @@ namespace Components::Remix
 
 		if ((keyboardTick++ % 60) == 0)
 		{
-			RestoreLegacyKeyboard();
+			Engine::RunOnMainThread(&RestoreLegacyKeyboard);
 		}
 
 		static unsigned tick = 0;
@@ -849,7 +935,9 @@ namespace Components::Remix
 		const bool isDue = !hasForcedDvars || (tick % reapplyInterval) == 0;
 		++tick;
 
-		if (!isDue || !Engine::SetDvar("r_smp_backend", "0") || !Engine::SetDvar("r_pretess", "0")
+		const bool isThreaded = isRenderFrameLocked && Core::GetConfig().remixThreadedRenderer;
+
+		if (!isDue || !Engine::SetDvar("r_smp_backend", isThreaded ? "1" : "0") || !Engine::SetDvar("r_pretess", "0")
 			|| !Engine::SetDvar("r_smc_enable", "0"))
 		{
 			return;
@@ -860,15 +948,13 @@ namespace Components::Remix
 		if (!hasForcedDvars)
 		{
 			hasForcedDvars = true;
-			Log() << "remix: r_smp_backend forced to 0, the engine renders on one thread so Remix never"
-					 " sees two threads at once; r_pretess and r_smc_enable forced to 0, so the world and static"
-					 " models take the draw paths Remix mode replaces (re-applied every " << reapplyInterval
+			Log() << "remix: r_smp_backend " << (isThreaded ? "1, the render back end runs on its own thread" : "0, the"
+					 " engine renders on the main thread") << "; r_pretess and r_smc_enable forced to 0, so the world"
+					 " and static models take the draw paths Remix mode replaces (re-applied every " << reapplyInterval
 				  << " frames)";
 		}
 	}
 
-	// a zero-area orthographic draw is the first thing Remix classes as UI: it composites the path-traced frame there
-	// and rasterises everything after it, which is what keeps HUD, menus and zw3's own lobby drawing out of the scene
 	void MarkUiPhase(IDirect3DDevice9* device)
 	{
 		if (!device)
@@ -908,6 +994,66 @@ namespace Components::Remix
 		injectionState->Apply();
 	}
 
+	static void DrawShadowLift(IDirect3DDevice9* device)
+	{
+		const float lift = std::clamp(GetEffectiveShadowLift(), 0.0f, 1.0f);
+
+		if (lift <= 0.0f || !device || !injectionState)
+		{
+			return;
+		}
+
+		struct LiftVertex
+		{
+			float position[4];
+			D3DCOLOR colour;
+		};
+
+		D3DVIEWPORT9 viewport{};
+		device->GetViewport(&viewport);
+
+		const float left = static_cast<float>(viewport.X) - 0.5f;
+		const float top = static_cast<float>(viewport.Y) - 0.5f;
+		const float right = left + static_cast<float>(viewport.Width);
+		const float bottom = top + static_cast<float>(viewport.Height);
+		const auto level = static_cast<unsigned>(lift * 255.0f + 0.5f);
+		const D3DCOLOR colour = D3DCOLOR_ARGB(255, level, level, level);
+
+		const LiftVertex quad[4] = {
+			{ { left, top, 0.0f, 1.0f }, colour },
+			{ { right, top, 0.0f, 1.0f }, colour },
+			{ { left, bottom, 0.0f, 1.0f }, colour },
+			{ { right, bottom, 0.0f, 1.0f }, colour },
+		};
+
+		injectionState->Capture();
+
+		device->SetVertexShader(nullptr);
+		device->SetPixelShader(nullptr);
+		device->SetFVF(D3DFVF_XYZRHW | D3DFVF_DIFFUSE);
+		device->SetTexture(0, nullptr);
+		device->SetRenderState(D3DRS_ZENABLE, FALSE);
+		device->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+		device->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+		device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+		device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+		device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_INVDESTCOLOR);
+		device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+		device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+		device->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN
+			| D3DCOLORWRITEENABLE_BLUE);
+		device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+		device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_DIFFUSE);
+		device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+		device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_DIFFUSE);
+		device->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+		device->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+
+		device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(LiftVertex));
+
+		injectionState->Apply();
+	}
+
 	void OnPostEffectsBegin()
 	{
 		if (!sceneDevice)
@@ -942,7 +1088,10 @@ namespace Components::Remix
 			DrawMapMarkers(sceneDevice);
 		}
 
+		Device::NoteFrameEvent("post effects: UI marker from the scene");
 		MarkUiPhase(sceneDevice);
+		DrawShadowLift(sceneDevice);
+		DrawScreenDrops(sceneDevice);
 
 		++stats.injectionFrames;
 
@@ -982,7 +1131,7 @@ namespace Components::Remix
 
 	void SetGlowBrightness(float brightness)
 	{
-		glowBrightness = std::clamp(brightness, 0.0f, 8.0f);
+		glowBrightness = std::clamp(brightness, 0.0f, 1000.0f);
 
 		const remixapi_Interface* api = TryGetApi(sceneDevice);
 
@@ -1136,6 +1285,25 @@ namespace Components::Remix
 		}
 
 		const std::uintptr_t site = Engine::RebaseAddress(patch.address);
+
+		if (kind == EffectKind::BulletTracers)
+		{
+			isEffectHidden[index] = !isDrawn;
+
+			Engine::RunOnMainThread([site, &patch, isDrawn]
+			{
+				if (isDrawn)
+				{
+					Hook::RestoreBytes(site);
+				}
+				else
+				{
+					Hook::PatchBytes(site, patch.original, patch.replacement, patch.size);
+				}
+			});
+
+			return true;
+		}
 
 		bool didChange = false;
 

@@ -71,6 +71,7 @@ namespace Components::Remix
 		void* colourTexture;
 		std::uint64_t textureHash;
 		bool isForcedCutout;
+		bool isMovedFromOpaqueRegion;
 	};
 
 	struct Classification
@@ -182,7 +183,7 @@ namespace Components::Remix
 		facts.isAlphaTestedAtHalf = (firstBits & 0x800u) == 0 && (firstBits & 0x3000u) == 0x3000u;
 	}
 
-	static bool IsCutoutMaterial(std::string_view name)
+	static bool IsListedCutoutMaterial(std::string_view name)
 	{
 		for (const std::string& listed : GetMapSettings().cutoutMaterials)
 		{
@@ -192,14 +193,39 @@ namespace Components::Remix
 			}
 		}
 
-		return name.find("curtain") != std::string_view::npos;
+		return false;
 	}
 
-	// converted maps draw some cloth opaque although its colour map has holes; those texels decode to transparent black,
-	// so the lit pass is switched to the engine's alpha test at half (GFXS0_ATEST_GE_128) and Remix cuts them out
+	static bool HasPunchThroughHoles(void* colourTexture)
+	{
+		if (!colourTexture)
+		{
+			return false;
+		}
+
+		D3DSURFACE_DESC description{};
+
+		if (FAILED(static_cast<IDirect3DTexture9*>(colourTexture)->GetLevelDesc(0, &description)))
+		{
+			return false;
+		}
+
+		return description.Format == D3DFMT_DXT1;
+	}
+
+	static bool IsCutoutMaterial(std::string_view name, void* colourTexture)
+	{
+		if (IsListedCutoutMaterial(name))
+		{
+			return true;
+		}
+
+		return name.find("curtain") != std::string_view::npos && HasPunchThroughHoles(colourTexture);
+	}
+
 	static bool TryForceCutout(std::uintptr_t material, const MaterialFacts& facts)
 	{
-		if (facts.blend != replaceBlend || facts.isAlphaTested || !IsCutoutMaterial(facts.name))
+		if (facts.blend != replaceBlend || facts.isAlphaTested || !IsCutoutMaterial(facts.name, facts.colourTexture))
 		{
 			return false;
 		}
@@ -332,6 +358,7 @@ namespace Components::Remix
 
 			CopyText(facts.techniqueSet, sizeof(facts.techniqueSet), techniqueSetName);
 			ReadMainStateBits(material, facts);
+			ReadColorTexture(material, facts);
 
 			if (TryForceCutout(material, facts))
 			{
@@ -339,16 +366,14 @@ namespace Components::Remix
 				facts.isForcedCutout = true;
 			}
 
-			ReadColorTexture(material, facts);
-
-			// maps converted from black ops leave their alpha blended world decals in the opaque region; models with
-			// blended materials there (zw3's zombies) are left alone so their bodies are never taken for decals
-			const bool isAlphaBlended = facts.blend == alphaBlend || facts.blend == premultipliedBlend;
+			const bool isAlphaBlended = facts.blend == alphaBlend || facts.blend == premultipliedBlend
+				|| facts.blend == additiveBlend;
 			const bool isWorldMaterial = std::string_view(facts.name).substr(0, 3) != "mc/";
 
 			if (facts.cameraRegion == 0 && isAlphaBlended && isWorldMaterial)
 			{
 				facts.cameraRegion = 1;
+				facts.isMovedFromOpaqueRegion = true;
 			}
 
 			return true;
@@ -407,8 +432,6 @@ namespace Components::Remix
 		return view;
 	}
 
-	// some converted maps (prototype, castle night) name every technique set "<name>.3x", which would defeat the exact
-	// and suffix rules below
 	static std::string_view TechniqueSetName(const char* text)
 	{
 		std::string_view view = StripComma(text);
@@ -545,8 +568,28 @@ namespace Components::Remix
 		return false;
 	}
 
+	static bool IsCharacterSkinMaterial(std::string_view name)
+	{
+		const bool isCharacter = Contains(name, "mtl_c_") || Contains(name, "zombie") || Contains(name, "_zom_");
+		const bool isSkin = Contains(name, "_head") || Contains(name, "_skin") || Contains(name, "_face");
+		const bool isWorn = ContainsAny(name, { "headgear", "helmet", "hat", "hair", "mask", "goggle", "eye" });
+
+		return isCharacter && isSkin && !isWorn;
+	}
+
+	static bool IsZombieEyeName(std::string_view name)
+	{
+		return Contains(name, "eye") && ContainsAny(name, { "zombie", "_zom_" })
+			&& !ContainsAny(name, { "eyelid", "eyebrow", "eyelash", "brow" });
+	}
+
 	static float SelfLitIntensity(std::string_view name)
 	{
+		if (IsZombieEyeName(name))
+		{
+			return 8.0f;
+		}
+
 		if (ContainsAny(name, { "light_stick", "lightstick", "glowstick", "glow_stick" }))
 		{
 			return 24.0f;
@@ -555,7 +598,6 @@ namespace Components::Remix
 		return 2.0f;
 	}
 
-	// the lit half of a converted map's lamp models is a self-lit unlit material, usually named *_light*_on or *_lamp*
 	static bool IsLampName(std::string_view name)
 	{
 		const bool isNamedLight = ContainsAny(name, { "light", "lamp", "lantern", "bulb", "sconce", "chandelier",
@@ -638,6 +680,11 @@ namespace Components::Remix
 		if (Contains(techniqueSet, "shadowcaster") || Contains(name, "shadow_caster") || EndsWith(name, "/shadowcaster"))
 		{
 			return { static_cast<int>(TextureTag::Ignore), false };
+		}
+
+		if (IsZombieEyeName(name))
+		{
+			return { -1, false, false, true };
 		}
 
 		if (EndsWith(name, "_dummy") && blend == premultipliedBlend)
@@ -751,11 +798,10 @@ namespace Components::Remix
 			return { static_cast<int>(TextureTag::Particle), false };
 		}
 
-		// muzzle flashes, impacts and explosions often use glow/flare names and falloff techniques too, and ignoring
-		// them is what made weapon effects vanish
 		const bool isWeaponEffect = ContainsAny(name, { "muzzle", "muz_", "flash", "impact", "spark", "explosion",
-			"explo", "blood", "bullet", "shell", "tracer", "fire", "flame", "smoke", "debris", "dust", "wind_" });
-		const bool isGlowCard = ContainsAny(name, { "glow", "flare", "lensflare", "lenseflare", "corona", "halo",
+			"explo", "blood", "bullet", "shell", "tracer", "fire", "flame", "smoke", "debris", "dust", "wind_",
+			"eyeglow", "eye_glow", "phosphor", "_trail", "thermal" });
+		const bool isGlowCard = ContainsAny(name, { "flare", "lensflare", "lenseflare", "corona", "halo",
 			"sun_flare", "spotlight_beam", "floodlight", "lightglow", "light_godray", "godray_dim", "long_ray" })
 			&& !isWeaponEffect;
 
@@ -779,6 +825,11 @@ namespace Components::Remix
 			&& (Contains(techniqueSet, "falloff") || ContainsAny(name, { "godray", "atmos_" })))
 		{
 			return { static_cast<int>(TextureTag::Ignore), false };
+		}
+
+		if (region == 1 && blend == additiveBlend && name.substr(0, 3) == "wc/" && !Contains(techniqueSet, "unlit"))
+		{
+			return { static_cast<int>(TextureTag::Decal), false };
 		}
 
 		const bool isBackdrop = ContainsAny(name, { "bg_", "background", "distant", "vista", "horizon", "skybox",
@@ -827,8 +878,12 @@ namespace Components::Remix
 		const bool isDecalLayerName = EndsWith(baseName, "_dec") || Contains(baseName, "_dec_") || Contains(baseName, "decal");
 		const bool isBlendedWorldLayer = (blend == premultipliedBlend || blend == alphaBlend) && facts.polygonOffset == 0
 			&& !Contains(techniqueSet, "unlit") && !Contains(name, "glass");
+		const bool isLayerName = isModelLayerDecal || isDecalLayerName || ContainsAny(baseName, { "blend", "stain",
+			"grime", "dirt", "burn", "moss", "crack", "puddle", "leak", "drip", "paper", "poster", "graffiti", "wet", "mud",
+			"dust", "sand", "rubble", "ground", "terrain", "grass", "snow", "rust", "trim", "edge", "overlay", "layer" });
 		const bool isBlendedLayer = isBlendedWorldLayer
-			&& (sortKey <= lastLayerSortKey || isModelLayerDecal || isDecalLayerName);
+			&& (facts.isMovedFromOpaqueRegion ? isLayerName : (sortKey <= lastLayerSortKey || isModelLayerDecal
+				|| isDecalLayerName || isLayerName));
 
 		if (region == 1 && isBlendedLayer)
 		{
@@ -860,8 +915,6 @@ namespace Components::Remix
 			return -1;
 		}
 
-		const std::uint32_t decalBit = 1u << static_cast<int>(TextureTag::Decal);
-
 		if (use.hasGeometryUser)
 		{
 			return -1;
@@ -876,8 +929,6 @@ namespace Components::Remix
 		const std::uint32_t ignoreBit = 1u << static_cast<int>(TextureTag::Ignore);
 		std::uint32_t mask = use.tagMask;
 
-		// a texture is screen-space UI only when every material using it is 2D: Remix rasterises UI textures on top of
-		// the path-traced frame, so an effect or rain sprite sharing a HUD texture would draw through walls
 		if ((mask & ~(uiBit | ignoreBit)) != 0 || use.hasNonUiUser)
 		{
 			mask &= ~uiBit;
@@ -1254,7 +1305,6 @@ namespace Components::Remix
 		TryWriteFileAtomically(Core::ModuleDirectory() + tagFileName, file.str());
 	}
 
-	// which images and materials each tag came from, so a texture drawn in the wrong place can be traced to its rule
 	static void WriteTagReport(const std::unordered_map<std::uint64_t, TextureUse>& uses)
 	{
 		std::ostringstream file;
@@ -1341,8 +1391,6 @@ namespace Components::Remix
 		const std::uintptr_t entries = materialPool.entries;
 		const std::uintptr_t poolEnd = entries + materialPool.count * materialPool.stride;
 
-		// zw3 raises the material pool to 16384 entries, so a full pass is four times iw4dlss5's cost; a repeat pass
-		// over the same materials, with every texture already hashed and the same switches, finds nothing new
 		const std::uint64_t fingerprint = MaterialPoolFingerprint(materialPool);
 
 		if (isRepeatPass && fingerprint == lastPassFingerprint && stats.texturesWithoutHash == 0)
@@ -1449,7 +1497,7 @@ namespace Components::Remix
 				use.hasNonLeafUser = true;
 			}
 
-			if (IsSkinColourMap(StripComma(facts.imageName)))
+			if (IsSkinColourMap(StripComma(facts.imageName)) || IsCharacterSkinMaterial(StripComma(facts.name)))
 			{
 				use.hasSkinUser = true;
 			}

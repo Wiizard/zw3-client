@@ -8,6 +8,7 @@ namespace Components::Remix
 	struct FixtureSpot
 	{
 		float position[3];
+		float normal[3];
 	};
 
 	struct WorldStats
@@ -69,6 +70,16 @@ namespace Components::Remix
 	void ReleaseWorldBuffers();
 
 	void RequestSceneDump();
+
+	void WriteMapMaterialReport();
+
+	IDirect3DTexture9* TryGetIgnoredColorMapTwin(IDirect3DDevice9* device, std::uintptr_t material);
+
+	IDirect3DTexture9* TryGetParticleColorMapTwin(IDirect3DDevice9* device, std::uintptr_t material);
+
+	bool IsScriptEffectSurface(const void* indices);
+
+	void RecordDumpEffect(IDirect3DDevice9* device, std::uintptr_t material, const char* action);
 
 	void SetPlayerBodyShadow(bool isEnabled);
 

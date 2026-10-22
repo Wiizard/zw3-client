@@ -28,8 +28,6 @@ namespace Components
 		static Dvar::Var cg_hudParallaxScale;
 		static Dvar::Var cg_hudParallaxSnapDistance;
 		static Dvar::Var cg_hudParallaxSnapAngle;
-		static Dvar::Var cg_hudParallaxBobPitch;
-		static Dvar::Var cg_hudParallaxBobYaw;
 
 		static void RegisterDvars();
 		static void StepMotion(int localClientNum);

@@ -10,16 +10,20 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "Core.hpp"
 #include "Device.hpp"
+#include "Dxt.hpp"
 #include "Engine.hpp"
 #include "Hook.hpp"
 #include "Iw4.hpp"
+#include "Look.hpp"
 #include "Api.hpp"
 #include "Camo.hpp"
 #include "PatchCalls.hpp"
@@ -111,6 +115,11 @@ namespace Components::Remix
 		UINT vertexCount = 0;
 		unsigned drawnScene = 0;
 		BatchDrawState drawState;
+		bool isDoubleSided = false;
+		unsigned removedTwins = 0;
+		int colourLow[4] = { 255, 255, 255, 255 };
+		int colourHigh[4] = {};
+		std::uint64_t colourSum[4] = {};
 	};
 
 	static IDirect3DStateBlock9* completeSceneState = nullptr;
@@ -175,7 +184,9 @@ namespace Components::Remix
 	static D3DCOLOR AlienColour(std::uint32_t seed, const float* position);
 	static IDirect3DIndexBuffer9* batchIndexBuffer = nullptr;
 	static unsigned sceneNumber = 1;
-	static unsigned sceneNumberAtLastHide = 0;
+	static unsigned mainFrameAtLastHide = 0;
+
+	static std::recursive_mutex staticBatchMutex;
 
 	static constexpr UINT skinnedRingBytes = 6u * 1024u * 1024u;
 	static IDirect3DVertexBuffer9* skinnedVertexBuffer = nullptr;
@@ -212,6 +223,12 @@ namespace Components::Remix
 		DWORD cullMode;
 		float minZ;
 		float maxZ;
+		char action[64];
+		int polygonOffset;
+		int sortKey;
+		int cameraRegion;
+		char vertexColour[96];
+		bool isDecalTagged;
 	};
 
 	struct ReticleShape
@@ -266,6 +283,9 @@ namespace Components::Remix
 	static std::unordered_map<std::uintptr_t, IDirect3DTexture9*> bodyTwins;
 	static std::string bodyTwinHashList;
 	static std::unordered_map<std::uint64_t, IDirect3DTexture9*> layerTwins;
+	static std::unordered_map<std::uint64_t, IDirect3DTexture9*> ignoredTwins;
+	static std::unordered_map<std::uint64_t, IDirect3DTexture9*> particleTwins;
+	static std::unordered_map<std::uintptr_t, bool> fakeLightVolumes;
 
 	static std::unordered_map<std::uintptr_t, IDirect3DTexture9*> camoTextures;
 	static std::unordered_map<std::uintptr_t, IDirect3DTexture9*> reticleTextures;
@@ -354,6 +374,29 @@ namespace Components::Remix
 		{
 			normal[i] = (static_cast<float>(packed[i]) / 127.0f - 1.0f) * scale;
 		}
+	}
+
+	static std::uint64_t CoincidentTriangleKey(const WorldSource& source, const std::uint32_t* engineVertices)
+	{
+		std::uint64_t corners[3];
+
+		for (int corner = 0; corner < 3; ++corner)
+		{
+			const float* position = reinterpret_cast<const float*>(source.vertices
+				+ engineVertices[corner] * Iw4::worldVertexStride);
+			std::uint64_t hash = 1469598103934665603ull;
+
+			for (int axis = 0; axis < 3; ++axis)
+			{
+				const auto rounded = static_cast<std::int64_t>(std::llround(static_cast<double>(position[axis]) * 100.0));
+				hash = (hash ^ static_cast<std::uint64_t>(rounded)) * 1099511628211ull;
+			}
+
+			corners[corner] = hash;
+		}
+
+		std::sort(corners, corners + 3);
+		return (corners[0] * 31ull + corners[1]) * 1099511628211ull ^ corners[2];
 	}
 
 	static void ConvertWorldVertex(const unsigned char* packed, WorldVertex& vertex)
@@ -463,7 +506,6 @@ namespace Components::Remix
 		std::string_view name(techniqueSetName);
 		const std::string_view suffix = "_sky";
 
-		// some converted maps name their technique sets "wc_sky.3x"
 		if (name.size() > 3 && name.substr(name.size() - 3) == ".3x")
 		{
 			name.remove_suffix(3);
@@ -602,7 +644,8 @@ namespace Components::Remix
 		{
 			for (int axis = 0; axis < 3; ++axis)
 			{
-				spot.position[axis] += normal[axis] / length * fixtureLift;
+				spot.normal[axis] = normal[axis] / length;
+				spot.position[axis] += spot.normal[axis] * fixtureLift;
 			}
 		}
 
@@ -795,28 +838,70 @@ namespace Components::Remix
 			batch.startIndex = indexCursor;
 			batch.firstVertex = vertexCursor;
 
+			std::unordered_set<std::uint64_t> triangleKeys;
+
 			for (const BatchSurface& surface : surfacesByMaterial[material])
 			{
-				for (UINT index = 0; index < 3u * surface.triCount; ++index)
+				for (UINT triangle = 0; triangle < surface.triCount; ++triangle)
 				{
-					std::uint32_t engineVertex = surface.firstVertex + source.indices[surface.baseIndex + index];
+					std::uint32_t engineVertices[3];
 
-					if (engineVertex >= source.vertexCount)
+					for (UINT corner = 0; corner < 3; ++corner)
 					{
-						engineVertex = surface.firstVertex;
+						std::uint32_t engineVertex = surface.firstVertex
+							+ source.indices[surface.baseIndex + 3u * triangle + corner];
+
+						if (engineVertex >= source.vertexCount)
+						{
+							engineVertex = surface.firstVertex;
+						}
+
+						engineVertices[corner] = engineVertex;
 					}
 
-					if (remap[engineVertex] == unmapped)
+					if (!triangleKeys.insert(CoincidentTriangleKey(source, engineVertices)).second)
 					{
-						remap[engineVertex] = vertexCursor;
-						touched.push_back(engineVertex);
-						ConvertWorldVertex(source.vertices + engineVertex * Iw4::worldVertexStride,
-							vertices[vertexCursor]);
-						++vertexCursor;
+						++batch.removedTwins;
+						continue;
 					}
 
-					indices[indexCursor] = remap[engineVertex];
-					++indexCursor;
+					for (const std::uint32_t engineVertex : engineVertices)
+					{
+						if (remap[engineVertex] == unmapped)
+						{
+							remap[engineVertex] = vertexCursor;
+							touched.push_back(engineVertex);
+							ConvertWorldVertex(source.vertices + engineVertex * Iw4::worldVertexStride,
+								vertices[vertexCursor]);
+							++vertexCursor;
+						}
+
+						indices[indexCursor] = remap[engineVertex];
+						++indexCursor;
+					}
+				}
+			}
+
+			batch.isDoubleSided = batch.removedTwins != 0;
+
+			if (batch.removedTwins != 0)
+			{
+				const char* name = ReadAt<const char*>(material);
+				Log() << "remix: " << (name ? name : "?") << " gave " << batch.removedTwins
+					  << " triangles twice in the same place (double sided), one copy kept and drawn without culling";
+			}
+
+			for (UINT vertex = batch.firstVertex; vertex < vertexCursor; ++vertex)
+			{
+				const D3DCOLOR colour = vertices[vertex].colour;
+				const int channels[4] = { static_cast<int>(colour >> 24), static_cast<int>((colour >> 16) & 0xFF),
+					static_cast<int>((colour >> 8) & 0xFF), static_cast<int>(colour & 0xFF) };
+
+				for (int channel = 0; channel < 4; ++channel)
+				{
+					batch.colourLow[channel] = std::min(batch.colourLow[channel], channels[channel]);
+					batch.colourHigh[channel] = std::max(batch.colourHigh[channel], channels[channel]);
+					batch.colourSum[channel] += static_cast<std::uint64_t>(channels[channel]);
 				}
 			}
 
@@ -1073,10 +1158,23 @@ namespace Components::Remix
 		batch->drawnScene = sceneNumber;
 		RecordBatchDrawState(device, batch->drawState);
 
+		DWORD cullMode = D3DCULL_CCW;
+
+		if (batch->isDoubleSided)
+		{
+			device->GetRenderState(D3DRS_CULLMODE, &cullMode);
+			device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+		}
+
 		device->SetStreamSource(0, batchVertexBuffer, 0, static_cast<UINT>(sizeof(WorldVertex)));
 		device->SetIndices(batchIndexBuffer);
 		device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, batch->firstVertex, batch->vertexCount, batch->startIndex,
 			batch->triCount);
+
+		if (batch->isDoubleSided)
+		{
+			device->SetRenderState(D3DRS_CULLMODE, cullMode);
+		}
 
 		++viewSurfaces;
 		++groupDraws;
@@ -1794,7 +1892,6 @@ namespace Components::Remix
 		return matrix;
 	}
 
-	// a lamp model's light goes at the middle of its glowing surface, in world space
 	static bool TryGetPropSpot(const StaticSurfaceRecord& record, std::uintptr_t drawInsts, FixtureSpot& spot)
 	{
 		__try
@@ -1807,20 +1904,38 @@ namespace Components::Remix
 			}
 
 			float centre[3] = {};
+			float normal[3] = {};
 
 			for (std::uint16_t i = 0; i < record.vertexCount; ++i)
 			{
 				float position[3];
+				float vertexNormal[3];
 				std::memcpy(position, packed + i * Iw4::packedVertexStride, sizeof(position));
+				UnpackNormal(packed + i * Iw4::packedVertexStride + Iw4::packedVertexNormal, vertexNormal);
 
 				for (int axis = 0; axis < 3; ++axis)
 				{
 					centre[axis] += position[axis] / static_cast<float>(record.vertexCount);
+					normal[axis] += vertexNormal[axis];
 				}
 			}
 
 			const D3DMATRIX placement = StaticModelMatrix(drawInsts + record.instance * Iw4::smodelDrawInstStride);
 			TransformPoint(centre, placement, spot.position);
+
+			float worldNormal[3];
+			TransformDirection(normal, placement, worldNormal);
+			const float length = std::sqrt(worldNormal[0] * worldNormal[0] + worldNormal[1] * worldNormal[1]
+				+ worldNormal[2] * worldNormal[2]);
+
+			if (length > 0.25f * static_cast<float>(record.vertexCount))
+			{
+				for (int axis = 0; axis < 3; ++axis)
+				{
+					spot.normal[axis] = worldNormal[axis] / length;
+				}
+			}
+
 			return true;
 		}
 		__except (EXCEPTION_EXECUTE_HANDLER)
@@ -1831,6 +1946,8 @@ namespace Components::Remix
 
 	static void ReleaseStaticModelBatches()
 	{
+		const std::lock_guard lock(staticBatchMutex);
+
 		if (staticBatchVertexBuffer)
 		{
 			staticBatchVertexBuffer->Release();
@@ -2216,6 +2333,7 @@ namespace Components::Remix
 			return;
 		}
 
+		const std::lock_guard lock(staticBatchMutex);
 		BuildStaticModelBatches(device, drawInsts, modelCount);
 	}
 
@@ -2260,12 +2378,21 @@ namespace Components::Remix
 			return;
 		}
 
-		if (sceneNumber == sceneNumberAtLastHide)
+		const unsigned mainFrame = Engine::MainFrameNumber();
+
+		if (mainFrame == mainFrameAtLastHide)
 		{
 			return;
 		}
 
-		sceneNumberAtLastHide = sceneNumber;
+		const std::unique_lock lock(staticBatchMutex, std::try_to_lock);
+
+		if (!lock.owns_lock())
+		{
+			return;
+		}
+
+		mainFrameAtLastHide = mainFrame;
 
 		const auto world = ReadAt<std::uintptr_t>(Engine::RebaseAddress(Engine::CurrentBuild().gfxWorld));
 
@@ -2681,7 +2808,7 @@ namespace Components::Remix
 		}
 	}
 
-	static bool TryCopyLevel(IDirect3DTexture9* source, IDirect3DTexture9* twin, UINT level, bool shouldMark,
+	static bool TryCopyLevel(IDirect3DTexture9* source, IDirect3DTexture9* twin, UINT level, unsigned char mark,
 		std::uint64_t& hash)
 	{
 		D3DSURFACE_DESC description{};
@@ -2724,9 +2851,9 @@ namespace Components::Remix
 
 		bool didHash = true;
 
-		if (shouldMark)
+		if (mark)
 		{
-			twinBits[static_cast<std::size_t>(rows - 1) * twinRect.Pitch + rowBytes - 1] ^= 0x01;
+			twinBits[static_cast<std::size_t>(rows - 1) * twinRect.Pitch + rowBytes - 1] ^= mark;
 			didHash = Device::TryHashTopLevel(twinBits, description, hash);
 		}
 
@@ -2736,7 +2863,13 @@ namespace Components::Remix
 		return didHash;
 	}
 
-	static IDirect3DTexture9* TryBuildBodyTwin(IDirect3DDevice9* device, IDirect3DTexture9* source, std::uint64_t& hash)
+	static constexpr unsigned char bodyTwinMark = 0x01;
+	static constexpr unsigned char ignoredTwinMark = 0x01;
+	static constexpr unsigned char layerTwinMark = 0x02;
+	static constexpr unsigned char particleTwinMark = 0x08;
+
+	static IDirect3DTexture9* TryBuildBodyTwin(IDirect3DDevice9* device, IDirect3DTexture9* source, std::uint64_t& hash,
+		unsigned char mark = bodyTwinMark)
 	{
 		D3DSURFACE_DESC description{};
 
@@ -2756,7 +2889,7 @@ namespace Components::Remix
 
 		for (DWORD level = 0; level < levels; ++level)
 		{
-			if (!TryCopyLevel(source, twin, level, level == 0, hash))
+			if (!TryCopyLevel(source, twin, level, level == 0 ? mark : 0, hash))
 			{
 				twin->Release();
 				return nullptr;
@@ -2855,7 +2988,7 @@ namespace Components::Remix
 		layerTwins[colourHash] = nullptr;
 
 		std::uint64_t twinHash = 0;
-		IDirect3DTexture9* twin = TryBuildBodyTwin(device, colorMap, twinHash);
+		IDirect3DTexture9* twin = TryBuildBodyTwin(device, colorMap, twinHash, layerTwinMark);
 
 		if (!twin)
 		{
@@ -2867,6 +3000,224 @@ namespace Components::Remix
 		layerTwins[colourHash] = twin;
 		++stats.layerTwins;
 		return twin;
+	}
+
+	static bool IsFakeLightVolume(std::uintptr_t material, bool isScreenBlend, bool isAdditive)
+	{
+		if (!isScreenBlend && !isAdditive)
+		{
+			return false;
+		}
+
+		const auto found = fakeLightVolumes.find(material);
+
+		if (found != fakeLightVolumes.end())
+		{
+			return found->second;
+		}
+
+		const char* name = ReadAt<const char*>(material);
+		const auto techniqueSet = ReadAt<std::uintptr_t>(material + Iw4::materialTechniqueSet);
+		const char* techniqueSetName = techniqueSet ? ReadAt<const char*>(techniqueSet) : nullptr;
+		bool isVolume = false;
+
+		if (name && techniqueSetName && std::strstr(techniqueSetName, "unlit"))
+		{
+			const std::string_view materialName(name);
+			const bool isDisplay = materialName.find("screen") != std::string_view::npos
+				|| materialName.find("_tv") != std::string_view::npos || materialName.find("monitor") != std::string_view::npos
+				|| materialName.find("display") != std::string_view::npos || materialName.find("sign") != std::string_view::npos
+				|| materialName.find("neon") != std::string_view::npos;
+			const bool isLightName = materialName.find("light") != std::string_view::npos
+				|| materialName.find("beam") != std::string_view::npos || materialName.find("ray") != std::string_view::npos
+				|| materialName.find("flash") != std::string_view::npos || materialName.find("glow") != std::string_view::npos
+				|| materialName.find("cone") != std::string_view::npos || materialName.find("volume") != std::string_view::npos
+				|| materialName.find("shaft") != std::string_view::npos || materialName.find("halo") != std::string_view::npos;
+
+			isVolume = !isDisplay && (isScreenBlend || isLightName);
+		}
+
+		fakeLightVolumes[material] = isVolume;
+
+		if (isVolume)
+		{
+			Log() << "remix: " << name << " is a fake light volume (unlit, " << (isScreenBlend ? "screen" : "additive")
+				  << " blended), left out of the path-traced scene";
+		}
+
+		return isVolume;
+	}
+
+	static std::unordered_map<std::uint64_t, IDirect3DTexture9*> overlayTwins;
+	static std::unordered_map<std::uint64_t, IDirect3DTexture9*> multiplyTwins;
+
+	static bool IsLitWorldOverlay(std::uintptr_t material)
+	{
+		static std::unordered_map<std::uintptr_t, bool> known;
+		const auto found = known.find(material);
+
+		if (found != known.end())
+		{
+			return found->second;
+		}
+
+		const char* name = ReadAt<const char*>(material);
+		const auto techniqueSet = ReadAt<std::uintptr_t>(material + Iw4::materialTechniqueSet);
+		const char* techniqueSetName = techniqueSet ? ReadAt<const char*>(techniqueSet) : nullptr;
+		const bool isOverlay = name && techniqueSetName && std::strncmp(name, "wc/", 3) == 0
+			&& !std::strstr(techniqueSetName, "unlit");
+
+		known[material] = isOverlay;
+		return isOverlay;
+	}
+
+	static IDirect3DTexture9* TryGetOverlayTwin(IDirect3DDevice9* device, IDirect3DTexture9* colorMap, bool isMultiply = false)
+	{
+		std::uint64_t colourHash = 0;
+
+		if (!colorMap || !Device::TryGetTextureHash(colorMap, colourHash))
+		{
+			return nullptr;
+		}
+
+		auto& twins = isMultiply ? multiplyTwins : overlayTwins;
+		const auto found = twins.find(colourHash);
+
+		if (found != twins.end())
+		{
+			return found->second;
+		}
+
+		twins[colourHash] = nullptr;
+
+		D3DSURFACE_DESC description{};
+
+		if (FAILED(colorMap->GetLevelDesc(0, &description)) || !IsDecodableFormat(description.Format))
+		{
+			return nullptr;
+		}
+
+		D3DLOCKED_RECT source{};
+
+		if (FAILED(colorMap->LockRect(0, &source, nullptr, D3DLOCK_READONLY)))
+		{
+			return nullptr;
+		}
+
+		DecodedImage image;
+		const bool isDecoded = TryDecodeImage(static_cast<const unsigned char*>(source.pBits), source.Pitch,
+			description.Format, description.Width, description.Height, image);
+		colorMap->UnlockRect(0);
+
+		if (!isDecoded)
+		{
+			return nullptr;
+		}
+
+		for (std::uint32_t& texel : image.texels)
+		{
+			const int red = Channel(texel, 16);
+			const int green = Channel(texel, 8);
+			const int blue = Channel(texel, 0);
+
+			if (isMultiply)
+			{
+				const int lowest = std::min({ red, green, blue });
+				const int coverage = 255 - lowest;
+
+				if (coverage == 0)
+				{
+					texel = PackColour(0, 0, 0, 0);
+					continue;
+				}
+
+				texel = PackColour((red - lowest) * 255 / coverage, (green - lowest) * 255 / coverage,
+					(blue - lowest) * 255 / coverage, coverage);
+				continue;
+			}
+
+			const int peak = std::max({ red, green, blue });
+
+			if (peak == 0)
+			{
+				texel = PackColour(0, 0, 0, 0);
+				continue;
+			}
+
+			texel = PackColour(red * 255 / peak, green * 255 / peak, blue * 255 / peak, peak);
+		}
+
+		IDirect3DTexture9* twin = nullptr;
+
+		if (FAILED(device->CreateTexture(image.width, image.height, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &twin, nullptr)))
+		{
+			return nullptr;
+		}
+
+		D3DLOCKED_RECT target{};
+
+		if (FAILED(twin->LockRect(0, &target, nullptr, 0)))
+		{
+			twin->Release();
+			return nullptr;
+		}
+
+		for (UINT y = 0; y < image.height; ++y)
+		{
+			std::memcpy(static_cast<unsigned char*>(target.pBits) + y * target.Pitch,
+				image.texels.data() + static_cast<std::size_t>(y) * image.width, image.width * sizeof(std::uint32_t));
+		}
+
+		twin->UnlockRect(0);
+
+		std::uint64_t twinHash = 0;
+
+		if (!Device::TryGetTextureHash(twin, twinHash))
+		{
+			twin->Release();
+			return nullptr;
+		}
+
+		TagGeneratedTexture(device, twinHash, TextureTag::Decal);
+		twins[colourHash] = twin;
+		return twin;
+	}
+
+	static IDirect3DTexture9* TryGetTaggedTwin(IDirect3DDevice9* device, IDirect3DTexture9* colorMap,
+		std::unordered_map<std::uint64_t, IDirect3DTexture9*>& twins, TextureTag tag, unsigned char mark)
+	{
+		std::uint64_t colourHash = 0;
+
+		if (!colorMap || !Device::TryGetTextureHash(colorMap, colourHash))
+		{
+			return nullptr;
+		}
+
+		const auto found = twins.find(colourHash);
+
+		if (found != twins.end())
+		{
+			return found->second;
+		}
+
+		twins[colourHash] = nullptr;
+
+		std::uint64_t twinHash = 0;
+		IDirect3DTexture9* twin = TryBuildBodyTwin(device, colorMap, twinHash, mark);
+
+		if (!twin)
+		{
+			return nullptr;
+		}
+
+		TagGeneratedTexture(device, twinHash, tag);
+		twins[colourHash] = twin;
+		return twin;
+	}
+
+	static IDirect3DTexture9* TryGetIgnoredTwin(IDirect3DDevice9* device, IDirect3DTexture9* colorMap)
+	{
+		return TryGetTaggedTwin(device, colorMap, ignoredTwins, TextureTag::Ignore, ignoredTwinMark);
 	}
 
 	static void UpdateBodyTexture(IDirect3DDevice9* device, BodyTextureSwap& swap, bool isLocalBody, std::uintptr_t material)
@@ -3508,6 +3859,29 @@ namespace Components::Remix
 			Device::TryGetTextureHash(ReadAt<const void*>(image + Iw4::gfxImageTexture), row.imageHash);
 		}
 
+		const auto entry = ReadAt<std::uint8_t>(material + Iw4::materialStateBitsEntry + Iw4::techniqueLit);
+		const auto stateBitsCount = ReadAt<std::uint8_t>(material + Iw4::materialStateBitsCount);
+		const auto stateBits = ReadAt<std::uintptr_t>(material + Iw4::materialStateBitsTable);
+
+		row.sortKey = ReadAt<std::uint8_t>(material + Iw4::materialSortKey);
+
+		if (const auto found = materialBatches.find(material); found != materialBatches.end() && found->second.vertexCount)
+		{
+			const MaterialBatch& batch = found->second;
+			const auto average = [&batch](int channel) { return static_cast<int>(batch.colourSum[channel] / batch.vertexCount); };
+			std::snprintf(row.vertexColour, sizeof(row.vertexColour), "%02X%02X%02X%02X/%02X%02X%02X%02X/%02X%02X%02X%02X",
+				batch.colourLow[0], batch.colourLow[1], batch.colourLow[2], batch.colourLow[3], average(0), average(1),
+				average(2), average(3), batch.colourHigh[0], batch.colourHigh[1], batch.colourHigh[2], batch.colourHigh[3]);
+		}
+		row.cameraRegion = ReadAt<std::uint8_t>(material + Iw4::materialCameraRegion);
+		row.isDecalTagged = row.imageHash != 0 && IsDecalTexture(row.imageHash);
+
+		if (entry < stateBitsCount && stateBits)
+		{
+			const std::uintptr_t loadBits = stateBits + entry * Iw4::stateBitsStride;
+			row.polygonOffset = static_cast<int>((ReadAt<std::uint32_t>(loadBits + sizeof(std::uint32_t)) >> 4) & 3u);
+		}
+
 		D3DVIEWPORT9 viewport{};
 		device->GetViewport(&viewport);
 		row.minZ = viewport.MinZ;
@@ -3547,7 +3921,7 @@ namespace Components::Remix
 			return;
 		}
 
-		file << "kind\tdraws\tmaterial\ttechset\timage\thash\tblend\tsrc\tdst\talphatest\tref\tfunc\tcull\tminz\tmaxz\n";
+		file << "kind\tdraws\tmaterial\ttechset\timage\thash\tblend\tsrc\tdst\talphatest\tref\tfunc\tcull\tminz\tmaxz\tzw3\toffset\tsortkey\tregion\tdecal\tvertex argb low/avg/high\n";
 
 		for (const DumpRow& row : dumpRows)
 		{
@@ -3557,7 +3931,9 @@ namespace Components::Remix
 			file << row.kind << "\t" << row.draws << "\t" << row.material << "\t" << row.techniqueSet << "\t"
 				 << row.image << "\t" << hash << "\t" << row.isBlending << "\t" << row.sourceBlend << "\t"
 				 << row.destinationBlend << "\t" << row.isAlphaTested << "\t" << row.alphaReference << "\t"
-				 << row.alphaFunction << "\t" << row.cullMode << "\t" << row.minZ << "\t" << row.maxZ << "\n";
+				 << row.alphaFunction << "\t" << row.cullMode << "\t" << row.minZ << "\t" << row.maxZ << "\t" << row.action
+				 << "\t" << row.polygonOffset << "\t" << row.sortKey << "\t" << row.cameraRegion << "\t"
+				 << row.isDecalTagged << "\t" << row.vertexColour << "\n";
 		}
 
 		Log() << "remix: wrote " << dumpRows.size() << " draw groups of one scene frame to zw3_remix_frame_"
@@ -3942,6 +4318,47 @@ namespace Components::Remix
 		}
 
 		layerTwins.clear();
+
+		for (auto& entry : ignoredTwins)
+		{
+			if (entry.second)
+			{
+				entry.second->Release();
+			}
+		}
+
+		ignoredTwins.clear();
+		fakeLightVolumes.clear();
+
+		for (auto& entry : particleTwins)
+		{
+			if (entry.second)
+			{
+				entry.second->Release();
+			}
+		}
+
+		particleTwins.clear();
+
+		for (auto& entry : overlayTwins)
+		{
+			if (entry.second)
+			{
+				entry.second->Release();
+			}
+		}
+
+		overlayTwins.clear();
+
+		for (auto& entry : multiplyTwins)
+		{
+			if (entry.second)
+			{
+				entry.second->Release();
+			}
+		}
+
+		multiplyTwins.clear();
 		reticle.shape = nullptr;
 
 		if (reticleDotTexture)
@@ -4071,6 +4488,17 @@ namespace Components::Remix
 			++stats.cutoutDecalLists;
 		}
 
+		const bool isAdditiveOverlay = isBlending && sourceBlend == D3DBLEND_ONE && destinationBlend == D3DBLEND_ONE
+			&& IsLitWorldOverlay(material);
+		const bool isMultiplyDecal = isBlending && ((sourceBlend == D3DBLEND_ZERO && destinationBlend == D3DBLEND_SRCCOLOR)
+			|| (sourceBlend == D3DBLEND_DESTCOLOR && destinationBlend == D3DBLEND_ZERO));
+
+		if (isAdditiveOverlay || isMultiplyDecal)
+		{
+			device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+			device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+		}
+
 		if ((isBlending || isCutoutDecal) && blendedIndexBuffer)
 		{
 			device->SetIndices(blendedIndexBuffer);
@@ -4082,7 +4510,7 @@ namespace Components::Remix
 		device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
 		device->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
 
-		if (isBlending)
+		if (isBlending && !isAdditiveOverlay && !isMultiplyDecal)
 		{
 			device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
 		}
@@ -4186,6 +4614,46 @@ namespace Components::Remix
 				colorMap = layerTwin;
 			}
 
+			const bool isScreenBlend = isBlending && sourceBlend == D3DBLEND_INVDESTCOLOR && destinationBlend == D3DBLEND_ONE;
+			const bool isAdditive = isBlending && sourceBlend == D3DBLEND_ONE && destinationBlend == D3DBLEND_ONE;
+
+			if (IsFakeLightVolume(material, isScreenBlend, isAdditive))
+			{
+				if (IDirect3DTexture9* ignoredTwin = TryGetIgnoredTwin(device, colorMap))
+				{
+					colorMap = ignoredTwin;
+					CopyName(dumpRow.action, sizeof(dumpRow.action), "hidden as a fake light volume");
+				}
+				else
+				{
+					CopyName(dumpRow.action, sizeof(dumpRow.action), "fake light volume, ignore copy FAILED");
+				}
+			}
+			else if (isMultiplyDecal)
+			{
+				if (IDirect3DTexture9* multiplyTwin = TryGetOverlayTwin(device, colorMap, true))
+				{
+					colorMap = multiplyTwin;
+					CopyName(dumpRow.action, sizeof(dumpRow.action), "multiply: darkness-alpha decal copy");
+				}
+				else
+				{
+					CopyName(dumpRow.action, sizeof(dumpRow.action), "multiply: darkness-alpha copy FAILED");
+				}
+			}
+			else if (isAdditiveOverlay)
+			{
+				if (IDirect3DTexture9* overlayTwin = TryGetOverlayTwin(device, colorMap))
+				{
+					colorMap = overlayTwin;
+					CopyName(dumpRow.action, sizeof(dumpRow.action), "overlay: brightness-alpha decal copy");
+				}
+				else
+				{
+					CopyName(dumpRow.action, sizeof(dumpRow.action), "overlay: brightness-alpha copy FAILED");
+				}
+			}
+
 			device->SetTexture(0, colorMap);
 		}
 
@@ -4275,6 +4743,12 @@ namespace Components::Remix
 			device->SetRenderState(D3DRS_DESTBLEND, destinationBlend);
 			device->SetRenderState(D3DRS_SRCBLENDALPHA, sourceBlendAlpha);
 			device->SetRenderState(D3DRS_DESTBLENDALPHA, destinationBlendAlpha);
+		}
+
+		if (isAdditiveOverlay || isMultiplyDecal)
+		{
+			device->SetRenderState(D3DRS_SRCBLEND, sourceBlend);
+			device->SetRenderState(D3DRS_DESTBLEND, destinationBlend);
 		}
 
 		if (isIlluminatedLayer)
@@ -4604,8 +5078,510 @@ namespace Components::Remix
 		return Hook::PatchCall(firstSite, first.bytes, sizeof(first.bytes), firstDetour, nullptr);
 	}
 
+	using FxDrawSpriteElems = void(__fastcall*)(void* codeSurfs, std::uintptr_t system, int drawTime);
+	static FxDrawSpriteElems originalDrawSpriteElems = nullptr;
+	static bool isEffectSurveyRequested = false;
+
+	static constexpr const char* effectElemTypeNames[] = { "billboard", "oriented", "tail", "trail", "cloud", "sparkcloud",
+		"sparkfountain", "model", "light", "spotlight", "sound", "decal", "runner" };
+
+	static void WriteEffectElemsUnsafe(std::FILE* file, std::uintptr_t elemDefs, const char* list,
+		std::uint16_t handle, std::uintptr_t elemsBase)
+	{
+		for (int count = 0; handle != 0xFFFF && count < 16; ++count)
+		{
+			const std::uintptr_t elem = elemsBase + 4 * static_cast<std::uintptr_t>(handle);
+			const std::uintptr_t elemDef = elemDefs + 288 * static_cast<std::uintptr_t>(ReadAt<std::uint8_t>(elem));
+			const auto type = ReadAt<std::uint8_t>(elemDef + 176);
+			const auto visualCount = ReadAt<std::uint8_t>(elemDef + 177);
+			std::uintptr_t visual = ReadAt<std::uintptr_t>(elemDef + 200);
+
+			if (visualCount > 1 && visual)
+			{
+				visual = ReadAt<std::uintptr_t>(visual);
+			}
+
+			const char* visualName = visual && visualCount ? ReadAt<const char*>(visual) : nullptr;
+			const char* typeName = type < std::size(effectElemTypeNames) ? effectElemTypeNames[type] : "?";
+
+			std::fprintf(file, "\t%s\t%s\t%u\t%s\t0x%08X\n", list, typeName, visualCount, visualName ? visualName : "-",
+				ReadAt<std::uint32_t>(elemDef));
+
+			handle = ReadAt<std::uint16_t>(elem + 4);
+		}
+	}
+
+	static void WriteEffectSurveyUnsafe(std::FILE* file, std::uintptr_t system, const float* camera)
+	{
+		const auto effects = ReadAt<std::uintptr_t>(system + 384);
+		const auto elems = ReadAt<std::uintptr_t>(system + 392);
+		const int first = ReadAt<int>(system + 544);
+		const int end = ReadAt<int>(system + 548);
+
+		for (int active = first; active != end; ++active)
+		{
+			const auto index = ReadAt<std::uint16_t>(system + 2 * static_cast<std::uintptr_t>(active & 0x3FF) + 556);
+			const std::uintptr_t effect = effects + 4 * static_cast<std::uintptr_t>(index);
+			const auto definition = ReadAt<std::uintptr_t>(effect);
+			const char* name = definition ? ReadAt<const char*>(definition) : nullptr;
+			const auto status = ReadAt<std::uint32_t>(effect + 8);
+			const float* origin = reinterpret_cast<const float*>(effect + 100);
+			const float dx = origin[0] - camera[0];
+			const float dy = origin[1] - camera[1];
+			const float dz = origin[2] - camera[2];
+
+			std::fprintf(file, "%s\tstatus 0x%08X\tat %.0f %.0f %.0f\tdistance %.0f\n", name ? name : "?", status, origin[0],
+				origin[1], origin[2], std::sqrt(dx * dx + dy * dy + dz * dz));
+
+			if (!definition)
+			{
+				continue;
+			}
+
+			const auto elemDefs = ReadAt<std::uintptr_t>(definition + 32);
+			WriteEffectElemsUnsafe(file, elemDefs, "elems", ReadAt<std::uint16_t>(effect + 12), elems);
+			WriteEffectElemsUnsafe(file, elemDefs, "elems2", ReadAt<std::uint16_t>(effect + 16), elems);
+
+			if (ReadAt<std::uint16_t>(effect + 20) != 0xFFFF)
+			{
+				std::fprintf(file, "\ttrails\n");
+			}
+		}
+	}
+
+	static void WriteEffectSurvey(std::FILE* file, std::uintptr_t system, const float* camera)
+	{
+		__try
+		{
+			WriteEffectSurveyUnsafe(file, system, camera);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			std::fprintf(file, "(survey stopped on a bad read)\n");
+		}
+	}
+
+	using FxDrawElement = void(__fastcall*)(std::uintptr_t elemDef, std::uintptr_t elem, std::uintptr_t drawState);
+	using AddCodeSurf = std::int64_t(__fastcall*)(std::uintptr_t codeSurfs, std::uintptr_t material, std::uintptr_t indices,
+		std::uint32_t indexCount, std::uint16_t argOffset, std::int16_t argCount);
+	static FxDrawElement originalDrawElement = nullptr;
+	static std::mutex scriptEffectMutex;
+	static std::unordered_map<std::uintptr_t, bool> scriptEffectDefs;
+	static std::vector<const void*> scriptSurfaces[2];
+	static int scriptSurfaceFrame = 0;
+
+	static constexpr std::uintptr_t fxSystemPendingIndices = 352;
+	static constexpr std::uintptr_t fxSystemPendingIndexCount = 360;
+	static constexpr std::uintptr_t fxSystemPendingMaterial = 368;
+
+	static bool IsScriptEffect(std::uintptr_t definition)
+	{
+		const auto found = scriptEffectDefs.find(definition);
+
+		if (found != scriptEffectDefs.end())
+		{
+			return found->second;
+		}
+
+		const char* name = definition ? ReadAt<const char*>(definition) : nullptr;
+		bool isScript = false;
+
+		if (name)
+		{
+			const std::string_view effectName(name);
+			isScript = effectName.starts_with("zw3/") || effectName.starts_with("misc/aircraft_light_wingtip")
+				|| effectName.starts_with("misc/glow_weapon");
+		}
+
+		scriptEffectDefs[definition] = isScript;
+		return isScript;
+	}
+
+	static void ClosePendingCodeSurf(std::uintptr_t system, std::uintptr_t codeSurfs)
+	{
+		const auto indexCount = ReadAt<std::uint32_t>(system + fxSystemPendingIndexCount);
+
+		if (indexCount)
+		{
+			const auto addCodeSurf = reinterpret_cast<AddCodeSurf>(Engine::RebaseAddress(Engine::CurrentBuild().R_AddCodeSurf));
+			addCodeSurf(codeSurfs, ReadAt<std::uintptr_t>(system + fxSystemPendingMaterial),
+				ReadAt<std::uintptr_t>(system + fxSystemPendingIndices), indexCount, 0, 0);
+		}
+
+		*reinterpret_cast<std::uint32_t*>(system + fxSystemPendingIndexCount) = 0;
+		*reinterpret_cast<std::uintptr_t*>(system + fxSystemPendingMaterial) = 0;
+	}
+
+	static constexpr std::uintptr_t fxDrawStateElemDef = 24;
+	static constexpr std::uintptr_t fxDrawStatePosition = 112;
+
+	using FxDrawElemBillboard = void(__fastcall*)(std::uintptr_t drawState);
+	static FxDrawElemBillboard originalDrawBillboard = nullptr;
+	static thread_local bool isDrawingScriptElem = false;
+	static thread_local bool isDrawingEyeElem = false;
+	static thread_local int eyeGlowCopies = 1;
+	static std::FILE* scriptVertexLog = nullptr;
+
+	static float EyeOffsetDistance(std::uintptr_t material)
+	{
+		static std::mutex mutex;
+		static std::unordered_map<std::uintptr_t, float> known;
+		std::lock_guard lock(mutex);
+
+		const auto found = known.find(material);
+
+		if (found != known.end())
+		{
+			return found->second;
+		}
+
+		const char* name = material ? ReadAt<const char*>(material) : nullptr;
+		const auto techniqueSet = material ? ReadAt<std::uintptr_t>(material + Iw4::materialTechniqueSet) : 0;
+		const char* techniqueSetName = techniqueSet ? ReadAt<const char*>(techniqueSet) : nullptr;
+		float distance = 0.0f;
+
+		if (name && techniqueSetName && std::strstr(techniqueSetName, "eyeoffset"))
+		{
+			distance = 10.0f;
+
+			if (const char* eye = std::strstr(name, "_eye"); eye && eye[4] >= '0' && eye[4] <= '9')
+			{
+				distance = static_cast<float>(std::atoi(eye + 4));
+			}
+		}
+
+		known[material] = distance;
+		return distance;
+	}
+
+	static void __fastcall DrawBillboardDetour(std::uintptr_t drawState)
+	{
+		float camera[3];
+
+		if (!isDrawingScriptElem || !TryGetCameraOrigin(camera))
+		{
+			originalDrawBillboard(drawState);
+			return;
+		}
+
+		const auto elemDef = ReadAt<std::uintptr_t>(drawState + fxDrawStateElemDef);
+		const auto visualCount = ReadAt<std::uint8_t>(elemDef + 177);
+		std::uintptr_t material = ReadAt<std::uintptr_t>(elemDef + 200);
+
+		if (visualCount > 1 && material)
+		{
+			material = ReadAt<std::uintptr_t>(material);
+		}
+
+		const float distance = visualCount ? EyeOffsetDistance(material) : 0.0f;
+		auto* position = reinterpret_cast<float*>(drawState + fxDrawStatePosition);
+		const float toEye[3] = { camera[0] - position[0], camera[1] - position[1], camera[2] - position[2] };
+		const float length = std::sqrt(toEye[0] * toEye[0] + toEye[1] * toEye[1] + toEye[2] * toEye[2]);
+
+		if (scriptVertexLog)
+		{
+			std::fprintf(scriptVertexLog, "  billboard %s: at %.1f %.1f %.1f, %.1f from the camera, eye offset %.1f%s\n",
+				material && visualCount ? ReadAt<const char*>(material) : "-", position[0], position[1], position[2], length,
+				distance, distance <= 0.0f || length <= distance * 2.0f ? " (not moved)" : "");
+		}
+
+		const int copies = isDrawingEyeElem ? eyeGlowCopies : 1;
+		const float shift = distance > 0.0f && length > distance * 2.0f ? distance : 0.0f;
+
+		if (shift == 0.0f && copies == 1)
+		{
+			originalDrawBillboard(drawState);
+			return;
+		}
+
+		float saved[3];
+		std::memcpy(saved, position, sizeof(saved));
+
+		for (int copy = 0; copy < copies; ++copy)
+		{
+			const float along = (shift + 0.05f * static_cast<float>(copy)) / std::max(length, 1.0f);
+
+			for (int axis = 0; axis < 3; ++axis)
+			{
+				position[axis] = saved[axis] + toEye[axis] * along;
+			}
+
+			originalDrawBillboard(drawState);
+		}
+
+		std::memcpy(position, saved, sizeof(saved));
+	}
+
+	static constexpr std::size_t codeMeshVertexStride = 32;
+	static constexpr std::uintptr_t codeSurfsVertices = 16;
+
+	static bool IsEyeEffect(std::uintptr_t definition)
+	{
+		static std::unordered_map<std::uintptr_t, bool> known;
+		const auto found = known.find(definition);
+
+		if (found != known.end())
+		{
+			return found->second;
+		}
+
+		const char* name = definition ? ReadAt<const char*>(definition) : nullptr;
+		bool isEye = false;
+
+		if (name)
+		{
+			const std::string_view effectName(name);
+			isEye = effectName.starts_with("misc/aircraft_light_wingtip")
+				|| (effectName.starts_with("zw3/") && effectName.find("eye") != std::string_view::npos);
+		}
+
+		known[definition] = isEye;
+		return isEye;
+	}
+
+	static void AdjustEyeGlowVerticesUnsafe(std::uintptr_t codeSurfs, std::uintptr_t system, float size, float alphaScale)
+	{
+		const auto vertices = ReadAt<std::uintptr_t>(codeSurfs + codeSurfsVertices);
+		const auto* indices = ReadAt<const std::uint16_t*>(system + fxSystemPendingIndices);
+		const auto indexCount = ReadAt<std::uint32_t>(system + fxSystemPendingIndexCount);
+
+		for (std::uint32_t quad = 0; quad + 6 <= indexCount; quad += 6)
+		{
+			const std::uint16_t first = *std::min_element(indices + quad, indices + quad + 6);
+			float centre[3] = {};
+
+			for (int corner = 0; corner < 4; ++corner)
+			{
+				const auto* position = reinterpret_cast<const float*>(vertices + codeMeshVertexStride * (first + corner));
+
+				for (int axis = 0; axis < 3; ++axis)
+				{
+					centre[axis] += position[axis] * 0.25f;
+				}
+			}
+
+			for (int corner = 0; corner < 4; ++corner)
+			{
+				const std::uintptr_t vertex = vertices + codeMeshVertexStride * (first + corner);
+				auto* position = reinterpret_cast<float*>(vertex);
+
+				for (int axis = 0; axis < 3; ++axis)
+				{
+					position[axis] = centre[axis] + (position[axis] - centre[axis]) * size;
+				}
+
+				auto* colour = reinterpret_cast<std::uint32_t*>(vertex + 16);
+				const float alpha = static_cast<float>(*colour >> 24) * alphaScale;
+				const auto scaled = static_cast<std::uint32_t>(std::clamp(alpha + 0.5f, 0.0f, 255.0f));
+				*colour = (*colour & 0x00FFFFFFu) | (scaled << 24);
+			}
+		}
+	}
+
+	static void AdjustEyeGlowVertices(std::uintptr_t codeSurfs, std::uintptr_t system, float size, float alphaScale)
+	{
+		__try
+		{
+			AdjustEyeGlowVerticesUnsafe(codeSurfs, system, size, alphaScale);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+		}
+	}
+
+	static bool InstallBillboardHook()
+	{
+		const Iw4::GameBuild& build = Engine::CurrentBuild();
+		const std::uintptr_t slot = Engine::RebaseAddress(build.fxDrawElemBillboardSlot);
+		const std::uintptr_t original = Engine::RebaseAddress(build.FX_DrawElem_BillboardSprite);
+		const auto replacement = reinterpret_cast<std::uintptr_t>(&DrawBillboardDetour);
+
+		originalDrawBillboard = reinterpret_cast<FxDrawElemBillboard>(original);
+
+		return Hook::PatchBytes(slot, reinterpret_cast<const unsigned char*>(&original),
+			reinterpret_cast<const unsigned char*>(&replacement), sizeof(std::uintptr_t));
+	}
+
+	static void LogScriptSurfaceUnsafe(std::uintptr_t codeSurfs, const std::uint16_t* indices, std::uint32_t indexCount)
+	{
+		const auto vertices = ReadAt<std::uintptr_t>(codeSurfs + codeSurfsVertices);
+		std::uint16_t logged[8];
+		int loggedCount = 0;
+
+		for (std::uint32_t i = 0; i < indexCount && loggedCount < 8; ++i)
+		{
+			const std::uint16_t index = indices[i];
+
+			if (std::find(logged, logged + loggedCount, index) != logged + loggedCount)
+			{
+				continue;
+			}
+
+			logged[loggedCount++] = index;
+			const std::uintptr_t vertex = vertices + codeMeshVertexStride * index;
+			const float* position = reinterpret_cast<const float*>(vertex);
+
+			std::fprintf(scriptVertexLog, "    vertex %u: %.2f %.2f %.2f  colour 0x%08X  texcoord 0x%08X\n", index,
+				position[0], position[1], position[2], ReadAt<std::uint32_t>(vertex + 16), ReadAt<std::uint32_t>(vertex + 20));
+		}
+	}
+
+	static void LogScriptSurface(std::uintptr_t codeSurfs, std::uintptr_t system)
+	{
+		const auto indexCount = ReadAt<std::uint32_t>(system + fxSystemPendingIndexCount);
+		const auto material = ReadAt<std::uintptr_t>(system + fxSystemPendingMaterial);
+		std::fprintf(scriptVertexLog, "  surface: %s, %u indices\n", material ? ReadAt<const char*>(material) : "-",
+			indexCount);
+
+		__try
+		{
+			LogScriptSurfaceUnsafe(codeSurfs, ReadAt<const std::uint16_t*>(system + fxSystemPendingIndices), indexCount);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			std::fprintf(scriptVertexLog, "    (vertices unreadable)\n");
+		}
+	}
+
+	static void __fastcall DrawElementDetour(std::uintptr_t elemDef, std::uintptr_t elem, std::uintptr_t drawState)
+	{
+		const auto system = ReadAt<std::uintptr_t>(drawState);
+		const auto effect = ReadAt<std::uintptr_t>(drawState + 8);
+		const auto codeSurfs = ReadAt<std::uintptr_t>(drawState + 32);
+		bool isScript = false;
+		bool isEye = false;
+
+		if (codeSurfs && effect)
+		{
+			std::lock_guard lock(scriptEffectMutex);
+			isScript = IsScriptEffect(ReadAt<std::uintptr_t>(effect));
+			isEye = isScript && IsEyeEffect(ReadAt<std::uintptr_t>(effect));
+		}
+
+		if (!isScript || !originalDrawSpriteElems)
+		{
+			originalDrawElement(elemDef, elem, drawState);
+			return;
+		}
+
+		ClosePendingCodeSurf(system, codeSurfs);
+
+		if (scriptVertexLog)
+		{
+			const auto definition = ReadAt<std::uintptr_t>(effect);
+			const auto type = ReadAt<std::uint8_t>(elemDef + 176);
+			std::fprintf(scriptVertexLog, "%s element, type %s\n", definition ? ReadAt<const char*>(definition) : "?",
+				type < std::size(effectElemTypeNames) ? effectElemTypeNames[type] : "?");
+		}
+
+		float eyeBrightness = 1.0f;
+		float eyeSize = 1.0f;
+
+		if (isEye)
+		{
+			const LookSettings look = GetLookSettings();
+			eyeBrightness = std::clamp(look.eyeGlowBrightness, 0.0f, 8.0f);
+			eyeSize = std::clamp(look.eyeGlowSize, 0.25f, 4.0f);
+			eyeGlowCopies = std::max(1, static_cast<int>(std::ceil(eyeBrightness)));
+		}
+
+		isDrawingScriptElem = true;
+		isDrawingEyeElem = isEye;
+		originalDrawElement(elemDef, elem, drawState);
+		isDrawingScriptElem = false;
+		isDrawingEyeElem = false;
+
+		if (isEye && (eyeBrightness != 1.0f || eyeSize != 1.0f))
+		{
+			AdjustEyeGlowVertices(codeSurfs, system, eyeSize, eyeBrightness / static_cast<float>(eyeGlowCopies));
+		}
+
+		if (ReadAt<std::uint32_t>(system + fxSystemPendingIndexCount) == 0)
+		{
+			if (scriptVertexLog)
+			{
+				std::fprintf(scriptVertexLog, "  no surface (culled, or drawn outside the code mesh)\n");
+			}
+
+			return;
+		}
+
+		if (scriptVertexLog)
+		{
+			LogScriptSurface(codeSurfs, system);
+		}
+
+		{
+			std::lock_guard lock(scriptEffectMutex);
+			scriptSurfaces[scriptSurfaceFrame & 1].push_back(ReadAt<const void*>(system + fxSystemPendingIndices));
+		}
+
+		ClosePendingCodeSurf(system, codeSurfs);
+	}
+
+	bool IsScriptEffectSurface(const void* indices)
+	{
+		std::lock_guard lock(scriptEffectMutex);
+
+		for (const auto& surfaces : scriptSurfaces)
+		{
+			if (std::find(surfaces.begin(), surfaces.end(), indices) != surfaces.end())
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	static void __fastcall DrawSpriteElemsDetour(void* codeSurfs, std::uintptr_t system, int drawTime)
+	{
+		{
+			std::lock_guard lock(scriptEffectMutex);
+			++scriptSurfaceFrame;
+			scriptSurfaces[scriptSurfaceFrame & 1].clear();
+		}
+
+		if (isEffectSurveyRequested)
+		{
+			isEffectSurveyRequested = false;
+			float camera[3] = {};
+			TryGetCameraOrigin(camera);
+
+			const std::wstring path = Core::ModuleDirectory() + L"zw3_remix_effects.txt";
+
+			if (std::FILE* file = _wfopen(path.c_str(), L"w"))
+			{
+				std::fprintf(file, "# live effects, camera at %.0f %.0f %.0f; elements: list, type, visual count, first"
+								   " material or model, elem def flags\n", camera[0], camera[1], camera[2]);
+				WriteEffectSurvey(file, system, camera);
+				std::fprintf(file, "\n# script effect elements drawn this frame, with the code mesh vertices they submitted\n");
+
+				scriptVertexLog = file;
+				originalDrawSpriteElems(codeSurfs, system, drawTime);
+				scriptVertexLog = nullptr;
+
+				std::fclose(file);
+				Log() << "remix: wrote the live effect list to zw3_remix_effects.txt";
+				return;
+			}
+		}
+
+		originalDrawSpriteElems(codeSurfs, system, drawTime);
+	}
+
 	static void InstallStaticModelHooks()
 	{
+		TryPatchCallGroup(&Engine::CurrentBuild().FX_DrawSpriteElemsCall, 1, reinterpret_cast<const void*>(&DrawSpriteElemsDetour),
+			reinterpret_cast<void**>(&originalDrawSpriteElems));
+
+		const bool isScriptEffectHooked = TryPatchCallGroup(Engine::CurrentBuild().FX_DrawElementSpriteCalls, 2,
+			reinterpret_cast<const void*>(&DrawElementDetour), reinterpret_cast<void**>(&originalDrawElement));
+
+		Log() << "remix: zw3 script effects (zombie eyes, perk glows) draw as their own code mesh surfaces with particle"
+				 " copies of their lens flare textures (" << isScriptEffectHooked << "), eye offset sprites moved toward the"
+				 " eye (" << InstallBillboardHook() << ")";
+
 		const Iw4::GameBuild& build = Engine::CurrentBuild();
 
 		const bool isRigidPatched = TryPatchPair(build.staticModelRigidCall, build.staticModelRigidSecondPassCall,
@@ -5090,6 +6066,12 @@ namespace Components::Remix
 			}
 
 			device->SetTexture(0, colorMap);
+
+			if (batch.isDoubleSided)
+			{
+				drawState.cullMode = D3DCULL_NONE;
+			}
+
 			ApplyDrawState(device, drawState);
 
 			D3DCOLOR neonColour = 0xFFFFFFFF;
@@ -5340,6 +6322,205 @@ namespace Components::Remix
 	void RequestSceneDump()
 	{
 		isDumpRequested = true;
+		isEffectSurveyRequested = true;
+		Device::ArmFrameCapture();
+	}
+
+	struct MapMaterialRow
+	{
+		const char* list = "";
+		unsigned surfaces = 0;
+		std::uint64_t triangles = 0;
+		std::uint64_t corners = 0;
+		std::uint64_t zeroNormals = 0;
+		std::uint64_t flippedNormals = 0;
+		std::uint64_t twinTriangles = 0;
+		std::unordered_set<std::uint64_t> triangleKeys;
+		int low[4] = { 255, 255, 255, 255 };
+		int high[4] = {};
+		std::uint64_t sum[4] = {};
+	};
+
+	void WriteMapMaterialReport()
+	{
+		WorldSource source;
+		const std::uintptr_t worldDpvs = ReadAt<std::uintptr_t>(Engine::RebaseAddress(Engine::CurrentBuild().g_worldDpvs));
+		const std::uintptr_t surfaces = worldDpvs ? ReadAt<std::uintptr_t>(worldDpvs + Iw4::worldDpvsSurfaces) : 0;
+
+		if (!TryReadWorldSource(source) || !surfaces)
+		{
+			Log() << "remix: no map is loaded, nothing to report";
+			return;
+		}
+
+		const struct
+		{
+			std::uintptr_t begin;
+			std::uintptr_t end;
+			const char* name;
+		} lists[] = {
+			{ Iw4::worldDpvsLitOpaqueBegin, Iw4::worldDpvsLitOpaqueEnd, "opaque" },
+			{ Iw4::worldDpvsLitTransBegin, Iw4::worldDpvsLitTransEnd, "trans" },
+			{ Iw4::worldDpvsEmissiveBegin, Iw4::worldDpvsEmissiveEnd, "emissive" },
+		};
+
+		std::unordered_map<std::uintptr_t, MapMaterialRow> rows;
+		std::vector<std::uintptr_t> order;
+
+		for (const auto& list : lists)
+		{
+			const auto begin = ReadAt<std::uint32_t>(worldDpvs + list.begin);
+			const auto end = ReadAt<std::uint32_t>(worldDpvs + list.end);
+
+			for (std::uint32_t surfaceIndex = begin; surfaceIndex < end; ++surfaceIndex)
+			{
+				const std::uintptr_t surface = surfaces + surfaceIndex * Iw4::gfxSurfaceStride;
+				const auto material = ReadAt<std::uintptr_t>(surface + Iw4::gfxSurfaceMaterial);
+				const auto firstVertex = ReadAt<std::uint32_t>(surface + Iw4::gfxSurfaceFirstVertex);
+				const auto triCount = ReadAt<std::uint16_t>(surface + Iw4::gfxSurfaceTriCount);
+				const auto baseIndex = ReadAt<std::uint32_t>(surface + Iw4::gfxSurfaceBaseIndex);
+
+				if (!material || static_cast<std::uint64_t>(baseIndex) + 3u * triCount > source.indexCount)
+				{
+					continue;
+				}
+
+				auto [found, isNew] = rows.try_emplace(material);
+				MapMaterialRow& row = found->second;
+
+				if (isNew)
+				{
+					row.list = list.name;
+					order.push_back(material);
+				}
+
+				++row.surfaces;
+				row.triangles += triCount;
+
+				for (UINT triangle = 0; triangle < triCount; ++triangle)
+				{
+					std::uint32_t corners[3];
+					bool isInRange = true;
+
+					for (int corner = 0; corner < 3; ++corner)
+					{
+						corners[corner] = firstVertex + source.indices[baseIndex + 3u * triangle + corner];
+						isInRange = isInRange && corners[corner] < source.vertexCount;
+					}
+
+					if (!isInRange)
+					{
+						continue;
+					}
+
+					if (!row.triangleKeys.insert(CoincidentTriangleKey(source, corners)).second)
+					{
+						++row.twinTriangles;
+					}
+
+					const float* a = reinterpret_cast<const float*>(source.vertices + corners[0] * Iw4::worldVertexStride);
+					const float* b = reinterpret_cast<const float*>(source.vertices + corners[1] * Iw4::worldVertexStride);
+					const float* c = reinterpret_cast<const float*>(source.vertices + corners[2] * Iw4::worldVertexStride);
+					const float ab[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] };
+					const float ac[3] = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
+					const float face[3] = { ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2],
+						ab[0] * ac[1] - ab[1] * ac[0] };
+
+					for (const std::uint32_t vertex : corners)
+					{
+						float normal[3];
+						UnpackNormal(source.vertices + vertex * Iw4::worldVertexStride + Iw4::worldVertexNormal, normal);
+						const float length = normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2];
+
+						if (length < 0.01f)
+						{
+							++row.zeroNormals;
+						}
+						else if (normal[0] * face[0] + normal[1] * face[1] + normal[2] * face[2] < 0.0f)
+						{
+							++row.flippedNormals;
+						}
+					}
+				}
+
+				for (UINT corner = 0; corner < 3u * triCount; ++corner)
+				{
+					const std::uint32_t vertex = firstVertex + source.indices[baseIndex + corner];
+
+					if (vertex >= source.vertexCount)
+					{
+						continue;
+					}
+
+					D3DCOLOR colour = 0;
+					std::memcpy(&colour, source.vertices + vertex * Iw4::worldVertexStride + Iw4::worldVertexColor,
+						sizeof(colour));
+					const int channels[4] = { static_cast<int>(colour >> 24), static_cast<int>((colour >> 16) & 0xFF),
+						static_cast<int>((colour >> 8) & 0xFF), static_cast<int>(colour & 0xFF) };
+
+					for (int channel = 0; channel < 4; ++channel)
+					{
+						row.low[channel] = std::min(row.low[channel], channels[channel]);
+						row.high[channel] = std::max(row.high[channel], channels[channel]);
+						row.sum[channel] += static_cast<std::uint64_t>(channels[channel]);
+					}
+
+					++row.corners;
+				}
+			}
+		}
+
+		const std::string mapName = GetMapName();
+		const std::wstring path = Core::ModuleDirectory() + L"zw3_remix_map_"
+			+ std::wstring(mapName.begin(), mapName.end()) + (Core::IsRemixMode() ? L"_rtx.txt" : L"_raster.txt");
+		std::FILE* file = _wfopen(path.c_str(), L"w");
+
+		if (!file)
+		{
+			return;
+		}
+
+		std::fprintf(file, "# %s world materials (%s); statebits are the lit pass's two words: src blend = bits 0-3,"
+						   " dst blend = 4-7, alpha test = 0x3800, polygon offset = word 2 bits 4-5\n",
+			mapName.c_str(), Core::IsRemixMode() ? "RTX Remix on" : "RTX Remix off");
+		std::fprintf(file, "list\tmaterial\ttechset\timage\tsortkey\tregion\tstatebits\tsurfaces\ttriangles\t"
+						   "vertex argb low\tavg\thigh\tzero normals\tnormals against face\ttwin triangles\n");
+
+		for (const std::uintptr_t material : order)
+		{
+			const MapMaterialRow& row = rows[material];
+			const char* name = ReadAt<const char*>(material);
+			const auto techniqueSet = ReadAt<std::uintptr_t>(material + Iw4::materialTechniqueSet);
+			const char* techniqueSetName = techniqueSet ? ReadAt<const char*>(techniqueSet) : nullptr;
+			const std::uintptr_t image = FindColorMapImage(material);
+			const char* imageName = image ? ReadAt<const char*>(image + Iw4::gfxImageName) : nullptr;
+
+			const auto entry = ReadAt<std::uint8_t>(material + Iw4::materialStateBitsEntry + Iw4::techniqueLit);
+			const auto stateBitsCount = ReadAt<std::uint8_t>(material + Iw4::materialStateBitsCount);
+			const auto stateBits = ReadAt<std::uintptr_t>(material + Iw4::materialStateBitsTable);
+			std::uint32_t bits[2] = {};
+
+			if (entry < stateBitsCount && stateBits)
+			{
+				std::memcpy(bits, reinterpret_cast<const void*>(stateBits + entry * Iw4::stateBitsStride), sizeof(bits));
+			}
+
+			const auto average = [&row](int channel) { return row.corners ? static_cast<int>(row.sum[channel] / row.corners) : 0; };
+
+			std::fprintf(file, "%s\t%s\t%s\t%s\t%u\t%u\t%08X %08X\t%u\t%llu\t%02X%02X%02X%02X\t%02X%02X%02X%02X\t"
+							   "%02X%02X%02X%02X\t%llu\t%llu of %llu\t%llu\n",
+				row.list, name ? name : "?", techniqueSetName ? techniqueSetName : "?", imageName ? imageName : "-",
+				ReadAt<std::uint8_t>(material + Iw4::materialSortKey), ReadAt<std::uint8_t>(material + Iw4::materialCameraRegion),
+				bits[0], bits[1], row.surfaces, static_cast<unsigned long long>(row.triangles),
+				row.low[0], row.low[1], row.low[2], row.low[3], average(0), average(1), average(2), average(3),
+				row.high[0], row.high[1], row.high[2], row.high[3], static_cast<unsigned long long>(row.zeroNormals),
+				static_cast<unsigned long long>(row.flippedNormals), static_cast<unsigned long long>(row.triangles * 3),
+				static_cast<unsigned long long>(row.twinTriangles));
+		}
+
+		std::fclose(file);
+		Log() << "remix: wrote " << order.size() << " world materials of " << mapName << " to zw3_remix_map_" << mapName
+			  << (Core::IsRemixMode() ? "_rtx.txt" : "_raster.txt");
 	}
 
 	void ReleaseWorldBuffers()
@@ -5389,5 +6570,28 @@ namespace Components::Remix
 	WorldStats GetWorldStats()
 	{
 		return stats;
+	}
+
+	IDirect3DTexture9* TryGetIgnoredColorMapTwin(IDirect3DDevice9* device, std::uintptr_t material)
+	{
+		return TryGetIgnoredTwin(device, TryGetColorMap(material));
+	}
+
+	IDirect3DTexture9* TryGetParticleColorMapTwin(IDirect3DDevice9* device, std::uintptr_t material)
+	{
+		return TryGetTaggedTwin(device, TryGetColorMap(material), particleTwins, TextureTag::Particle, particleTwinMark);
+	}
+
+	void RecordDumpEffect(IDirect3DDevice9* device, std::uintptr_t material, const char* action)
+	{
+		if (!isDumping || !device || !material)
+		{
+			return;
+		}
+
+		DumpRow row = CaptureDumpRow(device, material, "effect");
+		row.draws = 1;
+		CopyName(row.action, sizeof(row.action), action);
+		dumpRows.push_back(row);
 	}
 }

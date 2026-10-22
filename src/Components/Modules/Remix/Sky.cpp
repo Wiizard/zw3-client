@@ -282,7 +282,7 @@ namespace Components::Remix
 
 	void SetSkyScale(float scale)
 	{
-		skyScale = std::clamp(scale, 0.0f, 4.0f);
+		skyScale = std::clamp(scale, 0.0f, 100.0f);
 	}
 
 	float GetSkyScale()

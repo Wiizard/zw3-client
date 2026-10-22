@@ -2,6 +2,7 @@
 
 #include "Culling.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <algorithm>
@@ -89,11 +90,35 @@ namespace Components::Remix
 	static float appliedRadius = 1000.0f;
 	static float appliedPropScale = 1.0f;
 	static std::unordered_set<std::uintptr_t> keptModels;
+	static std::atomic<int> keptModelCount = 0;
+	static bool isEntityCullingDisabledRequested = false;
+	static bool isSteadyModelDetailRequested = false;
 	static unsigned keptModelsVersion = 0;
 	static std::uintptr_t keptModelsWorld = 0;
 
+	int CellForPoint(const float* point)
+	{
+		using CellForPointFunction = int(__fastcall*)(const float*);
+		const Iw4::GameBuild& build = Engine::CurrentBuild();
+
+		if (build.gfxWorld == 0 || !ReadAt<std::uintptr_t>(Engine::RebaseAddress(build.gfxWorld)))
+		{
+			return -1;
+		}
+
+		const auto cellForPoint = reinterpret_cast<CellForPointFunction>(Engine::RebaseAddress(Iw4::cellForPointFunction));
+		return cellForPoint(point);
+	}
+
+	int GetCameraCell()
+	{
+		float camera[3];
+		return TryGetCameraOrigin(camera) ? CellForPoint(camera) : -1;
+	}
+
 	static void __fastcall AddWorldSurfacesDpvsDetour(unsigned int cell, float* viewPlane, float* planes, unsigned int count)
 	{
+
 		if (appliedLevel != CullingLevel::Engine)
 		{
 			viewPlane[3] += appliedRadius;
@@ -218,6 +243,8 @@ namespace Components::Remix
 
 		const bool isEntityCullingOff = TrySetGroupApplied(entityFrustumGroup, true);
 		const bool isLodSteady = TrySetGroupApplied(lodFovGroup, true);
+		isEntityCullingDisabledRequested = entityFrustumGroup.isApplied;
+		isSteadyModelDetailRequested = lodFovGroup.isApplied;
 
 		Log() << "remix: scene entities and brush models no longer frustum culled (" << isEntityCullingOff
 			  << "), model detail no longer follows the zoom (" << isLodSteady << ")";
@@ -237,28 +264,27 @@ namespace Components::Remix
 
 	static bool TryApplyLevel(CullingLevel level)
 	{
-		bool isComplete = true;
-
-		for (PatchGroup& group : groups)
+		for (const PatchGroup& group : groups)
 		{
 			if (!group.patches)
 			{
 				return false;
 			}
-
-			const bool shouldApply = static_cast<int>(level) >= static_cast<int>(group.level);
-
-			if (!TrySetGroupApplied(group, shouldApply))
-			{
-				isComplete = false;
-			}
 		}
 
-		appliedLevel = level;
+		Engine::RunOnMainThread([level]
+		{
+			for (PatchGroup& group : groups)
+			{
+				TrySetGroupApplied(group, static_cast<int>(level) >= static_cast<int>(group.level));
+			}
 
-		Log() << "remix: view culling level " << static_cast<int>(level);
+			appliedLevel = level;
 
-		return isComplete;
+			Log() << "remix: view culling level " << static_cast<int>(level);
+		});
+
+		return true;
 	}
 
 	bool TrySetCullingLevel(CullingLevel level)
@@ -302,13 +328,11 @@ namespace Components::Remix
 		return mapLevel.has_value();
 	}
 
-	static void ResolveKeptModels()
+	static void ResolveKeptModelsOnMainThread(const std::vector<std::string>& names)
 	{
 		keptModels.clear();
-		keptModelsVersion = GetMapSettingsVersion();
-		keptModelsWorld = GetMapIdentity();
+		keptModelCount = 0;
 
-		const std::vector<std::string>& names = GetMapSettings().keptModels;
 		const Iw4::GameBuild& build = Engine::CurrentBuild();
 
 		if (names.empty() || build.gfxWorld == 0)
@@ -358,8 +382,21 @@ namespace Components::Remix
 			}
 		}
 
+		keptModelCount = static_cast<int>(keptModels.size());
+
 		Log() << "remix: " << keptModels.size() << " of " << names.size()
 			  << " models the map settings keep are on this map, they are never culled by distance";
+	}
+
+	static void ResolveKeptModels()
+	{
+		keptModelsVersion = GetMapSettingsVersion();
+		keptModelsWorld = GetMapIdentity();
+
+		Engine::RunOnMainThread([names = GetMapSettings().keptModels]
+		{
+			ResolveKeptModelsOnMainThread(names);
+		});
 	}
 
 	void UpdateCulling()
@@ -416,7 +453,7 @@ namespace Components::Remix
 		appliedPropScale = std::clamp(propScale, 0.1f, 100.0f);
 		stats.appliedRadius = appliedRadius;
 		stats.appliedPropScale = appliedPropScale;
-		stats.keptModels = static_cast<int>(keptModels.size());
+		stats.keptModels = keptModelCount;
 	}
 
 	void SetCullingTuning(const CullingTuning& settings)
@@ -432,22 +469,32 @@ namespace Components::Remix
 
 	void SetEntityCullingDisabled(bool isDisabled)
 	{
-		TrySetGroupApplied(entityFrustumGroup, isDisabled);
+		isEntityCullingDisabledRequested = isDisabled;
+
+		Engine::RunOnMainThread([isDisabled]
+		{
+			TrySetGroupApplied(entityFrustumGroup, isDisabled);
+		});
 	}
 
 	bool IsEntityCullingDisabled()
 	{
-		return entityFrustumGroup.isApplied;
+		return isEntityCullingDisabledRequested;
 	}
 
 	void SetSteadyModelDetail(bool isEnabled)
 	{
-		TrySetGroupApplied(lodFovGroup, isEnabled);
+		isSteadyModelDetailRequested = isEnabled;
+
+		Engine::RunOnMainThread([isEnabled]
+		{
+			TrySetGroupApplied(lodFovGroup, isEnabled);
+		});
 	}
 
 	bool IsSteadyModelDetail()
 	{
-		return lodFovGroup.isApplied;
+		return isSteadyModelDetailRequested;
 	}
 
 	CullingStats GetCullingStats()

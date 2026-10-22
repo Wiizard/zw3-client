@@ -16,6 +16,8 @@
 #include "UIFeeder.hpp"
 #include "Voice.hpp"
 #include "GSC/Field.hpp"
+#include "GSC/Script.hpp"
+#include "Utils/ManagedRuntimeQuery.hpp"
 
 namespace Components
 {
@@ -1104,6 +1106,101 @@ namespace Components
 		Network::SendCommand(address, "statusResponse", info.Build() + "\n" + playerList + "\n");
 	}
 
+	static std::optional<std::string> ReadRuntimeString(const char* name, const std::size_t maximum)
+	{
+		const auto* dvar = Game::Dvar_FindVar(name);
+		if (!dvar || dvar->type != Game::DVAR_TYPE_STRING || !dvar->current.string) return std::nullopt;
+		const auto length = strnlen(dvar->current.string, maximum + 1);
+		if (!length || length > maximum) return std::nullopt;
+		return std::string(dvar->current.string, length);
+	}
+
+	static nlohmann::json ReadRuntimeInteger(const char* name, const int maximum = 1, const bool allowBoolean = true)
+	{
+		using namespace Utils::ManagedRuntimeQuery;
+		const auto* dvar = Game::Dvar_FindVar(name);
+		if (!dvar) return IntegerObservation("unknown", std::nullopt);
+		if (dvar->type == Game::DVAR_TYPE_BOOL)
+			return IntegerObservation("bool", allowBoolean ? std::optional<int>(dvar->current.enabled ? 1 : 0) : std::nullopt);
+		if (dvar->type == Game::DVAR_TYPE_INT)
+		{
+			const auto value = dvar->current.integer;
+			return IntegerObservation("int", value >= 0 && value <= maximum ? std::optional<int>(value) : std::nullopt);
+		}
+		if (dvar->type == Game::DVAR_TYPE_STRING)
+		{
+			const auto text = ReadRuntimeString(name, 10);
+			return IntegerObservation("string", text ? ReadInteger(*text, maximum) : std::nullopt);
+		}
+		return IntegerObservation("unsupported", std::nullopt);
+	}
+
+	static nlohmann::json RuntimeIdentifier(const std::optional<std::string>& text, const std::size_t maximum = 128)
+	{
+		if (!text || text->empty() || text->size() > maximum) return nullptr;
+		for (const auto character : *text)
+			if (!((character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z')
+				|| (character >= '0' && character <= '9') || character == '_' || character == '-')) return nullptr;
+		return *text;
+	}
+
+	void ServerInfo::HandleManagedRuntimeQuery(Network::Address& address, const std::string& data)
+	{
+		// This is a fixed-field local agent observation, never an arbitrary-dvar
+		// or public inspection API. Existing connect/auth handling is unchanged.
+		if (!Dedicated::IsEnabled() || !address.IsLoopback()) return;
+		char mode[16]{};
+		if (GetEnvironmentVariableA("ZWNET_ADMISSION_MODE", mode, sizeof(mode)) != 8 || std::strcmp(mode, "REQUIRED") != 0) return;
+		const auto challenge = Utils::ManagedRuntimeQuery::ReadChallenge(data);
+		if (!challenge) return;
+		static Utils::ManagedRuntimeQuery::RateLimit rateLimit;
+		if (!rateLimit.Allow(Utils::ManagedRuntimeQuery::RateLimit::Clock::now())) return;
+
+		Scheduler::Once([address, challenge = std::string(*challenge)]
+		{
+			char instance[129]{};
+			const auto instanceLength = GetEnvironmentVariableA("ZWNET_ADMISSION_INSTANCE_ID", instance, sizeof(instance));
+			const auto instanceId = instanceLength > 0 && instanceLength < sizeof(instance)
+				? RuntimeIdentifier(std::string(instance, instanceLength)) : nlohmann::json(nullptr);
+			const auto scriptMarker = ReadRuntimeInteger("zw3_runtime_script_ready");
+			const bool gameTypeReady = GSC::Script::IsGameTypeInitialized();
+			const bool vmActive = Game::Scr_IsSystemActive();
+			nlohmann::json result = {
+				{ "schema_version", 1 }, { "challenge", challenge }, { "protocol", GetProtocol() },
+				{ "instance_id", instanceId }, { "match_id", RuntimeIdentifier(ReadRuntimeString("zwnet_match_id", 80), 80) },
+				{ "map_id", RuntimeIdentifier(ReadRuntimeString("mapname", 80), 80) },
+				{ "selected_map_id", RuntimeIdentifier(ReadRuntimeString("zwnet_selected_map", 80), 80) },
+				{ "game_mode", RuntimeIdentifier(ReadRuntimeString("g_gametype", 32), 32) },
+				{ "sv_running", Dedicated::IsRunning() }, { "game_type_initialized", gameTypeReady },
+				{ "script_system_active", vmActive },
+				{ "script_ready", gameTypeReady && vmActive && scriptMarker.at("valid") == true && scriptMarker.at("value") == 1 },
+				{ "round", ReadRuntimeInteger("round", 9999, false) },
+				{ "testing", ReadRuntimeInteger("testing") }, { "developer", ReadRuntimeInteger("developer") },
+				{ "developer_script", ReadRuntimeInteger("developer_script") }, { "uploadStats", ReadRuntimeInteger("uploadStats") },
+				{ "sv_cheats", ReadRuntimeInteger("sv_cheats") },
+				{ "stats_contract_version", ReadRuntimeInteger("zw3_stats_contract_version") },
+				{ "stats_last_outcome", nullptr }, { "stats_last_player_guid", nullptr }, { "stats_credential_sha256", nullptr }
+			};
+			if (const auto outcome = ReadRuntimeString("zw3_stats_last_outcome", 16);
+				outcome && (*outcome == "none" || *outcome == "disabled" || *outcome == "submitted" || *outcome == "stored" || *outcome == "failed"))
+				result["stats_last_outcome"] = *outcome;
+			if (const auto guid = ReadRuntimeString("zw3_stats_last_player_guid", 16); guid && guid->size() == 16)
+			{
+				bool isHex = true;
+				for (const auto character : *guid)
+					isHex &= (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F');
+				if (isHex) result["stats_last_player_guid"] = Utils::String::ToLower(*guid);
+			}
+			if (auto credential = ReadRuntimeString("zw3_stats_ingest_token", 4096))
+			{
+				result["stats_credential_sha256"] = Utils::String::ToLower(Utils::Cryptography::SHA256::Compute(*credential, true));
+				SecureZeroMemory(credential->data(), credential->size());
+			}
+			const auto response = result.dump();
+			if (response.size() <= 4096) Network::SendCommand(address, "zwnetRuntimeResponse", response);
+		}, Scheduler::Pipeline::SERVER);
+	}
+
 	void ServerInfo::HandleStatusResponse(Network::Address& address, const std::string& data)
 	{
 		if (playerContainer.target != address)
@@ -1233,6 +1330,7 @@ namespace Components
 		UIFeeder::Add(playerListFeeder, GetPlayerCount, GetPlayerText, SelectPlayer);
 
 		Network::OnPacket("getStatus", HandleGetStatus);
+		Network::OnPacket("getZWNetRuntime", HandleManagedRuntimeQuery);
 		Network::OnPacket("statusResponse", HandleStatusResponse);
 
 		Network::OnPacket("getZW3LobbyRanks", [](Network::Address& address, [[maybe_unused]] const std::string& data)

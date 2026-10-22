@@ -1097,6 +1097,10 @@ namespace Components
 			sv_wwwBaseUrl = Dvar::Register("sv_wwwBaseUrl", "", Game::DVAR_NONE, "Set to the base url for the external map download.");
 		});
 
+		// Headless servers do not execute CL_Frame. Script HTTP work must be
+		// started/completed on their real server/VM pipeline, exactly once.
+		const auto scriptRequestPipeline = Dedicated::IsEnabled() ? Scheduler::Pipeline::SERVER : Scheduler::Pipeline::CLIENT;
+
 		Scheduler::Loop([]
 		{
 			auto workingCount = 0;
@@ -1133,7 +1137,7 @@ namespace Components
 					++workingCount;
 				}
 			}
-		}, Scheduler::Pipeline::CLIENT);
+		}, scriptRequestPipeline);
 
 		Scheduler::Loop([]
 		{
@@ -1170,7 +1174,7 @@ namespace Components
 					++workingCount;
 				}
 			}
-		}, Scheduler::Pipeline::CLIENT);
+		}, scriptRequestPipeline);
 
 		Events::OnVMShutdown([]
 		{

@@ -1,7 +1,10 @@
 #include "STDInclude.hpp"
 
 #include "Events.hpp"
+#include "Flags.hpp"
 #include "Logger.hpp"
+
+#include <intrin.h>
 
 namespace Components
 {
@@ -62,6 +65,59 @@ namespace Components
 	constexpr std::uintptr_t CL_InitUI_UI_InitCall = 0x140101F26;
 
 	constexpr std::uintptr_t CL_Disconnect = 0x1400F8E20;
+	constexpr std::uintptr_t Com_ErrorEntered = 0x1401F3F40;
+	static const std::uint8_t comErrorEnteredBytes[] = { 0x83, 0x3D, 0xD5, 0x5B, 0x9E, 0x01, 0x00, 0x0F, 0x9F, 0xC0, 0xC3 };
+	static thread_local const Events::NativeDisconnectError* currentNativeDisconnectError = nullptr;
+
+	static int ReadNativeErrorEntered()
+	{
+		static const bool canReadError = Utils::Hook::MatchesBytes(Com_ErrorEntered, comErrorEnteredBytes, sizeof(comErrorEnteredBytes));
+		return canReadError ? (reinterpret_cast<bool(*)()>(Utils::Hook::Rebase(Com_ErrorEntered))() ? 1 : 0) : -1;
+	}
+
+	static std::string ReadNativeErrorText(const char* name)
+	{
+		const auto* const dvar = Game::Dvar_FindVar(name);
+		if (!dvar || dvar->type != Game::DVAR_TYPE_STRING || !dvar->current.string) return {};
+		constexpr std::size_t maximumLength = 4096;
+		const auto length = strnlen(dvar->current.string, maximumLength + 1);
+		if (length > maximumLength) return {};
+		return std::string(dvar->current.string, length);
+	}
+
+	// Never print arbitrary server/error text: it can contain addresses or
+	// credentials. Only fixed engine localization keys reach the diagnostic log.
+	static constexpr std::string_view ClassifyDisconnectReason(std::string_view value)
+	{
+		if (value.empty()) return "empty";
+		if (value.front() == '\x15' || value.front() == '@') value.remove_prefix(1);
+		constexpr std::string_view known[] = {
+			"EXE_DISCONNECTED", "EXE_DISCONNECTEDFROMOWNLISTENSERVER", "EXE_DEMONWARE_DISCONNECT",
+			"EXE_TIMEDOUT", "EXE_ERR_SERVER_TIMEOUT", "EXE_LOSTCONNECTION", "EXE_LOSTRELIABLECOMMANDS",
+			"EXE_SERVER_DISCONNECTED", "EXE_SERVERDISCONNECTREASON", "EXE_SERVERQUIT", "EXE_SERVERKILLED",
+			"EXE_SERVERISFULL", "EXE_PLAYERKICKED", "EXE_SERVER_IS_DIFFERENT_VER", "EXE_SERVERCOMMANDOVERFLOW",
+			"EXE_SERVERMESSAGEOVERFLOW", "EXE_SERVERRESTARTMISC", "EXE_SERVERRESTARTTIMEWRAP",
+			"EXE_MIGRATION_IN_PROGRESS", "EXE_MIGRATIONABORTED", "EXE_MIGRATIONLIMIT"
+		};
+		for (const auto reason : known) if (value == reason) return reason;
+		return "other";
+	}
+
+	static_assert(ClassifyDisconnectReason("EXE_TIMEDOUT") == "EXE_TIMEDOUT");
+	static_assert(ClassifyDisconnectReason("@EXE_SERVERQUIT") == "EXE_SERVERQUIT");
+	static_assert(ClassifyDisconnectReason("\x15" "EXE_DISCONNECTED") == "EXE_DISCONNECTED");
+	static_assert(ClassifyDisconnectReason("") == "empty");
+	static_assert(ClassifyDisconnectReason("https://private.invalid/?connect_ticket=secret") == "other");
+	static_assert(ClassifyDisconnectReason("EXE_TIMEDOUT secret") == "other");
+
+	static std::string_view ReadDisconnectReason(const char* name)
+	{
+		const auto* const dvar = Game::Dvar_FindVar(name);
+		if (!dvar || dvar->type != Game::DVAR_TYPE_STRING || !dvar->current.string) return "unavailable";
+		const auto length = strnlen(dvar->current.string, 129);
+		if (length > 128) return "other";
+		return ClassifyDisconnectReason(std::string_view(dvar->current.string, length));
+	}
 
 	constexpr std::uintptr_t CL_DisconnectCalls[] =
 	{
@@ -138,6 +194,11 @@ namespace Components
 		{
 			tasks.emplace_back(callback);
 		});
+	}
+
+	Events::NativeDisconnectError Events::CurrentNativeDisconnectError()
+	{
+		return currentNativeDisconnectError ? *currentNativeDisconnectError : NativeDisconnectError{};
 	}
 
 	void Events::OnVMShutdown(const std::function<void()>& callback)
@@ -374,6 +435,46 @@ namespace Components
 		const auto* const uiActive = reinterpret_cast<const clientUIActive_t*>(Utils::Hook::Rebase(clientUIActives));
 		const bool wasRunning = uiActive->isRunning;
 		const bool wasConnected = uiActive->connectionState >= CA_CONNECTING;
+		const int errorEntered = ReadNativeErrorEntered();
+		NativeDisconnectError nativeError;
+		if (errorEntered == 1)
+		{
+			nativeError.hasNativeError = true;
+			try
+			{
+				// Preserve the current engine UI text before native cleanup clears
+				// it. Never log these strings: they may contain sensitive details.
+				nativeError.message = ReadNativeErrorText("com_errorMessage");
+				nativeError.title = ReadNativeErrorText("com_errorTitle");
+			}
+			catch (...) { /* An error snapshot must not prevent native cleanup. */ }
+		}
+		static thread_local bool isTracing = false;
+		if (Flags::HasFlag("log") && !isTracing)
+		{
+			// Capture the native call site and safe categories before the engine
+			// clears connection state. This does not infer user intent or a cause.
+			struct TraceScope
+			{
+				bool& value;
+				explicit TraceScope(bool& flag) : value(flag) { value = true; }
+				~TraceScope() { value = false; }
+			} traceScope(isTracing);
+			try
+			{
+				const auto returnedTo = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+				const auto caller = std::ranges::find_if(CL_DisconnectCalls, [returnedTo](const std::uintptr_t site)
+				{
+					return returnedTo == Utils::Hook::Rebase(site) + 5;
+				});
+				const bool isEngineCaller = caller != std::end(CL_DisconnectCalls);
+				const auto callerRva = isEngineCaller ? *caller - 0x140000000ULL : 0;
+				Logger::Print("native disconnect: caller={} rva=0x{:X} client={} running={} connection={} error_entered={} error={} title={} party_reason={}\n",
+					isEngineCaller ? "engine" : "other", callerRva, localClientNum, wasRunning ? 1 : 0, uiActive->connectionState,
+					errorEntered, ReadDisconnectReason("com_errorMessage"), ReadDisconnectReason("com_errorTitle"), ReadDisconnectReason("partyend_reason"));
+			}
+			catch (...) { /* Diagnostics must not replace native disconnect/cleanup. */ }
+		}
 
 		reinterpret_cast<void(*)(int)>(Utils::Hook::Rebase(CL_Disconnect))(localClientNum);
 
@@ -381,6 +482,14 @@ namespace Components
 		{
 			return;
 		}
+
+		struct NativeErrorCallbackScope
+		{
+			const NativeDisconnectError* previous;
+			explicit NativeErrorCallbackScope(const NativeDisconnectError& error)
+				: previous(currentNativeDisconnectError) { currentNativeDisconnectError = &error; }
+			~NativeErrorCallbackScope() { currentNativeDisconnectError = previous; }
+		} nativeErrorScope(nativeError);
 
 		disconnectedTasks.Access([wasConnected](CLDisconnectCallback& tasks)
 		{

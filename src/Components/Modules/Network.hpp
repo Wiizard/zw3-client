@@ -78,6 +78,7 @@ namespace Components
 
 		static void OnPacket(const std::string& command, const Callback& callback);
 		static void OnPacketRaw(const std::string& command, const RawCallback& callback);
+		static bool HandleServerQuery(Game::netadr_t* from, Game::msg_t* message);
 
 		using EntityEventObserver = std::function<bool(int localClientNum, Game::centity_s* cent, int event)>;
 		static void OnEntityEvent(const EntityEventObserver& observer);

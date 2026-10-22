@@ -21,6 +21,7 @@
 #include "GSC/Script.hpp"
 
 #include "Utils/MapPreview.hpp"
+#include "Utils/UserMapHash.hpp"
 
 namespace Components
 {
@@ -37,68 +38,7 @@ namespace Components
 
 	Maps::UserMapContainer Maps::userMap;
 
-	struct UserMapFileStamp
-	{
-		std::uintmax_t size{};
-		std::filesystem::file_time_type modified{};
-
-		bool operator==(const UserMapFileStamp&) const = default;
-	};
-
-	struct UserMapFileHash
-	{
-		UserMapFileStamp stamp;
-		std::string hash;
-	};
-
-	static std::unordered_map<std::string, UserMapFileHash> userMapHashCache;
-
-	static std::optional<UserMapFileStamp> TryGetUserMapFileStamp(const std::filesystem::path& path)
-	{
-		std::error_code error;
-
-		const auto size = std::filesystem::file_size(path, error);
-
-		if (error)
-		{
-			return std::nullopt;
-		}
-
-		const auto modified = std::filesystem::last_write_time(path, error);
-
-		if (error)
-		{
-			return std::nullopt;
-		}
-
-		return UserMapFileStamp{ size, modified };
-	}
-
-	static std::string HashUserMapFile(const std::filesystem::path& path)
-	{
-		hash_state state{};
-		sha256_init(&state);
-
-		const auto file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
-
-		if (file != INVALID_HANDLE_VALUE)
-		{
-			std::vector<unsigned char> buffer(1024 * 1024);
-			DWORD bytesRead = 0;
-
-			while (ReadFile(file, buffer.data(), static_cast<DWORD>(buffer.size()), &bytesRead, nullptr) && bytesRead > 0)
-			{
-				sha256_process(&state, buffer.data(), bytesRead);
-			}
-
-			CloseHandle(file);
-		}
-
-		std::array<unsigned char, 32> digest{};
-		sha256_done(&state, digest.data());
-
-		return { reinterpret_cast<const char*>(digest.data()), digest.size() };
-	}
+	static Utils::UserMapFileHashes userMapHashCache;
 	std::vector<Maps::DLC> Maps::dlcPacks;
 	std::string Maps::currentMainZone;
 	std::vector<std::string> Maps::currentDependencies;
@@ -193,8 +133,10 @@ namespace Components
 
 	unsigned int Maps::UserMapContainer::GetHash()
 	{
-		if (!this->isHashComputed && this->IsValid())
+		if (this->IsValid())
 		{
+			// File metadata is cheap to revalidate and prevents the container's
+			// older lifetime cache from masking an installed map update.
 			this->hash = Maps::GetUsermapHash(this->mapname);
 			this->isHashComputed = true;
 		}
@@ -671,45 +613,63 @@ namespace Components
 
 	unsigned int Maps::GetUsermapHash(const std::string& map)
 	{
-		const auto mapDirectory = std::filesystem::path("usermaps") / map;
+		const auto hash = TryGetUsermapHash(map);
+		if (!hash)
+		{
+			Logger::Warning("Unable to read complete usermap content for '{}'; no checksum is available\n", map);
+			return 0; // Existing protocol's unavailable sentinel, never a partial digest.
+		}
+		return *hash;
+	}
 
-		if (Utils::IO::DirectoryExists(mapDirectory))
+	static std::optional<unsigned int> ReadUsermapHash(const std::string& map, const bool cacheOnly,
+		const std::function<bool()>& isCancelled)
+	{
+		if (isCancelled && isCancelled()) return std::nullopt;
+		const auto mapDirectory = std::filesystem::path("usermaps") / map;
+		const auto directoryAttributes = GetFileAttributesW(mapDirectory.c_str());
+		if (directoryAttributes == INVALID_FILE_ATTRIBUTES)
+		{
+			const auto error = GetLastError();
+			if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) return 0;
+			return std::nullopt;
+		}
+		if (directoryAttributes & FILE_ATTRIBUTE_DIRECTORY)
 		{
 			std::string hash;
-			hash.reserve(std::size(userMapFiles) * 32);
+			hash.reserve(std::size(Maps::userMapFiles) * 32);
 
-			for (std::size_t i = 0; i < std::size(userMapFiles); ++i)
+			for (std::size_t i = 0; i < std::size(Maps::userMapFiles); ++i)
 			{
-				const auto filePath = mapDirectory / std::format("{}{}", map, userMapFiles[i]);
+				if (isCancelled && isCancelled()) return std::nullopt;
+				const auto filePath = mapDirectory / std::format("{}{}", map, Maps::userMapFiles[i]);
 
-				if (!Utils::IO::FileExists(filePath.string()))
+				if (GetFileAttributesW(filePath.c_str()) == INVALID_FILE_ATTRIBUTES)
 				{
-					continue;
+					const auto error = GetLastError();
+					if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) continue;
+					return std::nullopt;
 				}
-
-				const auto stamp = TryGetUserMapFileStamp(filePath);
-				const auto cacheKey = Utils::String::ToLower(filePath.lexically_normal().generic_string());
-				const auto cached = userMapHashCache.find(cacheKey);
-
-				if (stamp && cached != userMapHashCache.end() && cached->second.stamp == *stamp)
-				{
-					hash.append(cached->second.hash);
-					continue;
-				}
-
-				auto fileHash = HashUserMapFile(filePath);
-				hash.append(fileHash);
-
-				if (stamp)
-				{
-					userMapHashCache.insert_or_assign(cacheKey, UserMapFileHash{ *stamp, std::move(fileHash) });
-				}
+				const auto fileHash = cacheOnly ? userMapHashCache.GetCached(filePath) : userMapHashCache.Get(filePath, isCancelled);
+				if (!fileHash) return std::nullopt;
+				hash.append(*fileHash);
 			}
 
 			return Utils::Cryptography::JenkinsOneAtATime::Compute(hash);
 		}
 
-		return 0;
+		return std::nullopt;
+	}
+
+	std::optional<unsigned int> Maps::TryGetUsermapHash(const std::string& map,
+		const std::function<bool()>& isCancelled)
+	{
+		return ReadUsermapHash(map, false, isCancelled);
+	}
+
+	std::optional<unsigned int> Maps::TryGetCachedUsermapHash(const std::string& map)
+	{
+		return ReadUsermapHash(map, true, {});
 	}
 
 	bool Maps::IsUserMap(const std::string& mapname)

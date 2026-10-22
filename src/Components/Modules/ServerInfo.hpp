@@ -59,6 +59,7 @@ namespace Components
 		static void SelectPlayer(unsigned int index);
 
 		static void HandleGetStatus(Network::Address& address, const std::string& data);
+		static void HandleManagedRuntimeQuery(Network::Address& address, const std::string& data);
 		static void HandleStatusResponse(Network::Address& address, const std::string& data);
 	};
 }

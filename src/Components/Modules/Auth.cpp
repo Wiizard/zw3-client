@@ -962,6 +962,10 @@ namespace Components
 
 	char Auth::SV_PacketEvent_Hook(Game::netadr_t* from, Game::msg_t* message)
 	{
+		if (Dedicated::IsEnabled() && Network::HandleServerQuery(from, message))
+		{
+			return 1;
+		}
 		currentPacket = message;
 
 		const auto result = reinterpret_cast<char(*)(Game::netadr_t*, Game::msg_t*)>(

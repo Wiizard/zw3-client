@@ -1,5 +1,8 @@
 #pragma once
 
+#include <functional>
+#include <optional>
+
 namespace Components
 {
 	class Maps : public Component
@@ -60,6 +63,12 @@ namespace Components
 
 		static UserMapContainer* GetUserMap();
 		static unsigned int GetUsermapHash(const std::string& map);
+		// Worker-safe content preflight. Missing non-usermap directories return
+		// zero; unreadable, incomplete or changing files return no checksum.
+		static std::optional<unsigned int> TryGetUsermapHash(const std::string& map,
+			const std::function<bool()>& isCancelled = {});
+		// Never starts content hashing: safe for the final UI-thread join check.
+		static std::optional<unsigned int> TryGetCachedUsermapHash(const std::string& map);
 
 		static bool IsUserMap(const std::string& mapname);
 

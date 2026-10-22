@@ -1,3 +1,16 @@
+-- The x64 port owns its audited MSBuild projects in projects/. Reuse those
+-- (including MASM, protobuf and the D3D9 proxy) instead of regenerating the
+-- obsolete x86 dependency graph below.
+if _ACTION == "vs2022" then
+	if _OPTIONS["copy-to"] or _OPTIONS["disable-binary-check"] then
+		error("x64 projects use scripts/deploy.ps1 and the game's version checks; legacy generation options are unsupported")
+	end
+	local script = path.getabsolute("scripts/prepare-x64.ps1", _SCRIPT_DIR)
+	local success, _, code = os.execute('powershell -NoProfile -ExecutionPolicy Bypass -File "' .. script .. '"')
+	if success == true or success == 0 then os.exit(0) end
+	os.exit(code or 1)
+end
+
 -- Quote the given string input as a C string
 function cstrquote(value)
 	if value == nil then

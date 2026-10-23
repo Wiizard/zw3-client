@@ -52,6 +52,10 @@ namespace Components::Remix
 	static int diSampleCount = 0;
 	static unsigned reassertFrame = 0;
 	static constexpr unsigned reassertInterval = 60;
+	static bool isFrontendRendering = false;
+	static const std::string raytracingOption = "rtx.enableRaytracing";
+	static const std::string raytracingDisabled = "False";
+	static const std::string raytracingDefault = "True";
 
 	static std::string Trim(const std::string& text)
 	{
@@ -163,6 +167,12 @@ namespace Components::Remix
 
 	static const std::string* FindEffectiveValue(const std::string& name, const OptionState& state)
 	{
+		// The lobby uses its own shaders and full-size render targets, which Remix can mistake for a game scene.
+		if (isFrontendRendering && name == raytracingOption)
+		{
+			return &raytracingDisabled;
+		}
+
 		if (const std::string* layered = FindLayerValue(name))
 		{
 			return layered;
@@ -178,7 +188,23 @@ namespace Components::Remix
 			return &state.fileValue;
 		}
 
+		if (name == raytracingOption)
+		{
+			return &raytracingDefault;
+		}
+
 		return nullptr;
+	}
+
+	void SetFrontendRendering(const bool isFrontend)
+	{
+		if (isFrontendRendering != isFrontend)
+		{
+			isFrontendRendering = isFrontend;
+			pending[raytracingOption] = { 0.0f };
+			Log() << "remix: " << (isFrontend ? "frontend uses the original raster renderer"
+				: "game scene restores the configured raytracing mode");
+		}
 	}
 
 	std::wstring GetRemixDataDirectory()
@@ -271,7 +297,7 @@ namespace Components::Remix
 		state.ownValue = value;
 		state.hasOwnValue = true;
 
-		if (FindLayerValue(name))
+		if (FindLayerValue(name) || (isFrontendRendering && name == raytracingOption))
 		{
 			return;
 		}

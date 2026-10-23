@@ -178,6 +178,7 @@
     <ClInclude Include="..\src\Components\Modules\Remix\Lights.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\Look.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\Menu.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\MenuInputState.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\MapEditor.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\MapSettings.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\Markers.hpp" />
@@ -187,10 +188,12 @@
     <ClInclude Include="..\src\Components\Modules\Remix\PatchCalls.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\PbrMaterials.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\Profiler.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\QueryPoll.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\Read.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\Remix.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\Scene.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\Settings.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\StartupSettings.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\Sky.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\TextureTags.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\Triggers.hpp" />
@@ -305,6 +308,7 @@
     <ClInclude Include="..\src\Components\Modules\Singleton.hpp" />
     <ClInclude Include="..\src\Components\Modules\SlowMotion.hpp" />
     <ClInclude Include="..\src\Components\Modules\Sound.hpp" />
+    <ClInclude Include="..\src\Components\Modules\SoundAliasPolicy.hpp" />
     <ClInclude Include="..\src\Components\Modules\StartupMessages.hpp" />
     <ClInclude Include="..\src\Components\Modules\Stats.hpp" />
     <ClInclude Include="..\src\Components\Modules\Steam.hpp" />

@@ -2688,6 +2688,15 @@ namespace Components
 			device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
 			device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
 			device->SetRenderState(D3DRS_FOGENABLE, FALSE);
+			// Map rendering can leave these states active when returning to the lobby.
+			device->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+			device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+			device->SetRenderState(D3DRS_CLIPPLANEENABLE, 0);
+			device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+			device->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, FALSE);
+			device->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
+			device->SetRenderState(D3DRS_DEPTHBIAS, 0);
+			device->SetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, 0);
 			device->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
 			device->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
 			device->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_ANISOTROPIC);
@@ -2706,7 +2715,15 @@ namespace Components
 			device->SetSamplerState(1, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
 			device->SetSamplerState(1, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
 			device->SetSamplerState(1, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+			device->SetTextureStageState(0, D3DTSS_TEXCOORDINDEX, 0);
+			device->SetTextureStageState(0, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
 			device->SetTextureStageState(1, D3DTSS_TEXCOORDINDEX, 1);
+			device->SetTextureStageState(1, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
+			for (DWORD stage = 2; stage < 8; ++stage)
+			{
+				device->SetTextureStageState(stage, D3DTSS_COLOROP, D3DTOP_DISABLE);
+				device->SetTextureStageState(stage, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+			}
 			device->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
 			device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
 			device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);

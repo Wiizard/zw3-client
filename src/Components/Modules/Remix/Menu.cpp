@@ -1,6 +1,7 @@
 #include "STDInclude.hpp"
 
 #include "Menu.hpp"
+#include "MenuInputState.hpp"
 
 #include "imgui.h"
 #include "imgui_impl_dx9.h"
@@ -33,9 +34,8 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg
 namespace Components::Remix::Menu
 {
 	static bool isReady = false;
-	static bool isOpen = false;
-	static bool isRemixMenuOpen = false;
-	static bool wasRemixChord = false;
+	static MenuInputState inputState;
+	static std::atomic<bool> inputResetRequested{ false };
 	static IDirect3DDevice9* deviceIdentity = nullptr;
 	static std::string settingsMessage;
 
@@ -2222,22 +2222,31 @@ namespace Components::Remix::Menu
 
 	constexpr std::uintptr_t in_mouseActive = 0x146786F6C;
 
-	static bool didSuspendGameMouse = false;
-
-	static void SetGameMouseActive(bool isActive)
+	static int& GameMouseActive()
 	{
-		auto* const mouseActive = reinterpret_cast<int*>(Engine::RebaseAddress(in_mouseActive));
+		return *reinterpret_cast<int*>(Engine::RebaseAddress(in_mouseActive));
+	}
 
-		if (!isActive)
+	static bool IsRemixChordHeld()
+	{
+		return hookedWindow && GetForegroundWindow() == GetAncestor(hookedWindow, GA_ROOT)
+			&& IsHeld(VK_MENU) && IsHeld('X');
+	}
+
+	static void ResetInput()
+	{
+		inputState.Reset(GameMouseActive(), IsRemixChordHeld());
+		SetMenuOwnsInput(false);
+		if (ImGui::GetCurrentContext())
 		{
-			*mouseActive = 0;
-			didSuspendGameMouse = true;
+			auto& io = ImGui::GetIO();
+			io.MouseDrawCursor = false;
+			io.ClearEventsQueue();
+			io.ClearInputKeys();
+			io.ClearInputMouse();
 		}
-		else if (didSuspendGameMouse)
-		{
-			*mouseActive = 1;
-			didSuspendGameMouse = false;
-		}
+		std::lock_guard lock(queueMutex);
+		queue.clear();
 	}
 
 	static void DrawSettingsButtons(Core::Config& config)
@@ -2449,6 +2458,7 @@ namespace Components::Remix::Menu
 	void Render(IDirect3DDevice9* device, HWND window)
 	{
 		static bool hasFailed = false;
+		if (inputResetRequested.exchange(false)) ResetInput();
 
 		if (!isReady && !hasFailed && !Attach(device, window))
 		{
@@ -2457,6 +2467,7 @@ namespace Components::Remix::Menu
 
 		if (!isReady || device != deviceIdentity)
 		{
+			ResetInput();
 			return;
 		}
 
@@ -2469,20 +2480,12 @@ namespace Components::Remix::Menu
 
 		if (ImGui::IsKeyPressed(ImGuiKey_Insert, false))
 		{
-			isOpen = !isOpen;
+			inputState.overlayOpen = !inputState.overlayOpen;
 		}
 
-		const bool isRemixChord = hookedWindow && GetForegroundWindow() == GetAncestor(hookedWindow, GA_ROOT)
-			&& IsHeld(VK_MENU) && IsHeld('X');
+		inputState.UpdateRemixChord(IsRemixChordHeld());
 
-		if (isRemixChord && !wasRemixChord)
-		{
-			isRemixMenuOpen = !isRemixMenuOpen;
-		}
-
-		wasRemixChord = isRemixChord;
-
-		if (isOpen)
+		if (inputState.overlayOpen)
 		{
 			DrawWindow();
 		}
@@ -2495,10 +2498,10 @@ namespace Components::Remix::Menu
 			DrawLightLabels(CollectNearbyLights(labelCamera, maxLabelledLights));
 		}
 
-		SetMenuOwnsInput(isOpen);
-		SetGameMouseActive(!isOpen && !isRemixMenuOpen);
+		SetMenuOwnsInput(inputState.overlayOpen);
+		inputState.ApplyMouse(GameMouseActive());
 
-		ImGui::GetIO().MouseDrawCursor = isOpen;
+		ImGui::GetIO().MouseDrawCursor = inputState.overlayOpen;
 
 		ImGui::EndFrame();
 		ImGui::Render();
@@ -2512,14 +2515,21 @@ namespace Components::Remix::Menu
 
 	void OnDeviceLost()
 	{
+		ResetInput();
 		if (isReady)
 		{
 			ImGui_ImplDX9_InvalidateDeviceObjects();
 		}
 	}
 
+	void RequestInputReset()
+	{
+		// Engine lifecycle callbacks can run outside the render thread.
+		inputResetRequested.store(true);
+	}
+
 	bool IsOpen()
 	{
-		return isOpen;
+		return inputState.overlayOpen;
 	}
 }

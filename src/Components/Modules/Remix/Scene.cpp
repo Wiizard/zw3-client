@@ -24,6 +24,7 @@
 #include "MapSettings.hpp"
 #include "Markers.hpp"
 #include "MotionTracker.hpp"
+#include "Menu.hpp"
 #include "Options.hpp"
 #include "Outdoor.hpp"
 #include "PatchCalls.hpp"
@@ -200,6 +201,7 @@ namespace Components::Remix
 
 	static void __fastcall ShutdownDetour(int shouldDestroyDevice)
 	{
+		Menu::OnDeviceLost();
 		OnDeviceLost();
 		originalShutdown(shouldDestroyDevice);
 	}
@@ -857,6 +859,7 @@ namespace Components::Remix
 
 		sceneDevice = device;
 		stats.hasDevice = device != nullptr;
+		SetFrontendRendering(!Game::CL_IsCgameInitialized(0));
 
 		static bool hasAppliedConfig = false;
 
@@ -879,6 +882,7 @@ namespace Components::Remix
 
 			if (mapName != configMap)
 			{
+				Menu::RequestInputReset();
 				configMap = mapName;
 				Core::LoadConfigForMap(mapName);
 				ApplyConfig(Core::GetConfig());

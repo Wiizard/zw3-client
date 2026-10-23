@@ -3,6 +3,7 @@
 #include "Device.hpp"
 #include "Core.hpp"
 #include "Engine.hpp"
+#include "QueryPoll.hpp"
 
 #include <atomic>
 #include <fstream>
@@ -321,29 +322,17 @@ namespace Components::Remix::Device
 	{
 		const DWORD thread = GetCurrentThreadId();
 
-		if (renderFrameOwner.load() == thread)
+		return PollQuery(flags, renderFrameOwner.load() == thread, [&](const DWORD pollFlags)
 		{
-			return originalQueryGetData(self, data, size, flags);
-		}
-
-		const HRESULT result = originalQueryGetData(self, data, size, flags & ~static_cast<DWORD>(D3DGETDATA_FLUSH));
-
-		if (result != S_FALSE)
+			return originalQueryGetData(self, data, size, pollFlags);
+		}, [thread]
 		{
-			return result;
-		}
-
-		constexpr ULONGLONG maxPollWaitMs = 100;
-
-		if (!TryAcquireRenderFrameFor(thread, maxPollWaitMs))
+			constexpr ULONGLONG maxPollWaitMs = 100;
+			return TryAcquireRenderFrameFor(thread, maxPollWaitMs);
+		}, []
 		{
-			return result;
-		}
-
-		const HRESULT flushed = originalQueryGetData(self, data, size, flags | D3DGETDATA_FLUSH);
-		renderFrameOwner.store(0);
-
-		return flushed;
+			renderFrameOwner.store(0);
+		});
 	}
 
 	template <typename Call>

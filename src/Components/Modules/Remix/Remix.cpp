@@ -8,6 +8,7 @@
 #include "Menu.hpp"
 #include "PbrMaterials.hpp"
 #include "Scene.hpp"
+#include "StartupSettings.hpp"
 #include "TextureTags.hpp"
 
 #include "Components/Modules/Command.hpp"
@@ -179,7 +180,17 @@ namespace Components::Remix
 
 	IDirect3D9* Remix::TryCreateDirect3D(const UINT sdkVersion)
 	{
-		static const bool shouldUseRemix = r_rtxRemix.IsValid() && r_rtxRemix.Get<bool>();
+		static const bool shouldUseRemix = []
+		{
+			// The engine executes startup +set commands after creating Direct3D.
+			// Apply the renderer override before caching the choice for this process.
+			if (const auto override = ReadStartupRemixOverride(Flags::GetOriginalCommandLine().c_str());
+				override && r_rtxRemix.IsValid())
+			{
+				r_rtxRemix.Set(*override);
+			}
+			return r_rtxRemix.IsValid() && r_rtxRemix.Get<bool>();
+		}();
 
 		if (!shouldUseRemix)
 		{
@@ -388,6 +399,15 @@ namespace Components::Remix
 		Events::OnDvarInit([]
 		{
 			r_rtxRemix = Dvar::Register("r_rtxRemix", false, Game::DVAR_ARCHIVE, "Path trace the game with NVIDIA RTX Remix (applies on the next launch)");
+		});
+
+		Events::OnCLDisconnected([](bool)
+		{
+			Menu::RequestInputReset();
+		});
+		Events::OnCGameInit([]
+		{
+			Menu::RequestInputReset();
 		});
 
 		Renderer::OnBackendFrame([](IDirect3DDevice9* device)

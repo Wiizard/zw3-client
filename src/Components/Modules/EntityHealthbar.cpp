@@ -751,7 +751,7 @@ namespace Components
 
 		Events::OnDvarInit([]
 		{
-			cg_drawHealthbars = Dvar::Register("cg_drawHealthbars", true, Game::DVAR_ARCHIVE, "Draw health bars over entities that scripts give one");
+			cg_drawHealthbars = Dvar::Register("cg_drawHealthbars", false, Game::DVAR_ARCHIVE, "Draw health bars over entities that scripts give one");
 			cg_healthbarMaxDist = Dvar::Register("cg_healthbarMaxDist", 2000.0f, 0.0f, 100000.0f, Game::DVAR_ARCHIVE, "Furthest a health bar is drawn, in units");
 			cg_healthbarAimWidth = Dvar::Register("cg_healthbarAimWidth", 32.0f, 0.0f, 1000.0f, Game::DVAR_ARCHIVE, "Width of the aim zone that shows health bars up close, in units");
 			cg_healthbarAimAngle = Dvar::Register("cg_healthbarAimAngle", 0.75f, 0.0f, 45.0f, Game::DVAR_ARCHIVE, "Angle the aim zone widens by with distance, in degrees");

@@ -210,6 +210,12 @@
     <ClInclude Include="..\src\Components\Modules\Remix\Device.hpp">
       <Filter>Components\Modules\Remix</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\QueryPoll.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\StartupSettings.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\Components\Modules\Remix\Dxt.hpp">
       <Filter>Components\Modules\Remix</Filter>
     </ClInclude>
@@ -235,6 +241,9 @@
       <Filter>Components\Modules\Remix</Filter>
     </ClInclude>
     <ClInclude Include="..\src\Components\Modules\Remix\Menu.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\MenuInputState.hpp">
       <Filter>Components\Modules\Remix</Filter>
     </ClInclude>
     <ClInclude Include="..\src\Components\Modules\Remix\MapEditor.hpp">
@@ -616,6 +625,9 @@
       <Filter>Components\Modules</Filter>
     </ClInclude>
     <ClInclude Include="..\src\Components\Modules\Sound.hpp">
+      <Filter>Components\Modules</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\SoundAliasPolicy.hpp">
       <Filter>Components\Modules</Filter>
     </ClInclude>
     <ClInclude Include="..\src\Components\Modules\StartupMessages.hpp">

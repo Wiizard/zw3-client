@@ -5,6 +5,7 @@ namespace Components::Remix::Menu
 	void Render(IDirect3DDevice9* device, HWND window);
 
 	void OnDeviceLost();
+	void RequestInputReset();
 
 	bool IsOpen();
 }

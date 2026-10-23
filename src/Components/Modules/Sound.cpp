@@ -3,7 +3,11 @@
 #include <mmsystem.h>
 
 #include "Sound.hpp"
+#include "SoundAliasPolicy.hpp"
+#include "AssetHandler.hpp"
 #include "Dedicated.hpp"
+#include "Flags.hpp"
+#include "GSC/Script.hpp"
 #include "LobbyScene.hpp"
 #include "Logger.hpp"
 #include "Scheduler.hpp"
@@ -369,6 +373,17 @@ namespace Components
 	constexpr std::int8_t streamFormatMp3 = 5;
 
 	static Utils::Hook streamHeaderHook;
+	static Utils::Hook scriptSoundPlaybackHook;
+	constexpr std::uintptr_t CG_ServerCommand_PlaySoundCall = 0x1400E6BA9;
+	constexpr std::uintptr_t CG_PlaySound = 0x1400D7000;
+	constexpr std::uintptr_t PlayerCmd_PlayLocalSound = 0x140166B20;
+
+	static int TraceScriptSoundPlayback(int localClientNum, const char* alias)
+	{
+		const auto result = reinterpret_cast<int(*)(int, const char*)>(scriptSoundPlaybackHook.GetOriginal())(localClientNum, alias);
+		Logger::Print("sound diagnostic: client alias={} playback={}\n", alias ? alias : "<null>", result);
+		return result;
+	}
 
 	struct Mp3Frame
 	{
@@ -663,7 +678,14 @@ namespace Components
 	{
 		if (!IsMisreadByEngine(data, size))
 		{
-			return reinterpret_cast<bool(*)(void*, const std::uint8_t*, std::uint32_t)>(Utils::Hook::Rebase(SND_ParseStreamHeader))(header, data, size);
+			const bool result = reinterpret_cast<bool(*)(void*, const std::uint8_t*, std::uint32_t)>(Utils::Hook::Rebase(SND_ParseStreamHeader))(header, data, size);
+			if (Flags::HasFlag("sounddiagnostics"))
+			{
+				const auto* parsed = static_cast<const StreamHeader*>(header);
+				Logger::Print("sound diagnostic: parsed={} rate={} samples={} channels={} bits={} format={} offset={} size={}\n",
+					result, parsed->rate, parsed->samples, parsed->channels, parsed->bits, parsed->format, parsed->dataOffset, parsed->dataSize);
+			}
+			return result;
 		}
 
 		std::int32_t fileLength = 0;
@@ -687,8 +709,39 @@ namespace Components
 
 	Sound::Sound()
 	{
+		if (Flags::HasFlag("sounddiagnostics"))
+		{
+			// Trace the existing script/client/stream path without initiating any playback.
+			Logger::SetLogFile("zw3/logs/sound-diagnostic.log");
+			Logger::Print("sound diagnostic: tracing script sounds for this session\n");
+			if (Utils::Hook::BranchesTo(CG_ServerCommand_PlaySoundCall, CG_PlaySound, HOOK_CALL)
+				&& scriptSoundPlaybackHook.Initialize(CG_ServerCommand_PlaySoundCall, TraceScriptSoundPlayback, HOOK_CALL)->Install()->IsInstalled())
+			{
+				scriptSoundPlaybackHook.Quick();
+			}
+			else
+			{
+				Logger::Warning("sound diagnostic: the client sound call does not match, playback tracing skipped\n");
+			}
+			GSC::Script::AddMethod("playlocalsound", [](Game::scr_entref_t entref)
+			{
+				Logger::Print("sound diagnostic: script entity={} alias={}\n", entref.entnum, Game::Scr_GetString(0));
+				reinterpret_cast<void(*)(Game::scr_entref_t)>(Utils::Hook::Rebase(PlayerCmd_PlayLocalSound))(entref);
+			}, false, true);
+		}
 		if (!Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled())
 		{
+			AssetHandler::OnLoad(Game::ASSET_TYPE_SOUND, [](unsigned int, void* asset, const std::string& name, bool*)
+			{
+				auto* const list = static_cast<Game::snd_alias_list_t*>(asset);
+				if (!list || !list->head) return;
+				for (unsigned int i = 0; i < list->count; ++i)
+				{
+					auto& flags = list->head[i].flags.intValue;
+					flags = SoundPolicy::MapAmbienceFlags(name, flags);
+				}
+			});
+
 			InstallFrontendVolume();
 
 			Scheduler::Loop([]

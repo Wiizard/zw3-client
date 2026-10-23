@@ -161,3 +161,12 @@ zw3-online-system/backend/relay/.env
 
 # Generated ZW3 client overlay release artifacts
 /staging/
+
+# Private game assets and local credentials must never enter client commits.
+staging/
+**/zw3/core/
+.env
+.env.*
+!.env.example
+!.env.template
+private.key

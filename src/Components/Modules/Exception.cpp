@@ -219,8 +219,9 @@ namespace Components
 		}
 
 		const auto description = DescribeException(exceptionInfo);
+		const bool isHeadlessServer = Flags::HasFlag("dedicated");
 
-		if (code == EXCEPTION_STACK_OVERFLOW)
+		if (code == EXCEPTION_STACK_OVERFLOW && !isHeadlessServer)
 		{
 			const auto notice = std::format("Termination because of a stack overflow.\n{}", clipboardQuestion);
 
@@ -232,6 +233,25 @@ namespace Components
 
 		std::string dumpPath;
 		const bool wroteDump = WriteMiniDump(exceptionInfo, dumpPath);
+
+		if (isHeadlessServer)
+		{
+			// A modal dialog would strand the game thread while the network thread
+			// keeps answering discovery queries. Preserve the dump, then let the
+			// unhandled exception terminate the process so its agent can retire it.
+			// Do not log launch parameters, DVARs or arbitrary exception text.
+			// Avoid shared stdio/logger locks on the faulting thread.
+			char notice[] = "ZWNET dedicated fatal exception: code=0x00000000 dump_written=0\r\n";
+			constexpr auto codeOffset = sizeof("ZWNET dedicated fatal exception: code=0x") - 1;
+			constexpr auto dumpOffset = sizeof("ZWNET dedicated fatal exception: code=0x00000000 dump_written=") - 1;
+			constexpr char hex[] = "0123456789ABCDEF";
+			for (unsigned digit = 0; digit < 8; ++digit)
+				notice[codeOffset + digit] = hex[(code >> ((7 - digit) * 4)) & 0xF];
+			notice[dumpOffset] = wroteDump ? '1' : '0';
+			DWORD written = 0;
+			WriteFile(GetStdHandle(STD_ERROR_HANDLE), notice, sizeof(notice) - 1, &written, nullptr);
+			return EXCEPTION_EXECUTE_HANDLER;
+		}
 
 		std::string error = description;
 		error.append("\n");

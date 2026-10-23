@@ -14,6 +14,7 @@
 #include "Scheduler.hpp"
 #include "ServerCommands.hpp"
 #include "ZoneBuilder.hpp"
+#include "Utils/ManagedServerPort.hpp"
 
 #include "Steam/Proxy.hpp"
 
@@ -105,6 +106,10 @@ namespace Components
 	constexpr std::uintptr_t CL_InitRenderer = 0x1400FBD60;
 	constexpr std::uintptr_t R_LoadGraphicsAssets = 0x140030C30;
 	constexpr std::uintptr_t graphicsZoneNames = 0x148CCC960;
+	constexpr std::uintptr_t UI_UpdateGameTypesList = 0x14026EF60;
+	constexpr std::uintptr_t NET_Config_RegisterPortCall = 0x1402A7686;
+	constexpr std::uintptr_t Dvar_RegisterInt = 0x140286180;
+	constexpr std::uintptr_t NET_Config_PortAttempts = 0x1402A771C;
 
 	constexpr std::uintptr_t Com_StartHunkUsers_Com_EventLoopCall = 0x1401F6B26;
 	constexpr std::uintptr_t Com_EventLoop = 0x1401F3F90;
@@ -122,6 +127,34 @@ namespace Components
 	static Utils::Hook postInitHook;
 	static Utils::Hook timeWrapHook;
 	static Utils::Hook clampMsecHook;
+	static Utils::Hook netPortHook;
+
+	static Game::dvar_t* RegisterDedicatedNetPort(const char* name, int value, int minimum, int maximum,
+		unsigned int flags, const char* description)
+	{
+		char mode[16]{};
+		if (GetEnvironmentVariableA("ZWNET_ADMISSION_MODE", mode, sizeof(mode)) == 8 && std::strcmp(mode, "REQUIRED") == 0)
+		{
+			// +set is executed after NET_Init in this x64 engine. Use the agent's
+			// signed reservation at the real port-registration point instead.
+			char text[6]{};
+			const auto length = GetEnvironmentVariableA("ZWNET_SERVER_PORT", text, sizeof(text));
+			const auto port = length > 0 && length < sizeof(text)
+				? Utils::ParseManagedServerPort(std::string_view(text, length)) : std::nullopt;
+			static const std::uint8_t attemptsEntry[] = { 0x83, 0xFF };
+			const auto attempts = Utils::Hook::Get<std::uint8_t>(NET_Config_PortAttempts + 2);
+			if (!port || !Utils::Hook::MatchesBytes(NET_Config_PortAttempts, attemptsEntry, sizeof(attemptsEntry))
+				|| (attempts != 10 && attempts != 100 && attempts != 1))
+			{
+				Game::Com_Error(Game::ERR_FATAL, "Managed server port reservation is invalid or unsupported");
+				return nullptr;
+			}
+			value = *port;
+			// A busy reserved port must fail, never silently select another match's port.
+			Utils::Hook::Set<std::uint8_t>(NET_Config_PortAttempts + 2, 1);
+		}
+		return Game::Dvar_RegisterInt(name, value, minimum, maximum, flags, description);
+	}
 
 	void Dedicated_ComClampMsec(int msec)
 	{
@@ -151,6 +184,22 @@ namespace Components
 
 		std::memcpy(reinterpret_cast<void*>(Utils::Hook::Rebase(graphicsZoneNames)), fastfiles, sizeof(fastfiles));
 		reinterpret_cast<void(*)()>(Utils::Hook::Rebase(R_LoadGraphicsAssets))();
+
+		// Headless startup skips the client UI initialization which normally
+		// populates the shared gametype catalog. Load the actual descriptors
+		// after their zones are available, before the engine checks the count.
+		if (!ZoneBuilder::IsEnabled() && Game::gameTypeCount && *Game::gameTypeCount == 0)
+		{
+			static const std::uint8_t loadGameTypesEntry[] = { 0x48, 0x83, 0xEC, 0x58, 0xBA, 0x00, 0x00, 0x08, 0x00 };
+			if (Utils::Hook::MatchesBytes(UI_UpdateGameTypesList, loadGameTypesEntry, sizeof(loadGameTypesEntry)))
+			{
+				reinterpret_cast<void(*)()>(Utils::Hook::Rebase(UI_UpdateGameTypesList))();
+			}
+			else
+			{
+				Logger::Error("dedicated: gametype loader does not match the supported x64 engine\n");
+			}
+		}
 	}
 
 	void Dedicated::PostInitialization()
@@ -216,6 +265,7 @@ namespace Components
 		}
 
 		const bool areCallsIntact = Utils::Hook::BranchesTo(Com_Init_CL_InitRendererCall, CL_InitRenderer, HOOK_CALL)
+			&& Utils::Hook::BranchesTo(NET_Config_RegisterPortCall, Dvar_RegisterInt, HOOK_CALL)
 			&& Utils::Hook::BranchesTo(Com_StartHunkUsers_Com_EventLoopCall, Com_EventLoop, HOOK_CALL)
 			&& Utils::Hook::BranchesTo(TimeWrap_Com_ErrorCall, Com_Error, HOOK_CALL)
 			&& Utils::Hook::MatchesBytes(Com_Frame_ClampMsecSite, clampMsecSite, sizeof(clampMsecSite));
@@ -229,6 +279,7 @@ namespace Components
 		Com_Frame_SvRunningSlot = Utils::Hook::Rebase(com_sv_running);
 
 		bool isSeated = initHook.Initialize(Com_Init_CL_InitRendererCall, reinterpret_cast<void*>(InitDedicatedServer), HOOK_CALL)->Install()->IsInstalled();
+		isSeated = netPortHook.Initialize(NET_Config_RegisterPortCall, reinterpret_cast<void*>(RegisterDedicatedNetPort), HOOK_CALL)->Install()->IsInstalled() && isSeated;
 		isSeated = postInitHook.Initialize(Com_StartHunkUsers_Com_EventLoopCall, reinterpret_cast<void*>(Com_EventLoop_Hk), HOOK_CALL)->Install()->IsInstalled() && isSeated;
 		isSeated = timeWrapHook.Initialize(TimeWrap_Com_ErrorCall, reinterpret_cast<void*>(TimeWrapStub), HOOK_CALL)->Install()->IsInstalled() && isSeated;
 		isSeated = clampMsecHook.Initialize(Com_Frame_ClampMsecSite, reinterpret_cast<void*>(Com_ClampMsec_Stub), HOOK_CALL)->Install()->IsInstalled() && isSeated;
@@ -236,6 +287,7 @@ namespace Components
 		if (!isSeated)
 		{
 			initHook.Uninstall();
+			netPortHook.Uninstall();
 			postInitHook.Uninstall();
 			timeWrapHook.Uninstall();
 			clampMsecHook.Uninstall();
@@ -244,6 +296,7 @@ namespace Components
 		}
 
 		initHook.Quick();
+		netPortHook.Quick();
 		postInitHook.Quick();
 		timeWrapHook.Quick();
 		clampMsecHook.Quick();
@@ -347,13 +400,15 @@ namespace Components
 				TerminateProcess(GetCurrentProcess(), EXIT_FAILURE);
 			}
 
-			Scheduler::OnGameInitialized([]
+			// The headless server must expose assignment and lifecycle fields
+			// before startup commands load a map and readiness queries arrive.
+			Events::OnDvarInit([]
 			{
 				zwnet_show_in_server_browser = Dvar::Register("zwnet_show_in_server_browser", "1", Game::DVAR_SERVERINFO, "Advertise this server in the normal server browser");
 				zwnet_match_ended = Dvar::Register("zwnet_match_ended", "0", Game::DVAR_SERVERINFO, "The assigned ZWNET match reached its authoritative end state");
 				zwnet_match_id = Dvar::Register("zwnet_match_id", "", Game::DVAR_SERVERINFO, "The backend-assigned ZWNET match identifier");
 				zwnet_selected_map = Dvar::Register("zwnet_selected_map", "", Game::DVAR_SERVERINFO, "The backend-assigned ZWNET map identifier");
-			}, Scheduler::Pipeline::MAIN);
+			});
 
 			Events::OnDvarInit([]
 			{

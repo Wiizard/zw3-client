@@ -1,4 +1,5 @@
 #include "STDInclude.hpp"
+#include "Utils/ServerQuery.hpp"
 
 #include "Network.hpp"
 #include "Logger.hpp"
@@ -579,6 +580,20 @@ namespace Components
 	void Network::OnPacketRaw(const std::string& command, const RawCallback& callback)
 	{
 		rawCallbacks[Utils::String::ToLower(command)] = callback;
+	}
+
+	bool Network::HandleServerQuery(Game::netadr_t* from, Game::msg_t* message)
+	{
+		if (!from || !message || !message->data || message->cursize < 6 || message->cursize > MAX_MSGLEN)
+			return false;
+		const auto command = Utils::ReadServerQuery(std::string_view(
+			reinterpret_cast<const char*>(message->data), static_cast<std::size_t>(message->cursize)));
+		if (!command) return false;
+		// Route only read-only discovery queries. Connect and challenge packets
+		// must continue through the engine and the existing admission checks.
+		const std::string name(*command);
+		if (Utils::String::ToLower(name) == "getzwnetruntime" && message->cursize > 128) return true;
+		return HandleCommand(from, name.c_str(), message);
 	}
 
 	bool Network::HandleCommand(Game::netadr_t* from, const char* command, Game::msg_t* message)

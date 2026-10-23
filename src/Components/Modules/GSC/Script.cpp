@@ -4,6 +4,8 @@
 
 #include "Script.hpp"
 #include "../Logger.hpp"
+#include "../Dvar.hpp"
+#include "../Events.hpp"
 
 namespace Components::GSC
 {
@@ -15,6 +17,12 @@ namespace Components::GSC
 
 	std::unordered_map<std::string, int> Script::scriptMainHandles;
 	std::unordered_map<std::string, int> Script::scriptInitHandles;
+	static std::atomic_bool gameTypeInitialized = false;
+
+	bool Script::IsGameTypeInitialized()
+	{
+		return gameTypeInitialized.load();
+	}
 
 	constexpr std::uintptr_t Scr_GetFunction_CommonCall = 0x1401A736A;
 	constexpr std::uintptr_t Common_GetFunction = 0x140181760;
@@ -110,6 +118,8 @@ namespace Components::GSC
 
 	void Script::Scr_LoadGameType_Stub()
 	{
+		gameTypeInitialized = false;
+		Game::Dvar_SetFromStringByName("zw3_runtime_script_ready", "0");
 		for (const auto& handle : scriptMainHandles)
 		{
 			const auto id = Game::Scr_ExecThread(handle.second, 0);
@@ -128,6 +138,7 @@ namespace Components::GSC
 		}
 
 		reinterpret_cast<void(*)()>(startupGameTypeHook.GetOriginal())();
+		gameTypeInitialized = true;
 	}
 
 	void Script::LoadCustomScriptsFromFolder(const char* dir)
@@ -502,6 +513,16 @@ namespace Components::GSC
 
 	Script::Script()
 	{
+		Events::OnDvarInit([]
+		{
+			Dvar::Register("zw3_runtime_script_ready", false, Game::DVAR_NONE,
+				"Runtime settings initialization observed by the managed server probe");
+		});
+		Events::OnVMShutdown([]
+		{
+			gameTypeInitialized = false;
+			Game::Dvar_SetFromStringByName("zw3_runtime_script_ready", "0");
+		});
 		if (Utils::Hook::MatchesBytes(Scr_BeginLoadScripts_HunkSize, programHunkSize, sizeof(programHunkSize)))
 		{
 			Utils::Hook::Set<std::uint32_t>(Scr_BeginLoadScripts_HunkSize + 1, programBufferSize);

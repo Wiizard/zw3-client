@@ -29,7 +29,8 @@ if ($LASTEXITCODE -ne 0 -or -not $revision)
 
 $revision = "$revision".Trim()
 
-$branch = (& git -C $root branch --show-current).Trim()
+$branchOutput = & git -C $root branch --show-current
+$branch = "$branchOutput".Trim()
 
 if (-not $branch)
 {

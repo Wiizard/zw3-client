@@ -23,6 +23,7 @@
 #include "UIFeeder.hpp"
 #include "UIScript.hpp"
 #include "ZWNet.hpp"
+#include "Utils/OnlineResponse.hpp"
 
 #include "Steam/Proxy.hpp"
 #include "Steam/Interfaces/SteamUser.hpp"
@@ -669,6 +670,7 @@ namespace Components
 
 			Utils::WebIO request(socialUserAgent);
 			request.SetTimeout(5000);
+			request.SetReadHttpErrorBody(true);
 
 			std::string response;
 
@@ -682,38 +684,15 @@ namespace Components
 				response = request.Post(url, body.dump(), headers, &isSuccessful);
 			}
 
-			if (!isSocialActive || !isSuccessful || response.empty())
+			if (!isSocialActive || response.empty())
 			{
 				SetLastSocialError("REQUEST_UNAVAILABLE");
 			}
 			else
 			{
-				auto parsed = nlohmann::json::parse(response);
-
-				const bool isError = parsed.is_object() && parsed.contains("error");
-				const bool isNotOk = parsed.is_object() && parsed.contains("ok") && !SocialJsonBool(parsed, "ok");
-
-				if (isError)
-				{
-					const auto& error = parsed.at("error");
-
-					if (error.is_object())
-					{
-						SetLastSocialError(SocialJsonString(error, "code"));
-					}
-					else
-					{
-						SetLastSocialError("REQUEST_FAILED");
-					}
-				}
-				else if (isNotOk)
-				{
-					SetLastSocialError("REQUEST_FAILED");
-				}
-				else
-				{
-					result = std::move(parsed);
-				}
+				auto parsed = Utils::ParseSocialResponse(response, isSuccessful);
+				SetLastSocialError(std::move(parsed.error));
+				result = std::move(parsed.value);
 			}
 		}
 		catch (const std::exception&)

@@ -9,6 +9,7 @@
 #include "Logger.hpp"
 #include "Window.hpp"
 #include "Remix/Remix.hpp"
+#include "Utils/LegacyMouseButtons.hpp"
 
 namespace Components
 {
@@ -25,6 +26,19 @@ namespace Components
 	constexpr std::uintptr_t IN_RecenterMouse_Engine = 0x1402A2E70;
 
 	static Utils::Hook hooks[std::size(IN_FrameCalls) + 2];
+
+	static bool CanSynchronizeUiMousePosition()
+	{
+		return Window::HasFocus() && !LobbyScene::IsTransitionActive()
+			&& Game::Key_IsCatcherActive(0, Game::KEYCATCH_UI);
+	}
+
+	static void SynchronizeUiMousePosition(const POINT& position)
+	{
+		// The native CL_MouseEvent routes UI pixels through its normal scaling
+		// and focus handling. Zero deltas do not add raw gameplay aim movement.
+		Game::CL_MouseEvent(position.x, position.y, 0, 0);
+	}
 
 	void rawMouseValue_t::ResetDelta()
 	{
@@ -233,7 +247,16 @@ namespace Components
 		ProcessMouseRawEvent(raw.data.mouse.usButtonFlags, RI_MOUSE_BUTTON_4_DOWN, 8);
 		ProcessMouseRawEvent(raw.data.mouse.usButtonFlags, RI_MOUSE_BUTTON_5_DOWN, 16);
 
-		Game::IN_MouseEvent(mouseRawEvents);
+		Utils::ForwardMouseButtonState(mouseRawEvents, []
+		{
+			if (!Utils::HasRawMouseButtonTransition(raw.data.mouse.usButtonFlags) || !CanSynchronizeUiMousePosition()) return;
+			POINT position{};
+			if (GetCursorPos(&position) && ScreenToClient(Window::GetWindow(), &position))
+				SynchronizeUiMousePosition(position);
+		}, [](const std::uint32_t buttons)
+		{
+			Game::IN_MouseEvent(static_cast<int>(buttons));
+		});
 
 		if (raw.data.mouse.usButtonFlags & RI_MOUSE_WHEEL)
 		{
@@ -268,35 +291,12 @@ namespace Components
 			return DefWindowProcA(Window::GetWindow(), Msg, wParam, lParam);
 		}
 
-		int mouseEvent = (wParam & MK_LBUTTON) != 0;
-
-		if ((wParam & MK_RBUTTON) != 0)
-		{
-			mouseEvent |= 2u;
-		}
-
-		if ((wParam & MK_MBUTTON) != 0)
-		{
-			mouseEvent |= 4u;
-		}
-
-		if ((wParam & MK_XBUTTON1) != 0)
-		{
-			mouseEvent |= 8u;
-		}
-
-		if ((wParam & MK_XBUTTON2) != 0)
-		{
-			mouseEvent |= 0x10u;
-		}
+		const auto buttons = Utils::ReadLegacyMouseButtons(Msg, wParam);
+		if (!buttons) return DefWindowProcA(Window::GetWindow(), Msg, wParam, lParam);
+		const auto mouseEvent = *buttons;
 
 		if (m_rawinput.Get<bool>() && inRawInput)
 		{
-			if (mouseEvent == 0)
-			{
-				return FALSE;
-			}
-
 			if (m_rawinput_verbose.Get<bool>())
 			{
 				Logger::Debug("Window Mouse Message: [{}, {}]", mouseEvent, mouseRawEvents);
@@ -305,7 +305,17 @@ namespace Components
 			mouseRawEvents = mouseEvent;
 		}
 
-		Game::IN_MouseEvent(mouseEvent);
+		// RDP/injected input may provide only the legacy press/release pair,
+		// even with raw input enabled. Always forward its final zero state.
+		// IN_MouseEvent already consumes state masks and deduplicates unchanged
+		// raw/legacy states; do not synthesize a second UI key/action here.
+		Utils::ForwardMouseButtonState(mouseEvent, [lParam]
+		{
+			if (CanSynchronizeUiMousePosition()) SynchronizeUiMousePosition(Utils::ReadLegacyMousePosition(lParam));
+		}, [](const std::uint32_t buttons)
+		{
+			Game::IN_MouseEvent(static_cast<int>(buttons));
+		});
 
 		return DefWindowProcA(Window::GetWindow(), Msg, wParam, lParam);
 	}

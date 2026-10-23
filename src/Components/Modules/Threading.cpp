@@ -44,7 +44,7 @@ namespace Components
 
 	static double droppedFractionMs = 0.0;
 
-	static void NetSleep(const int waitMs)
+	static void NetSleep(const int waitMs, const bool dispatchEvents = true)
 	{
 		const SOCKET socketHandle = *reinterpret_cast<const SOCKET*>(Utils::Hook::Rebase(ip_socket));
 
@@ -70,7 +70,7 @@ namespace Components
 			return;
 		}
 
-		if (readyCount <= 0)
+		if (readyCount <= 0 || !dispatchEvents)
 		{
 			return;
 		}
@@ -151,7 +151,11 @@ namespace Components
 
 			if (residual < 50)
 			{
-				NetSleep(50 - residual);
+				// The native game worker can still own the script VM here. A
+				// connect packet dispatched from this pacing hook would enter the
+				// same VM on MAIN and overwrite the worker's shared jump buffers.
+				// Only wait/wake here; the regular engine event loop owns dispatch.
+				NetSleep(50 - residual, false);
 			}
 		}
 

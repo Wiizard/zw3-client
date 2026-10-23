@@ -11,6 +11,7 @@
 #include "Download.hpp"
 #include "Dvar.hpp"
 #include "Events.hpp"
+#include "Flags.hpp"
 #include "Gamepad.hpp"
 #include "LobbyScene.hpp"
 #include "Localization.hpp"
@@ -1712,6 +1713,8 @@ namespace Components
 
 	void Party::HandleGetInfo(Network::Address& address, const std::string& data)
 	{
+		const bool traceDedicatedQuery = Dedicated::IsEnabled() && Flags::HasFlag("stdout");
+		if (traceDedicatedQuery) Logger::Print("dedicated query: getInfo received\n");
 		const auto challenge = ReadGetInfoRequest(address, data);
 
 		int botCount = 0;
@@ -1753,7 +1756,12 @@ namespace Components
 				maxClientCount = partyMaxPlayers.Get<int>();
 			}
 
-			effectiveClientCount = Game::PartyClient_CountMembersEvenIfInactive(Game::g_lobbyData);
+			// A dedicated server has no initialized client-side party object.
+			// During its empty startup, count only the real server slots below.
+			if (!Dedicated::IsEnabled())
+			{
+				effectiveClientCount = Game::PartyClient_CountMembersEvenIfInactive(Game::g_lobbyData);
+			}
 
 			const auto slotCount = std::min(static_cast<std::size_t>(maxClientCount), Game::MAX_CLIENTS);
 
@@ -1788,6 +1796,7 @@ namespace Components
 		info.Set("gametype", Dvar::Var("g_gametype").Get<std::string>());
 		info.Set("fs_game", (*Game::fs_gameDirVar)->current.string);
 		info.Set("xuid", Utils::String::VA("%llX", Auth::GetKeyHash()));
+		if (traceDedicatedQuery) Logger::Print("dedicated query: server identity available\n");
 		info.Set("clients", std::to_string(effectiveClientCount));
 		info.Set("bots", std::to_string(botCount));
 		info.Set("sv_maxclients", std::to_string(maxClientCount));
@@ -1801,6 +1810,7 @@ namespace Components
 		info.Set("sv_running", InfoFlag(Dedicated::IsRunning()));
 		info.Set("aimAssist", InfoFlag(Gamepad::sv_allowAimAssist.Get<bool>()));
 		info.Set("voiceChat", InfoFlag(Voice::SV_VoiceEnabled()));
+		if (traceDedicatedQuery) Logger::Print("dedicated query: basic fields available\n");
 
 		for (const auto& setting : hostSettings)
 		{
@@ -1817,6 +1827,7 @@ namespace Components
 		info.Set("party_currentHost", currentHost);
 		info.Set("party_currentPlayers", std::to_string(Dvar::Var("party_currentPlayers").Get<int>()));
 		info.Set("party_realPlayers", std::to_string(Dvar::Var("party_realPlayers").Get<int>()));
+		if (traceDedicatedQuery) Logger::Print("dedicated query: host fields available\n");
 
 		for (int slot = 1; slot <= maxPartySlots; ++slot)
 		{
@@ -1828,6 +1839,7 @@ namespace Components
 		{
 			info.Set("mapname", Dvar::Var("ui_mapname").Get<std::string>());
 		}
+		if (traceDedicatedQuery) Logger::Print("dedicated query: map fields available\n");
 
 		if (Maps::GetUserMap()->IsValid())
 		{
@@ -1850,6 +1862,7 @@ namespace Components
 		}
 
 		MatchType matchType = MatchType::NoMatch;
+		if (traceDedicatedQuery) Logger::Print("dedicated query: managed fields available\n");
 
 		if (IsHostingParty() && (Dvar::Var("sv_running").Get<bool>() || HasJoinableHostLobby()))
 		{
@@ -1871,8 +1884,10 @@ namespace Components
 		info.Set("wwwUrl", Download::sv_wwwBaseUrl.Get<std::string>());
 
 		info.Set("x64", "1");
+		if (traceDedicatedQuery) Logger::Print("dedicated query: sending getInfo\n");
 
 		Network::SendCommand(address, "infoResponse", info.Build());
+		if (traceDedicatedQuery) Logger::Print("dedicated query: getInfo replied\n");
 	}
 
 	std::string Party::GetHostName()
@@ -1923,6 +1938,7 @@ namespace Components
 		request.Set("xuid", Utils::String::VA("%llX", GetLocalPlayerXuid()));
 
 		Network::SendCommand(joinContainer.target, "getinfo", request.Build());
+		if (Flags::HasFlag("log")) Logger::Print("join trace: server info request sent\n");
 
 		Command::Execute("openmenu popup_reconnectingtoparty");
 	}
@@ -1951,6 +1967,16 @@ namespace Components
 
 		joinContainer.isValid = false;
 		joinContainer.info = info;
+		if (Flags::HasFlag("log")) Logger::Print("join trace: matching server info received\n");
+
+		const auto protocolText = info.Get("protocol");
+		char* protocolEnd = nullptr;
+		const auto protocol = std::strtol(protocolText.data(), &protocolEnd, 10);
+		if (protocolEnd == protocolText.data() || *protocolEnd != '\0' || protocol != ServerInfo::GetProtocol())
+		{
+			ConnectError("This server uses an incompatible game protocol. The x64 client requires an x64 server.");
+			return true;
+		}
 
 		if (joinContainer.isUnmanagedRequired && info.Get("zwnet_managed_session") == "1")
 		{
@@ -1995,6 +2021,7 @@ namespace Components
 		}
 
 		ApplyHostInfo(info);
+		if (Flags::HasFlag("log")) Logger::Print("join trace: host info applied\n");
 
 		if (info.Get("party_currentHost").empty() && !info.Get("hostname").empty())
 		{
@@ -2074,8 +2101,25 @@ namespace Components
 
 		const bool isUsermap = !info.Get("usermaphash").empty();
 		const auto usermapHash = std::strtoul(info.Get("usermaphash").data(), nullptr, 10);
+		if (Flags::HasFlag("log")) Logger::Print("join trace: checking map content\n");
 
-		if (isUsermap && usermapHash != Maps::GetUsermapHash(info.Get("mapname")))
+		std::optional<unsigned int> localUsermapHash;
+		if (isUsermap)
+		{
+			if (Dvar::Var("zwnet_managed_session").Get<bool>())
+			{
+				// Managed joins prepare content on the online worker before a ticket
+				// exists. A changed/cold cache must not hash large files on this thread.
+				localUsermapHash = Maps::TryGetCachedUsermapHash(info.Get("mapname"));
+				if (!localUsermapHash)
+				{
+					ConnectError("Map files changed or could not be verified. Please try joining again.");
+					return true;
+				}
+			}
+			else localUsermapHash = Maps::GetUsermapHash(info.Get("mapname"));
+		}
+		if (isUsermap && usermapHash != *localUsermapHash)
 		{
 			Command::Execute("closemenu popup_reconnectingtoparty");
 			Download::InitiateMapDownload(info.Get("mapname"), isPrivate);
@@ -2083,6 +2127,7 @@ namespace Components
 		}
 
 		const std::string mod = (*Game::fs_gameDirVar)->current.string;
+		if (Flags::HasFlag("log")) Logger::Print("join trace: map content checked\n");
 		const auto serverMod = info.Get("fs_game");
 
 		if (!serverMod.empty() && Utils::String::ToLower(mod) != Utils::String::ToLower(serverMod))
@@ -2141,6 +2186,7 @@ namespace Components
 			Dvar::Var("sv_version").Set(version);
 
 			Game::Menus_CloseAll(Game::uiContext);
+			if (Flags::HasFlag("log")) Logger::Print("join trace: connection menus closed\n");
 
 			Game::_XSESSION_INFO hostInfo{};
 
@@ -2151,10 +2197,12 @@ namespace Components
 			Network::RecordServerBuild(target, isX86);
 
 			Game::LiveStorage_EnsureWeHaveStats(0);
+			if (Flags::HasFlag("log")) Logger::Print("join trace: native stats initialized\n");
 
 			Logger::Print("connecting to {} on {} {}, {}/{} players\n", serverName, mapName, gameType, clients, maxClients);
 
 			Game::CL_ConnectFromParty(0, &hostInfo, raw, 0, 0, mapName.data(), gameType.data());
+			if (Flags::HasFlag("log")) Logger::Print("join trace: engine connection initiated\n");
 		};
 
 		if (!LobbyScene::DeferLaunch(connectMatch, info.Get("mapname")))

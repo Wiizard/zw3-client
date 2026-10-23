@@ -13,6 +13,7 @@ namespace Components::GSC
 
 		static void AddFuncMultiple(Game::BuiltinFunction func, bool type, scriptNames aliases);
 		static void AddMethMultiple(Game::BuiltinMethod func, bool type, scriptNames aliases);
+		static bool IsGameTypeInitialized();
 
 		static void Scr_Error(const char* error);
 		static void Scr_ParamError(unsigned int paramIndex, const char* error);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "UIScript.hpp"
+#include "Events.hpp"
 
 namespace Components
 {
@@ -33,13 +34,15 @@ namespace Components
 		static void Register();
 		static void SetState(const std::string& state, const std::string& error = {});
 		static std::optional<nlohmann::json> CurrentOrNewParty();
-		static void StartQuickPlay(const std::string& playlistId, std::int64_t playlistRevision, std::uint64_t selectorGeneration);
+		static void StartQuickPlay(const std::string& playlistId, std::int64_t playlistRevision, std::uint64_t selectorGeneration, bool isQuickPlay);
 		static void RefreshPlaylistCatalog(bool isForced = false);
 		static void ClearPlaylistCatalog();
 		static void BeginPlaylistSelection();
 		static void CancelPlaylistSelection();
 		static void HighlightPlaylistSlot(int slot);
 		static void ActivatePlaylistSlot(int slot);
+		static void ActivateQuickPlay();
+		static void ActivatePlaylist(const std::string& playlistId, std::int64_t playlistRevision, bool isQuickPlay);
 		static void ChangePlaylistPage(int direction);
 		static void AcknowledgePlaylistNotice();
 		static void PublishPlaylistCatalog();
@@ -51,10 +54,10 @@ namespace Components
 		static void CancelSearch();
 		static void CancelMatchmaking();
 		static void CloseOnlineSession(bool isShuttingDown, bool isTerminal);
-		static void HandleServerDisconnect(bool isTerminal, bool wasMatchmaking);
+		static void HandleServerDisconnect(bool isTerminal, bool wasMatchmaking, Events::NativeDisconnectError nativeError);
 		static bool ReturnToMatchmakingLobby();
-		static void ScheduleReturnToIdleMenu();
-		static void ReturnToIdleMenu();
+		static void ScheduleReturnToIdleMenu(Events::NativeDisconnectError nativeError = {});
+		static void ReturnToIdleMenu(const Events::NativeDisconnectError& nativeError);
 		static void UpdatePresence();
 		static nlohmann::json PublishLocalRank(nlohmann::json party);
 		static void EnterLobby(std::string map);
@@ -69,9 +72,11 @@ namespace Components
 		static void RefreshActiveParty();
 		static void UpdateMatchmaking();
 		static void RefreshNetworkMetrics();
+		static void UpdateSearchTime();
 		static void BeginJoinInProgressPreview(const nlohmann::json& status);
 		static void CancelJoinInProgressPreview();
-		static void ConnectMatch(const std::string& matchId, bool isRelay, bool isReconnect);
+		static void CancelPendingJoinPreparation();
+		static void ConnectMatch(const std::string& matchId, bool isRelay, bool isReconnect, std::uint64_t expectedGeneration);
 		static void InitializeDvars();
 		static void EnqueueAsync(std::function<void()> task);
 		static void ProcessAsyncTasks();

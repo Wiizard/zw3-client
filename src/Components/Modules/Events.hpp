@@ -16,6 +16,13 @@ namespace Components
 		using ClientCmdCallback = std::vector<std::function<void(Game::usercmd_s* cmd)>>;
 		using CLDisconnectCallback = std::vector<std::function<void(bool wasConnected)>>;
 
+		struct NativeDisconnectError
+		{
+			bool hasNativeError = false;
+			std::string message;
+			std::string title;
+		};
+
 		Events();
 
 		static bool IsInstalled();
@@ -27,6 +34,10 @@ namespace Components
 		static void OnSteamDisconnect(const std::function<void()>& callback);
 
 		static void OnCLDisconnected(const std::function<void(bool)>& callback);
+
+		// A fresh native error snapshot, available only inside OnCLDisconnected
+		// callbacks. Copy it before scheduling asynchronous cleanup/UI work.
+		static NativeDisconnectError CurrentNativeDisconnectError();
 
 		static void OnVMShutdown(const std::function<void()>& callback);
 

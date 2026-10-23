@@ -67,6 +67,7 @@ namespace Components::Remix::Core
 		{ "remix_sun_height", &Config::remixSunHeightDeg },
 		{ "remix_weather", &Config::remixWeather },
 		{ "remix_offscreen_world", &Config::remixOffscreenWorld },
+		{ "remix_threaded_renderer", &Config::remixThreadedRenderer },
 		{ "remix_shared_decals", &Config::remixSharedDecals },
 		{ "remix_rain_outdoors", &Config::remixRainOutdoorsOnly },
 		{ "remix_effects_offscreen", &Config::remixEffectsOffscreen },
@@ -102,6 +103,7 @@ namespace Components::Remix::Core
 		{ "remix_tint_g", &Config::remixColourBalanceG },
 		{ "remix_tint_b", &Config::remixColourBalanceB },
 		{ "remix_global_aces", &Config::remixGlobalAces },
+		{ "remix_steady_tone_curve", &Config::remixSteadyToneCurve },
 		{ "remix_bloom", &Config::remixBloom },
 		{ "remix_bloom_strength", &Config::remixBloomIntensity },
 		{ "remix_bloom_threshold", &Config::remixBloomThreshold },
@@ -145,12 +147,15 @@ namespace Components::Remix::Core
 		{ "remix_laser_lights", &Config::remixLaserLights },
 		{ "remix_fixture_lights", &Config::remixFixtureLights },
 		{ "remix_fixture_brightness", &Config::remixFixtureBrightness },
+		{ "remix_fixture_offset", &Config::remixFixtureOffset },
+		{ "remix_fixture_size", &Config::remixFixtureSize },
 		{ "remix_puddles", &Config::remixPuddles },
 		{ "remix_parallax", &Config::remixParallax },
 		{ "remix_parallax_depth", &Config::remixParallaxDepth },
 		{ "remix_wet", &Config::remixWetMode },
 		{ "remix_rain_everywhere", &Config::remixRainEverywhere },
 		{ "remix_rain_amount", &Config::remixRainAmount },
+		{ "remix_screen_drops", &Config::remixScreenDrops },
 		{ "remix_time_of_day", &Config::remixTimeOfDay },
 		{ "remix_time_of_day_hours", &Config::remixTimeOfDayHours },
 		{ "remix_night", &Config::remixNight },
@@ -160,6 +165,13 @@ namespace Components::Remix::Core
 		{ "remix_mirror", &Config::remixMirror },
 		{ "remix_mirror_metal", &Config::remixMirrorMetal },
 		{ "remix_effect_glow", &Config::remixEffectGlow },
+		{ "remix_shadow_lift", &Config::remixShadowLift },
+		{ "remix_eye_glow_brightness", &Config::remixEyeGlowBrightness },
+		{ "remix_eye_glow_size", &Config::remixEyeGlowSize },
+		{ "remix_map_zones", &Config::remixMapZones },
+		{ "remix_steady_transparency", &Config::remixSteadyTransparency },
+		{ "remix_outdoor_ev", &Config::remixOutdoorEv },
+		{ "remix_opacity_micromaps", &Config::remixOpacityMicromaps },
 		{ "remix_sky_reprojected", &Config::remixSkyReprojected },
 		{ "remix_spot_brightness", &Config::remixSpotBrightness },
 		{ "remix_omni_brightness", &Config::remixOmniBrightness },
@@ -395,7 +407,6 @@ namespace Components::Remix::Core
 		LoadConfigForMap(activeMap);
 	}
 
-	// rewrites the values of keys already in the file so comments and order survive, then appends the rest
 	void SaveConfig(std::string& message)
 	{
 		if (hasMapConfig)
@@ -475,7 +486,6 @@ namespace Components::Remix::Core
 		LoadConfigForMap(activeMap);
 	}
 
-	// the map's file only holds what differs from remix.ini, so it is read over the global settings
 	void LoadConfigForMap(const std::string& mapName)
 	{
 		const std::string remixDll = config.remixDll;

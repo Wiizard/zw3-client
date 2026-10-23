@@ -4,18 +4,20 @@
 #include "Core.hpp"
 #include "Device.hpp"
 #include "Engine.hpp"
+#include "FixedFunction.hpp"
 #include "Menu.hpp"
 #include "PbrMaterials.hpp"
 #include "Scene.hpp"
 #include "TextureTags.hpp"
 
-#include "Components/Modules/Dedicated.hpp"
 #include "Components/Modules/Command.hpp"
+#include "Components/Modules/Dedicated.hpp"
 #include "Components/Modules/Events.hpp"
 #include "Components/Modules/Flags.hpp"
 #include "Components/Modules/Logger.hpp"
 #include "Components/Modules/Menus.hpp"
 #include "Components/Modules/Renderer.hpp"
+#include "Components/Modules/Scheduler.hpp"
 #include "Components/Modules/UIScript.hpp"
 #include "Components/Modules/Window.hpp"
 
@@ -23,9 +25,6 @@ namespace Components::Remix
 {
 	Dvar::Var Remix::r_rtxRemix;
 
-	// remix presents on vulkan, and with DLSS frame generation it presents frames the game never drew, so the frames on
-	// screen are counted at vkQueuePresentKHR: the runtime imports vkGetInstanceProcAddr, and every present function
-	// it looks up goes through the wrapped lookups below
 	using VkFunction = void(*)();
 	using VkGetProcAddr = VkFunction(*)(void* owner, const char* name);
 	using VkQueuePresent = std::int32_t(*)(void* queue, const void* presentInfo);
@@ -180,7 +179,6 @@ namespace Components::Remix
 
 	IDirect3D9* Remix::TryCreateDirect3D(const UINT sdkVersion)
 	{
-		// decided once per launch, so toggling r_rtxRemix and then vid_restart never swaps runtimes mid-session
 		static const bool shouldUseRemix = r_rtxRemix.IsValid() && r_rtxRemix.Get<bool>();
 
 		if (!shouldUseRemix)
@@ -249,12 +247,11 @@ namespace Components::Remix
 		return Device::WrapDirect3D(direct3D, OnDeviceCreated, OnDeviceReset);
 	}
 
-	// zw3 code that draws with its own shaders outside the game's 3D scene calls this first, so Remix rasterises
-	// those draws instead of taking them for world geometry on frames where no scene ran
 	void Remix::BeginUiDrawing(IDirect3DDevice9* device)
 	{
 		if (Core::IsRemixMode())
 		{
+			Device::NoteFrameEvent("UI marker from zw3's own drawing (lobby scene)");
 			MarkUiPhase(device);
 		}
 	}
@@ -368,6 +365,24 @@ namespace Components::Remix
 			{
 				SetEnabledAndRestart(token.Get<int>() != 0);
 			}
+		});
+
+		Scheduler::Loop([]
+		{
+			if (Core::IsRemixMode())
+			{
+				Engine::RunMainThreadTasks();
+			}
+		}, Scheduler::Pipeline::MAIN);
+
+		Command::Add("dumpframe", []
+		{
+			if (Core::IsRemixMode())
+			{
+				RequestSceneDump();
+			}
+
+			WriteMapMaterialReport();
 		});
 
 		Events::OnDvarInit([]

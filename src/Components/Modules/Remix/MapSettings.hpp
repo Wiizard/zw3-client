@@ -105,6 +105,26 @@ namespace Components::Remix
 		float radius = 0.0f;
 	};
 
+	struct MapZone
+	{
+		std::string name;
+		std::vector<int> cells;
+		bool hasBox = false;
+		float boxMin[3] = {};
+		float boxMax[3] = {};
+		std::optional<float> exposureEv;
+		std::optional<float> shadowLift;
+		std::optional<float> effectGlow;
+		std::optional<float> lampBrightness;
+		bool hasLampColour = false;
+		float lampColour[3] = { 1.0f, 0.9f, 0.75f };
+		std::optional<float> contrast;
+		std::optional<float> saturation;
+		bool hasTint = false;
+		float tint[3] = { 1.0f, 1.0f, 1.0f };
+		float blendSeconds = 1.0f;
+	};
+
 	struct MapSettings
 	{
 		std::string mapName;
@@ -134,6 +154,7 @@ namespace Components::Remix
 
 		std::vector<std::pair<std::uint64_t, TextureTag>> textureTags;
 		std::vector<std::string> cutoutMaterials;
+		std::vector<MapZone> zones;
 	};
 
 	void UpdateMapSettings(IDirect3DDevice9* device);

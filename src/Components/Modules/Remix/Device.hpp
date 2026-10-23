@@ -14,6 +14,10 @@ namespace Components::Remix::Device
 
 	void NoteFrameEvent(const std::string& text);
 
+	void ArmFrameCapture();
+
+	void AdvanceFrameCapture();
+
 	bool TryHashTopLevel(const void* bits, const D3DSURFACE_DESC& desc, std::uint64_t& hash);
 
 	bool TryGetTextureHash(const void* texture, std::uint64_t& hash);
@@ -29,4 +33,10 @@ namespace Components::Remix::Device
 	void BeginPremultipliedRemap(IDirect3DDevice9* device);
 
 	void EndPremultipliedRemap(IDirect3DDevice9* device);
+
+	void EnterRenderFrame();
+
+	void LeaveRenderFrame();
+
+	bool IsQueryPollGuarded();
 }

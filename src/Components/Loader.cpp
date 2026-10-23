@@ -5,7 +5,10 @@
 #include "Modules/Auth.hpp"
 #include "Modules/Bans.hpp"
 #include "Modules/Bullet.hpp"
+#include "Modules/ClipDebug.hpp"
+#include "Modules/CollmapCollision.hpp"
 #include "Modules/CrateCollision.hpp"
+#include "Modules/ZombieCollision.hpp"
 #include "Modules/BotAI/BotAI.hpp"
 #include "Modules/Bots.hpp"
 #include "Modules/Console.hpp"
@@ -16,11 +19,13 @@
 #include "Modules/Changelog.hpp"
 #include "Modules/D3D9Ex.hpp"
 #include "Modules/Remix/Remix.hpp"
+#include "Modules/DamageFeedback.hpp"
 #include "Modules/Debug.hpp"
 #include "Modules/Dedicated.hpp"
 #include "Modules/Discord.hpp"
 #include "Modules/Discovery.hpp"
 #include "Modules/Elevators.hpp"
+#include "Modules/EntityHealthbar.hpp"
 #include "Modules/Chat.hpp"
 #include "Modules/ClanTags.hpp"
 #include "Modules/ClientCommand.hpp"
@@ -194,8 +199,13 @@ namespace Components
 		Register(new ArenaLength());
 		Register(new Bullet());
 		Register(new CrateCollision());
+		Register(new CollmapCollision());
+		Register(new ZombieCollision());
+		Register(new ClipDebug());
 		Register(new Discovery());
 		Register(new Elevators());
+		Register(new EntityHealthbar());
+		Register(new DamageFeedback());
 		Register(new Lean());
 		Register(new HudParallax());
 		Register(new Materials());

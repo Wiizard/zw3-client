@@ -2,6 +2,12 @@
 
 #include "Device.hpp"
 #include "Core.hpp"
+#include "Engine.hpp"
+
+#include <atomic>
+#include <fstream>
+#include <mutex>
+#include <vector>
 
 #include "Components/Modules/Logger.hpp"
 
@@ -10,13 +16,21 @@
 
 namespace Components::Remix::Device
 {
-	// vtable slots of the d3d9 interfaces, in declaration order of d3d9.h
 	constexpr std::size_t direct3DCreateDeviceSlot = 16;
 	constexpr std::size_t deviceResetSlot = 16;
 	constexpr std::size_t deviceSetRenderStateSlot = 57;
 	constexpr std::size_t textureReleaseSlot = 2;
 	constexpr std::size_t textureLockRectSlot = 19;
 	constexpr std::size_t textureUnlockRectSlot = 20;
+	constexpr std::size_t queryGetDataSlot = 7;
+	constexpr std::size_t deviceSetRenderTargetSlot = 37;
+	constexpr std::size_t deviceSetTransformSlot = 44;
+	constexpr std::size_t deviceDrawPrimitiveSlot = 81;
+	constexpr std::size_t deviceDrawIndexedPrimitiveSlot = 82;
+	constexpr std::size_t deviceDrawPrimitiveUpSlot = 83;
+	constexpr std::size_t deviceDrawIndexedPrimitiveUpSlot = 84;
+	constexpr std::size_t bufferLockSlot = 11;
+	constexpr std::size_t bufferUnlockSlot = 12;
 
 	using CreateDevice_t = HRESULT(STDMETHODCALLTYPE*)(IDirect3D9* self, UINT adapter, D3DDEVTYPE deviceType, HWND focusWindow, DWORD behaviorFlags, D3DPRESENT_PARAMETERS* presentationParameters, IDirect3DDevice9** returnedDevice);
 	using Reset_t = HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9* self, D3DPRESENT_PARAMETERS* presentationParameters);
@@ -24,6 +38,20 @@ namespace Components::Remix::Device
 	using Release_t = ULONG(STDMETHODCALLTYPE*)(IDirect3DTexture9* self);
 	using LockRect_t = HRESULT(STDMETHODCALLTYPE*)(IDirect3DTexture9* self, UINT level, D3DLOCKED_RECT* lockedRect, const RECT* rect, DWORD flags);
 	using UnlockRect_t = HRESULT(STDMETHODCALLTYPE*)(IDirect3DTexture9* self, UINT level);
+	using QueryGetData_t = HRESULT(STDMETHODCALLTYPE*)(IDirect3DQuery9* self, void* data, DWORD size, DWORD flags);
+	using BufferLock_t = HRESULT(STDMETHODCALLTYPE*)(void* self, UINT offset, UINT size, void** data, DWORD flags);
+	using BufferUnlock_t = HRESULT(STDMETHODCALLTYPE*)(void* self);
+	using SetRenderTarget_t = HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9* self, DWORD index, IDirect3DSurface9* surface);
+	using SetTransform_t = HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9* self, D3DTRANSFORMSTATETYPE state,
+		const D3DMATRIX* matrix);
+	using DrawPrimitive_t = HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9* self, D3DPRIMITIVETYPE type, UINT start,
+		UINT count);
+	using DrawIndexedPrimitive_t = HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9* self, D3DPRIMITIVETYPE type,
+		INT baseVertex, UINT minIndex, UINT vertices, UINT startIndex, UINT count);
+	using DrawPrimitiveUp_t = HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9* self, D3DPRIMITIVETYPE type, UINT count,
+		const void* data, UINT stride);
+	using DrawIndexedPrimitiveUp_t = HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9* self, D3DPRIMITIVETYPE type,
+		UINT minIndex, UINT vertices, UINT count, const void* indices, D3DFORMAT format, const void* data, UINT stride);
 
 	static CreateDevice_t originalCreateDevice = nullptr;
 	static Reset_t originalReset = nullptr;
@@ -31,6 +59,34 @@ namespace Components::Remix::Device
 	static Release_t originalTextureRelease = nullptr;
 	static LockRect_t originalLockRect = nullptr;
 	static UnlockRect_t originalUnlockRect = nullptr;
+	static QueryGetData_t originalQueryGetData = nullptr;
+	static SetRenderTarget_t originalSetRenderTarget = nullptr;
+	static SetTransform_t originalSetTransform = nullptr;
+	static DrawPrimitive_t originalDrawPrimitive = nullptr;
+	static DrawIndexedPrimitive_t originalDrawIndexedPrimitive = nullptr;
+	static DrawPrimitiveUp_t originalDrawPrimitiveUp = nullptr;
+	static DrawIndexedPrimitiveUp_t originalDrawIndexedPrimitiveUp = nullptr;
+
+	enum class CaptureState
+	{
+		Idle,
+		Armed,
+		Capturing,
+	};
+
+	static std::atomic<CaptureState> captureState = CaptureState::Idle;
+	static std::mutex captureMutex;
+	static std::vector<std::string> capturedEvents;
+	static unsigned capturedDraws = 0;
+	static unsigned capturedOrthoDraws = 0;
+	static bool isProjectionOrtho = false;
+	static int captureIndex = 0;
+	static BufferLock_t originalVertexLock = nullptr;
+	static BufferUnlock_t originalVertexUnlock = nullptr;
+	static BufferLock_t originalIndexLock = nullptr;
+	static BufferUnlock_t originalIndexUnlock = nullptr;
+
+	static std::atomic<DWORD> renderFrameOwner = 0;
 
 	static DeviceCallback createdCallback = nullptr;
 	static DeviceCallback resetCallback = nullptr;
@@ -112,7 +168,6 @@ namespace Components::Remix::Device
 		return requestedDestinationBlend;
 	}
 
-	// the game's blend states are remapped while an effect pass is open; our own draws pass through untouched
 	static HRESULT STDMETHODCALLTYPE SetRenderStateHook(IDirect3DDevice9* self, D3DRENDERSTATETYPE state, DWORD value)
 	{
 		if (!IsGameCaller(_ReturnAddress()))
@@ -217,6 +272,189 @@ namespace Components::Remix::Device
 		return originalUnlockRect(self, level);
 	}
 
+	static void AcquireRenderFrame(DWORD thread)
+	{
+		DWORD expected = 0;
+
+		while (!renderFrameOwner.compare_exchange_weak(expected, thread))
+		{
+			if (expected == thread)
+			{
+				return;
+			}
+
+			expected = 0;
+			SwitchToThread();
+		}
+	}
+
+	static bool TryAcquireRenderFrameFor(DWORD thread, ULONGLONG milliseconds)
+	{
+		const ULONGLONG deadline = GetTickCount64() + milliseconds;
+		DWORD expected = 0;
+
+		while (!renderFrameOwner.compare_exchange_weak(expected, thread))
+		{
+			if (GetTickCount64() >= deadline)
+			{
+				return false;
+			}
+
+			expected = 0;
+			SwitchToThread();
+		}
+
+		return true;
+	}
+
+	void EnterRenderFrame()
+	{
+		AcquireRenderFrame(GetCurrentThreadId());
+	}
+
+	void LeaveRenderFrame()
+	{
+		renderFrameOwner.store(0);
+	}
+
+	static HRESULT STDMETHODCALLTYPE QueryGetDataHook(IDirect3DQuery9* self, void* data, DWORD size, DWORD flags)
+	{
+		const DWORD thread = GetCurrentThreadId();
+
+		if (renderFrameOwner.load() == thread)
+		{
+			return originalQueryGetData(self, data, size, flags);
+		}
+
+		const HRESULT result = originalQueryGetData(self, data, size, flags & ~static_cast<DWORD>(D3DGETDATA_FLUSH));
+
+		if (result != S_FALSE)
+		{
+			return result;
+		}
+
+		constexpr ULONGLONG maxPollWaitMs = 100;
+
+		if (!TryAcquireRenderFrameFor(thread, maxPollWaitMs))
+		{
+			return result;
+		}
+
+		const HRESULT flushed = originalQueryGetData(self, data, size, flags | D3DGETDATA_FLUSH);
+		renderFrameOwner.store(0);
+
+		return flushed;
+	}
+
+	template <typename Call>
+	static HRESULT GuardedBufferCall(Call call)
+	{
+		const DWORD thread = GetCurrentThreadId();
+
+		if (renderFrameOwner.load() == thread || !Engine::IsRendererThreaded())
+		{
+			return call();
+		}
+
+		constexpr ULONGLONG maxBufferWaitMs = 50;
+		const bool isGuarded = TryAcquireRenderFrameFor(thread, maxBufferWaitMs);
+		const HRESULT result = call();
+
+		if (isGuarded)
+		{
+			renderFrameOwner.store(0);
+		}
+
+		return result;
+	}
+
+	static HRESULT STDMETHODCALLTYPE VertexLockHook(void* self, UINT offset, UINT size, void** data, DWORD flags)
+	{
+		return GuardedBufferCall([&] { return originalVertexLock(self, offset, size, data, flags); });
+	}
+
+	static HRESULT STDMETHODCALLTYPE VertexUnlockHook(void* self)
+	{
+		return GuardedBufferCall([&] { return originalVertexUnlock(self); });
+	}
+
+	static HRESULT STDMETHODCALLTYPE IndexLockHook(void* self, UINT offset, UINT size, void** data, DWORD flags)
+	{
+		return GuardedBufferCall([&] { return originalIndexLock(self, offset, size, data, flags); });
+	}
+
+	static HRESULT STDMETHODCALLTYPE IndexUnlockHook(void* self)
+	{
+		return GuardedBufferCall([&] { return originalIndexUnlock(self); });
+	}
+
+	static void HookBufferClasses(IDirect3DDevice9* device)
+	{
+		IDirect3DVertexBuffer9* vertexProbe = nullptr;
+
+		if (SUCCEEDED(device->CreateVertexBuffer(64, D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY, 0, D3DPOOL_DEFAULT,
+				&vertexProbe, nullptr)) && vertexProbe)
+		{
+			if (const auto lock = SwapSlot<BufferLock_t>(vertexProbe, bufferLockSlot, reinterpret_cast<void*>(&VertexLockHook)))
+			{
+				originalVertexLock = lock;
+			}
+
+			if (const auto unlock = SwapSlot<BufferUnlock_t>(vertexProbe, bufferUnlockSlot,
+					reinterpret_cast<void*>(&VertexUnlockHook)))
+			{
+				originalVertexUnlock = unlock;
+			}
+
+			vertexProbe->Release();
+		}
+
+		IDirect3DIndexBuffer9* indexProbe = nullptr;
+
+		if (SUCCEEDED(device->CreateIndexBuffer(64, D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_DEFAULT,
+				&indexProbe, nullptr)) && indexProbe)
+		{
+			if (const auto lock = SwapSlot<BufferLock_t>(indexProbe, bufferLockSlot, reinterpret_cast<void*>(&IndexLockHook)))
+			{
+				originalIndexLock = lock;
+			}
+
+			if (const auto unlock = SwapSlot<BufferUnlock_t>(indexProbe, bufferUnlockSlot,
+					reinterpret_cast<void*>(&IndexUnlockHook)))
+			{
+				originalIndexUnlock = unlock;
+			}
+
+			indexProbe->Release();
+		}
+	}
+
+	static void HookQueryClass(IDirect3DDevice9* device)
+	{
+		IDirect3DQuery9* probe = nullptr;
+
+		if (FAILED(device->CreateQuery(D3DQUERYTYPE_EVENT, &probe)) || !probe)
+		{
+			LogError() << "remix: could not create a probe query, the renderer stays on one thread";
+			return;
+		}
+
+		const auto getData = SwapSlot<QueryGetData_t>(probe, queryGetDataSlot, reinterpret_cast<void*>(&QueryGetDataHook));
+
+		if (getData)
+		{
+			originalQueryGetData = getData;
+		}
+
+		probe->Release();
+	}
+
+	bool IsQueryPollGuarded()
+	{
+		return originalQueryGetData && originalVertexLock && originalVertexUnlock && originalIndexLock
+			&& originalIndexUnlock;
+	}
+
 	static void HookTextureClass(IDirect3DDevice9* device)
 	{
 		IDirect3DTexture9* probe = nullptr;
@@ -249,6 +487,193 @@ namespace Components::Remix::Device
 		probe->Release();
 	}
 
+	static bool IsCapturing()
+	{
+		return captureState.load(std::memory_order_relaxed) == CaptureState::Capturing;
+	}
+
+	static void PushCapturedEvent(const std::string& text)
+	{
+		const std::lock_guard lock(captureMutex);
+		char prefix[64];
+		std::snprintf(prefix, sizeof(prefix), "[%u draws, %u ortho] ", capturedDraws, capturedOrthoDraws);
+		capturedEvents.push_back(std::string(prefix) + text);
+		capturedDraws = 0;
+		capturedOrthoDraws = 0;
+	}
+
+	static void CountCapturedDraw(IDirect3DDevice9* self)
+	{
+		if (!IsCapturing())
+		{
+			return;
+		}
+
+		IDirect3DVertexShader9* vertexShader = nullptr;
+		self->GetVertexShader(&vertexShader);
+
+		const std::lock_guard lock(captureMutex);
+		++capturedDraws;
+
+		if (vertexShader)
+		{
+			vertexShader->Release();
+		}
+		else if (isProjectionOrtho)
+		{
+			++capturedOrthoDraws;
+		}
+	}
+
+	static HRESULT STDMETHODCALLTYPE SetRenderTargetHook(IDirect3DDevice9* self, DWORD index, IDirect3DSurface9* surface)
+	{
+		if (IsCapturing())
+		{
+			D3DSURFACE_DESC description{};
+
+			if (surface)
+			{
+				surface->GetDesc(&description);
+			}
+
+			char text[160];
+			std::snprintf(text, sizeof(text), "render target %lu = %p (%ux%u format %d)%s", index,
+				static_cast<void*>(surface), description.Width, description.Height, static_cast<int>(description.Format),
+				IsGameCaller(_ReturnAddress()) ? " by the game" : " by zw3");
+			PushCapturedEvent(text);
+		}
+
+		return originalSetRenderTarget(self, index, surface);
+	}
+
+	static HRESULT STDMETHODCALLTYPE SetTransformHook(IDirect3DDevice9* self, D3DTRANSFORMSTATETYPE state,
+		const D3DMATRIX* matrix)
+	{
+		if (state == D3DTS_PROJECTION && matrix)
+		{
+			const bool isOrtho = matrix->_34 == 0.0f && matrix->_44 == 1.0f;
+
+			if (IsCapturing() && isOrtho != isProjectionOrtho)
+			{
+				char text[200];
+				std::snprintf(text, sizeof(text), "projection -> %s (%.3f %.3f %.3f %.3f %.3f)%s",
+					isOrtho ? "ORTHOGRAPHIC" : "perspective", matrix->_11, matrix->_22, matrix->_33, matrix->_43,
+					matrix->_34, IsGameCaller(_ReturnAddress()) ? " by the game" : " by zw3");
+				PushCapturedEvent(text);
+			}
+
+			isProjectionOrtho = isOrtho;
+		}
+
+		return originalSetTransform(self, state, matrix);
+	}
+
+	static HRESULT STDMETHODCALLTYPE DrawPrimitiveHook(IDirect3DDevice9* self, D3DPRIMITIVETYPE type, UINT start, UINT count)
+	{
+		CountCapturedDraw(self);
+		return originalDrawPrimitive(self, type, start, count);
+	}
+
+	static HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveHook(IDirect3DDevice9* self, D3DPRIMITIVETYPE type,
+		INT baseVertex, UINT minIndex, UINT vertices, UINT startIndex, UINT count)
+	{
+		CountCapturedDraw(self);
+		return originalDrawIndexedPrimitive(self, type, baseVertex, minIndex, vertices, startIndex, count);
+	}
+
+	static HRESULT STDMETHODCALLTYPE DrawPrimitiveUpHook(IDirect3DDevice9* self, D3DPRIMITIVETYPE type, UINT count,
+		const void* data, UINT stride)
+	{
+		CountCapturedDraw(self);
+		return originalDrawPrimitiveUp(self, type, count, data, stride);
+	}
+
+	static HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveUpHook(IDirect3DDevice9* self, D3DPRIMITIVETYPE type,
+		UINT minIndex, UINT vertices, UINT count, const void* indices, D3DFORMAT format, const void* data, UINT stride)
+	{
+		CountCapturedDraw(self);
+		return originalDrawIndexedPrimitiveUp(self, type, minIndex, vertices, count, indices, format, data, stride);
+	}
+
+	static void HookCaptureSlots(IDirect3DDevice9* device)
+	{
+		if (const auto hooked = SwapSlot<SetRenderTarget_t>(device, deviceSetRenderTargetSlot,
+				reinterpret_cast<void*>(&SetRenderTargetHook)))
+		{
+			originalSetRenderTarget = hooked;
+		}
+
+		if (const auto hooked = SwapSlot<SetTransform_t>(device, deviceSetTransformSlot,
+				reinterpret_cast<void*>(&SetTransformHook)))
+		{
+			originalSetTransform = hooked;
+		}
+
+		if (const auto hooked = SwapSlot<DrawPrimitive_t>(device, deviceDrawPrimitiveSlot,
+				reinterpret_cast<void*>(&DrawPrimitiveHook)))
+		{
+			originalDrawPrimitive = hooked;
+		}
+
+		if (const auto hooked = SwapSlot<DrawIndexedPrimitive_t>(device, deviceDrawIndexedPrimitiveSlot,
+				reinterpret_cast<void*>(&DrawIndexedPrimitiveHook)))
+		{
+			originalDrawIndexedPrimitive = hooked;
+		}
+
+		if (const auto hooked = SwapSlot<DrawPrimitiveUp_t>(device, deviceDrawPrimitiveUpSlot,
+				reinterpret_cast<void*>(&DrawPrimitiveUpHook)))
+		{
+			originalDrawPrimitiveUp = hooked;
+		}
+
+		if (const auto hooked = SwapSlot<DrawIndexedPrimitiveUp_t>(device, deviceDrawIndexedPrimitiveUpSlot,
+				reinterpret_cast<void*>(&DrawIndexedPrimitiveUpHook)))
+		{
+			originalDrawIndexedPrimitiveUp = hooked;
+		}
+	}
+
+	void ArmFrameCapture()
+	{
+		captureState.store(CaptureState::Armed);
+	}
+
+	void AdvanceFrameCapture()
+	{
+		const CaptureState state = captureState.load();
+
+		if (state == CaptureState::Armed)
+		{
+			const std::lock_guard lock(captureMutex);
+			capturedEvents.clear();
+			capturedDraws = 0;
+			capturedOrthoDraws = 0;
+			captureState.store(CaptureState::Capturing);
+			return;
+		}
+
+		if (state != CaptureState::Capturing)
+		{
+			return;
+		}
+
+		PushCapturedEvent("present (end of the captured frame)");
+		captureState.store(CaptureState::Idle);
+
+		++captureIndex;
+		const std::wstring fileName = L"zw3_remix_events_" + std::to_wstring(captureIndex) + L".txt";
+		std::ofstream file(Core::ModuleDirectory() + fileName, std::ios::trunc);
+		const std::lock_guard lock(captureMutex);
+
+		for (const std::string& line : capturedEvents)
+		{
+			file << line << "\n";
+		}
+
+		Log() << "remix: wrote one frame's events to zw3_remix_events_" << captureIndex << ".txt";
+	}
+
 	static void AttachDevice(IDirect3DDevice9* device)
 	{
 		const auto reset = SwapSlot<Reset_t>(device, deviceResetSlot, reinterpret_cast<void*>(&ResetHook));
@@ -265,6 +690,9 @@ namespace Components::Remix::Device
 		}
 
 		HookTextureClass(device);
+		HookQueryClass(device);
+		HookBufferClasses(device);
+		HookCaptureSlots(device);
 
 		if (createdCallback)
 		{
@@ -314,6 +742,12 @@ namespace Components::Remix::Device
 
 	void NoteFrameEvent(const std::string& text)
 	{
+		if (IsCapturing())
+		{
+			PushCapturedEvent(text);
+			return;
+		}
+
 		Logger::Debug("remix: {}\n", text);
 	}
 

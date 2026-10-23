@@ -248,6 +248,16 @@ namespace Components
 	{
 		std::string data;
 
+		if (!Game::DB_IsZoneLoaded("code_pre_gfx_mp") && !Game::DB_IsZoneLoaded("code_post_gfx_mp"))
+		{
+			if (size > 0)
+			{
+				buffer[0] = '\0';
+			}
+
+			return buffer;
+		}
+
 		if (userMap.IsValid())
 		{
 			const auto mapname = userMap.GetName();

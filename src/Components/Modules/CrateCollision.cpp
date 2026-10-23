@@ -1,85 +1,30 @@
 #include "STDInclude.hpp"
 
 #include "CrateCollision.hpp"
+#include "ClipMap.hpp"
+#include "CollmapCollision.hpp"
 #include "GSC/Script.hpp"
 #include "Logger.hpp"
 
 namespace Components
 {
-	// cm (0x141BD3180)
-	constexpr std::uintptr_t cm_numMaterials = 0x141BD31A8;
-	constexpr std::uintptr_t cm_materials = 0x141BD31B0;
-	constexpr std::uintptr_t cm_leafbrushNodesCount = 0x141BD31F8;
-	constexpr std::uintptr_t cm_leafbrushNodes = 0x141BD3200;
-	constexpr std::uintptr_t cm_numSubModels = 0x141BD3280;
-	constexpr std::uintptr_t cm_cmodels = 0x141BD3288;
-	constexpr std::uintptr_t cm_numBrushes = 0x141BD3290;
-	constexpr std::uintptr_t cm_brushes = 0x141BD3298;
-	constexpr std::uintptr_t cm_brushBounds = 0x141BD32A0;
-	constexpr std::uintptr_t cm_brushContents = 0x141BD32A8;
+	using namespace ClipMap;
 
 	constexpr std::uintptr_t rgp_world = 0x148CCC7A0;
 	constexpr std::size_t gfxWorld_modelCount = 0x160;
 	constexpr std::size_t gfxWorld_models = 0x168;
 
 	constexpr std::uintptr_t CM_LoadMap = 0x1401E84C0;
-	constexpr std::uintptr_t loadMapCalls[] = { 0x1400F3E8E /* CL_CM_LoadMap */, 0x14023B761 /* SV_SpawnServer */ };
+	constexpr std::uintptr_t loadMapCalls[] = { 0x1400F3E8E , 0x14023B761  };
 
 	constexpr std::uintptr_t R_GetBrushModel = 0x14001F150;
 	static const std::uint8_t getBrushModelBytes[] = { 0x8B, 0xC1, 0x48, 0x8B, 0x0D, 0x47, 0xD6, 0xCA, 0x08, 0x48, 0x6B, 0xC0, 0x3C, 0x48, 0x03, 0x81, 0x68, 0x01, 0x00, 0x00, 0xC3 };
 
-	constexpr int contentsSolid = 1;
-
-	// stock care_package brush, scaled down so zombie hitboxes fit through tight spots
 	constexpr float crateScale = 0.75f;
 	constexpr Game::Bounds crateBounds =
 	{
 		{ -1.0f * crateScale, 0.25f * crateScale, 0.0f * crateScale },
 		{ 30.0f * crateScale, 17.75f * crateScale, 16.0f * crateScale },
-	};
-
-#pragma pack(push, 1)
-	struct cLeaf_t
-	{
-		std::uint16_t firstCollAabbIndex;
-		std::uint16_t collAabbCount;
-		int brushContents;
-		int terrainContents;
-		Game::Bounds bounds;
-		int leafBrushNode;
-	};
-
-	struct cmodel_t
-	{
-		Game::Bounds bounds;
-		float radius;
-		cLeaf_t leaf;
-	};
-#pragma pack(pop)
-
-	struct cLeafBrushNode_s
-	{
-		std::uint8_t axis;
-		std::int16_t leafBrushCount;
-		int contents;
-		std::uint16_t* brushes;
-		char pad[0x8];
-	};
-
-	struct cbrush_t
-	{
-		std::uint16_t numsides;
-		std::uint16_t glassPieceIndex;
-		char pad0[0x14];
-		std::int16_t axialMaterialNum[2][3];
-		char pad1[0xC];
-	};
-
-	struct ClipMaterial
-	{
-		const char* name;
-		int surfaceFlags;
-		int contents;
 	};
 
 	struct GfxBrushModel
@@ -93,26 +38,19 @@ namespace Components
 		char pad[0x2];
 	};
 
-	AssertSize(cLeaf_t, 0x28);
-	AssertSize(cmodel_t, 0x44);
-	AssertOffset(cmodel_t, leaf, 0x1C);
-	AssertSize(cLeafBrushNode_s, 0x18);
-	AssertOffset(cLeafBrushNode_s, brushes, 0x8);
-	AssertSize(cbrush_t, 0x30);
-	AssertOffset(cbrush_t, axialMaterialNum, 0x18);
-	AssertSize(ClipMaterial, 0x10);
 	AssertSize(GfxBrushModel, 0x3C);
 	AssertOffset(GfxBrushModel, surfaceCount, 0x34);
 
 	static std::vector<cmodel_t> cmodels;
 	static std::vector<cLeafBrushNode_s> leafbrushNodes;
-	static std::vector<cbrush_t> brushes;
+	static std::vector<Game::cbrush_t> brushes;
 	static std::vector<Game::Bounds> brushBounds;
 	static std::vector<int> brushContents;
 	static std::uint16_t leafBrush;
 	static unsigned int crateIndex;
 
 	static GfxBrushModel crateGfxModel;
+	static GfxBrushModel emptyGfxModel;
 
 	static Utils::Hook loadMapHooks[std::size(loadMapCalls)];
 	static Utils::Hook getBrushModelHook;
@@ -122,27 +60,10 @@ namespace Components
 		return crateIndex;
 	}
 
-	static std::int16_t FindSolidMaterial()
-	{
-		const auto count = Utils::Hook::Get<unsigned int>(cm_numMaterials);
-		const auto* const materials = Utils::Hook::Get<const ClipMaterial*>(cm_materials);
-
-		for (unsigned int i = 0; i < count; ++i)
-		{
-			if (materials[i].contents & contentsSolid)
-			{
-				return static_cast<std::int16_t>(i);
-			}
-		}
-
-		return 0;
-	}
-
 	void CrateCollision::Inject()
 	{
 		const auto* const oldCmodels = Utils::Hook::Get<const cmodel_t*>(cm_cmodels);
 
-		// already added (listen server, map_restart)
 		if (!cmodels.empty() && oldCmodels == cmodels.data())
 		{
 			return;
@@ -161,7 +82,7 @@ namespace Components
 		}
 
 		const auto* const oldNodes = Utils::Hook::Get<const cLeafBrushNode_s*>(cm_leafbrushNodes);
-		const auto* const oldBrushes = Utils::Hook::Get<const cbrush_t*>(cm_brushes);
+		const auto* const oldBrushes = Utils::Hook::Get<const Game::cbrush_t*>(cm_brushes);
 		const auto* const oldBounds = Utils::Hook::Get<const Game::Bounds*>(cm_brushBounds);
 		const auto* const oldContents = Utils::Hook::Get<const int*>(cm_brushContents);
 
@@ -171,8 +92,7 @@ namespace Components
 		brushBounds.assign(oldBounds, oldBounds + numBrushes);
 		brushContents.assign(oldContents, oldContents + numBrushes);
 
-		// no sides = box
-		cbrush_t brush{};
+		Game::cbrush_t brush{};
 		const auto material = FindSolidMaterial();
 
 		for (auto& side : brush.axialMaterialNum)
@@ -212,7 +132,6 @@ namespace Components
 
 		crateIndex = numSubModels;
 
-		// CG_UpdateBModelWorldBounds writes to it
 		crateGfxModel = {};
 		crateGfxModel.writable = crateBounds;
 		crateGfxModel.bounds = crateBounds;
@@ -222,7 +141,14 @@ namespace Components
 	void CrateCollision::CM_LoadMap_Hk(const char* name, unsigned int* checksum)
 	{
 		reinterpret_cast<void(*)(const char*, unsigned int*)>(Utils::Hook::Rebase(CM_LoadMap))(name, checksum);
+
+		if (CollmapCollision::IsInjected())
+		{
+			return;
+		}
+
 		Inject();
+		CollmapCollision::Inject();
 	}
 
 	void* CrateCollision::R_GetBrushModel_Hk(const unsigned int index)
@@ -233,6 +159,12 @@ namespace Components
 		if (crateIndex && index == crateIndex && index >= modelCount)
 		{
 			return &crateGfxModel;
+		}
+
+		if (index >= modelCount)
+		{
+			emptyGfxModel = {};
+			return &emptyGfxModel;
 		}
 
 		return *reinterpret_cast<std::uint8_t* const*>(world + gfxWorld_models) + sizeof(GfxBrushModel) * index;
@@ -282,7 +214,6 @@ namespace Components
 
 		getBrushModelHook.Quick();
 
-		// 0 = none
 		GSC::Script::AddFunction("GetCrateCollisionIndex", []
 		{
 			Game::Scr_AddInt(static_cast<int>(crateIndex));

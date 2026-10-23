@@ -143,7 +143,7 @@ namespace Components::Remix
 	static ULONGLONG lastSettingChangeTick = 0;
 	static constexpr ULONGLONG settingSettleMs = 1000;
 	static constexpr const char* unsetField = "-";
-	static constexpr const char* modFormatMarker = "int zw3_format = 3";
+	static constexpr const char* modFormatMarker = "int zw3_format = 4";
 	static constexpr UINT maxHeightSize = 512;
 	static constexpr UINT coarsestHeightSize = 8;
 	static constexpr int coarseHeightIterations = 200;
@@ -266,7 +266,8 @@ namespace Components::Remix
 			 << "            {\n"
 			 << "                uniform token info:implementationSource = \"sourceAsset\"\n"
 			 << "                uniform asset info:mdl:sourceAsset = @AperturePBR_Opaque.mdl@\n"
-			 << "                uniform token info:mdl:sourceAsset:subIdentifier = \"AperturePBR_Opaque\"\n";
+			 << "                uniform token info:mdl:sourceAsset:subIdentifier = \"AperturePBR_Opaque\"\n"
+			 << "                bool inputs:use_legacy_alpha_state = 1\n";
 
 		if (!material.normalFile.empty())
 		{

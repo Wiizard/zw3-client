@@ -50,13 +50,13 @@ namespace Components::Remix
 
 	static constexpr UINT rainTextureWidth = 4;
 	static constexpr UINT rainTextureHeight = 64;
-	static constexpr float rainHalfWidth = 700.0f;
-	static constexpr float rainHalfHeight = 450.0f;
+	static constexpr float rainHalfWidth = 450.0f;
+	static constexpr float rainHalfHeight = 350.0f;
 	static constexpr float rainFallSpeed = 520.0f;
 	static constexpr float rainWindSpeed = 45.0f;
-	static constexpr float rainStreakLength = 30.0f;
-	static constexpr float rainStreakWidth = 0.7f;
-	static constexpr int rainAlpha = 150;
+	static constexpr float rainStreakLength = 48.0f;
+	static constexpr float rainStreakWidth = 0.55f;
+	static constexpr int rainAlpha = 130;
 	static constexpr D3DCOLOR rainColour = 0x00C8D2DC;
 	static constexpr int rainDropsPerAmount = 1024;
 	static constexpr float maximumRainAmount = 10.0f;
@@ -82,6 +82,40 @@ namespace Components::Remix
 	static IDirect3DStateBlock9* rainState = nullptr;
 	static bool didRainTextureFail = false;
 	static std::uintptr_t rainyMapIdentity = 0;
+
+	struct ScreenDrop
+	{
+		float x;
+		float y;
+		float radius;
+		float age;
+		float life;
+		float slideDelay;
+		float speed;
+	};
+
+	static constexpr UINT dropTextureSize = 64;
+	static constexpr std::size_t maxScreenDrops = 64;
+	static constexpr float dropsPerSecond = 5.0f;
+	static constexpr float dropFadeInSeconds = 0.15f;
+	static constexpr float dropFadeOutSeconds = 1.2f;
+	static constexpr float slidingRadius = 0.014f;
+	static constexpr DWORD dropVertexFormat = D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1;
+
+	struct DropVertex
+	{
+		float position[4];
+		D3DCOLOR colour;
+		float texCoord[2];
+	};
+
+	static std::vector<ScreenDrop> screenDrops;
+	static IDirect3DTexture9* dropTexture = nullptr;
+	static IDirect3DStateBlock9* dropState = nullptr;
+	static bool didDropTextureFail = false;
+	static ULONGLONG lastDropTick = 0;
+	static float dropSpawnCarry = 0.0f;
+	static std::uint32_t dropRandomState = 0x9E3779B9u;
 
 	static void BuildLocalPositions()
 	{
@@ -746,8 +780,247 @@ namespace Components::Remix
 		return rainyMapIdentity != 0 && rainyMapIdentity == GetMapIdentity();
 	}
 
+	static float NextDropRandom()
+	{
+		dropRandomState ^= dropRandomState << 13;
+		dropRandomState ^= dropRandomState >> 17;
+		dropRandomState ^= dropRandomState << 5;
+		return static_cast<float>(dropRandomState & 0xFFFFFF) / 16777215.0f;
+	}
+
+	static IDirect3DTexture9* TryBuildDropTexture(IDirect3DDevice9* device)
+	{
+		IDirect3DTexture9* texture = nullptr;
+
+		if (FAILED(device->CreateTexture(dropTextureSize, dropTextureSize, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED,
+				&texture, nullptr)))
+		{
+			return nullptr;
+		}
+
+		D3DLOCKED_RECT locked{};
+
+		if (FAILED(texture->LockRect(0, &locked, nullptr, 0)))
+		{
+			texture->Release();
+			return nullptr;
+		}
+
+		for (UINT y = 0; y < dropTextureSize; ++y)
+		{
+			auto* row = reinterpret_cast<std::uint32_t*>(static_cast<unsigned char*>(locked.pBits) + y * locked.Pitch);
+
+			for (UINT x = 0; x < dropTextureSize; ++x)
+			{
+				const float u = (static_cast<float>(x) + 0.5f) / dropTextureSize * 2.0f - 1.0f;
+				const float v = (static_cast<float>(y) + 0.5f) / dropTextureSize * 2.0f - 1.0f;
+				const float distance = std::sqrt(u * u + v * v);
+
+				if (distance >= 1.0f)
+				{
+					row[x] = 0;
+					continue;
+				}
+
+				const float edge = std::clamp((1.0f - distance) / 0.12f, 0.0f, 1.0f);
+				const float rim = std::clamp((distance - 0.7f) / 0.3f, 0.0f, 1.0f);
+				const float highlightDistance = std::sqrt((u + 0.35f) * (u + 0.35f) + (v + 0.4f) * (v + 0.4f));
+				const float highlight = std::clamp(1.0f - highlightDistance / 0.28f, 0.0f, 1.0f);
+				const float crescentDistance = std::sqrt((u - 0.2f) * (u - 0.2f) + (v - 0.25f) * (v - 0.25f));
+				const float crescent = std::clamp(1.0f - std::fabs(crescentDistance - 0.55f) / 0.15f, 0.0f, 1.0f)
+					* std::clamp(u + v, 0.0f, 1.0f);
+
+				const float light = std::clamp(highlight * highlight * 1.0f + crescent * 0.55f, 0.0f, 1.0f);
+				const float body = 0.18f + rim * 0.35f;
+				const float alpha = std::clamp((body + light * 0.7f) * edge, 0.0f, 1.0f);
+				const float shade = std::clamp(0.12f + light * 0.88f, 0.0f, 1.0f);
+
+				const auto channel = static_cast<std::uint32_t>(shade * 255.0f + 0.5f);
+				const auto blue = static_cast<std::uint32_t>(std::min(255.0f, shade * 255.0f + 18.0f));
+				row[x] = (static_cast<std::uint32_t>(alpha * 255.0f + 0.5f) << 24) | (channel << 16) | (channel << 8) | blue;
+			}
+		}
+
+		texture->UnlockRect(0);
+		return texture;
+	}
+
+	static bool IsCameraInRain()
+	{
+		float camera[3];
+		return IsRaining() && TryGetCameraOrigin(camera) && IsWeatherPointOutdoors(camera);
+	}
+
+	static void UpdateScreenDrops(float seconds, bool isWet, float amount)
+	{
+		if (isWet)
+		{
+			dropSpawnCarry += seconds * dropsPerSecond * std::clamp(amount, 0.3f, 3.0f);
+		}
+		else
+		{
+			dropSpawnCarry = 0.0f;
+		}
+
+		while (dropSpawnCarry >= 1.0f && screenDrops.size() < maxScreenDrops)
+		{
+			dropSpawnCarry -= 1.0f;
+
+			ScreenDrop drop{};
+			drop.x = NextDropRandom();
+			drop.y = NextDropRandom() * 0.9f;
+			drop.radius = 0.006f + NextDropRandom() * NextDropRandom() * 0.018f;
+			drop.life = 1.5f + NextDropRandom() * 3.5f;
+			drop.slideDelay = 0.4f + NextDropRandom() * 1.2f;
+			drop.speed = drop.radius >= slidingRadius ? 0.04f + NextDropRandom() * 0.12f : 0.0f;
+			screenDrops.push_back(drop);
+		}
+
+		dropSpawnCarry = std::min(dropSpawnCarry, 1.0f);
+
+		for (ScreenDrop& drop : screenDrops)
+		{
+			drop.age += seconds;
+
+			if (drop.speed > 0.0f && drop.age > drop.slideDelay)
+			{
+				drop.speed += seconds * 0.15f;
+				drop.y += drop.speed * seconds;
+			}
+		}
+
+		std::erase_if(screenDrops, [](const ScreenDrop& drop)
+		{
+			return drop.age >= drop.life || drop.y - drop.radius > 1.0f;
+		});
+	}
+
+	void DrawScreenDrops(IDirect3DDevice9* device)
+	{
+		const LookSettings look = GetLookSettings();
+		const ULONGLONG now = GetTickCount64();
+		const float seconds = lastDropTick == 0 ? 0.0f : std::min(static_cast<float>(now - lastDropTick) / 1000.0f, 0.1f);
+		lastDropTick = now;
+
+		if (!device || !look.isScreenDrops || didDropTextureFail)
+		{
+			screenDrops.clear();
+			return;
+		}
+
+		UpdateScreenDrops(seconds, IsCameraInRain(), look.rainAmount);
+
+		if (screenDrops.empty())
+		{
+			return;
+		}
+
+		if (!dropTexture)
+		{
+			dropTexture = TryBuildDropTexture(device);
+
+			if (!dropTexture)
+			{
+				didDropTextureFail = true;
+				return;
+			}
+		}
+
+		if (!dropState && FAILED(device->CreateStateBlock(D3DSBT_ALL, &dropState)))
+		{
+			dropState = nullptr;
+			return;
+		}
+
+		D3DVIEWPORT9 viewport{};
+		device->GetViewport(&viewport);
+
+		const float width = static_cast<float>(viewport.Width);
+		const float height = static_cast<float>(viewport.Height);
+		std::vector<DropVertex> triangles;
+		triangles.reserve(screenDrops.size() * 6);
+
+		for (const ScreenDrop& drop : screenDrops)
+		{
+			const float fadeIn = std::clamp(drop.age / dropFadeInSeconds, 0.0f, 1.0f);
+			const float fadeOut = std::clamp((drop.life - drop.age) / dropFadeOutSeconds, 0.0f, 1.0f);
+			const auto alpha = static_cast<std::uint32_t>(fadeIn * fadeOut * 255.0f + 0.5f);
+			const D3DCOLOR colour = (alpha << 24) | 0x00FFFFFFu;
+
+			const bool isSliding = drop.speed > 0.0f && drop.age > drop.slideDelay;
+			const float halfWidth = drop.radius * height;
+			const float halfHeight = halfWidth * (isSliding ? 1.35f : 1.0f);
+			const float centreX = static_cast<float>(viewport.X) + drop.x * width;
+			const float centreY = static_cast<float>(viewport.Y) + drop.y * height;
+
+			const DropVertex corners[4] = {
+				{ { centreX - halfWidth - 0.5f, centreY - halfHeight - 0.5f, 0.0f, 1.0f }, colour, { 0.0f, 0.0f } },
+				{ { centreX + halfWidth - 0.5f, centreY - halfHeight - 0.5f, 0.0f, 1.0f }, colour, { 1.0f, 0.0f } },
+				{ { centreX - halfWidth - 0.5f, centreY + halfHeight - 0.5f, 0.0f, 1.0f }, colour, { 0.0f, 1.0f } },
+				{ { centreX + halfWidth - 0.5f, centreY + halfHeight - 0.5f, 0.0f, 1.0f }, colour, { 1.0f, 1.0f } },
+			};
+
+			triangles.push_back(corners[0]);
+			triangles.push_back(corners[1]);
+			triangles.push_back(corners[2]);
+			triangles.push_back(corners[2]);
+			triangles.push_back(corners[1]);
+			triangles.push_back(corners[3]);
+		}
+
+		dropState->Capture();
+
+		device->SetVertexShader(nullptr);
+		device->SetPixelShader(nullptr);
+		device->SetFVF(dropVertexFormat);
+		device->SetTexture(0, dropTexture);
+		device->SetRenderState(D3DRS_ZENABLE, FALSE);
+		device->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+		device->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+		device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+		device->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+		device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+		device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+		device->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+		device->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN
+			| D3DCOLORWRITEENABLE_BLUE);
+		device->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+		device->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+		device->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+		device->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+		device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+		device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+		device->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+		device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+		device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+		device->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+		device->SetTextureStageState(0, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
+		device->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+		device->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+
+		device->DrawPrimitiveUP(D3DPT_TRIANGLELIST, static_cast<UINT>(triangles.size() / 3), triangles.data(),
+			sizeof(DropVertex));
+
+		dropState->Apply();
+	}
+
 	void ReleaseWeather()
 	{
+		if (dropTexture)
+		{
+			dropTexture->Release();
+			dropTexture = nullptr;
+		}
+
+		if (dropState)
+		{
+			dropState->Release();
+			dropState = nullptr;
+		}
+
+		screenDrops.clear();
+		didDropTextureFail = false;
+
 		if (rainTexture)
 		{
 			rainTexture->Release();

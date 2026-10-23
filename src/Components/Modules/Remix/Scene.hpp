@@ -63,6 +63,10 @@ namespace Components::Remix
 
 	bool IsOffscreenWorldEnabled();
 
+	bool IsRenderFrameLocked();
+
+	void ApplyThreadedRenderer(bool isThreaded);
+
 	float GetGlowBrightness();
 
 	IDirect3DDevice9* GetSceneDevice();

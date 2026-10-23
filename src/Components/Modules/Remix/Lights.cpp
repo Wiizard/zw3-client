@@ -3,6 +3,9 @@
 #include "Lights.hpp"
 
 #include <algorithm>
+#include <array>
+#include <unordered_map>
+#include <unordered_set>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -18,6 +21,7 @@
 #include "FixedFunction.hpp"
 #include "PbrMaterials.hpp"
 #include "Look.hpp"
+#include "Culling.hpp"
 #include "MapSettings.hpp"
 #include "Read.hpp"
 #include "Scene.hpp"
@@ -36,7 +40,7 @@ namespace Components::Remix
 	static constexpr float warmBelowDeg = 30.0f;
 	static constexpr float sphereRadius = 4.0f;
 	static constexpr float minimumLightBrightness = 0.0f;
-	static constexpr float maximumLightBrightness = 8.0f;
+	static constexpr float maximumLightBrightness = 1000.0f;
 	static constexpr float matchDistanceOfRadius = 0.5f;
 	static constexpr int maxMapLights = 256;
 	static constexpr std::uint64_t dynamicLightHashBase = 0x4D57325F444C5431ull;
@@ -45,6 +49,8 @@ namespace Components::Remix
 	static constexpr float dynamicLightBrightness = 0.25f;
 	static constexpr std::uint64_t fixtureLightHashBase = 0x4D57325F46495854ull;
 	static constexpr int maxFixtureLights = 384;
+	static constexpr int maxDrawnFixtureLights = 96;
+	static constexpr float maxFixtureLightDistance = 2500.0f;
 	static constexpr float fixtureRange = 200.0f;
 	static constexpr float fixtureColour[3] = { 1.0f, 0.9f, 0.75f };
 	static constexpr std::uint64_t laserLightHashBase = 0x4D57325F4C415352ull;
@@ -56,6 +62,27 @@ namespace Components::Remix
 	static constexpr int maxAuthoredLights = 256;
 
 	static const remixapi_Interface* api = nullptr;
+
+	static unsigned long long lightsCreated = 0;
+	static unsigned long long lightsDestroyed = 0;
+
+	static remixapi_ErrorCode CreateCountedLight(const remixapi_LightInfo* info, remixapi_LightHandle* handle)
+	{
+		const remixapi_ErrorCode result = api->CreateLight(info, handle);
+
+		if (result == REMIXAPI_ERROR_CODE_SUCCESS && *handle)
+		{
+			++lightsCreated;
+		}
+
+		return result;
+	}
+
+	static void DestroyCountedLight(remixapi_LightHandle handle)
+	{
+		api->DestroyLight(handle);
+		++lightsDestroyed;
+	}
 
 	static remixapi_LightHandle sunLight = nullptr;
 	static float submittedSun[7] = {};
@@ -72,6 +99,42 @@ namespace Components::Remix
 	static float mapLightsBrightness = 1.0f;
 	static float mapLightsColourScale = 1.0f;
 	static float lightBrightness = 1.0f;
+
+	static float settledLightBrightness = 1.0f;
+	static float settledFixtureBrightness = 1.0f;
+	static float settledFixtureOffset = 0.0f;
+	static float settledFixtureSize = sphereRadius;
+	static float pendingLightBrightness = 1.0f;
+	static float pendingFixtureBrightness = 1.0f;
+	static float pendingFixtureOffset = 0.0f;
+	static float pendingFixtureSize = sphereRadius;
+	static ULONGLONG brightnessChangedMs = 0;
+	static constexpr ULONGLONG brightnessSettleMs = 300;
+
+	static void SettleBrightness(const LookSettings& look)
+	{
+		const ULONGLONG now = GetTickCount64();
+		const float fixtureOffset = std::clamp(look.fixtureOffset, 0.0f, 64.0f);
+		const float fixtureSize = std::clamp(look.fixtureSize, 0.5f, 64.0f);
+
+		if (lightBrightness != pendingLightBrightness || look.fixtureBrightness != pendingFixtureBrightness
+			|| fixtureOffset != pendingFixtureOffset || fixtureSize != pendingFixtureSize)
+		{
+			pendingLightBrightness = lightBrightness;
+			pendingFixtureBrightness = look.fixtureBrightness;
+			pendingFixtureOffset = fixtureOffset;
+			pendingFixtureSize = fixtureSize;
+			brightnessChangedMs = now;
+		}
+
+		if (now - brightnessChangedMs >= brightnessSettleMs)
+		{
+			settledLightBrightness = pendingLightBrightness;
+			settledFixtureBrightness = pendingFixtureBrightness;
+			settledFixtureOffset = pendingFixtureOffset;
+			settledFixtureSize = pendingFixtureSize;
+		}
+	}
 	static bool isAllEffectLights = true;
 
 	static remixapi_LightHandle dynamicLights[maxDynamicLights];
@@ -82,10 +145,13 @@ namespace Components::Remix
 	static LightStats stats;
 
 	static remixapi_LightHandle fixtureLights[maxFixtureLights];
+	static float fixturePositions[maxFixtureLights][3];
 	static int fixtureLightCount = 0;
 	static unsigned fixtureLightsSpots = 0;
 	static unsigned fixtureLightsVersion = 0;
 	static float fixtureLightsBrightness = 0.0f;
+	static float fixtureLightsOffset = -1.0f;
+	static float fixtureLightsSize = -1.0f;
 
 	static remixapi_LightHandle laserLights[maxLaserLights];
 	static int laserLightCount = 0;
@@ -134,7 +200,7 @@ namespace Components::Remix
 	{
 		for (int i = 0; i < mapLightCount; ++i)
 		{
-			api->DestroyLight(mapLights[i]);
+			DestroyCountedLight(mapLights[i]);
 		}
 
 		mapLightCount = 0;
@@ -301,7 +367,7 @@ namespace Components::Remix
 		{
 			if (sunLight)
 			{
-				api->DestroyLight(sunLight);
+				DestroyCountedLight(sunLight);
 				sunLight = nullptr;
 			}
 
@@ -317,7 +383,7 @@ namespace Components::Remix
 			info.hash = sunHash;
 			info.radiance = { sun[3], sun[4], sun[5] };
 
-			if (api->CreateLight(&info, &sunLight) != REMIXAPI_ERROR_CODE_SUCCESS)
+			if (CreateCountedLight(&info, &sunLight) != REMIXAPI_ERROR_CODE_SUCCESS)
 			{
 				sunLight = nullptr;
 				stats.hasSun = false;
@@ -356,7 +422,7 @@ namespace Components::Remix
 
 		DestroyMapLights();
 		mapLightsWorld = mapIdentity;
-		mapLightsBrightness = lightBrightness;
+		mapLightsBrightness = settledLightBrightness;
 		mapLightsColourScale = colourScale;
 		mapLightsSettingsVersion = GetMapSettingsVersion();
 		mapLightsTuningVersion = tuningVersion;
@@ -487,7 +553,7 @@ namespace Components::Remix
 
 			lightSize = std::max(lightSize, 0.1f);
 
-			const float brightness = lightBrightness * typeBrightness * overrideBrightness;
+			const float brightness = settledLightBrightness * typeBrightness * overrideBrightness;
 			const float matchDistance = matchDistanceOfRadius * radius;
 			const float radianceScale = (matchDistance * matchDistance) / (lightSize * lightSize) * brightness;
 
@@ -531,7 +597,7 @@ namespace Components::Remix
 
 			remixapi_LightHandle handle = nullptr;
 
-			if (api->CreateLight(&lightInfo, &handle) == REMIXAPI_ERROR_CODE_SUCCESS && handle)
+			if (CreateCountedLight(&lightInfo, &handle) == REMIXAPI_ERROR_CODE_SUCCESS && handle)
 			{
 				mapLights[mapLightCount] = handle;
 				++mapLightCount;
@@ -554,7 +620,7 @@ namespace Components::Remix
 		{
 			if (dynamicLights[slot])
 			{
-				api->DestroyLight(dynamicLights[slot]);
+				DestroyCountedLight(dynamicLights[slot]);
 				dynamicLights[slot] = nullptr;
 			}
 
@@ -667,13 +733,13 @@ namespace Components::Remix
 
 				if (dynamicLights[slot])
 				{
-					api->DestroyLight(dynamicLights[slot]);
+					DestroyCountedLight(dynamicLights[slot]);
 					dynamicLights[slot] = nullptr;
 				}
 
 				remixapi_LightHandle handle = nullptr;
 
-				if (api->CreateLight(&info, &handle) != REMIXAPI_ERROR_CODE_SUCCESS || !handle)
+				if (CreateCountedLight(&info, &handle) != REMIXAPI_ERROR_CODE_SUCCESS || !handle)
 				{
 					continue;
 				}
@@ -693,16 +759,198 @@ namespace Components::Remix
 		stats.dynamicLights = drawn;
 	}
 
+	static std::uint64_t fixtureHashes[maxFixtureLights];
+	static int fixtureCells[maxFixtureLights];
+	static std::unordered_map<std::uint64_t, FixtureEdit> fixtureEdits;
+	static std::unordered_set<std::uint64_t> dirtyFixtures;
+	static float fixtureRadianceScale = 0.0f;
+
+	static int FixtureCellAt(const float* position)
+	{
+		const int cell = CellForPoint(position);
+
+		if (cell >= 0)
+		{
+			return cell;
+		}
+
+		static constexpr float steps[] = { 8.0f, 16.0f, 32.0f, 48.0f };
+		static constexpr float directions[6][3] = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, -1 }, { 0, 0, 1 } };
+
+		for (const float step : steps)
+		{
+			for (const auto& direction : directions)
+			{
+				const float point[3] = { position[0] + direction[0] * step, position[1] + direction[1] * step,
+					position[2] + direction[2] * step };
+				const int nearby = CellForPoint(point);
+
+				if (nearby >= 0)
+				{
+					return nearby;
+				}
+			}
+		}
+
+		return -1;
+	}
+
+	static std::uint64_t FixtureHashAt(const float* position)
+	{
+		const std::int32_t cell[3] = {
+			static_cast<std::int32_t>(std::lround(position[0])),
+			static_cast<std::int32_t>(std::lround(position[1])),
+			static_cast<std::int32_t>(std::lround(position[2])),
+		};
+
+		return XXH3_64bits_withSeed(cell, sizeof(cell), fixtureLightHashBase);
+	}
+
+	static FixtureEdit EffectiveFixtureEdit(std::uint64_t hash, int cell)
+	{
+		const auto live = fixtureEdits.find(hash);
+
+		if (live != fixtureEdits.end())
+		{
+			return live->second;
+		}
+
+		FixtureEdit edit;
+		const MapSettings& settings = GetMapSettings();
+
+		if (std::find(settings.ignoredLights.begin(), settings.ignoredLights.end(), hash) != settings.ignoredLights.end())
+		{
+			edit.isOn = false;
+			return edit;
+		}
+
+		for (const LightOverride& change : settings.lightOverrides)
+		{
+			if (change.hash != hash)
+			{
+				continue;
+			}
+
+			edit.brightness = change.brightness.value_or(1.0f);
+			edit.hasColour = change.hasColour;
+			std::memcpy(edit.colour, change.colour, sizeof(edit.colour));
+			edit.size = change.radius.value_or(sphereRadius);
+			return edit;
+		}
+
+		for (const MapZone& zone : settings.zones)
+		{
+			if (!GetLookSettings().isMapZones)
+			{
+				break;
+			}
+
+			if (cell < 0 || std::find(zone.cells.begin(), zone.cells.end(), cell) == zone.cells.end())
+			{
+				continue;
+			}
+
+			edit.brightness = zone.lampBrightness.value_or(1.0f);
+
+			if (zone.hasLampColour)
+			{
+				edit.hasColour = true;
+				std::memcpy(edit.colour, zone.lampColour, sizeof(edit.colour));
+			}
+
+			break;
+		}
+
+		return edit;
+	}
+
+	static int FixtureCellOf(std::uint64_t hash)
+	{
+		for (int i = 0; i < fixtureLightCount; ++i)
+		{
+			if (fixtureHashes[i] == hash)
+			{
+				return fixtureCells[i];
+			}
+		}
+
+		return -1;
+	}
+
+	static remixapi_LightHandle CreateFixtureLight(int index)
+	{
+		const FixtureEdit edit = EffectiveFixtureEdit(fixtureHashes[index], fixtureCells[index]);
+
+		if (!edit.isOn)
+		{
+			return nullptr;
+		}
+
+		const float* colour = edit.hasColour ? edit.colour : fixtureColour;
+		const float size = std::max(edit.size * settledFixtureSize / sphereRadius, 0.5f);
+		const float scale = fixtureRadianceScale * edit.brightness * (sphereRadius * sphereRadius) / (size * size);
+
+		remixapi_LightInfoSphereEXT sphere{};
+		sphere.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
+		sphere.position = { fixturePositions[index][0], fixturePositions[index][1], fixturePositions[index][2] };
+		sphere.radius = size;
+		sphere.volumetricRadianceScale = 1.0f;
+
+		remixapi_LightInfo info{};
+		info.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
+		info.pNext = &sphere;
+		info.hash = fixtureHashes[index];
+		info.radiance = { colour[0] * scale, colour[1] * scale, colour[2] * scale };
+
+		remixapi_LightHandle handle = nullptr;
+
+		if (CreateCountedLight(&info, &handle) != REMIXAPI_ERROR_CODE_SUCCESS)
+		{
+			return nullptr;
+		}
+
+		return handle;
+	}
+
 	static void DestroyFixtureLights()
 	{
 		for (int i = 0; i < fixtureLightCount; ++i)
 		{
-			api->DestroyLight(fixtureLights[i]);
+			if (fixtureLights[i])
+			{
+				DestroyCountedLight(fixtureLights[i]);
+				fixtureLights[i] = nullptr;
+			}
 		}
 
 		fixtureLightCount = 0;
 		fixtureLightsVersion = 0;
 		stats.fixtureLights = 0;
+	}
+
+	static void RebuildDirtyFixtures()
+	{
+		if (dirtyFixtures.empty())
+		{
+			return;
+		}
+
+		for (int i = 0; i < fixtureLightCount; ++i)
+		{
+			if (dirtyFixtures.count(fixtureHashes[i]) == 0)
+			{
+				continue;
+			}
+
+			if (fixtureLights[i])
+			{
+				DestroyCountedLight(fixtureLights[i]);
+			}
+
+			fixtureLights[i] = CreateFixtureLight(i);
+		}
+
+		dirtyFixtures.clear();
 	}
 
 	static void SubmitFixtureLights()
@@ -720,20 +968,26 @@ namespace Components::Remix
 		}
 
 		const unsigned spots = GetSurfaceSpotsVersion();
-		const unsigned version = GetFixtureVersion() + GetLampLightVersion() * 65536u + 1;
-		const float brightness = look.fixtureBrightness * lightBrightness;
+		const unsigned version = GetFixtureVersion() + GetLampLightVersion() * 65536u + GetMapSettingsVersion() * 7919u
+			+ (look.isMapZones ? 1u : 2u);
+		const float brightness = settledFixtureBrightness * settledLightBrightness;
 		const bool isStale = spots != fixtureLightsSpots || version != fixtureLightsVersion
-			|| brightness != fixtureLightsBrightness;
+			|| brightness != fixtureLightsBrightness || settledFixtureOffset != fixtureLightsOffset
+			|| settledFixtureSize != fixtureLightsSize;
 
 		if (isStale)
 		{
+			++stats.fixtureRebuilds;
 			DestroyFixtureLights();
 			fixtureLightsSpots = spots;
 			fixtureLightsVersion = version;
 			fixtureLightsBrightness = brightness;
+			fixtureLightsOffset = settledFixtureOffset;
+			fixtureLightsSize = settledFixtureSize;
+			dirtyFixtures.clear();
 
 			const float matchDistance = matchDistanceOfRadius * fixtureRange;
-			const float radianceScale = (matchDistance * matchDistance) / (sphereRadius * sphereRadius) * brightness;
+			fixtureRadianceScale = (matchDistance * matchDistance) / (sphereRadius * sphereRadius) * brightness;
 
 			for (const FixtureSpot& spot : CollectFixtureSpots())
 			{
@@ -742,44 +996,103 @@ namespace Components::Remix
 					break;
 				}
 
-				remixapi_LightInfoSphereEXT sphere{};
-				sphere.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
-				sphere.position = { spot.position[0], spot.position[1], spot.position[2] };
-				sphere.radius = sphereRadius;
-				sphere.volumetricRadianceScale = 1.0f;
-
-				remixapi_LightInfo info{};
-				info.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
-				info.pNext = &sphere;
-				info.hash = fixtureLightHashBase + static_cast<std::uint64_t>(fixtureLightCount);
-				info.radiance = { fixtureColour[0] * radianceScale, fixtureColour[1] * radianceScale,
-					fixtureColour[2] * radianceScale };
-
-				remixapi_LightHandle handle = nullptr;
-
-				if (api->CreateLight(&info, &handle) != REMIXAPI_ERROR_CODE_SUCCESS || !handle)
+				const int index = fixtureLightCount;
+				for (int axis = 0; axis < 3; ++axis)
 				{
-					continue;
+					fixturePositions[index][axis] = spot.position[axis] + spot.normal[axis] * settledFixtureOffset;
 				}
 
-				fixtureLights[fixtureLightCount] = handle;
+				fixtureHashes[index] = FixtureHashAt(spot.position);
+				fixtureCells[index] = FixtureCellAt(spot.position);
+				fixtureLights[index] = CreateFixtureLight(index);
 				++fixtureLightCount;
 			}
 
 			stats.fixtureLights = fixtureLightCount;
+			stats.fixturesInCells = static_cast<int>(std::count_if(fixtureCells, fixtureCells + fixtureLightCount,
+				[](int cell) { return cell >= 0; }));
 		}
+
+		RebuildDirtyFixtures();
+
+		float camera[3];
+
+		if (fixtureLightCount <= maxDrawnFixtureLights || !TryGetCameraOrigin(camera))
+		{
+			int drawnAll = 0;
+
+			for (int i = 0; i < fixtureLightCount; ++i)
+			{
+				if (fixtureLights[i])
+				{
+					api->DrawLightInstance(fixtureLights[i]);
+					++drawnAll;
+				}
+			}
+
+			stats.drawnFixtureLights = drawnAll;
+			return;
+		}
+
+		std::array<std::pair<float, int>, maxFixtureLights> byDistance{};
+		int candidates = 0;
 
 		for (int i = 0; i < fixtureLightCount; ++i)
 		{
-			api->DrawLightInstance(fixtureLights[i]);
+			if (!fixtureLights[i])
+			{
+				continue;
+			}
+
+			const float dx = fixturePositions[i][0] - camera[0];
+			const float dy = fixturePositions[i][1] - camera[1];
+			const float dz = fixturePositions[i][2] - camera[2];
+			const float distanceSquared = dx * dx + dy * dy + dz * dz;
+
+			if (distanceSquared <= maxFixtureLightDistance * maxFixtureLightDistance)
+			{
+				byDistance[candidates++] = { distanceSquared, i };
+			}
 		}
+
+		const int drawn = std::min(candidates, maxDrawnFixtureLights);
+		std::partial_sort(byDistance.begin(), byDistance.begin() + drawn, byDistance.begin() + candidates);
+
+		for (int i = 0; i < drawn; ++i)
+		{
+			api->DrawLightInstance(fixtureLights[byDistance[i].second]);
+		}
+
+		stats.drawnFixtureLights = drawn;
+	}
+
+	FixtureEdit GetFixtureEdit(std::uint64_t hash)
+	{
+		return EffectiveFixtureEdit(hash, FixtureCellOf(hash));
+	}
+
+	void SetFixtureEdit(std::uint64_t hash, const FixtureEdit& edit)
+	{
+		fixtureEdits[hash] = edit;
+		dirtyFixtures.insert(hash);
+	}
+
+	void ForgetFixtureEdit(std::uint64_t hash)
+	{
+		fixtureEdits.erase(hash);
+		dirtyFixtures.insert(hash);
+	}
+
+	bool HasLiveFixtureEdit(std::uint64_t hash)
+	{
+		return fixtureEdits.count(hash) != 0;
 	}
 
 	static void DestroyLaserLights()
 	{
 		for (int i = 0; i < laserLightCount; ++i)
 		{
-			api->DestroyLight(laserLights[i]);
+			DestroyCountedLight(laserLights[i]);
 		}
 
 		laserLightCount = 0;
@@ -838,7 +1151,7 @@ namespace Components::Remix
 
 			remixapi_LightHandle handle = nullptr;
 
-			if (api->CreateLight(&info, &handle) != REMIXAPI_ERROR_CODE_SUCCESS || !handle)
+			if (CreateCountedLight(&info, &handle) != REMIXAPI_ERROR_CODE_SUCCESS || !handle)
 			{
 				continue;
 			}
@@ -857,7 +1170,7 @@ namespace Components::Remix
 		{
 			if (instance.handle)
 			{
-				api->DestroyLight(instance.handle);
+				DestroyCountedLight(instance.handle);
 				instance.handle = nullptr;
 			}
 		}
@@ -1053,7 +1366,7 @@ namespace Components::Remix
 			sphere.shaping_value.focusExponent = std::max(shape.focus, 0.0f);
 		}
 
-		const float scale = intensity * lightBrightness;
+		const float scale = intensity * settledLightBrightness;
 
 		remixapi_LightInfo info{};
 		info.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
@@ -1063,7 +1376,7 @@ namespace Components::Remix
 
 		remixapi_LightHandle handle = nullptr;
 
-		if (api->CreateLight(&info, &handle) != REMIXAPI_ERROR_CODE_SUCCESS || !handle)
+		if (CreateCountedLight(&info, &handle) != REMIXAPI_ERROR_CODE_SUCCESS || !handle)
 		{
 			return false;
 		}
@@ -1076,14 +1389,14 @@ namespace Components::Remix
 	{
 		const std::uintptr_t mapIdentity = GetMapIdentity();
 		const bool isStale = authoredSettingsVersion != GetMapSettingsVersion() || authoredWorld != mapIdentity
-			|| authoredBrightness != lightBrightness;
+			|| authoredBrightness != settledLightBrightness;
 
 		if (isStale)
 		{
 			DestroyAuthoredLights();
 			authoredSettingsVersion = GetMapSettingsVersion();
 			authoredWorld = mapIdentity;
-			authoredBrightness = lightBrightness;
+			authoredBrightness = settledLightBrightness;
 			authoredStartMs = GetTickCount64();
 
 			const std::string mapName = GetMapName();
@@ -1111,7 +1424,7 @@ namespace Components::Remix
 
 			if (isAnimated && instance.handle)
 			{
-				api->DestroyLight(instance.handle);
+				DestroyCountedLight(instance.handle);
 				instance.handle = nullptr;
 			}
 
@@ -1173,9 +1486,10 @@ namespace Components::Remix
 
 		const float colourScale = ReadAt<float>(colourScaleDvar + Iw4::dvarValueOffset);
 
+		SettleBrightness(GetLookSettings());
 		SubmitSun(backEnd, world, colourScale);
 
-		if (GetMapIdentity() != mapLightsWorld || mapLightsBrightness != lightBrightness
+		if (GetMapIdentity() != mapLightsWorld || mapLightsBrightness != settledLightBrightness
 			|| mapLightsColourScale != colourScale || mapLightsSettingsVersion != GetMapSettingsVersion()
 			|| mapLightsTuningVersion != tuningVersion)
 		{
@@ -1211,7 +1525,7 @@ namespace Components::Remix
 
 		if (sunLight)
 		{
-			api->DestroyLight(sunLight);
+			DestroyCountedLight(sunLight);
 			sunLight = nullptr;
 		}
 
@@ -1229,14 +1543,14 @@ namespace Components::Remix
 	void SetLightTuning(const LightTuning& settings)
 	{
 		LightTuning clamped = settings;
-		clamped.spotBrightness = std::clamp(settings.spotBrightness, 0.0f, 8.0f);
-		clamped.omniBrightness = std::clamp(settings.omniBrightness, 0.0f, 8.0f);
-		clamped.sphereRadius = std::clamp(settings.sphereRadius, 0.5f, 32.0f);
+		clamped.spotBrightness = std::clamp(settings.spotBrightness, 0.0f, 1000.0f);
+		clamped.omniBrightness = std::clamp(settings.omniBrightness, 0.0f, 1000.0f);
+		clamped.sphereRadius = std::clamp(settings.sphereRadius, 0.5f, 1000.0f);
 		clamped.coneOffsetDeg = std::clamp(settings.coneOffsetDeg, -45.0f, 45.0f);
 		clamped.softnessOffset = std::clamp(settings.softnessOffset, -1.0f, 1.0f);
-		clamped.focusExponent = std::clamp(settings.focusExponent, 0.0f, 8.0f);
-		clamped.volumetric = std::clamp(settings.volumetric, 0.0f, 8.0f);
-		clamped.dimLightCutoff = std::clamp(settings.dimLightCutoff, 0.0f, 100.0f);
+		clamped.focusExponent = std::clamp(settings.focusExponent, 0.0f, 100.0f);
+		clamped.volumetric = std::clamp(settings.volumetric, 0.0f, 1000.0f);
+		clamped.dimLightCutoff = std::clamp(settings.dimLightCutoff, 0.0f, 100000.0f);
 
 		if (std::memcmp(&clamped, &tuning, sizeof(tuning)) != 0)
 		{
@@ -1265,6 +1579,20 @@ namespace Components::Remix
 			result.push_back(info);
 		}
 
+		for (int i = 0; i < fixtureLightCount; ++i)
+		{
+			const FixtureEdit edit = EffectiveFixtureEdit(fixtureHashes[i], fixtureCells[i]);
+
+			MapLightInfo info;
+			info.hash = fixtureHashes[i];
+			std::memcpy(info.origin, fixturePositions[i], sizeof(info.origin));
+			info.radius = fixtureRange;
+			info.isFixture = true;
+			info.isIgnored = !edit.isOn;
+			info.isChanged = edit.isOn && (edit.brightness != 1.0f || edit.hasColour || edit.size != sphereRadius);
+			result.push_back(info);
+		}
+
 		return result;
 	}
 
@@ -1281,8 +1609,8 @@ namespace Components::Remix
 	void SetSunSettings(const SunSettings& settings)
 	{
 		sunSettings = settings;
-		sunSettings.brightness = std::clamp(settings.brightness, 0.0f, 8.0f);
-		sunSettings.maxRadiance = std::clamp(settings.maxRadiance, 0.0f, 40.0f);
+		sunSettings.brightness = std::clamp(settings.brightness, 0.0f, 1000.0f);
+		sunSettings.maxRadiance = std::clamp(settings.maxRadiance, 0.0f, 10000.0f);
 		sunSettings.pitchDeg = std::clamp(settings.pitchDeg, -10.0f, 90.0f);
 
 		for (int channel = 0; channel < 3; ++channel)
@@ -1308,6 +1636,9 @@ namespace Components::Remix
 
 	LightStats GetLightStats()
 	{
-		return stats;
+		LightStats result = stats;
+		result.lightsCreated = lightsCreated;
+		result.lightsDestroyed = lightsDestroyed;
+		return result;
 	}
 }

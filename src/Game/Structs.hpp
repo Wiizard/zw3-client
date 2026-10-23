@@ -2002,9 +2002,18 @@ namespace Game
 		bool isBeingCarried;
 	};
 
+	struct LerpEntityStateScriptMover
+	{
+		int entToTakeMarksFrom;
+		int xModelIndex;
+		int animIndex;
+		int animTime;
+	};
+
 	union LerpEntityStateTypeUnion
 	{
 		LerpEntityStateTurret turret;
+		LerpEntityStateScriptMover scriptMover;
 		char pad0[0x24];
 	};
 
@@ -2049,10 +2058,15 @@ namespace Game
 	AssertOffset(entityState_s, eventParm, 0xA4);
 	AssertOffset(entityState_s, weapon, 0xCC);
 	static_assert(offsetof(entityState_s, lerp.u.turret) == 0x54);
+	static_assert(offsetof(entityState_s, lerp.u.scriptMover.xModelIndex) == 0x58);
+	AssertOffset(entityState_s, index, 0x90);
+	AssertOffset(entityState_s, solid, 0xA0);
 
 	enum entityType_t
 	{
+		ET_GENERAL = 0x0,
 		ET_PLAYER = 0x1,
+		ET_SCRIPTMOVER = 0x6,
 		ET_MISSILE = 0x4,
 		ET_HELICOPTER = 0xC,
 	};
@@ -2070,7 +2084,8 @@ namespace Game
 		float absHalfSize[3];
 		float currentOrigin[3];
 		float currentAngles[3];
-		char pad1[0x8];
+		unsigned short ownerNum;
+		char pad1[0x6];
 	};
 
 	AssertSize(entityShared_t, 0x58);
@@ -2078,6 +2093,8 @@ namespace Game
 	AssertOffset(entityShared_t, contents, 0x1C);
 	AssertOffset(entityShared_t, absMidPoint, 0x20);
 	AssertOffset(entityShared_t, currentOrigin, 0x38);
+	AssertOffset(entityShared_t, currentAngles, 0x44);
+	AssertOffset(entityShared_t, ownerNum, 0x50);
 
 	enum entityFlag
 	{
@@ -2130,13 +2147,15 @@ namespace Game
 	{
 		char pad0[0x20];
 		float origin[3];
-		char pad1[0x48 - 0x2C];
+		float angles[3];
+		char pad1[0x48 - 0x38];
 		CEntTurretInfo turret;
 		char pad2[0x78 - 0x48 - sizeof(CEntTurretInfo)];
 	};
 
 	AssertSize(cpose_t, 0x78);
 	AssertOffset(cpose_t, origin, 0x20);
+	AssertOffset(cpose_t, angles, 0x2C);
 	static_assert(offsetof(cpose_t, turret.playerUsing) == 0x54);
 
 	struct centity_s

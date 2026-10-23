@@ -1428,7 +1428,6 @@ namespace Components
 		}
 	}
 
-	// the exe keeps no dvar descriptions
 	static std::vector<std::pair<std::string, std::string>> dvarHints;
 
 	void Console::AddDvarHint(const char* name, const char* hint)
@@ -2149,12 +2148,12 @@ namespace Components
 				didPressMouse = true;
 			}
 
-			return true;
+			return down != 0;
 		}
 
 		if (!down)
 		{
-			return true;
+			return key == keyConsole;
 		}
 
 		if (TextRenderer::HandleFontIconAutocompleteKey(TextRenderer::FONT_ICON_ACI_CONSOLE, key, inputBuffer, inputCursor))

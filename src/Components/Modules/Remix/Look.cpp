@@ -2,6 +2,8 @@
 
 #include "Look.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <string>
 
@@ -9,6 +11,10 @@
 #include "Api.hpp"
 #include "Options.hpp"
 #include "PbrMaterials.hpp"
+#include "Culling.hpp"
+#include "MapSettings.hpp"
+#include "Outdoor.hpp"
+#include "Scene.hpp"
 #include "Weather.hpp"
 
 namespace Components::Remix
@@ -101,6 +107,170 @@ namespace Components::Remix
 		return desired;
 	}
 
+	static float outdoorBlend = 0.0f;
+	static ULONGLONG lastOutdoorTick = 0;
+	static bool hasOutdoorMask = false;
+	static bool isCameraOutdoors = false;
+
+	static void UpdateOutdoorBlend()
+	{
+		const ULONGLONG now = GetTickCount64();
+		const float seconds = lastOutdoorTick == 0 ? 0.0f : std::min(static_cast<float>(now - lastOutdoorTick) / 1000.0f, 0.25f);
+		lastOutdoorTick = now;
+
+		float camera[3];
+		bool isOutdoors = false;
+		hasOutdoorMask = TryGetCameraOrigin(camera) && TryTestPointOutdoors(camera, isOutdoors);
+		isCameraOutdoors = hasOutdoorMask && isOutdoors;
+
+		const float target = isCameraOutdoors ? 1.0f : 0.0f;
+		constexpr float blendPerSecond = 1.5f;
+		const float step = std::min(1.0f, seconds * blendPerSecond);
+		outdoorBlend += (target - outdoorBlend) * step;
+
+		if (std::fabs(target - outdoorBlend) < 0.01f)
+		{
+			outdoorBlend = target;
+		}
+	}
+
+	OutdoorExposureState GetOutdoorExposureState()
+	{
+		return { hasOutdoorMask, isCameraOutdoors, outdoorBlend };
+	}
+
+	struct ZoneValues
+	{
+		float exposureEv = 0.0f;
+		float shadowLift = 0.0f;
+		float effectGlow = 0.2f;
+		float contrast = 1.0f;
+		float saturation = 1.0f;
+		float tint[3] = { 1.0f, 1.0f, 1.0f };
+	};
+
+	static bool isZoneGrading = false;
+
+	static ZoneValues zoneValues;
+	static bool hasZoneValues = false;
+	static ULONGLONG lastZoneTick = 0;
+	static int zoneCell = -1;
+	static std::string zoneName;
+
+	static const MapZone* FindActiveZone(int cell, const float* camera, bool hasCamera)
+	{
+		if (!desired.isMapZones)
+		{
+			return nullptr;
+		}
+
+		for (const MapZone& zone : GetMapSettings().zones)
+		{
+			if (cell >= 0 && std::find(zone.cells.begin(), zone.cells.end(), cell) != zone.cells.end())
+			{
+				return &zone;
+			}
+
+			if (zone.hasBox && hasCamera)
+			{
+				bool isInside = true;
+
+				for (int axis = 0; axis < 3; ++axis)
+				{
+					const float low = std::min(zone.boxMin[axis], zone.boxMax[axis]);
+					const float high = std::max(zone.boxMin[axis], zone.boxMax[axis]);
+					isInside = isInside && camera[axis] >= low && camera[axis] <= high;
+				}
+
+				if (isInside)
+				{
+					return &zone;
+				}
+			}
+		}
+
+		return nullptr;
+	}
+
+	static void UpdateZoneValues()
+	{
+		const ULONGLONG now = GetTickCount64();
+		const float seconds = lastZoneTick == 0 ? 0.0f : std::min(static_cast<float>(now - lastZoneTick) / 1000.0f, 0.25f);
+		lastZoneTick = now;
+
+		float camera[3];
+		const bool hasCamera = TryGetCameraOrigin(camera);
+		zoneCell = GetCameraCell();
+
+		const MapZone* zone = FindActiveZone(zoneCell, camera, hasCamera);
+		zoneName = zone ? (zone->name.empty() ? std::string("(unnamed)") : zone->name) : std::string();
+
+		ZoneValues target;
+		target.exposureEv = zone && zone->exposureEv ? *zone->exposureEv : 0.0f;
+		target.shadowLift = zone && zone->shadowLift ? *zone->shadowLift : desired.shadowLift;
+		target.effectGlow = zone && zone->effectGlow ? *zone->effectGlow : desired.effectGlow;
+
+		const bool hasZoneGrade = zone && (zone->contrast || zone->saturation || zone->hasTint);
+		const float baseContrast = desired.isColourGrading ? desired.contrast : 1.0f;
+		const float baseSaturation = desired.isColourGrading ? desired.saturation : 1.0f;
+		target.contrast = zone && zone->contrast ? *zone->contrast : baseContrast;
+		target.saturation = zone && zone->saturation ? *zone->saturation : baseSaturation;
+
+		for (int channel = 0; channel < 3; ++channel)
+		{
+			const float baseTint = desired.isColourGrading ? desired.colourBalance[channel] : 1.0f;
+			target.tint[channel] = zone && zone->hasTint ? zone->tint[channel] : baseTint;
+		}
+
+		if (!hasZoneValues)
+		{
+			zoneValues = target;
+			hasZoneValues = true;
+			return;
+		}
+
+		const float blendSeconds = zone ? zone->blendSeconds : 1.0f;
+		const float step = blendSeconds <= 0.0f ? 1.0f : std::min(1.0f, seconds / blendSeconds * 3.0f);
+
+		const auto ease = [step](float& value, float goal)
+		{
+			value += (goal - value) * step;
+
+			if (std::fabs(goal - value) < 0.002f)
+			{
+				value = goal;
+			}
+		};
+
+		ease(zoneValues.exposureEv, target.exposureEv);
+		ease(zoneValues.shadowLift, target.shadowLift);
+		ease(zoneValues.effectGlow, target.effectGlow);
+		ease(zoneValues.contrast, target.contrast);
+		ease(zoneValues.saturation, target.saturation);
+
+		bool isNeutral = std::fabs(zoneValues.contrast - 1.0f) < 0.002f && std::fabs(zoneValues.saturation - 1.0f) < 0.002f;
+
+		for (int channel = 0; channel < 3; ++channel)
+		{
+			ease(zoneValues.tint[channel], target.tint[channel]);
+			isNeutral = isNeutral && std::fabs(zoneValues.tint[channel] - 1.0f) < 0.002f;
+		}
+
+		isZoneGrading = hasZoneGrade || !isNeutral;
+	}
+
+	ZoneState GetZoneState()
+	{
+		return { zoneCell, zoneName, zoneValues.exposureEv, zoneValues.shadowLift, zoneValues.effectGlow,
+			zoneValues.contrast, zoneValues.saturation, { zoneValues.tint[0], zoneValues.tint[1], zoneValues.tint[2] },
+			isZoneGrading || desired.isColourGrading };
+	}
+
+	float GetEffectiveShadowLift()
+	{
+		return hasZoneValues ? zoneValues.shadowLift : desired.shadowLift;
+	}
+
 	void UpdateLook(IDirect3DDevice9* device)
 	{
 		const remixapi_Interface* api = TryGetApi(device);
@@ -109,6 +279,14 @@ namespace Components::Remix
 		{
 			return;
 		}
+
+		UpdateOutdoorBlend();
+		UpdateZoneValues();
+
+		const float outdoorEvNow = std::round(outdoorBlend * desired.outdoorEv * 50.0f) / 50.0f;
+		const float extraEv = std::round((zoneValues.exposureEv + outdoorEvNow) * 50.0f) / 50.0f;
+		const float exposureBiasNow = desired.exposureBiasEv + extraEv;
+		const float localExposureNow = desired.localExposure * std::pow(2.0f, extraEv);
 
 		if (desired.tonemapper != submitted.tonemapper || !hasSentAll)
 		{
@@ -121,33 +299,44 @@ namespace Components::Remix
 		SendFloatIfChanged(api, "rtx.autoExposure.evMaxValue", desired.exposureMaxEv, submitted.exposureMaxEv);
 		SendFloatIfChanged(api, "rtx.autoExposure.autoExposureSpeed", desired.exposureSpeed, submitted.exposureSpeed);
 
-		SendFloatIfChanged(api, "rtx.localtonemap.exposure", desired.localExposure, submitted.localExposure);
+		SendFloatIfChanged(api, "rtx.localtonemap.exposure", localExposureNow, submitted.localExposure);
 		SendFloatIfChanged(api, "rtx.localtonemap.shadows", desired.localShadows, submitted.localShadows);
 		SendFloatIfChanged(api, "rtx.localtonemap.highlights", desired.localHighlights, submitted.localHighlights);
 		SendBoolIfChanged(api, "rtx.localtonemap.boostLocalContrast", desired.isLocalContrastBoosted,
 			submitted.isLocalContrastBoosted);
 		SendBoolIfChanged(api, "rtx.localtonemap.finalizeWithACES", desired.isLocalAces, submitted.isLocalAces);
 
-		SendFloatIfChanged(api, "rtx.tonemap.exposureBias", desired.exposureBiasEv, submitted.exposureBiasEv);
-		SendBoolIfChanged(api, "rtx.tonemap.colorGradingEnabled", desired.isColourGrading, submitted.isColourGrading);
-		SendFloatIfChanged(api, "rtx.tonemap.contrast", desired.contrast, submitted.contrast);
-		SendFloatIfChanged(api, "rtx.tonemap.saturation", desired.saturation, submitted.saturation);
-		SendBoolIfChanged(api, "rtx.tonemap.finalizeWithACES", desired.isGlobalAces, submitted.isGlobalAces);
+		SendFloatIfChanged(api, "rtx.tonemap.exposureBias", exposureBiasNow, submitted.exposureBiasEv);
 
-		const bool isBalanceChanged = desired.colourBalance[0] != submitted.colourBalance[0]
-			|| desired.colourBalance[1] != submitted.colourBalance[1]
-			|| desired.colourBalance[2] != submitted.colourBalance[2];
+		static bool isMicromapSent = false;
+		SendBoolIfChanged(api, "rtx.opacityMicromap.enable", desired.isOpacityMicromaps, isMicromapSent);
+		const auto grade = [](float value) { return std::round(value * 200.0f) / 200.0f; };
+		SendBoolIfChanged(api, "rtx.tonemap.colorGradingEnabled", desired.isColourGrading || isZoneGrading,
+			submitted.isColourGrading);
+		SendFloatIfChanged(api, "rtx.tonemap.contrast", grade(zoneValues.contrast), submitted.contrast);
+		SendFloatIfChanged(api, "rtx.tonemap.saturation", grade(zoneValues.saturation), submitted.saturation);
+		SendBoolIfChanged(api, "rtx.tonemap.finalizeWithACES", desired.isGlobalAces, submitted.isGlobalAces);
+		static bool isToneCurveSent = false;
+		SendBoolIfChanged(api, "rtx.tonemap.tonemappingEnabled", !desired.isSteadyToneCurve, isToneCurveSent);
+
+		if (!hasSentAll)
+		{
+			SendInt(api, "rtx.autoExposure.exposureAverageMode", 1);
+		}
+
+		const float balance[3] = { grade(zoneValues.tint[0]), grade(zoneValues.tint[1]), grade(zoneValues.tint[2]) };
+		const bool isBalanceChanged = balance[0] != submitted.colourBalance[0] || balance[1] != submitted.colourBalance[1]
+			|| balance[2] != submitted.colourBalance[2];
 
 		if (isBalanceChanged || !hasSentAll)
 		{
 			char text[64];
-			std::snprintf(text, sizeof(text), "%.4f, %.4f, %.4f", desired.colourBalance[0], desired.colourBalance[1],
-				desired.colourBalance[2]);
+			std::snprintf(text, sizeof(text), "%.4f, %.4f, %.4f", balance[0], balance[1], balance[2]);
 			SendOption(api, "rtx.tonemap.colorBalance", text);
 
 			for (int channel = 0; channel < 3; ++channel)
 			{
-				submitted.colourBalance[channel] = desired.colourBalance[channel];
+				submitted.colourBalance[channel] = balance[channel];
 			}
 		}
 
@@ -175,7 +364,11 @@ namespace Components::Remix
 		SendBoolIfChanged(api, "rtx.postfx.enableMotionBlur", desired.isMotionBlur, submitted.isMotionBlur);
 
 		SendBoolIfChanged(api, "rtx.volumetrics.enable", desired.isHaze || desired.isGodRays, submitted.isHaze);
-		SendFloatIfChanged(api, "rtx.emissiveBlendOverrideEmissiveIntensity", desired.effectGlow, submitted.effectGlow);
+		SendFloatIfChanged(api, "rtx.emissiveBlendOverrideEmissiveIntensity",
+			std::round(zoneValues.effectGlow * 100.0f) / 100.0f, submitted.effectGlow);
+
+		static bool isStochasticSent = false;
+		SendBoolIfChanged(api, "rtx.enableStochasticAlphaBlend", !desired.isSteadyTransparency, isStochasticSent);
 		SendBoolIfChanged(api, "rtx.skyReprojectToMainCameraSpace", desired.isSkyReprojected, submitted.isSkyReprojected);
 		SendBoolIfChanged(api, "rtx.useWhiteMaterialMode", desired.isWhiteMaterial, submitted.isWhiteMaterial);
 

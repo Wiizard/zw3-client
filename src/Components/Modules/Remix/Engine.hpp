@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include "Iw4.hpp"
 
 namespace Components::Remix::Engine
@@ -35,4 +37,12 @@ namespace Components::Remix::Engine
 	std::uintptr_t RebaseAddress(std::uintptr_t idbAddress);
 
 	bool InstallPrePostHook(PrePostCallback callback);
+
+	bool IsRendererThreaded();
+
+	void RunOnMainThread(std::function<void()> task);
+
+	void RunMainThreadTasks();
+
+	unsigned MainFrameNumber();
 }

@@ -17,6 +17,8 @@ namespace Components::Remix
 
 	void DrawRainEverywhere(IDirect3DDevice9* device);
 
+	void DrawScreenDrops(IDirect3DDevice9* device);
+
 	bool IsRaining();
 
 	void ReleaseWeather();

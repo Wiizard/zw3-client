@@ -12,6 +12,8 @@ namespace Components::Remix
 		int mapLights = 0;
 		int dynamicLights = 0;
 		int fixtureLights = 0;
+		int drawnFixtureLights = 0;
+		int fixturesInCells = 0;
 		int laserLights = 0;
 		int ignoredMapLights = 0;
 		int changedMapLights = 0;
@@ -22,6 +24,9 @@ namespace Components::Remix
 		float mapSunRadiance[3] = {};
 		float sunDirection[3] = {};
 		unsigned long long submittedFrames = 0;
+		unsigned long long lightsCreated = 0;
+		unsigned long long lightsDestroyed = 0;
+		unsigned long long fixtureRebuilds = 0;
 	};
 
 	struct SunSettings
@@ -56,9 +61,27 @@ namespace Components::Remix
 		bool isIgnored = false;
 		bool isChanged = false;
 		bool isAuthored = false;
+		bool isFixture = false;
 	};
 
 	void SubmitSceneLights(IDirect3DDevice9* device, const void* viewInfo);
+
+	struct FixtureEdit
+	{
+		bool isOn = true;
+		float brightness = 1.0f;
+		bool hasColour = false;
+		float colour[3] = { 1.0f, 0.9f, 0.75f };
+		float size = 4.0f;
+	};
+
+	FixtureEdit GetFixtureEdit(std::uint64_t hash);
+
+	void SetFixtureEdit(std::uint64_t hash, const FixtureEdit& edit);
+
+	void ForgetFixtureEdit(std::uint64_t hash);
+
+	bool HasLiveFixtureEdit(std::uint64_t hash);
 
 	void SetLightBrightness(float brightness);
 

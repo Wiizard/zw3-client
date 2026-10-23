@@ -59,6 +59,7 @@ namespace Components::Remix
 		look.colourBalance[1] = config.remixColourBalanceG;
 		look.colourBalance[2] = config.remixColourBalanceB;
 		look.isGlobalAces = config.remixGlobalAces;
+		look.isSteadyToneCurve = config.remixSteadyToneCurve;
 		look.isBloom = config.remixBloom;
 		look.bloomIntensity = config.remixBloomIntensity;
 		look.bloomThreshold = config.remixBloomThreshold;
@@ -88,12 +89,15 @@ namespace Components::Remix
 		look.isLaserLights = config.remixLaserLights;
 		look.isFixtureLights = config.remixFixtureLights;
 		look.fixtureBrightness = config.remixFixtureBrightness;
+		look.fixtureOffset = config.remixFixtureOffset;
+		look.fixtureSize = config.remixFixtureSize;
 		look.isPuddles = config.remixPuddles;
 		look.isParallax = config.remixParallax;
 		look.parallaxDepth = config.remixParallaxDepth;
 		look.wetMode = config.remixWetMode;
 		look.isRainEverywhere = config.remixRainEverywhere;
 		look.rainAmount = config.remixRainAmount;
+		look.isScreenDrops = config.remixScreenDrops;
 		look.isTimeOfDay = config.remixTimeOfDay;
 		look.timeOfDayHours = config.remixTimeOfDayHours;
 		look.isNight = config.remixNight;
@@ -103,6 +107,13 @@ namespace Components::Remix
 		look.isMirror = config.remixMirror;
 		look.mirrorMetal = config.remixMirrorMetal;
 		look.effectGlow = config.remixEffectGlow;
+		look.shadowLift = config.remixShadowLift;
+		look.eyeGlowBrightness = config.remixEyeGlowBrightness;
+		look.eyeGlowSize = config.remixEyeGlowSize;
+		look.isMapZones = config.remixMapZones;
+		look.isSteadyTransparency = config.remixSteadyTransparency;
+		look.outdoorEv = config.remixOutdoorEv;
+		look.isOpacityMicromaps = config.remixOpacityMicromaps;
 		look.isSkyReprojected = config.remixSkyReprojected;
 		return look;
 	}
@@ -127,6 +138,7 @@ namespace Components::Remix
 		config.remixColourBalanceG = look.colourBalance[1];
 		config.remixColourBalanceB = look.colourBalance[2];
 		config.remixGlobalAces = look.isGlobalAces;
+		config.remixSteadyToneCurve = look.isSteadyToneCurve;
 		config.remixBloom = look.isBloom;
 		config.remixBloomIntensity = look.bloomIntensity;
 		config.remixBloomThreshold = look.bloomThreshold;
@@ -156,12 +168,15 @@ namespace Components::Remix
 		config.remixLaserLights = look.isLaserLights;
 		config.remixFixtureLights = look.isFixtureLights;
 		config.remixFixtureBrightness = look.fixtureBrightness;
+		config.remixFixtureOffset = look.fixtureOffset;
+		config.remixFixtureSize = look.fixtureSize;
 		config.remixPuddles = look.isPuddles;
 		config.remixParallax = look.isParallax;
 		config.remixParallaxDepth = look.parallaxDepth;
 		config.remixWetMode = look.wetMode;
 		config.remixRainEverywhere = look.isRainEverywhere;
 		config.remixRainAmount = look.rainAmount;
+		config.remixScreenDrops = look.isScreenDrops;
 		config.remixTimeOfDay = look.isTimeOfDay;
 		config.remixTimeOfDayHours = look.timeOfDayHours;
 		config.remixNight = look.isNight;
@@ -171,6 +186,13 @@ namespace Components::Remix
 		config.remixMirror = look.isMirror;
 		config.remixMirrorMetal = look.mirrorMetal;
 		config.remixEffectGlow = look.effectGlow;
+		config.remixShadowLift = look.shadowLift;
+		config.remixEyeGlowBrightness = look.eyeGlowBrightness;
+		config.remixEyeGlowSize = look.eyeGlowSize;
+		config.remixMapZones = look.isMapZones;
+		config.remixSteadyTransparency = look.isSteadyTransparency;
+		config.remixOutdoorEv = look.outdoorEv;
+		config.remixOpacityMicromaps = look.isOpacityMicromaps;
 		config.remixSkyReprojected = look.isSkyReprojected;
 	}
 

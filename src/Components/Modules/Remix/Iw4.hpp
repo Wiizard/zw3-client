@@ -58,6 +58,11 @@ namespace Components::Remix::Iw4
 		CallSite marksTessCalls[2];
 		CallSite glassTessCalls[2];
 		CallSite particleCloudTessCalls[2];
+		CallSite FX_DrawSpriteElemsCall;
+		CallSite FX_DrawElementSpriteCalls[2];
+		std::uintptr_t R_AddCodeSurf;
+		std::uintptr_t fxDrawElemBillboardSlot;
+		std::uintptr_t FX_DrawElem_BillboardSprite;
 		CallSite R_AddAllStaticModelSurfacesCameraCall;
 
 		CallSite R_AddCode3DQuadSurfCalls[3];
@@ -103,11 +108,11 @@ namespace Components::Remix::Iw4
 		std::uintptr_t R_SetFilmConstants;
 		CallSite SND_PlaySoundAlias_InternalCalls[12];
 		std::uintptr_t visionNameNaked;
+		BytePatch gpuSyncPollFlushPatches[4];
+		CallSite renderCommandFrameCalls[3];
+		CallSite renderThreadUpdateScreenCall;
 	};
 
-	// iw4mp 2.0.13 x64 (md5 fc9bf305bc9f9873cb836d64934aea33). Translated from iw4dlss5's 2.0.14 table by
-	// matching each site's surrounding instructions (relative operands masked) in both IDBs; every call
-	// lands on the same function there, and the expected bytes are the ones 2.0.13 actually holds.
 	inline constexpr GameBuild multiplayer{
 		.rChangeDepthRange = 0x1400478B0,
 		.emissivePassCall = { 0x1400738FF, { 0xE8, 0xBC, 0x70, 0x00, 0x00 } },
@@ -179,6 +184,14 @@ namespace Components::Remix::Iw4
 			{ 0x140051587, { 0xE8, 0xC4, 0x37, 0x02, 0x00 } },
 			{ 0x1400515AC, { 0xE8, 0x9F, 0x37, 0x02, 0x00 } },
 		},
+		.FX_DrawSpriteElemsCall = { 0x14013D0DA, { 0xE8, 0xA1, 0xDE, 0xFF, 0xFF } },
+		.FX_DrawElementSpriteCalls = {
+			{ 0x14013B0AE, { 0xE8, 0x2D, 0xF7, 0xFF, 0xFF } },
+			{ 0x14013B128, { 0xE8, 0xB3, 0xF6, 0xFF, 0xFF } },
+		},
+		.R_AddCodeSurf = 0x14001E1F0,
+		.fxDrawElemBillboardSlot = 0x14037D930,
+		.FX_DrawElem_BillboardSprite = 0x140139F40,
 		.R_AddAllStaticModelSurfacesCameraCall = { 0x140022BD0, { 0xE8, 0x0B, 0xD1, 0x03, 0x00 } },
 		.R_AddCode3DQuadSurfCalls = {
 			{ 0x1400B4A3B, { 0xE8, 0x80, 0x98, 0xF6, 0xFF } },
@@ -249,6 +262,18 @@ namespace Components::Remix::Iw4
 			{ 0x14024AE40, { 0xE8, 0x8B, 0xC2, 0xFF, 0xFF } },
 		},
 		.visionNameNaked = 0x140586E84,
+		.gpuSyncPollFlushPatches = {
+			{ 0x140031C8A, { 0x41, 0xB9, 0x01, 0x00, 0x00, 0x00 }, { 0x41, 0xB9, 0x00, 0x00, 0x00, 0x00 }, 6 },
+			{ 0x140031C90, { 0x45, 0x8D, 0x41, 0x03 }, { 0x45, 0x8D, 0x41, 0x04 }, 4 },
+			{ 0x14001B69A, { 0x41, 0xB9, 0x01, 0x00, 0x00, 0x00 }, { 0x41, 0xB9, 0x00, 0x00, 0x00, 0x00 }, 6 },
+			{ 0x14001B6A0, { 0x45, 0x8D, 0x41, 0x03 }, { 0x45, 0x8D, 0x41, 0x04 }, 4 },
+		},
+		.renderCommandFrameCalls = {
+			{ 0x14005050A, { 0xE8, 0x31, 0xFE, 0xFF, 0xFF } },
+			{ 0x140050561, { 0xE8, 0xDA, 0xFD, 0xFF, 0xFF } },
+			{ 0x1400505C7, { 0xE8, 0x74, 0xFD, 0xFF, 0xFF } },
+		},
+		.renderThreadUpdateScreenCall = { 0x14005057E, { 0xE8, 0xAD, 0x16, 0x0B, 0x00 } },
 	};
 
 	inline constexpr std::uintptr_t dvarValueOffset = 16;
@@ -318,6 +343,23 @@ namespace Components::Remix::Iw4
 	inline constexpr std::uintptr_t worldDpvsEmissiveBegin = 0x24;
 	inline constexpr std::uintptr_t worldDpvsEmissiveEnd = 0x28;
 	inline constexpr std::uintptr_t worldName = 0x0;
+	inline constexpr std::uintptr_t worldCellCount = 0x40;
+	inline constexpr std::uintptr_t worldCellTreeCounts = 0x60;
+	inline constexpr std::uintptr_t worldCellTrees = 0x68;
+	inline constexpr std::uintptr_t worldCells = 0x70;
+	inline constexpr std::size_t cellStride = 0x38;
+	inline constexpr std::uintptr_t cellMidPoint = 0x00;
+	inline constexpr std::uintptr_t cellHalfSize = 0x0C;
+	inline constexpr std::uintptr_t cellPortalCount = 0x18;
+	inline constexpr std::uintptr_t cellPortals = 0x20;
+	inline constexpr std::size_t portalStride = 0x50;
+	inline constexpr std::uintptr_t portalCellIndex = 0x30;
+	inline constexpr std::size_t aabbTreeStride = 0x38;
+	inline constexpr std::uintptr_t aabbTreeSurfaceCount = 0x1A;
+	inline constexpr std::uintptr_t aabbTreeStartSurfIndex = 0x1C;
+	inline constexpr std::uintptr_t aabbTreeSModelCount = 0x22;
+	inline constexpr std::uintptr_t aabbTreeSModelIndexes = 0x28;
+	inline constexpr std::uintptr_t cellForPointFunction = 0x140027780;
 	inline constexpr std::uintptr_t worldSkyCount = 0x1C;
 	inline constexpr std::uintptr_t worldLastSunPrimaryLightIndex = 0x28;
 	inline constexpr std::uintptr_t worldPrimaryLightCount = 0x2C;
@@ -412,8 +454,6 @@ namespace Components::Remix::Iw4
 	inline constexpr std::uint64_t drawSurfGroupMask = 0xFFFFFFFFC1000000ull;
 	inline constexpr std::uint64_t drawSurfUsesGfxEntity = 0x1000000ull;
 
-	// zw3's AssetHandler widens the material index from 12 to 14 bits (WidenDrawSurfKey): the gfx entity flag
-	// drops to bit 22 and the static model run count to 2 bits, read as `shr 0Eh` in R_TessStaticModelRigidDrawSurfList
 	inline constexpr std::uint64_t drawSurfGroupMaskWide = 0xFFFFFFFFF0400000ull;
 	inline constexpr std::uint64_t drawSurfUsesGfxEntityWide = 0x400000ull;
 	inline constexpr int drawSurfHasEntityBitWide = 22;

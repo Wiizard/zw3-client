@@ -4,10 +4,14 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
+#include <string_view>
+#include <unordered_map>
 
 #include "Core.hpp"
 #include "Device.hpp"
 #include "Engine.hpp"
+#include "FixedFunction.hpp"
 #include "Hook.hpp"
 #include "Iw4.hpp"
 #include "PatchCalls.hpp"
@@ -220,6 +224,120 @@ namespace Components::Remix
 		}
 	}
 
+	static bool isHidingLampFlares = true;
+
+	void SetLampFlaresHidden(bool isHidden)
+	{
+		isHidingLampFlares = isHidden;
+	}
+
+	bool AreLampFlaresHidden()
+	{
+		return isHidingLampFlares;
+	}
+
+	static bool IsEyeOffsetLampFlare(std::uintptr_t material)
+	{
+		static std::unordered_map<std::uintptr_t, bool> known;
+		const auto found = known.find(material);
+
+		if (found != known.end())
+		{
+			return found->second;
+		}
+
+		const char* name = ReadAt<const char*>(material);
+		const auto techniqueSet = ReadAt<std::uintptr_t>(material + Iw4::materialTechniqueSet);
+		const char* techniqueSetName = techniqueSet ? ReadAt<const char*>(techniqueSet) : nullptr;
+		bool isFlare = false;
+
+		if (name && techniqueSetName && std::strstr(techniqueSetName, "eyeoffset"))
+		{
+			const std::string_view materialName(name);
+			const auto has = [&materialName](std::string_view part) { return materialName.find(part) != std::string_view::npos; };
+
+			const bool isLampGlow = has("glow") || has("flare") || has("halo") || has("corona") || has("light");
+			const bool isWanted = has("eyeglow") || has("eye_glow") || has("muz") || has("fire") || has("spark")
+				|| has("explo") || has("blood") || has("tracer");
+
+			isFlare = isLampGlow && !isWanted;
+		}
+
+		known[material] = isFlare;
+		return isFlare;
+	}
+
+	static std::uintptr_t FindScriptRunEnd(std::uintptr_t cursor, std::uintptr_t end, bool& isScript)
+	{
+		const auto key = ReadAt<std::uint32_t>(cursor);
+		isScript = IsScriptEffectSurface(ReadAt<const void*>(cursor + Iw4::codeSurfIndices));
+		cursor += Iw4::codeSurfStride;
+
+		while (cursor < end && ReadAt<std::uint32_t>(cursor) == key
+			&& IsScriptEffectSurface(ReadAt<const void*>(cursor + Iw4::codeSurfIndices)) == isScript)
+		{
+			cursor += Iw4::codeSurfStride;
+		}
+
+		return cursor;
+	}
+
+	static char DrawEffectRun(void* context, void** iterator, void* placement, std::uintptr_t material, bool isScript)
+	{
+		IDirect3DDevice9* sceneDevice = GetSceneDevice();
+		IDirect3DTexture9* twin = nullptr;
+		const char* action = "";
+
+		if (sceneDevice && isScript)
+		{
+			twin = TryGetParticleColorMapTwin(sceneDevice, material);
+			std::uint64_t twinHash = 0;
+
+			if (twin && Device::TryGetTextureHash(twin, twinHash))
+			{
+				static char twinAction[64];
+				std::snprintf(twinAction, sizeof(twinAction), "zw3 script effect, particle copy 0x%016llX",
+					static_cast<unsigned long long>(twinHash));
+				action = twinAction;
+			}
+			else
+			{
+				action = "zw3 script effect, particle copy FAILED";
+			}
+		}
+		else if (sceneDevice && isHidingLampFlares && IsEyeOffsetLampFlare(material))
+		{
+			twin = TryGetIgnoredColorMapTwin(sceneDevice, material);
+
+			if (twin)
+			{
+				action = "hidden as a floating lamp flare";
+			}
+		}
+
+		RecordDumpEffect(sceneDevice, material, action);
+
+		if (!twin)
+		{
+			return originalTessMarks(context, iterator, placement);
+		}
+
+		IDirect3DBaseTexture9* boundTexture = nullptr;
+		sceneDevice->GetTexture(0, &boundTexture);
+		sceneDevice->SetTexture(0, twin);
+
+		const char result = originalTessMarks(context, iterator, placement);
+
+		sceneDevice->SetTexture(0, boundTexture);
+
+		if (boundTexture)
+		{
+			boundTexture->Release();
+		}
+
+		return result;
+	}
+
 	static char __fastcall TessMarksDetour(void* context, void** iterator, void* placement)
 	{
 		const auto contextAddress = reinterpret_cast<std::uintptr_t>(context);
@@ -229,7 +347,35 @@ namespace Components::Remix
 		if (!IsBackground(material) && !IsBlipOrSweep(material))
 		{
 			ReorderSpriteQuads(iterator);
-			return originalTessMarks(context, iterator, placement);
+
+			void* const end = iterator[1];
+			const auto endAddress = reinterpret_cast<std::uintptr_t>(end);
+			auto cursor = reinterpret_cast<std::uintptr_t>(iterator[0]);
+
+			if (!cursor || cursor >= endAddress)
+			{
+				return originalTessMarks(context, iterator, placement);
+			}
+
+			const auto key = ReadAt<std::uint32_t>(cursor);
+			char result = 0;
+
+			while (true)
+			{
+				bool isScript = false;
+				const std::uintptr_t runEnd = FindScriptRunEnd(cursor, endAddress, isScript);
+
+				iterator[1] = reinterpret_cast<void*>(runEnd);
+				result = DrawEffectRun(context, iterator, placement, material, isScript);
+				iterator[1] = end;
+
+				cursor = reinterpret_cast<std::uintptr_t>(iterator[0]);
+
+				if (cursor != runEnd || cursor >= endAddress || ReadAt<std::uint32_t>(cursor) != key)
+				{
+					return result;
+				}
+			}
 		}
 
 		const auto source = ReadAt<std::uintptr_t>(contextAddress + Iw4::drawListArgsSource);

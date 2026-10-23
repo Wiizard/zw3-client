@@ -24,8 +24,6 @@ namespace Components
 	Dvar::Var HudParallax::cg_hudParallaxScale;
 	Dvar::Var HudParallax::cg_hudParallaxSnapDistance;
 	Dvar::Var HudParallax::cg_hudParallaxSnapAngle;
-	Dvar::Var HudParallax::cg_hudParallaxBobPitch;
-	Dvar::Var HudParallax::cg_hudParallaxBobYaw;
 
 	constexpr std::uintptr_t R_RenderScene_CG_Draw2DCall = 0x140022896;
 	constexpr std::uintptr_t CG_Draw2D = 0x1400D0D80;
@@ -69,18 +67,15 @@ namespace Components
 	constexpr std::uintptr_t AnglesToAxis = 0x14027E1F0;
 	constexpr std::uintptr_t AxisToAngles = 0x1402793F0;
 
-	constexpr std::uintptr_t BG_CalculateViewMovement_VerticalBobFactor = 0x14009ED50;
-	constexpr std::uintptr_t BG_CalculateViewMovement_HorizontalBobFactor = 0x14009EC60;
-	constexpr std::uintptr_t bobSpeed = 0x1404ED124;
-
 	constexpr int firstUnanchoredAlign = 4;
 	constexpr int lastUnanchoredAlign = 6;
+
+	constexpr int teleportBit = 1 << 1;
 
 	constexpr float degreesPerRadian = 57.2957795f;
 	constexpr float rateTimeBase = 1.0f / 60.0f;
 	constexpr float rootUnitsHigh = 720.0f;
-	constexpr float pi = 3.14159265f;
-	constexpr float bobCycleSteps = 255.0f;
+	constexpr float trackSnapAngle = 0.001f;
 
 	static const char* const ignoredMaterials[] =
 	{
@@ -108,7 +103,6 @@ namespace Components
 	using HudElemPlace_t = void(*)(int localClientNum, const void* hudElem, float* origin, void* layout);
 	using AnglesToAxis_t = void(*)(const float* angles, float* axis);
 	using AxisToAngles_t = void(*)(const float* axis, float* angles);
-	using BobFactor_t = float(*)(const Game::playerState_s* ps, float phase, float speed);
 
 	struct Motion
 	{
@@ -116,6 +110,7 @@ namespace Components
 		bool hasVelocity;
 		int time;
 		int pmType;
+		int eFlags;
 		std::chrono::steady_clock::time_point clock;
 		float aimAngles[3];
 		float cameraAngles[3];
@@ -186,6 +181,19 @@ namespace Components
 		return angle;
 	}
 
+	static float TrackAngle(float target, float current, float rate, float seconds)
+	{
+		const float delta = AngleDelta(target, current);
+		const float step = delta * rate * seconds;
+
+		if (std::fabs(delta) > trackSnapAngle && std::fabs(delta) >= std::fabs(step))
+		{
+			return AngleNormalize180(current + step);
+		}
+
+		return AngleNormalize180(target);
+	}
+
 	static bool IsAnchored(int align)
 	{
 		return align < firstUnanchoredAlign || align > lastUnanchoredAlign;
@@ -229,6 +237,7 @@ namespace Components
 	{
 		motion.time = cg->time;
 		motion.pmType = cg->predictedPlayerState.pm_type;
+		motion.eFlags = cg->predictedPlayerState.eFlags;
 		motion.clock = now;
 
 		std::memcpy(motion.aimAngles, cg->predictedPlayerState.viewangles, sizeof(motion.aimAngles));
@@ -274,13 +283,6 @@ namespace Components
 
 		const auto& ps = cg->predictedPlayerState;
 
-		if (ps.pm_type != motion.pmType)
-		{
-			motion.hasVelocity = false;
-			SeedSamples(cg, cameraAngles, now);
-			return;
-		}
-
 		const float gameSeconds = static_cast<float>(cg->time - motion.time) * 0.001f;
 		float realSeconds = std::chrono::duration<float>(now - motion.clock).count();
 
@@ -303,32 +305,36 @@ namespace Components
 		}
 
 		const float originDistance = std::sqrt(originDelta[0] * originDelta[0] + originDelta[1] * originDelta[1] + originDelta[2] * originDelta[2]);
-		const bool isCameraCut = originDistance > cg_hudParallaxSnapDistance.Get<float>() || animTurn > cg_hudParallaxSnapAngle.Get<float>();
+		const bool isTeleported = ((ps.eFlags ^ motion.eFlags) & teleportBit) != 0;
+		const bool isCameraCut = isTeleported
+			|| ps.pm_type != motion.pmType
+			|| originDistance > cg_hudParallaxSnapDistance.Get<float>()
+			|| animTurn > cg_hudParallaxSnapAngle.Get<float>();
 
 		if (isCameraCut)
 		{
 			motion.hasVelocity = false;
-			SeedSamples(cg, cameraAngles, now);
-			return;
+			std::memset(aimDelta, 0, sizeof(aimDelta));
+			std::memset(animDelta, 0, sizeof(animDelta));
+			std::memset(originDelta, 0, sizeof(originDelta));
 		}
 
-		const float decay = std::exp(-cg_hudParallaxSmoothing.Get<float>() * realSeconds);
-		const float inputGain = (1.0f - decay) / realSeconds * rateTimeBase;
-		const float viewRate = cg_hudParallaxViewRate.Get<float>();
-		const float animRate = cg_hudParallaxAnimRate.Get<float>();
+		const float viewGain = cg_hudParallaxViewRate.Get<float>() / realSeconds * rateTimeBase;
+		const float animGain = cg_hudParallaxAnimRate.Get<float>() / gameSeconds * rateTimeBase;
 
-		float impulse[3];
-		impulse[0] = (aimDelta[0] * viewRate + animDelta[0] * animRate) * inputGain;
-		impulse[1] = (aimDelta[1] * viewRate + animDelta[1] * animRate) * inputGain;
-		impulse[2] = animDelta[2] * animRate * inputGain;
+		float target[3];
+		target[0] = aimDelta[0] * viewGain + animDelta[0] * animGain;
+		target[1] = aimDelta[1] * viewGain + animDelta[1] * animGain;
+		target[2] = animDelta[2] * animGain;
 
-		const float yawRadians = ps.viewangles[1] / degreesPerRadian;
+		const float yawRadians = cameraAngles[1] / degreesPerRadian;
 		const float forward[2] = { std::cos(yawRadians), std::sin(yawRadians) };
+		const float cameraVelocity[3] = { originDelta[0] / gameSeconds, originDelta[1] / gameSeconds, originDelta[2] / gameSeconds };
 		const float localVelocity[3] =
 		{
-			ps.velocity[0] * forward[0] + ps.velocity[1] * forward[1],
-			ps.velocity[1] * forward[0] - ps.velocity[0] * forward[1],
-			ps.velocity[2],
+			cameraVelocity[0] * forward[0] + cameraVelocity[1] * forward[1],
+			cameraVelocity[1] * forward[0] - cameraVelocity[0] * forward[1],
+			cameraVelocity[2],
 		};
 
 		if (motion.hasVelocity)
@@ -339,7 +345,7 @@ namespace Components
 			}
 		}
 
-		motion.hasVelocity = true;
+		motion.hasVelocity = !isCameraCut;
 		std::memcpy(motion.localVelocity, localVelocity, sizeof(motion.localVelocity));
 
 		const float linearMax = cg_hudParallaxLinearMax.Get<float>();
@@ -358,20 +364,11 @@ namespace Components
 		const float clampedLength = std::min(kickLength, linearMax);
 		const float kickFraction = clampedLength / linearMax;
 
-		float linearTarget[3] = { 0.0f, 0.0f, 0.0f };
-		linearTarget[0] += kickDirection[0] * kickFraction * cg_hudParallaxLinearForward.Get<float>();
-		linearTarget[0] += kickDirection[2] * kickFraction * cg_hudParallaxLinearUp.Get<float>();
-		linearTarget[1] -= kickDirection[1] * kickFraction * cg_hudParallaxLinearSide.Get<float>();
+		target[0] += kickDirection[0] * kickFraction * cg_hudParallaxLinearForward.Get<float>();
+		target[0] += kickDirection[2] * kickFraction * cg_hudParallaxLinearUp.Get<float>();
+		target[1] -= kickDirection[1] * kickFraction * cg_hudParallaxLinearSide.Get<float>();
 
-		const float speed = Utils::Hook::Get<float>(bobSpeed);
-		const float bobPhase = static_cast<float>(static_cast<std::uint8_t>(ps.bobCycle)) / bobCycleSteps * pi * 2.0f + 2.0f * pi;
-		const float verticalBob = reinterpret_cast<BobFactor_t>(Utils::Hook::Rebase(BG_CalculateViewMovement_VerticalBobFactor))(&ps, bobPhase, speed);
-		const float horizontalBob = reinterpret_cast<BobFactor_t>(Utils::Hook::Rebase(BG_CalculateViewMovement_HorizontalBobFactor))(&ps, bobPhase, speed);
-
-		linearTarget[0] += verticalBob * cg_hudParallaxBobPitch.Get<float>();
-		linearTarget[1] += horizontalBob * cg_hudParallaxBobYaw.Get<float>();
-
-		const float decayedLength = std::max(clampedLength - linearMax / cg_hudParallaxLinearDecay.Get<float>() * realSeconds, 0.0f);
+		const float decayedLength = std::max(clampedLength - linearMax / cg_hudParallaxLinearDecay.Get<float>() * gameSeconds, 0.0f);
 
 		for (int i = 0; i < 3; ++i)
 		{
@@ -379,12 +376,13 @@ namespace Components
 		}
 
 		const float maxOffset[3] = { cg_hudParallaxMaxPitch.Get<float>(), cg_hudParallaxMaxYaw.Get<float>(), cg_hudParallaxMaxYaw.Get<float>() };
+		const float smoothing = cg_hudParallaxSmoothing.Get<float>();
 
 		float swayedAngles[3];
 
 		for (int i = 0; i < 3; ++i)
 		{
-			motion.sway[i] = motion.sway[i] * decay + impulse[i] + linearTarget[i] * (1.0f - decay);
+			motion.sway[i] = TrackAngle(target[i], motion.sway[i], smoothing, gameSeconds);
 			swayedAngles[i] = ClampAngle(cameraAngles[i] + motion.sway[i], cameraAngles[i], maxOffset[i]);
 		}
 
@@ -570,21 +568,19 @@ namespace Components
 		cg_hudParallaxUnanchored = Dvar::Register("cg_hudParallaxUnanchored", false, Game::DVAR_ARCHIVE, "Also move items aligned fullscreen or without scaling");
 		cg_hudParallaxIgnore = Dvar::Register("cg_hudParallaxIgnore", true, Game::DVAR_ARCHIVE, "Keep the hit marker, scavenger icon and hints still");
 
-		cg_hudParallaxViewRate = Dvar::Register("cg_hudParallaxViewRate", -0.12f, -100.0f, 100.0f, Game::DVAR_NONE, "How much turning the view moves the hud, negative lags behind");
-		cg_hudParallaxAnimRate = Dvar::Register("cg_hudParallaxAnimRate", -1.5f, -100.0f, 100.0f, Game::DVAR_NONE, "How much camera animation moves the hud, negative lags behind");
-		cg_hudParallaxLinearForward = Dvar::Register("cg_hudParallaxLinearForward", 0.0f, 0.0f, 360.0f, Game::DVAR_NONE, "Degrees of pitch from a change in forward speed");
-		cg_hudParallaxLinearSide = Dvar::Register("cg_hudParallaxLinearSide", 0.0f, 0.0f, 360.0f, Game::DVAR_NONE, "Degrees of yaw from a change in sideways speed");
-		cg_hudParallaxLinearUp = Dvar::Register("cg_hudParallaxLinearUp", 1.0f, 0.0f, 360.0f, Game::DVAR_NONE, "Degrees of pitch from a change in vertical speed");
-		cg_hudParallaxLinearMax = Dvar::Register("cg_hudParallaxLinearMax", 40.0f, 0.01f, 100000.0f, Game::DVAR_NONE, "Largest speed change counted, in units per second");
-		cg_hudParallaxLinearDecay = Dvar::Register("cg_hudParallaxLinearDecay", 0.3f, 0.01f, 10.0f, Game::DVAR_NONE, "Seconds for a full speed change to fade out");
-		cg_hudParallaxSmoothing = Dvar::Register("cg_hudParallaxSmoothing", 7.0f, 0.01f, 1000.0f, Game::DVAR_NONE, "How fast the hud follows its target, per second");
-		cg_hudParallaxMaxPitch = Dvar::Register("cg_hudParallaxMaxPitch", 4.5f, 0.0f, 360.0f, Game::DVAR_NONE, "Largest vertical offset, in degrees");
-		cg_hudParallaxMaxYaw = Dvar::Register("cg_hudParallaxMaxYaw", 4.5f, 0.0f, 360.0f, Game::DVAR_NONE, "Largest horizontal offset, in degrees");
-		cg_hudParallaxScale = Dvar::Register("cg_hudParallaxScale", 0.3f, 0.0f, 100.0f, Game::DVAR_NONE, "Scale on the final offset");
-		cg_hudParallaxSnapDistance = Dvar::Register("cg_hudParallaxSnapDistance", 128.0f, 0.0f, 1000000.0f, Game::DVAR_NONE, "Camera move in one frame, in units, treated as a cut and not as motion");
-		cg_hudParallaxBobPitch = Dvar::Register("cg_hudParallaxBobPitch", 0.125f, 0.0f, 10.0f, Game::DVAR_NONE, "Degrees of pitch per unit of the view bob's height, so the hud sways with each step");
-		cg_hudParallaxBobYaw = Dvar::Register("cg_hudParallaxBobYaw", 0.05f, 0.0f, 10.0f, Game::DVAR_NONE, "Degrees of yaw per unit of the view bob's side motion");
-		cg_hudParallaxSnapAngle = Dvar::Register("cg_hudParallaxSnapAngle", 30.0f, 0.0f, 360.0f, Game::DVAR_NONE, "Camera turn in one frame not made by aiming, in degrees, treated as a cut and not as motion");
+		cg_hudParallaxViewRate = Dvar::Register("cg_hudParallaxViewRate", -0.12f, -100.0f, 100.0f, Game::DVAR_ARCHIVE, "How much turning the view moves the hud, negative lags behind");
+		cg_hudParallaxAnimRate = Dvar::Register("cg_hudParallaxAnimRate", -1.5f, -100.0f, 100.0f, Game::DVAR_ARCHIVE, "How much camera animation moves the hud, negative lags behind");
+		cg_hudParallaxLinearForward = Dvar::Register("cg_hudParallaxLinearForward", 0.0f, 0.0f, 360.0f, Game::DVAR_ARCHIVE, "Degrees of pitch from a change in forward speed");
+		cg_hudParallaxLinearSide = Dvar::Register("cg_hudParallaxLinearSide", 0.0f, 0.0f, 360.0f, Game::DVAR_ARCHIVE, "Degrees of yaw from a change in sideways speed");
+		cg_hudParallaxLinearUp = Dvar::Register("cg_hudParallaxLinearUp", 0.25f, 0.0f, 360.0f, Game::DVAR_ARCHIVE, "Degrees of pitch from a change in vertical speed");
+		cg_hudParallaxLinearMax = Dvar::Register("cg_hudParallaxLinearMax", 40.0f, 0.01f, 100000.0f, Game::DVAR_ARCHIVE, "Largest speed change counted, in units per second");
+		cg_hudParallaxLinearDecay = Dvar::Register("cg_hudParallaxLinearDecay", 0.3f, 0.01f, 10.0f, Game::DVAR_ARCHIVE, "Seconds for a full speed change to fade out");
+		cg_hudParallaxSmoothing = Dvar::Register("cg_hudParallaxSmoothing", 7.0f, 0.01f, 1000.0f, Game::DVAR_ARCHIVE, "How fast the hud follows its target, per second");
+		cg_hudParallaxMaxPitch = Dvar::Register("cg_hudParallaxMaxPitch", 4.5f, 0.0f, 360.0f, Game::DVAR_ARCHIVE, "Largest vertical offset, in degrees");
+		cg_hudParallaxMaxYaw = Dvar::Register("cg_hudParallaxMaxYaw", 4.5f, 0.0f, 360.0f, Game::DVAR_ARCHIVE, "Largest horizontal offset, in degrees");
+		cg_hudParallaxScale = Dvar::Register("cg_hudParallaxScale", 0.75f, 0.0f, 100.0f, Game::DVAR_ARCHIVE, "Scale on the final offset");
+		cg_hudParallaxSnapDistance = Dvar::Register("cg_hudParallaxSnapDistance", 128.0f, 0.0f, 1000000.0f, Game::DVAR_ARCHIVE, "Camera move in one frame, in units, treated as a cut and not as motion");
+		cg_hudParallaxSnapAngle = Dvar::Register("cg_hudParallaxSnapAngle", 30.0f, 0.0f, 360.0f, Game::DVAR_ARCHIVE, "Camera turn in one frame not made by aiming, in degrees, treated as a cut and not as motion");
 	}
 
 	HudParallax::HudParallax()

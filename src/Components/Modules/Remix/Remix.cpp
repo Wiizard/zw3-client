@@ -10,9 +10,13 @@
 #include "TextureTags.hpp"
 
 #include "Components/Modules/Dedicated.hpp"
+#include "Components/Modules/Command.hpp"
 #include "Components/Modules/Events.hpp"
+#include "Components/Modules/Flags.hpp"
 #include "Components/Modules/Logger.hpp"
+#include "Components/Modules/Menus.hpp"
 #include "Components/Modules/Renderer.hpp"
+#include "Components/Modules/UIScript.hpp"
 #include "Components/Modules/Window.hpp"
 
 namespace Components::Remix
@@ -267,12 +271,104 @@ namespace Components::Remix
 		OnDeviceLost();
 	}
 
+	static std::wstring QuoteRestartArgument(std::wstring_view argument)
+	{
+		std::wstring result = L"\"";
+		std::size_t backslashes = 0;
+		for (const wchar_t character : argument)
+		{
+			if (character == L'\\')
+			{
+				++backslashes;
+				continue;
+			}
+			result.append(character == L'"' ? backslashes * 2 + 1 : backslashes, L'\\');
+			result += character;
+			backslashes = 0;
+		}
+		result.append(backslashes * 2, L'\\');
+		result += L'"';
+		return result;
+	}
+
+	void Remix::SetEnabledAndRestart(bool enabled)
+	{
+		static bool restarting = false;
+		if (restarting || !r_rtxRemix.IsValid() || r_rtxRemix.Get<bool>() == enabled)
+		{
+			return;
+		}
+
+		std::wstring executable(32768, L'\0');
+		const DWORD length = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+		if (!length || length >= executable.size())
+		{
+			Logger::Error("remix: could not resolve the executable for restart\n");
+			return;
+		}
+		executable.resize(length);
+
+		int count = 0;
+		auto* const arguments = CommandLineToArgvW(Flags::GetOriginalCommandLine().c_str(), &count);
+		if (!arguments)
+		{
+			Logger::Error("remix: could not read the launch arguments for restart\n");
+			return;
+		}
+
+		std::wstring commandLine = QuoteRestartArgument(executable);
+		for (int i = 1; i < count; ++i)
+		{
+			if (std::wstring_view(arguments[i]).starts_with(Flags::RestartParentFlag))
+			{
+				continue;
+			}
+			// Replace earlier startup overrides instead of accumulating conflicting values on every restart.
+			if (i + 2 < count && (!_wcsicmp(arguments[i], L"+set") || !_wcsicmp(arguments[i], L"+seta"))
+				&& !_wcsicmp(arguments[i + 1], L"r_rtxRemix"))
+			{
+				i += 2;
+				continue;
+			}
+			commandLine += L" " + QuoteRestartArgument(arguments[i]);
+		}
+		LocalFree(arguments);
+		commandLine += std::format(L" {}{} +set r_rtxRemix {}", Flags::RestartParentFlag, GetCurrentProcessId(), enabled ? 1 : 0);
+
+		STARTUPINFOW startupInfo{};
+		startupInfo.cb = sizeof(startupInfo);
+		PROCESS_INFORMATION processInfo{};
+		if (!CreateProcessW(executable.c_str(), commandLine.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startupInfo, &processInfo))
+		{
+			Logger::Error("remix: could not restart the game, error {}\n", GetLastError());
+			MessageBoxW(Window::GetWindow(), L"The game could not be restarted. RTX Remix has not been changed.", L"RTX Remix", MB_OK | MB_ICONERROR);
+			return;
+		}
+		CloseHandle(processInfo.hThread);
+		CloseHandle(processInfo.hProcess);
+
+		// The new process waits for this one to exit before loading its configuration and renderer.
+		restarting = true;
+		r_rtxRemix.Set(enabled);
+		Command::Execute("writeconfig " CLIENT_CONFIG);
+		Command::Execute("quit", false);
+	}
+
 	Remix::Remix()
 	{
 		if (Dedicated::IsEnabled())
 		{
 			return;
 		}
+
+		Menus::Add("ui_mp/popup_rtx_remix.menu");
+		UIScript::Add("SetRtxRemixAndRestart", [](const UIScript::Token& token)
+		{
+			if (token.IsValid() && (token.Get<int>() == 0 || token.Get<int>() == 1))
+			{
+				SetEnabledAndRestart(token.Get<int>() != 0);
+			}
+		});
 
 		Events::OnDvarInit([]
 		{

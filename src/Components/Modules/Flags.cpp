@@ -2,10 +2,19 @@
 
 #include "Flags.hpp"
 
+#include <cwchar>
+
 namespace Components
 {
 	std::vector<std::string> Flags::enabledFlags;
 	bool Flags::isParsed = false;
+	std::wstring Flags::originalCommandLine;
+
+	const std::wstring& Flags::GetOriginalCommandLine()
+	{
+		ParseFlags();
+		return originalCommandLine;
+	}
 
 	bool Flags::HasFlag(const std::string& flag)
 	{
@@ -27,6 +36,8 @@ namespace Components
 		}
 
 		isParsed = true;
+		// Keep quoting intact for a later process restart; the legacy flag parser removes quotes below.
+		originalCommandLine = GetCommandLineW();
 
 		if (char* const buffer = GetCommandLineA())
 		{
@@ -77,6 +88,32 @@ namespace Components
 		for (int i = 0; i < count; ++i)
 		{
 			std::wstring argument(arguments[i]);
+
+			if (argument.starts_with(RestartParentFlag))
+			{
+				wchar_t* end = nullptr;
+				const auto parentId = std::wcstoul(argument.c_str() + RestartParentFlag.size(), &end, 10);
+				if (!parentId || *end || parentId == GetCurrentProcessId())
+				{
+					ExitProcess(ERROR_INVALID_PARAMETER);
+				}
+
+				// Wait before Singleton and renderer initialization so the previous instance can release its resources.
+				if (const HANDLE parent = OpenProcess(SYNCHRONIZE, FALSE, parentId))
+				{
+					const DWORD result = WaitForSingleObject(parent, 60000);
+					CloseHandle(parent);
+					if (result != WAIT_OBJECT_0)
+					{
+						ExitProcess(ERROR_TIMEOUT);
+					}
+				}
+				else if (GetLastError() != ERROR_INVALID_PARAMETER)
+				{
+					ExitProcess(GetLastError());
+				}
+				continue;
+			}
 
 			if (argument.empty() || argument.front() != L'-')
 			{

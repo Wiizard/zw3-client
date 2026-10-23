@@ -29,5 +29,6 @@ namespace Components::Remix
 		static void OnDeviceCreated(IDirect3DDevice9* device);
 		static void OnDeviceReset(IDirect3DDevice9* device);
 		static void FailBackToStock(const std::string& reason);
+		static void SetEnabledAndRestart(bool enabled);
 	};
 }

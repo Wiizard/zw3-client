@@ -89,7 +89,10 @@ namespace Components::Menu
 
         for (float& v: r)
         {
-          while (b != e && *b == ' ')
+          while (b != e && (*b == ' ' || *b == '\t' || *b == ','))
+            ++b;
+
+          if (b != e && *b == '+')
             ++b;
 
           auto [p, ec] = from_chars (b, e, v);
@@ -100,7 +103,7 @@ namespace Components::Menu
           b = p;
         }
 
-        while (b != e && *b == ' ')
+        while (b != e && (*b == ' ' || *b == '\t' || *b == ','))
           ++b;
 
         return b == e;
@@ -124,15 +127,19 @@ namespace Components::Menu
 
       // Split the entity string into entities.
       //
-      // The format is the one the map compiler writes and the engine's own
-      // G_ParseSpawnVars reads: a sequence of brace-enclosed entities, each
-      // a sequence of quoted key and value pairs, with whitespace (newlines
-      // included) between the tokens:
+      // Read it the way the engine's own G_ParseSpawnVars does rather than
+      // the way the map compiler happens to write it: a token is a quoted
+      // string or a bare word, so maps whose tools wrote bare keys
       //
       // {
-      // "classname" "mp_dm_spawn"
-      // "origin" "1 2 3"
+      //     classname "mp_dm_spawn"
+      //     origin "1 2 3"
       // }
+      //
+      // read as well as quoted ones. And since a backdrop is decoration, an
+      // entity that doesn't parse is skipped rather than the whole map
+      // refused: one stray brace in a custom map shouldn't cost it its
+      // backdrop. Only a string without a single entity is an error.
       //
       vector<entity>
       parse_entities (string_view s)
@@ -141,12 +148,18 @@ namespace Components::Menu
 
         size_t i (s.starts_with ("\xEF\xBB\xBF") ? 3 : 0);
 
-        auto skip = [&s, &i] ()
+        auto blank = [] (char c)
+        {
+          return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\0';
+        };
+
+        auto skip = [&] ()
         {
           for (;;)
           {
-            while (i != s.size () &&
-                   (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n')) ++i;
+            while (i != s.size () && blank (s[i]))
+              ++i;
+
             if (s.substr (i).starts_with ("//"))
             {
               const size_t end (s.find ('\n', i + 2));
@@ -155,62 +168,96 @@ namespace Components::Menu
             else if (s.substr (i).starts_with ("/*"))
             {
               const size_t end (s.find ("*/", i + 2));
-              if (end == string_view::npos) throw invalid_argument ("unterminated entity comment");
-              i = end + 2;
+              i = end == string_view::npos ? s.size () : end + 2;
             }
-            else break;
+            else
+              break;
           }
         };
 
-        auto quoted = [&s, &i] () -> string_view
+        // The next token, or nullopt at a brace or the end (not consumed).
+        //
+        auto token = [&] () -> optional<string_view>
         {
-          size_t e (s.find ('"', ++i)); // Skip the opening quote.
+          skip ();
 
-          if (e == string_view::npos)
-            throw invalid_argument ("unterminated string");
+          if (i == s.size () || s[i] == '{' || s[i] == '}')
+            return nullopt;
 
-          string_view r (s.substr (i, e - i));
-          i = e + 1;
-          return r;
+          if (s[i] == '"')
+          {
+            const size_t b (i + 1);
+            size_t e (s.find ('"', b));
+
+            // An unterminated string runs to the end of its line.
+            //
+            if (e == string_view::npos)
+              e = min (s.find ('\n', b), s.size ());
+
+            i = min (e + 1, s.size ());
+            return s.substr (b, e - b);
+          }
+
+          const size_t b (i);
+
+          while (i != s.size () && !blank (s[i]) && s[i] != '{' &&
+                 s[i] != '}' && s[i] != '"')
+            ++i;
+
+          return s.substr (b, i - b);
         };
 
         for (skip (); i != s.size (); skip ())
         {
           if (s[i] != '{')
-            throw invalid_argument ("expected '{'");
+          {
+            // Junk between entities: step over it.
+            //
+            if (s[i] == '}')
+              ++i;
+            else
+              token ();
+
+            continue;
+          }
 
           ++i;
           entity e;
+          bool closed (false);
 
           for (;;)
           {
-            skip ();
+            optional<string_view> k (token ());
 
-            if (i == s.size ())
-              throw invalid_argument ("unterminated entity");
-
-            if (s[i] == '}')
+            if (!k)
             {
-              ++i;
+              // A brace or the end. A closing brace ends the entity; an
+              // opening one means this entity was never closed, so keep
+              // what it had and let the loop start the next.
+              //
+              if (i != s.size () && s[i] == '}')
+              {
+                ++i;
+                closed = true;
+              }
+
               break;
             }
 
-            if (s[i] != '"')
-              throw invalid_argument ("expected key");
+            optional<string_view> v (token ());
 
-            string_view k (quoted ());
+            if (!v)
+              continue; // A key without a value, dropped.
 
-            skip ();
-
-            if (i == s.size () || s[i] != '"')
-              throw invalid_argument (
-                "missing value for key '" + string (k) + '\'');
-
-            e.emplace_back (k, quoted ());
+            e.emplace_back (*k, *v);
           }
 
-          r.push_back (move (e));
+          if (!e.empty () && (closed || i == s.size () || s[i] == '{'))
+            r.push_back (move (e));
         }
+
+        if (r.empty ())
+          throw invalid_argument ("no entities");
 
         return r;
       }
@@ -281,6 +328,33 @@ namespace Components::Menu
     {
       const vector<entity> ents (parse_entities (es));
 
+      // Read an entity's placement, or nullopt if it has no usable origin.
+      // A malformed angle is taken as facing east rather than refused.
+      //
+      auto placement = [] (const entity& e) -> optional<spawn>
+      {
+        optional<string_view> o (value (e, "origin"));
+        spawn s {};
+
+        if (!o || !parse_numbers (*o, s.origin))
+          return nullopt;
+
+        array<float, 3> as {};
+        array<float, 1> a1 {};
+
+        if (optional<string_view> a = value (e, "angles"); a && parse_numbers (*a, as))
+          s.yaw = as[1];
+        else if (optional<string_view> a = value (e, "angle"); a && parse_numbers (*a, a1))
+          s.yaw = a1[0];
+
+        return s;
+      };
+
+      auto pick = [index] (const vector<spawn>& ss) -> optional<spawn>
+      {
+        return ss.empty () ? nullopt : optional<spawn> (ss[index % ss.size ()]);
+      };
+
       // Go over the classes in order of preference and settle on the first
       // one with at least one spawn we can use. Note that an entity without
       // an origin is not usable and is skipped rather than diagnosed: the
@@ -291,43 +365,40 @@ namespace Components::Menu
         vector<spawn> ss;
 
         for (const entity& e: ents)
+          if (optional<string_view> cn = value (e, "classname"); cn && *cn == c)
+            if (optional<spawn> sp = placement (e))
+              ss.push_back (*sp);
+
+        if (optional<spawn> r = pick (ss))
+          return r;
+      }
+
+      // No class we know: a custom or converted map with its own spawn
+      // classes. Anything that sounds like somewhere a player starts will
+      // do, and failing that any placed entity, so that every map that has
+      // something in it gets a backdrop.
+      //
+      for (const auto& words: {vector<string_view> {"spawn", "player", "start"},
+                               vector<string_view> {""}})
+      {
+        vector<spawn> ss;
+
+        for (const entity& e: ents)
         {
           optional<string_view> cn (value (e, "classname"));
 
-          if (!cn || *cn != c)
+          if (!cn || *cn == "worldspawn")
             continue;
 
-          optional<string_view> o (value (e, "origin"));
-
-          if (!o)
+          if (!ranges::any_of (words, [&cn] (string_view w) {return cn->find (w) != string_view::npos;}))
             continue;
 
-          spawn s {};
-
-          if (!parse_numbers (*o, s.origin))
-            throw invalid_argument ("invalid origin '" + string (*o) + '\'');
-
-          if (optional<string_view> a = value (e, "angles"))
-          {
-            array<float, 3> as;
-
-            if (!parse_numbers (*a, as))
-              throw invalid_argument ("invalid angles '" + string (*a) + '\'');
-
-            s.yaw = as[1];
-          }
-          else if (optional<string_view> single_angle = value (e, "angle"))
-          {
-            array<float, 1> angle;
-            if (!parse_numbers (*single_angle, angle)) throw invalid_argument ("invalid spawn angle");
-            s.yaw = angle[0];
-          }
-
-          ss.push_back (s);
+          if (optional<spawn> sp = placement (e))
+            ss.push_back (*sp);
         }
 
-        if (!ss.empty ())
-          return ss[index % ss.size ()];
+        if (optional<spawn> r = pick (ss))
+          return r;
       }
 
       return nullopt;

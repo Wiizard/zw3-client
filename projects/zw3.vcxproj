@@ -130,6 +130,7 @@
     <ClInclude Include="..\src\Components\Modules\Menu\Backdrop.hpp" />
     <ClInclude Include="..\src\Components\Modules\Menu\Budget.hpp" />
     <ClInclude Include="..\src\Components\Modules\Menu\Camera.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Menu\Director.hpp" />
     <ClInclude Include="..\src\Components\Modules\Menu\Cast.hpp" />
     <ClInclude Include="..\src\Components\Modules\Menu\Engine.hpp" />
     <ClInclude Include="..\src\Components\Modules\Menu\Hooks.hpp" />
@@ -481,6 +482,9 @@
     </ClCompile>
     <ClCompile Include="..\src\Components\Modules\Menu\Camera.cpp">
       <ObjectFileName>$(IntDir)\MenuCamera.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Menu\Director.cpp">
+      <ObjectFileName>$(IntDir)\MenuDirector.obj</ObjectFileName>
     </ClCompile>
     <ClCompile Include="..\src\Components\Modules\Menu\Cast.cpp">
       <ObjectFileName>$(IntDir)\MenuCast.obj</ObjectFileName>

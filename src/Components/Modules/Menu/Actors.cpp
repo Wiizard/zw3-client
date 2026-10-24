@@ -7,6 +7,8 @@
 #include "../Scheduler.hpp"
 #include "../ZoneBuilder.hpp"
 #include "Engine.hpp"
+#include <cctype>
+#include <cstring>
 #include <numbers>
 #include <zlib.h>
 
@@ -27,9 +29,32 @@ namespace Components::Menu
 		constexpr const char* zombieClips[ClipCount] = {
 			"ai_zombie_walk_v1", nullptr, "fsm_zombie_death", "ai_zombie_walk_v1",
 			nullptr, nullptr, nullptr, "ai_zombie_run_v1", nullptr, "zw2_zombie_attack01"};
+		// Kino's zombies: the Black Ops honor guard bodies with their separate
+		// heads, the pairing the old lobby actor was exported from. The
+		// fallback body already carries its head, so nothing is attached to it.
+		constexpr const char* zombieBodyNames[] = {"c_t5_ger_honorguard_body1", "c_t5_ger_honorguard_body2"};
+		constexpr const char* zombieHeadNames[] = {"c_t5_ger_zombie_head1", "c_t5_ger_zombie_head2", "c_t5_ger_zombie_head3", "c_t5_ger_zombie_head4"};
+		constexpr unsigned int zombieVariants = 8;
+		constexpr unsigned int riseMs = 1600, sinkDelayMs = 2600, sinkMs = 1700, despawnSinkMs = 1500;
+		constexpr float riseDepth = 72.0f, sinkDepth = 64.0f;
 		std::array<Game::XModel*, 5> models{};
 		std::array<Game::XModel*, 4> weapons{};
-		Game::XModel* zombieHead = nullptr;
+		std::array<Game::XModel*, std::size(zombieBodyNames)> zombieBodies{};
+		std::array<Game::XModel*, std::size(zombieHeadNames)> zombieHeads{};
+
+		// Red eyes. The eye surfaces of the zombie heads draw a material whose
+		// colorTint constant the shader multiplies the eye texture by. The
+		// renderer resolves material constants from the material itself at
+		// draw time (and looks materials up by their sorted index, so a copy
+		// would never be drawn), so the tint is written into the loaded
+		// material while the backdrop shows its zombies and put back after.
+		constexpr std::array<float, 4> eyeTint{2.6f, 0.10f, 0.05f, 1.0f};
+		struct EyeTint
+		{
+			Game::MaterialConstantDef* constant;
+			std::array<float, 4> original;
+		};
+		std::vector<EyeTint> eyeTints;
 		std::array<std::array<Game::XAnimParts*, ClipCount>, 2> clips{};
 		bool prepared = false, ready = false;
 		thread_local std::vector<void*>* allocationBlocks = nullptr;
@@ -77,14 +102,18 @@ namespace Components::Menu
 				tree = nullptr;
 				anims = nullptr;
 				model = weapon = -1;
+				variant = 0;
 				lastBase = lastAction = ClipCount;
 			}
 
-			bool Create(int selectedModel, int selectedWeapon, unsigned int entity)
+			unsigned int variant = 0;
+
+			bool Create(int selectedModel, int selectedWeapon, unsigned int selectedVariant, unsigned int entity)
 			{
 				Logger::Debug("menu actors: creating native {} (entity {}, weapon {})\n", modelNames[selectedModel], entity, selectedWeapon);
 				model = selectedModel;
 				weapon = selectedWeapon;
+				variant = selectedVariant;
 				allocationBlocks = &blocks;
 				anims = XAnimCreateAnims("menu actors", ClipCount + 1, AllocateAnimation);
 				// The fifth parameter is a full uint32 count on the stack in 2.0.13.
@@ -97,11 +126,35 @@ namespace Components::Menu
 
 				DObjModel_s entries[3]{{models[selectedModel], 0, false, {}}};
 				unsigned int count = 1;
-				if (selectedModel == 4 && zombieHead) entries[count++] = {zombieHead, 0, true, {}};
+				if (selectedModel == 4)
+				{
+					// The honor guard body has no head of its own; the fallback
+					// body does, and attaching a second one to it is what drew
+					// two heads into each other.
+					// Take the variant's body and head, or the next ones loaded.
+					const auto pick = [](const auto& choices, std::size_t index) -> Game::XModel*
+					{
+						for (std::size_t i = 0; i < choices.size(); ++i)
+							if (auto* m = choices[(index + i) % choices.size()]; m && m->numLods) return m;
+						return nullptr;
+					};
+					auto* body = pick(zombieBodies, selectedVariant % zombieBodies.size());
+					auto* head = pick(zombieHeads, (selectedVariant / zombieBodies.size()) % zombieHeads.size());
+					if (body && head)
+					{
+						entries[0].model = body;
+						entries[count++] = {head, 0, true, {}};
+					}
+				}
 				if (selectedWeapon >= 0 && weapons[selectedWeapon])
 				{
 					const auto tag = Engine::Bind<unsigned int (*)(const char*)>(0x140221910)("tag_weapon_right");
 					if (tag) entries[count++] = {weapons[selectedWeapon], static_cast<std::uint16_t>(tag), true, {}};
+				}
+				if (!entries[0].model)
+				{
+					Release();
+					return false;
 				}
 				object = {};
 				DObjCreate(entries, count, tree, reinterpret_cast<char*>(object.data()), entity);
@@ -116,26 +169,27 @@ namespace Components::Menu
 			float yaw = 0;
 			int model = 0, weapon = -1;
 			unsigned int base = Idle, action = ClipCount, actionStart = 0;
+			unsigned int variant = 0, spawnedAt = 0;
 			bool visible = false, dead = false;
-			NLOHMANN_DEFINE_TYPE_INTRUSIVE(State, origin, yaw, model, weapon, base, action, actionStart, visible, dead)
+			NLOHMANN_DEFINE_TYPE_INTRUSIVE(State, origin, yaw, model, weapon, base, action, actionStart, variant, spawnedAt, visible, dead)
 		};
 		struct Survivor
 		{
 			State state;
 			Vec home{};
-			unsigned int nextShot = 0, nextWeapon = 0, meleeImpact = 0;
+			unsigned int nextShot = 0, nextWeapon = 0, meleeImpact = 0, nextScan = 0;
 			int target = -1;
 			unsigned int burst = 0;
 		};
 		struct Zombie
 		{
 			State state;
-			unsigned int respawn = 0, lastAttack = 0, blockedSince = 0;
+			unsigned int respawn = 0, lastAttack = 0, blockedSince = 0, nextStep = 0;
 			int target = -1;
 		};
 		struct Packet
 		{
-			unsigned int version = 2, time = 0;
+			unsigned int version = 3, time = 0;
 			std::string map;
 			std::array<State, survivorCount> survivors{};
 			std::array<State, zombieCount> zombies{};
@@ -167,13 +221,13 @@ namespace Components::Menu
 				standing.origin[1] + std::sin(yaw) * forward + std::cos(yaw) * side, standing.origin[2]};
 		}
 
-		Game::trace_t Trace(const Vec& start, const Vec& end, bool capsule = false)
+		Game::trace_t Trace(const Vec& start, const Vec& end, bool capsule = false, const Game::Bounds* custom = nullptr, int mask = 0x10001)
 		{
-			const Game::Bounds bounds = capsule ? Game::Bounds{{0, 0, 36}, {14, 14, 34}} : Game::Bounds{};
+			const Game::Bounds bounds = custom ? *custom : capsule ? Game::Bounds{{0, 0, 36}, {14, 14, 34}} : Game::Bounds{};
 			Game::trace_t result{};
 			// CG_WorldTrace supplies the engine's glass callback to CM_WorldTrace.
 			Engine::Bind<void (*)(Game::trace_t*, const float*, const float*, const Game::Bounds*, int)>(0x1400CA9A0)(
-				&result, start.data(), end.data(), &bounds, 0x10001);
+				&result, start.data(), end.data(), &bounds, mask);
 			return result;
 		}
 		bool Ground(Vec& point)
@@ -242,8 +296,42 @@ namespace Components::Menu
 		{
 			zombie.state.dead = true;
 			Action(zombie.state, Death, now);
-			zombie.respawn = now + 4500;
+			zombie.respawn = now + sinkDelayMs + sinkMs + 200;
 			zombie.target = -1;
+		}
+		// Take a zombie that got stuck out of the scene by letting it sink
+		// into the floor rather than vanishing in plain view.
+		void Despawn(Zombie& zombie, unsigned int now)
+		{
+			zombie.state.dead = true;
+			zombie.state.action = ClipCount;
+			zombie.state.actionStart = now;
+			zombie.respawn = now + despawnSinkMs + 100;
+			zombie.target = -1;
+		}
+		bool Rising(const State& state, unsigned int now)
+		{
+			return state.model == 4 && state.spawnedAt && now - state.spawnedAt < riseMs;
+		}
+		float Smooth(float t)
+		{
+			t = std::clamp(t, 0.0f, 1.0f);
+			return t * t * (3.0f - 2.0f * t);
+		}
+		// How far below the floor a zombie is drawn: climbing out of it when it
+		// spawns, sinking back into it after it died or got stuck.
+		float Burial(const State& state, unsigned int now)
+		{
+			if (state.model != 4) return 0;
+			if (state.dead)
+			{
+				const bool died = state.action == Death;
+				const float delay = died ? static_cast<float>(sinkDelayMs) : 0.0f;
+				const float span = static_cast<float>(died ? sinkMs : despawnSinkMs);
+				return sinkDepth * Smooth((static_cast<float>(now - state.actionStart) - delay) / span);
+			}
+			if (Rising(state, now)) return riseDepth * (1.0f - Smooth(static_cast<float>(now - state.spawnedAt) / riseMs));
+			return 0;
 		}
 
 		void UpdateRoster(unsigned int now)
@@ -312,6 +400,15 @@ namespace Components::Menu
 						zombie.state.origin = candidate;
 						zombie.state.visible = true;
 						zombie.state.base = (++spawnSequence % 3 == 0) ? Run : Walk;
+						zombie.state.variant = (spawnSequence * 5 + attempt) % zombieVariants;
+						zombie.state.spawnedAt = now;
+						// Face the survivors while climbing out.
+						for (const auto& survivor : survivors)
+							if (survivor.state.visible)
+							{
+								zombie.state.yaw = std::atan2(survivor.home[1] - candidate[1], survivor.home[0] - candidate[0]) / radians;
+								break;
+							}
 						break;
 					}
 					break;
@@ -330,7 +427,7 @@ namespace Components::Menu
 					const float next = Distance(state.origin, survivors[i].state.origin);
 					if (next < distance) { distance = next; zombie.target = static_cast<int>(i); }
 				}
-				if (zombie.target < 0) continue;
+				if (zombie.target < 0 || Rising(state, now)) continue;
 				const auto& goal = survivors[zombie.target].state.origin;
 				const float heading = std::atan2(goal[1] - state.origin[1], goal[0] - state.origin[0]) / radians;
 				state.yaw = Turn(state.yaw, heading, dt * 6);
@@ -342,26 +439,36 @@ namespace Components::Menu
 					zombie.lastAttack = now;
 					continue;
 				}
+				// A blocked zombie retries a few times a second, not every
+				// frame: each try is two traces per direction.
+				if (zombie.blockedSince && !Due(now, zombie.nextStep))
+				{
+					if (now - zombie.blockedSince > 6000) Despawn(zombie, now);
+					continue;
+				}
 				const float speed = state.base == Run ? 65.0f : 30.0f;
+				const float step = std::max(dt, zombie.blockedSince ? 0.05f : 0.0f);
 				bool moved = false;
-				for (float deflection : {0.0f, 40.0f, -40.0f, 80.0f, -80.0f})
+				for (float deflection : {0.0f, 40.0f, -40.0f, 80.0f, -80.0f, 120.0f, -120.0f})
 				{
 					const float angle = (heading + deflection) * radians;
 					Vec next = state.origin;
-					next[0] += std::cos(angle) * speed * dt;
-					next[1] += std::sin(angle) * speed * dt;
-					if (!Ground(next) || std::abs(next[2] - state.origin[2]) > 18 || !Clear(state.origin, next)) continue;
+					next[0] += std::cos(angle) * speed * step;
+					next[1] += std::sin(angle) * speed * step;
+					// The crowd check is arithmetic; do it before the traces.
 					bool crowded = false;
 					for (const auto& other : zombies)
-						if (&other != &zombie && other.state.visible && !other.state.dead && Distance(other.state.origin, next) < 24) crowded = true;
+						if (&other != &zombie && other.state.visible && !other.state.dead && Distance(other.state.origin, next) < 24) { crowded = true; break; }
 					if (crowded) continue;
+					if (!Ground(next) || std::abs(next[2] - state.origin[2]) > 18 || !Clear(state.origin, next)) continue;
 					state.origin = next;
 					moved = true;
 					break;
 				}
+				if (!moved) zombie.nextStep = now + 150;
 				if (moved) zombie.blockedSince = 0;
 				else if (!zombie.blockedSince) zombie.blockedSince = now;
-				else if (now - zombie.blockedSince > 8000) state.visible = false;
+				else if (now - zombie.blockedSince > 6000) Despawn(zombie, now);
 			}
 
 			for (auto& survivor : survivors)
@@ -374,15 +481,33 @@ namespace Components::Menu
 					survivor.nextWeapon = now + 25000;
 				}
 				state.base = state.weapon == 0 ? Idle : RifleIdle;
-				float best = 500;
-				int target = -1;
-				for (std::size_t i = 0; i < zombieCount; ++i)
+				// Pick a target a few times a second rather than every frame,
+				// nearest first, tracing only until one is in sight: this was
+				// a line-of-sight trace per survivor per zombie per frame, the
+				// bulk of the backdrop's cost.
+				const auto targetable = [now](const State& z)
 				{
-					const auto& z = zombies[i].state;
-					if (!z.visible || z.dead) continue;
-					const float distance = Distance(state.origin, z.origin);
-					if (distance < best && LineOfSight(state.origin, z.origin)) { best = distance; target = static_cast<int>(i); }
+					return z.visible && !z.dead && !(z.spawnedAt && now - z.spawnedAt < riseMs / 2);
+				};
+				int target = survivor.target;
+				if (target >= 0 && !targetable(zombies[target].state)) target = -1;
+				if (target < 0 || Due(now, survivor.nextScan))
+				{
+					survivor.nextScan = now + 220;
+					std::array<std::pair<float, int>, zombieCount> order{};
+					std::size_t candidates = 0;
+					for (std::size_t i = 0; i < zombieCount; ++i)
+					{
+						if (!targetable(zombies[i].state)) continue;
+						const float distance = Distance(state.origin, zombies[i].state.origin);
+						if (distance < 500) order[candidates++] = {distance, static_cast<int>(i)};
+					}
+					std::sort(order.begin(), order.begin() + candidates);
+					target = -1;
+					for (std::size_t c = 0; c < candidates && c < 6; ++c)
+						if (LineOfSight(state.origin, zombies[order[c].second].state.origin)) { target = order[c].second; break; }
 				}
+				const float best = target >= 0 ? Distance(state.origin, zombies[target].state.origin) : 500.0f;
 				survivor.target = target;
 				if (target >= 0)
 				{
@@ -420,9 +545,43 @@ namespace Components::Menu
 			}
 		}
 
+		void TintEyes(Game::XModel* model)
+		{
+			if (!model || !model->materialHandles) return;
+			for (unsigned int i = 0; i < model->numsurfs; ++i)
+			{
+				auto* material = model->materialHandles[i];
+				if (!material || !material->info.name || !material->constantTable) continue;
+				std::string name = material->info.name;
+				std::ranges::transform(name, name.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+				if (name.find("eye") == std::string::npos) continue;
+				bool tinted = false;
+				for (unsigned int c = 0; c < material->constantCount; ++c)
+				{
+					auto& constant = material->constantTable[c];
+					if (std::strncmp(constant.name, "colorTint", sizeof(constant.name)) != 0) continue;
+					tinted = true;
+					if (std::ranges::any_of(eyeTints, [&](const EyeTint& t) { return t.constant == &constant; })) break;
+					EyeTint saved{&constant, {}};
+					std::copy_n(constant.literal, 4, saved.original.begin());
+					eyeTints.push_back(saved);
+					std::ranges::copy(eyeTint, constant.literal);
+					Logger::Print("menu actors: red eyes on {} ({})\n", material->info.name, model->name);
+					break;
+				}
+				if (!tinted) Logger::Print("menu actors: eye material {} of {} has no colorTint, its eyes stay as they are\n", material->info.name, model->name);
+			}
+		}
+
+		void RestoreEyes()
+		{
+			for (const auto& tint : eyeTints) std::ranges::copy(tint.original, tint.constant->literal);
+			eyeTints.clear();
+		}
+
 		bool Valid(const State& state)
 		{
-			return state.model >= 0 && state.model < 5 && state.weapon >= -1 && state.weapon < 4
+			return state.model >= 0 && state.model < 5 && state.weapon >= -1 && state.weapon < 4 && state.variant < zombieVariants
 				&& state.base < ClipCount && state.action <= ClipCount && std::isfinite(state.yaw)
 				&& std::ranges::all_of(state.origin, [](float n) { return std::isfinite(n) && std::abs(n) < 10000000; });
 		}
@@ -468,6 +627,7 @@ namespace Components::Menu
 				setTime(actor.tree, action + 1, std::clamp(static_cast<float>(now - state.actionStart) / static_cast<float>(std::max(1u, Duration(state.model == 4, action))), 0.0f, 0.999f));
 			actor.pose = {};
 			std::ranges::copy(state.origin, actor.pose.origin);
+			actor.pose.origin[2] -= Burial(state, now);
 			actor.pose.angles[1] = state.yaw;
 			DObjUpdateClientInfo(actor.Object(), dt, false);
 			Vec lightOrigin = state.origin;
@@ -477,6 +637,19 @@ namespace Components::Menu
 	}
 
 	bool Actors::IsReady() { return ready; }
+
+	float Actors::Clearance(const std::array<float, 3>& from, const std::array<float, 3>& to)
+	{
+		// The camera collides with what you can see, not with player clips
+		// (0x10000), which fill the air around many spawns, and it keeps a
+		// small box clear around itself so it never grazes a wall. A trace
+		// that starts in solid (the subject's point inside a prop) says
+		// nothing about the camera's path, so it counts as clear.
+		constexpr Game::Bounds camera{{0, 0, 0}, {8, 8, 8}};
+		const auto hit = Trace(from, to, false, &camera, 0x1);
+		if (hit.startsolid || hit.allsolid) return 1;
+		return std::clamp(hit.fraction, 0.0f, 1.0f);
+	}
 
 	void Actors::Prepare()
 	{
@@ -488,21 +661,33 @@ namespace Components::Menu
 		};
 		for (std::size_t i = 0; i < models.size(); ++i) models[i] = static_cast<Game::XModel*>(loaded(Game::ASSET_TYPE_XMODEL, modelNames[i]));
 		for (std::size_t i = 0; i < weapons.size(); ++i) weapons[i] = static_cast<Game::XModel*>(loaded(Game::ASSET_TYPE_XMODEL, weaponNames[i]));
-		zombieHead = static_cast<Game::XModel*>(loaded(Game::ASSET_TYPE_XMODEL, "c_t5_ger_zombie_head1"));
+		for (std::size_t i = 0; i < zombieBodies.size(); ++i) zombieBodies[i] = static_cast<Game::XModel*>(loaded(Game::ASSET_TYPE_XMODEL, zombieBodyNames[i]));
+		for (std::size_t i = 0; i < zombieHeads.size(); ++i) zombieHeads[i] = static_cast<Game::XModel*>(loaded(Game::ASSET_TYPE_XMODEL, zombieHeadNames[i]));
+		const bool honorGuard = std::ranges::any_of(zombieBodies, [](const auto* m) { return m && m->numLods; })
+			&& std::ranges::any_of(zombieHeads, [](const auto* m) { return m && m->numLods; });
 		for (std::size_t kind = 0; kind < clips.size(); ++kind)
 			for (std::size_t i = 0; i < ClipCount; ++i)
 			{
 				const auto* name = kind ? zombieClips[i] : playerClips[i];
 				clips[kind][i] = name ? static_cast<Game::XAnimParts*>(loaded(Game::ASSET_TYPE_XANIMPARTS, name)) : nullptr;
 			}
-		prepared = std::ranges::all_of(models, [](const auto* model) { return model && model->numLods; }) && clips[0][Idle] && clips[1][Idle];
-		Logger::Print("menu actors: native Primis/zombie models {} (using zw3.ff and zw3_common.ff)\n", prepared ? "ready" : "unavailable");
+		const bool survivorsLoaded = std::all_of(models.begin(), models.begin() + 4, [](const auto* model) { return model && model->numLods; });
+		const bool zombiesLoaded = honorGuard || (models[4] && models[4]->numLods);
+		prepared = survivorsLoaded && zombiesLoaded && clips[0][Idle] && clips[1][Idle];
+		if (prepared)
+		{
+			if (honorGuard) for (auto* head : zombieHeads) TintEyes(head);
+			else TintEyes(models[4]);
+		}
+		Logger::Print("menu actors: native Primis/zombie models {} ({} zombies, using zw3.ff and zw3_common.ff)\n",
+			prepared ? "ready" : "unavailable", honorGuard ? "honor guard" : "fallback");
 	}
 
 	void Actors::Reset()
 	{
 		if (std::ranges::any_of(entities, [](const NativeActor& actor) { return actor.created; })) R_SyncRenderThread();
 		for (auto& actor : entities) actor.Release();
+		RestoreEyes();
 		survivors = {};
 		zombies = {};
 		currentMap.clear();
@@ -556,14 +741,16 @@ namespace Components::Menu
 		}
 		bool changing = false;
 		for (std::size_t i = 0; i < states.size(); ++i)
-			if (entities[i].created && (!states[i].visible || entities[i].model != states[i].model || entities[i].weapon != states[i].weapon)) changing = true;
+			if (entities[i].created && (!states[i].visible || entities[i].model != states[i].model || entities[i].weapon != states[i].weapon
+				|| (states[i].model == 4 && entities[i].variant != states[i].variant))) changing = true;
 		if (changing) R_SyncRenderThread();
 		for (std::size_t i = 0; i < states.size(); ++i)
 		{
 			auto& actor = entities[i];
 			const auto& state = states[i];
-			if (actor.created && (!state.visible || actor.model != state.model || actor.weapon != state.weapon)) actor.Release();
-			if (state.visible && !actor.created) actor.Create(state.model, state.weapon, static_cast<unsigned int>(i) + 32);
+			if (actor.created && (!state.visible || actor.model != state.model || actor.weapon != state.weapon
+				|| (state.model == 4 && actor.variant != state.variant))) actor.Release();
+			if (state.visible && !actor.created) actor.Create(state.model, state.weapon, state.variant, static_cast<unsigned int>(i) + 32);
 		}
 		ready = false;
 		for (std::size_t i = 0; i < states.size(); ++i)
@@ -588,7 +775,7 @@ namespace Components::Menu
 		try
 		{
 			auto packet = nlohmann::json::from_msgpack(unpacked.data(), unpacked.data() + length).get<Packet>();
-			if (packet.version != 2 || !BackdropData::find_stage(packet.map)
+			if (packet.version != 3 || !BackdropData::find_stage(packet.map)
 				|| !std::ranges::all_of(packet.survivors, Valid) || !std::ranges::all_of(packet.zombies, Valid)) return;
 			std::lock_guard lock(snapshotMutex);
 			if (remote && remote->map == packet.map && !Due(packet.time, remote->time)) return;

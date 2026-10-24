@@ -2211,6 +2211,7 @@
     <ClInclude Include="..\src\Components\Modules\Menu\Backdrop.hpp"><Filter>Components\Modules\Menu</Filter></ClInclude>
     <ClInclude Include="..\src\Components\Modules\Menu\Budget.hpp"><Filter>Components\Modules\Menu</Filter></ClInclude>
     <ClInclude Include="..\src\Components\Modules\Menu\Camera.hpp"><Filter>Components\Modules\Menu</Filter></ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Menu\Director.hpp"><Filter>Components\Modules\Menu</Filter></ClInclude>
     <ClInclude Include="..\src\Components\Modules\Menu\Cast.hpp"><Filter>Components\Modules\Menu</Filter></ClInclude>
     <ClInclude Include="..\src\Components\Modules\Menu\Engine.hpp"><Filter>Components\Modules\Menu</Filter></ClInclude>
     <ClInclude Include="..\src\Components\Modules\Menu\Hooks.hpp"><Filter>Components\Modules\Menu</Filter></ClInclude>
@@ -2223,6 +2224,7 @@
     <ClCompile Include="..\src\Components\Modules\Menu\Backdrop.cpp"><Filter>Components\Modules\Menu</Filter></ClCompile>
     <ClCompile Include="..\src\Components\Modules\Menu\Budget.cpp"><Filter>Components\Modules\Menu</Filter></ClCompile>
     <ClCompile Include="..\src\Components\Modules\Menu\Camera.cpp"><Filter>Components\Modules\Menu</Filter></ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Menu\Director.cpp"><Filter>Components\Modules\Menu</Filter></ClCompile>
     <ClCompile Include="..\src\Components\Modules\Menu\Cast.cpp"><Filter>Components\Modules\Menu</Filter></ClCompile>
     <ClCompile Include="..\src\Components\Modules\Menu\Engine.cpp"><Filter>Components\Modules\Menu</Filter></ClCompile>
     <ClCompile Include="..\src\Components\Modules\Menu\Hooks.cpp"><Filter>Components\Modules\Menu</Filter></ClCompile>

@@ -10,6 +10,9 @@ namespace Components::Menu
 	public:
 		Actors();
 		static bool IsReady();
+		// The fraction of the segment that is clear of the map's world
+		// geometry (1 when nothing is hit, 0 when it starts in solid).
+		static float Clearance(const std::array<float, 3>& from, const std::array<float, 3>& to);
 		static void Prepare();
 		static void Reset();
 		static void DrawScene(const BackdropData::spawn& anchor, std::string_view map, float deltaSeconds);

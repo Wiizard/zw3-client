@@ -16,6 +16,8 @@
 #include "Stage.hpp"
 #include "Budget.hpp"
 #include "Camera.hpp"
+#include "Director.hpp"
+#include "../FileSystem.hpp"
 
 
 #include <windows.h>
@@ -263,7 +265,7 @@ namespace Components
       // renderer is about to restart), whatever we loaded would be freed
       // again right away.
       //
-      constexpr int settle_msec (1500);
+      constexpr int settle_msec (500);
 
       // The near plane, as the engine's own r_znear default.
       //
@@ -472,6 +474,19 @@ namespace Components
         // The map last published in ui_backdrop_map.
         //
         string published_map;
+
+        // Maps a random pick tried this session that could not be shown,
+        // and how many tries the current pick has had (see retry_or_fail()).
+        //
+        vector<string> rejected;
+        unsigned int retries {0};
+        bool random_pick {false};
+
+        // The cinematography of the map shown (see Director.hpp), and the
+        // shot last logged.
+        //
+        director scene;
+        size_t logged_shot {static_cast<size_t> (-1)};
 
         // What the log has already been told, so that per-frame conditions
         // are said once when they start rather than every frame.
@@ -1104,6 +1119,144 @@ namespace Components
         reset ();
       }
 
+      // A map that loaded but can't be shown (no clip map, a world the
+      // renderer won't take, too many lights...). A map named by the
+      // player or a menu fails as before; a random pick is put aside for
+      // the session and another one picked, so a random backdrop always
+      // ends up showing something whatever is installed.
+      //
+      void
+      retry_or_fail (const string& why)
+      {
+        constexpr unsigned int max_retries (6);
+
+        if (!s.random_pick || s.retries >= max_retries)
+        {
+          fail (why);
+          return;
+        }
+
+        LogLine{} << "backdrop: " << why << "; picking another map";
+
+        s.rejected.push_back (s.map);
+        ++s.retries;
+        s.seed = (s.seed * 6364136223846793005ull + 1442695040888963407ull) | 1;
+
+        const int settled (s.front_end_since);
+        unload ();
+        s.front_end_since = settled; // Already settled: don't wait again.
+      }
+
+      constexpr int reveal_msec (1400);
+
+      // The scene file's text (see Director.hpp), empty if there is none.
+      //
+      string
+      scene_file ()
+      {
+        FileSystem::File f ("lobby/backdrop_scenes.json");
+        return f.Exists () ? f.GetBuffer () : string ();
+      }
+
+      // The world collision the director fits its shots against.
+      //
+      float
+      scene_clearance (const vec3& from, const vec3& to)
+      {
+        return Actors::Clearance (from, to);
+      }
+
+      // Plan the map's cinematography. Needs the clip map, which finish()
+      // has set up by the time it calls this.
+      //
+      void
+      plan_scene ()
+      {
+        scene_script script;
+
+        try
+        {
+          script = script_for (scene_file (), s.map, s.seed);
+        }
+        catch (const exception& e)
+        {
+          LogLine{} << "backdrop: lobby/backdrop_scenes.json: " << e.what ()
+                    << ", filming " << s.map << " automatically";
+          script = automatic_script (s.seed);
+        }
+
+        const string style (script.style);
+        s.scene.plan (s.standing, move (script), clearance (&scene_clearance));
+        s.standing = s.scene.subject ();
+        s.logged_shot = static_cast<size_t> (-1);
+
+        LogLine{} << format ("backdrop: filming {} ({}): {} shots, a {:.0f} s loop",
+                             s.map,
+                             style,
+                             s.scene.shot_count (),
+                             s.scene.loop_length ());
+      }
+
+      // The maps a random backdrop may be: the curated stock ones, every map
+      // of the lobby's map list, and the custom maps found installed. Which
+      // of them are installed and fit is decided when one is picked.
+      //
+      vector<const stage*>
+      random_pool ()
+      {
+        vector<const stage*> r;
+
+        auto add = [&r] (string_view m)
+        {
+          if (const stage* st = find_stage (m))
+            if (ranges::find (r, st) == r.end ())
+              r.push_back (st);
+        };
+
+        for (const stage& st: stages ())
+          r.push_back (&st);
+
+        const dvar_t* pool (Game::Dvar_FindVar ("ui_backdrop_pool"));
+        const char* p (pool != nullptr && pool->current.string != nullptr ? pool->current.string : "all");
+
+        if (I_stricmp (p, "curated") == 0)
+          return r;
+
+        // The campaign and Spec Ops levels of the list are left to an
+        // explicit ui_backdrop unless asked for: they were built for a
+        // different front end and some (the credits) are no place to stand.
+        //
+        const bool everything (I_stricmp (p, "everything") == 0);
+
+        try
+        {
+          FileSystem::File f ("lobby/maps.json");
+
+          if (f.Exists ())
+          {
+            const nlohmann::json j (nlohmann::json::parse (f.GetBuffer ()));
+
+            for (const nlohmann::json& m: j.value ("maps", nlohmann::json::array ()))
+              if (m.is_object () && m.contains ("id") && m["id"].is_string ())
+              {
+                const string id (m["id"].get<string> ());
+
+                if (everything || id.starts_with ("mp_"))
+                  add (id);
+              }
+          }
+        }
+        catch (const nlohmann::json::exception& e)
+        {
+          LogLine{} << "backdrop: lobby/maps.json: " << e.what ();
+        }
+
+        for (const string& m: Maps::GetCustomMaps ())
+          add (m);
+
+        return r;
+      }
+
       // Pick and request the map.
       //
       void
@@ -1152,11 +1305,18 @@ namespace Components
         //
         vector<const stage*> cs;
 
+        s.random_pick = sel.kind != selection_kind::map;
+
         if (sel.kind == selection_kind::map)
           cs.push_back (sel.stage);
         else
-          for (const stage& st: stages ())
-            cs.push_back (&st);
+        {
+          cs = random_pool ();
+          erase_if (cs, [] (const stage* st)
+          {
+            return ranges::find (s.rejected, string (st->map)) != s.rejected.end ();
+          });
+        }
 
         vector<const stage*> installed;
         vector<uint64_t> sizes;
@@ -1195,6 +1355,42 @@ namespace Components
                 ? format ("{} is not installed", sel.stage->map)
                 : string ("no backdrop stage is installed"));
           return;
+        }
+
+        // With a hundred maps to pick from, some won't fit beside the menus.
+        // Pick among those that do rather than refuse the one picked.
+        //
+        if (sel.kind != selection_kind::map && installed.size () > 1)
+        {
+          uint64_t extra_size (0);
+
+          for (const string& n: s.zones)
+            if (optional<filesystem::path> f = zone_file (n))
+            {
+              error_code ec;
+              const uintmax_t z (filesystem::file_size (*f, ec));
+              if (!ec) extra_size += z;
+            }
+
+          const resources room (measure ());
+          vector<const stage*> fitting;
+          vector<uint64_t> fitting_sizes;
+
+          for (size_t i (0); i != installed.size (); ++i)
+            if (!shortfall (room, require (sizes[i] + extra_size)))
+            {
+              fitting.push_back (installed[i]);
+              fitting_sizes.push_back (sizes[i]);
+            }
+
+          LogLine{} << "backdrop: " << fitting.size () << " of "
+                    << installed.size () << " installed stages fit";
+
+          if (!fitting.empty ())
+          {
+            installed = move (fitting);
+            sizes = move (fitting_sizes);
+          }
         }
 
         const stage& st (pick_stage (installed, s.seed));
@@ -1305,7 +1501,7 @@ namespace Components
 
         if (!DB_IsFileLoaded (s.map.c_str ()))
         {
-          fail (format ("{} did not load", s.map));
+          retry_or_fail (format ("{} did not load", s.map));
           return;
         }
 
@@ -1334,7 +1530,7 @@ namespace Components
         if (cm->name == nullptr || s.world != cm->name ||
             cm->mapEnts == nullptr || cm->mapEnts->entityString == nullptr)
         {
-          fail (format ("{} loaded without its clip map", s.map));
+          retry_or_fail (format ("{} loaded without its clip map", s.map));
           return;
         }
 
@@ -1348,7 +1544,7 @@ namespace Components
 
           if (!sp)
           {
-            fail (format ("{} has no spawn to stand on", s.map));
+            retry_or_fail (format ("{} has no spawn to stand on", s.map));
             return;
           }
 
@@ -1356,7 +1552,7 @@ namespace Components
         }
         catch (const invalid_argument& e)
         {
-          fail (format ("{} has an invalid entity string: {}", s.map,
+          retry_or_fail (format ("{} has an invalid entity string: {}", s.map,
                         e.what ()));
           return;
         }
@@ -1398,13 +1594,13 @@ namespace Components
         if ((*rendererWorld) == nullptr || (*rendererWorld)->name == nullptr ||
             s.world != (*rendererWorld)->name)
         {
-          fail (format ("the renderer did not take {}'s world", s.map));
+          retry_or_fail (format ("the renderer did not take {}'s world", s.map));
           return;
         }
 
         if ((*rendererWorld)->primaryLightCount > 248)
         {
-          fail ("world exceeds the renderer's primary-light limit");
+          retry_or_fail ("world exceeds the renderer's primary-light limit");
           return;
         }
 
@@ -1414,7 +1610,9 @@ namespace Components
         memset (s.refdef.get (), 0, sizeof (refdef_t));
         init_primary_lights (s.refdef->primaryLights);
 
+        plan_scene ();
         Actors::Prepare ();
+        s.retries = 0;
 
         enter (phase::ready);
         s.start_time = s.last_time = s.heartbeat = Sys_Milliseconds ();
@@ -1501,11 +1699,19 @@ namespace Components
         }
         else
         {
-          constexpr framing crowd_framing {300.0f, 60.0f, 85.0f, 40.0f, 80.0f, 60.0f};
-          const view v (frame (s.standing,
-                               crowd_framing,
-                               static_cast<float> (w) / static_cast<float> (h),
-                               (now - s.start_time) / 1000.0));
+          const double seconds ((now - s.start_time) / 1000.0);
+          const clearance clear (&scene_clearance);
+          const view v (s.scene.at (seconds,
+                                    static_cast<float> (w) / static_cast<float> (h),
+                                    &clear));
+
+          if (const size_t shot = s.scene.shot_index (seconds); shot != s.logged_shot)
+          {
+            LogLine{} << format ("backdrop: shot {} of {} at ({:.0f}, {:.0f}, {:.0f})",
+                                 shot + 1, s.scene.shot_count (),
+                                 v.origin[0], v.origin[1], v.origin[2]);
+            s.logged_shot = shot;
+          }
 
           r.view.tanHalfFovX = v.fov.x;
           r.view.tanHalfFovY = v.fov.y;
@@ -1525,6 +1731,15 @@ namespace Components
         // A popup that blurs the world in a match blurs the backdrop too.
         //
         r.blurRadius = CL_GetMenuBlurRadius (0);
+
+        // Reveal the scene by bringing it into focus over its first second
+        // or so, rather than popping it in over the still image.
+        //
+        if (const int shown_for (now - s.start_time); shown_for < reveal_msec)
+        {
+          const float t (static_cast<float> (shown_for) / reveal_msec);
+          r.blurRadius = max (r.blurRadius, 6.0f * (1.0f - t * t * (3.0f - 2.0f * t)));
+        }
 
         // Blur what lies behind a figure that asks for it: from just past
         // its farthest reach along the view, fading in over a few of its
@@ -2370,6 +2585,29 @@ namespace Components
                        s.map, static_cast<int> (*renderer_started), static_cast<int> (*ui_started),
                        static_cast<int> (Game::CL_GetLocalClientConnectionState (0)), Actors::IsReady ());
         if (!s.failure.empty ()) Logger::Print ("menu backdrop: {}\n", s.failure);
+      });
+      Scheduler::OnGameInitialized ([]
+      {
+        Game::Dvar_RegisterString ("ui_backdrop_pool", "all", Game::DVAR_ARCHIVE,
+                                   "Maps a random backdrop is picked from: all (every installed multiplayer and zombies map that fits), everything (campaign levels too), or curated (the stock maps)");
+      }, Scheduler::Pipeline::MAIN);
+      Command::Add ("ui_backdrop_scene_reload", []
+      {
+        // Re-read lobby/backdrop_scenes.json and refilm the map shown,
+        // without reloading it: what a scene author iterates with.
+        if (s.current != phase::ready) { Logger::Print ("menu backdrop: no map is shown\n"); return; }
+        Actors::Reset (); // An anchor that moved takes the fight with it.
+        plan_scene ();
+        s.start_time = Sys_Milliseconds ();
+      });
+      Command::Add ("ui_backdrop_scene_status", []
+      {
+        if (s.current != phase::ready) { Logger::Print ("menu backdrop: no map is shown\n"); return; }
+        const double seconds ((Sys_Milliseconds () - s.start_time) / 1000.0);
+        const spawn& a (s.scene.subject ());
+        Logger::Print ("menu backdrop: {} shot {} of {}, {:.1f} s into a {:.0f} s loop; subject at ({:.0f}, {:.0f}, {:.0f}) facing {:.0f}\n",
+                       s.map, s.scene.shot_index (seconds) + 1, s.scene.shot_count (),
+                       seconds, s.scene.loop_length (), a.origin[0], a.origin[1], a.origin[2], a.yaw);
       });
       Command::Add ("ui_backdrop_reload", []
       {

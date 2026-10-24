@@ -46,7 +46,6 @@
 #include "Modules/Huffman.hpp"
 #include "Modules/IPCPipe.hpp"
 #include "Modules/Lean.hpp"
-#include "Modules/LobbyScene.hpp"
 #include "Modules/Localization.hpp"
 #include "Modules/Logger.hpp"
 #include "Modules/MapDump.hpp"
@@ -54,6 +53,8 @@
 #include "Modules/Maps.hpp"
 #include "Modules/Materials.hpp"
 #include "Modules/Menus.hpp"
+#include "Modules/Menu/Backdrop.hpp"
+#include "Modules/Menu/Actors.hpp"
 #include "Modules/ModelCache.hpp"
 #include "Modules/ModelSurfs.hpp"
 #include "Modules/Download.hpp"
@@ -214,7 +215,8 @@ namespace Components
 		Register(new Window());
 		Register(new RawMouse());
 		Register(new Renderer());
-		Register(new LobbyScene());
+		Register(new Menu::Backdrop());
+		Register(new Menu::Actors());
 		Register(new SlowMotion());
 		Register(new Sound());
 		Register(new SPLoadscreens());

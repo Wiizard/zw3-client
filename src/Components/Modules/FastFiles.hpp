@@ -11,6 +11,7 @@ namespace Components
 
 		static void AddZonePath(const std::string& path);
 		static bool Exists(const std::string& file);
+		static std::optional<std::filesystem::path> FindZoneFile(const std::string& name);
 
 		static std::string Current();
 		static bool Ready();

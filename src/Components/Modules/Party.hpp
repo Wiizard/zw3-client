@@ -18,8 +18,8 @@ namespace Components
 
 		static bool IsHostingParty();
 		static bool IsPrivateMatchClient();
-		static bool IsLobbySceneClient();
 		static void BroadcastLobbyTransition();
+		static bool IsLobbySceneClient();
 
 		static void Connect(const Network::Address& target, bool downloadOnly = false, bool isUnmanagedRequired = false, bool preserveLobbyTransition = false);
 

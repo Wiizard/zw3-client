@@ -577,14 +577,14 @@ namespace Components
 		Dvar::Var("uiDisplayMapName").Set(displayName);
 	}
 
-	void Maps::PrepareUsermap(const char* mapname)
+	void Maps::PrepareUsermap(const char* mapname, bool updateSelection)
 	{
 		if (!mapname || !*mapname)
 		{
 			return;
 		}
 
-		SynchronizeMapDvars(mapname);
+		if (updateSelection) SynchronizeMapDvars(mapname);
 		SPLoadscreens::SetLoadingMap(mapname);
 
 		if (userMap.IsValid() && userMap.GetName() == mapname)

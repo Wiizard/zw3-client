@@ -15,7 +15,7 @@
 #include "Dedicated.hpp"
 #include "Events.hpp"
 #include "Flags.hpp"
-#include "LobbyScene.hpp"
+#include "Menu/Backdrop.hpp"
 #include "Maps.hpp"
 #include "Party.hpp"
 #include "Logger.hpp"
@@ -1126,6 +1126,18 @@ namespace Components
 		return reinterpret_cast<const char*(*)(const char*)>(Utils::Hook::Rebase(Sys_GetMapZoneDir))(zoneName);
 	}
 
+	std::optional<std::filesystem::path> FastFiles::FindZoneFile(const std::string& name)
+	{
+		std::string zone = name;
+		if (zone.ends_with(".ff")) zone.resize(zone.size() - 3);
+		const char* directory = Sys_GetMapZoneDir_Stub(zone.c_str());
+		if (!directory) return std::nullopt;
+		auto path = std::filesystem::path(InstallPath()) / directory / (zone + ".ff");
+		std::error_code error;
+		if (!std::filesystem::is_regular_file(path, error)) return std::nullopt;
+		return path;
+	}
+
 	bool FastFiles::Exists(const std::string& file)
 	{
 		std::string zoneName = file;
@@ -1167,34 +1179,6 @@ namespace Components
 		else
 		{
 			ExitWithZW3Error(std::format("Missing 'zw3_common.ff':\n{}\\zw3\\zw3_common.ff\n\nPlease run the Zombie Warfare 3 Launcher to verify game files or place it inside the zw3 folder.", InstallPath()));
-		}
-
-		const bool isServerOrBuilder = Dedicated::IsEnabled() || ZoneBuilder::IsEnabled();
-		const auto lobbyPath = std::format("{}\\zw3\\zw3_lobby.ff", InstallPath());
-		const bool hasLobby = Utils::IO::FileExists(lobbyPath);
-
-		if (!isServerOrBuilder && !hasLobby && !isDev)
-		{
-			ExitWithZW3Error(std::format("Missing 'zw3_lobby.ff':\n{}\n\nPlease run the Zombie Warfare 3 Launcher to verify game files or place it inside the zw3 folder.", lobbyPath));
-		}
-
-		if (!isServerOrBuilder && hasLobby)
-		{
-			const auto common = std::ranges::find_if(zones, [](const Game::XZoneInfo& zone)
-			{
-				return zone.name && (!std::strcmp(zone.name, "zw3_common") || !std::strcmp(zone.name, "common_mp"));
-			});
-
-			const Game::XZoneInfo lobby = { "zw3_lobby", 1, 0 };
-
-			if (common != zones.end())
-			{
-				zones.insert(std::next(common), lobby);
-			}
-			else
-			{
-				zones.push_back(lobby);
-			}
 		}
 
 		if (Exists("iw4x_patch_mp"))
@@ -1336,7 +1320,7 @@ namespace Components
 
 				const std::string_view name = zone.name;
 
-				return name != "zw3_common" && name != "common_mp" && name != "zw3_lobby";
+				return name != "zw3_common" && name != "common_mp";
 			});
 		}
 
@@ -1352,15 +1336,9 @@ namespace Components
 
 		Game::DB_LoadXAssets(data.data(), static_cast<unsigned int>(data.size()), sync);
 
-		if (!Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled())
-		{
-			LobbyScene::PrepareStartup();
-		}
-
 		Scheduler::OnGameInitialized([]
 		{
 			g_loadingInitialZones.Set(false);
-			LobbyScene::PrepareStartup();
 		}, Scheduler::Pipeline::MAIN);
 	}
 
@@ -1566,11 +1544,6 @@ namespace Components
 
 			Events::OnDvarInit([]
 			{
-				if (!ZoneBuilder::IsEnabled())
-				{
-					PrefetchZone("zw3_lobby");
-				}
-
 				PrefetchZone("zw3_common");
 
 				if (!Flags::HasFlag("dev"))
@@ -1815,7 +1788,7 @@ namespace Components
 
 		Scheduler::Loop([]
 		{
-			if ((!Party::IsInLobby() && !LobbyScene::IsSceneReady()) || !Game::Sys_IsDatabaseReady()
+			if ((!Party::IsInLobby() && !Menu::Backdrop::IsShown()) || !Game::Sys_IsDatabaseReady()
 				|| Game::CL_IsCgameInitialized(0) || Game::CL_GetLocalClientConnectionState(0) >= Game::CA_CONNECTING) return;
 			static std::string selectedMap;
 			static std::string prefetchedMap;

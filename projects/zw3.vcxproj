@@ -164,6 +164,9 @@
     <ClInclude Include="..\src\Components\Modules\Auth.hpp" />
     <ClInclude Include="..\src\Components\Modules\Bans.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\Api.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\ApiStock.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\AreaExposure.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\AutoLook.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\Camo.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\Core.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\Culling.hpp" />
@@ -498,6 +501,15 @@
     <ClCompile Include="..\src\Components\Modules\BotAI\BotAI.cpp" />
     <ClCompile Include="..\src\Components\Modules\Remix\Api.cpp">
       <ObjectFileName>$(IntDir)\RemixApi.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\ApiStock.cpp">
+      <ObjectFileName>$(IntDir)\RemixApiStock.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\AreaExposure.cpp">
+      <ObjectFileName>$(IntDir)\RemixAreaExposure.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\AutoLook.cpp">
+      <ObjectFileName>$(IntDir)\RemixAutoLook.obj</ObjectFileName>
     </ClCompile>
     <ClCompile Include="..\src\Components\Modules\Remix\Camo.cpp">
       <ObjectFileName>$(IntDir)\RemixCamo.obj</ObjectFileName>

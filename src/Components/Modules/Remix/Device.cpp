@@ -19,6 +19,8 @@ namespace Components::Remix::Device
 	constexpr std::size_t direct3DCreateDeviceSlot = 16;
 	constexpr std::size_t deviceResetSlot = 16;
 	constexpr std::size_t deviceSetRenderStateSlot = 57;
+	constexpr std::size_t deviceBeginSceneSlot = 41;
+	constexpr std::size_t deviceClearSlot = 43;
 	constexpr std::size_t textureReleaseSlot = 2;
 	constexpr std::size_t textureLockRectSlot = 19;
 	constexpr std::size_t textureUnlockRectSlot = 20;
@@ -35,6 +37,9 @@ namespace Components::Remix::Device
 	using CreateDevice_t = HRESULT(STDMETHODCALLTYPE*)(IDirect3D9* self, UINT adapter, D3DDEVTYPE deviceType, HWND focusWindow, DWORD behaviorFlags, D3DPRESENT_PARAMETERS* presentationParameters, IDirect3DDevice9** returnedDevice);
 	using Reset_t = HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9* self, D3DPRESENT_PARAMETERS* presentationParameters);
 	using SetRenderState_t = HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9* self, D3DRENDERSTATETYPE state, DWORD value);
+	using BeginScene_t = HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9* self);
+	using Clear_t = HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9* self, DWORD count, const D3DRECT* rects, DWORD flags,
+		D3DCOLOR color, float z, DWORD stencil);
 	using Release_t = ULONG(STDMETHODCALLTYPE*)(IDirect3DTexture9* self);
 	using LockRect_t = HRESULT(STDMETHODCALLTYPE*)(IDirect3DTexture9* self, UINT level, D3DLOCKED_RECT* lockedRect, const RECT* rect, DWORD flags);
 	using UnlockRect_t = HRESULT(STDMETHODCALLTYPE*)(IDirect3DTexture9* self, UINT level);
@@ -56,6 +61,11 @@ namespace Components::Remix::Device
 	static CreateDevice_t originalCreateDevice = nullptr;
 	static Reset_t originalReset = nullptr;
 	static SetRenderState_t originalSetRenderState = nullptr;
+	static BeginScene_t originalBeginScene = nullptr;
+	static std::vector<DeviceCallback> beginSceneCallbacks;
+	static bool isInBeginSceneCallbacks = false;
+	static Clear_t originalClear = nullptr;
+	static bool isSceneKept = false;
 	static Release_t originalTextureRelease = nullptr;
 	static LockRect_t originalLockRect = nullptr;
 	static UnlockRect_t originalUnlockRect = nullptr;
@@ -674,6 +684,61 @@ namespace Components::Remix::Device
 		Log() << "remix: wrote one frame's events to zw3_remix_events_" << captureIndex << ".txt";
 	}
 
+	static HRESULT STDMETHODCALLTYPE ClearHook(IDirect3DDevice9* self, DWORD count, const D3DRECT* rects, DWORD flags,
+		D3DCOLOR color, float z, DWORD stencil)
+	{
+		if (isSceneKept)
+		{
+			flags &= ~static_cast<DWORD>(D3DCLEAR_TARGET);
+
+			if (!flags)
+			{
+				return D3D_OK;
+			}
+		}
+
+		return originalClear(self, count, rects, flags, color, z, stencil);
+	}
+
+	void KeepSceneUntilFrameEnd()
+	{
+		isSceneKept = originalClear != nullptr;
+	}
+
+	static HRESULT STDMETHODCALLTYPE BeginSceneHook(IDirect3DDevice9* self)
+	{
+		const HRESULT result = originalBeginScene(self);
+
+		if (SUCCEEDED(result) && !isInBeginSceneCallbacks)
+		{
+			isSceneKept = false;
+			isInBeginSceneCallbacks = true;
+
+			for (const DeviceCallback callback : beginSceneCallbacks)
+			{
+				callback(self);
+			}
+
+			isInBeginSceneCallbacks = false;
+		}
+
+		return result;
+	}
+
+	void OnBeginScene(DeviceCallback callback)
+	{
+		beginSceneCallbacks.push_back(callback);
+	}
+
+	HRESULT BeginOwnScene(IDirect3DDevice9* device)
+	{
+		const bool wasInCallbacks = isInBeginSceneCallbacks;
+		isInBeginSceneCallbacks = true;
+		const HRESULT result = device->BeginScene();
+		isInBeginSceneCallbacks = wasInCallbacks;
+		return result;
+	}
+
 	static void AttachDevice(IDirect3DDevice9* device)
 	{
 		const auto reset = SwapSlot<Reset_t>(device, deviceResetSlot, reinterpret_cast<void*>(&ResetHook));
@@ -687,6 +752,16 @@ namespace Components::Remix::Device
 		if (setRenderState)
 		{
 			originalSetRenderState = setRenderState;
+		}
+
+		if (const auto beginScene = SwapSlot<BeginScene_t>(device, deviceBeginSceneSlot, reinterpret_cast<void*>(&BeginSceneHook)))
+		{
+			originalBeginScene = beginScene;
+		}
+
+		if (const auto clear = SwapSlot<Clear_t>(device, deviceClearSlot, reinterpret_cast<void*>(&ClearHook)))
+		{
+			originalClear = clear;
 		}
 
 		HookTextureClass(device);

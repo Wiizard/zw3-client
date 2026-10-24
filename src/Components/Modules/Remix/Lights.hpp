@@ -23,6 +23,10 @@ namespace Components::Remix
 		float sunRadiance[3] = {};
 		float mapSunRadiance[3] = {};
 		float sunDirection[3] = {};
+		bool isAtmosphereSun = false;
+		float atmosphereElevationDeg = 0.0f;
+		float atmosphereRotationDeg = 0.0f;
+		float atmosphereIntensity = 0.0f;
 		unsigned long long submittedFrames = 0;
 		unsigned long long lightsCreated = 0;
 		unsigned long long lightsDestroyed = 0;
@@ -65,6 +69,8 @@ namespace Components::Remix
 	};
 
 	void SubmitSceneLights(IDirect3DDevice9* device, const void* viewInfo);
+
+	void SubmitMenuSceneLights(IDirect3DDevice9* device);
 
 	struct FixtureEdit
 	{

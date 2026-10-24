@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
+#include <unordered_set>
 
 namespace Components::Remix
 {
@@ -43,6 +45,15 @@ namespace Components::Remix
 	TextureTagStats GetTextureTagStats();
 
 	bool IsDecalTexture(std::uint64_t hash);
+
+	// Blended world layers with no opaque surface under them (FixedFunction checks the map's triangles). They stay
+	// plain blended geometry: as decals Remix would draw them on top of nothing and show the sky through them.
+	void SetFloatingLayers(const std::unordered_set<std::uint64_t>& hashes);
+
+	bool IsFloatingLayer(std::uint64_t hash);
+
+	// The Remix tags zw3 has on a texture this session ("-" for none), for frame dumps.
+	std::string DescribeTextureTags(std::uint64_t hash);
 
 	bool IsSharedLayerTexture(std::uint64_t hash);
 

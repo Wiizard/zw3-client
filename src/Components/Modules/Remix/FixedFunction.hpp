@@ -38,6 +38,8 @@ namespace Components::Remix
 		unsigned long long dynamicLightLists = 0;
 		unsigned materialBatches = 0;
 		unsigned long long batchDraws = 0;
+		unsigned long long chunksDrawn = 0;
+		unsigned long long chunksBeyondDrawDistance = 0;
 		unsigned long long shaderTintLists = 0;
 		unsigned staticModelBatches = 0;
 		unsigned bakedStaticModels = 0;
@@ -86,4 +88,8 @@ namespace Components::Remix
 	bool IsPlayerBodyShadow();
 
 	WorldStats GetWorldStats();
+
+	// Draw distance in game units (0 = the whole map). Big world and prop batches are split into 4096 unit chunks
+	// that are left out past it, and the engine's r_zfar is set to it so entities, effects and big props stop there.
+	void SetDrawDistance(float distance);
 }

@@ -47,6 +47,7 @@ namespace Components::Remix
 		IDirect3DTexture9* specularMap;
 		float environmentMinimum;
 		bool isMetal;
+		bool isWeapon = false;
 		std::string name;
 	};
 
@@ -74,6 +75,8 @@ namespace Components::Remix
 		bool shouldWriteSpecular = false;
 		float environmentMinimum = 0.0f;
 		bool isMetal = false;
+		bool isWeapon = false;
+		WeaponLook weapon;
 		TextureCopy normal;
 		TextureCopy specular;
 	};
@@ -167,6 +170,9 @@ namespace Components::Remix
 	static unsigned fixtureVersion = 0;
 	static bool isFixtureGlow = false;
 	static float fixtureGlowBrightness = 1.0f;
+	static std::unordered_set<std::uint64_t> viewmodelHashes;
+	static WeaponLook weaponLook;
+	static bool isWeaponPassDue = false;
 
 	static std::vector<ExportCandidate> candidates;
 	static std::size_t nextCandidate = 0;
@@ -861,6 +867,69 @@ namespace Components::Remix
 
 	static std::string HashFileName(std::uint64_t hash, const char* suffix);
 	static std::string HeightFileName(const std::string& normalFile);
+	static std::string SpecularFileName(std::uint64_t hash, float environmentMinimum, bool isMetal, const char* suffix);
+
+	static bool IsDefaultWeaponLook(const WeaponLook& look)
+	{
+		return look.roughnessScale == 1.0f && look.metalBoost == 0.0f && look.normalStrength == 1.0f;
+	}
+
+	// "_w" and the bits of the baked weapon settings, so each setting gets its own files and going back reuses them.
+	static std::string WeaponVariant(const WeaponLook& look)
+	{
+		if (IsDefaultWeaponLook(look))
+		{
+			return "";
+		}
+
+		std::uint32_t bits = 2166136261u;
+
+		for (const float value : { look.roughnessScale, look.metalBoost, look.normalStrength })
+		{
+			std::uint32_t valueBits = 0;
+			std::memcpy(&valueBits, &value, sizeof(valueBits));
+			bits = (bits ^ valueBits) * 16777619u;
+		}
+
+		char text[16];
+		std::snprintf(text, sizeof(text), "_w%08X", bits);
+		return text;
+	}
+
+	struct ExpectedFiles
+	{
+		std::string normalFile;
+		std::string roughnessFile;
+		std::string metallicFile;
+		bool isMetal = false;
+	};
+
+	// The files a candidate's material publishes, weapon variants included. Called with exportMutex held.
+	static ExpectedFiles ExpectFiles(const ExportCandidate& candidate)
+	{
+		ExpectedFiles files;
+		const std::string variant = candidate.isWeapon ? WeaponVariant(weaponLook) : "";
+		files.isMetal = candidate.isMetal || (candidate.isWeapon && weaponLook.metalBoost > 0.0f);
+
+		if (candidate.normalMap)
+		{
+			files.normalFile = HashFileName(candidate.normalHash, (variant + ".n.dds").c_str());
+		}
+
+		if (candidate.specularMap)
+		{
+			files.roughnessFile = SpecularFileName(candidate.specularHash, candidate.environmentMinimum, files.isMetal,
+				(variant + ".r.dds").c_str());
+
+			if (files.isMetal)
+			{
+				files.metallicFile = SpecularFileName(candidate.specularHash, candidate.environmentMinimum, true,
+					(variant + ".m.dds").c_str());
+			}
+		}
+
+		return files;
+	}
 
 	static bool IsMissingDerivedFiles(std::uint64_t colourHash, const PublishedMaterial& material)
 	{
@@ -922,15 +991,6 @@ namespace Components::Remix
 				continue;
 			}
 
-			const auto existing = published.find(candidate.colourHash);
-			const bool isComplete = existing != published.end()
-				&& !IsMissingDerivedFiles(candidate.colourHash, existing->second);
-
-			if (isComplete || !seen.insert(candidate.colourHash).second)
-			{
-				continue;
-			}
-
 			if (raw.normalTexture)
 			{
 				candidate.normalMap = Device::Unwrap(static_cast<IDirect3DTexture9*>(const_cast<void*>(raw.normalTexture)));
@@ -943,7 +1003,26 @@ namespace Components::Remix
 			}
 			candidate.environmentMinimum = raw.environmentMinimum;
 			candidate.isMetal = (raw.surfaceTypeBits & metalSurfaceBit) != 0;
+			candidate.isWeapon = viewmodelHashes.count(candidate.colourHash) != 0;
 			candidate.name = raw.name;
+
+			const auto existing = published.find(candidate.colourHash);
+			bool isComplete = existing != published.end()
+				&& !IsMissingDerivedFiles(candidate.colourHash, existing->second);
+
+			if (isComplete && candidate.isWeapon)
+			{
+				const ExpectedFiles files = ExpectFiles(candidate);
+				isComplete = existing->second.normalFile == files.normalFile
+					&& existing->second.roughnessFile == files.roughnessFile
+					&& existing->second.metallicFile == files.metallicFile;
+			}
+
+			if (isComplete || !seen.insert(candidate.colourHash).second)
+			{
+				continue;
+			}
+
 			candidates.push_back(candidate);
 		}
 
@@ -1211,7 +1290,7 @@ namespace Components::Remix
 		EncodeBcLevel(encoded, width, height, 2, output);
 	}
 
-	static bool TryWriteNormalFile(const TextureCopy& copy, const std::string& fileName)
+	static bool TryWriteNormalFile(const TextureCopy& copy, const std::string& fileName, float strength)
 	{
 		DecodedImage image;
 
@@ -1224,8 +1303,8 @@ namespace Components::Remix
 
 		for (std::size_t i = 0; i < image.texels.size(); ++i)
 		{
-			const float x = Channel(image.texels[i], 24) / 255.0f * 4.08f - 2.08f;
-			const float y = Channel(image.texels[i], 8) / 255.0f * 4.0645161f - 2.0645161f;
+			const float x = (Channel(image.texels[i], 24) / 255.0f * 4.08f - 2.08f) * strength;
+			const float y = (Channel(image.texels[i], 8) / 255.0f * 4.0645161f - 2.0645161f) * strength;
 			const float length = std::sqrt(x * x + y * y + 1.0f);
 
 			level[i * 3] = x / length;
@@ -1483,6 +1562,14 @@ namespace Components::Remix
 
 			roughness[i] = perceptual * perceptual;
 			metallic[i] = std::clamp((reflectance - 0.04f) / (0.30f - 0.04f), 0.0f, 1.0f);
+
+			// Weapon shine: roughness scaled (lower is glossier), and metal pushed up where the specular map already
+			// reflects, so painted and wooden parts stay as they are.
+			if (job.isWeapon)
+			{
+				roughness[i] = std::clamp(roughness[i] * job.weapon.roughnessScale, 0.0004f, 1.0f);
+				metallic[i] = std::clamp(metallic[i] + (1.0f - metallic[i]) * job.weapon.metalBoost * visibility, 0.0f, 1.0f);
+			}
 		}
 
 		return true;
@@ -1608,8 +1695,9 @@ namespace Components::Remix
 				const std::size_t nameStart = entry.second.name.find_first_not_of(' ');
 				const bool isWorldMaterial = nameStart != std::string::npos
 					&& entry.second.name.compare(nameStart, 3, "wc/") == 0;
+				const bool isWeaponDepth = weaponLook.isDepth && viewmodelHashes.count(entry.first) != 0;
 
-				if (hasHeight && isWorldMaterial)
+				if (hasHeight && (isWorldMaterial || isWeaponDepth))
 				{
 					entry.second.heightFile = HeightFileName(entry.second.normalFile);
 				}
@@ -1820,7 +1908,7 @@ namespace Components::Remix
 
 			if (job.shouldWriteNormal)
 			{
-				didConvert = TryWriteNormalFile(job.normal, job.normalFile);
+				didConvert = TryWriteNormalFile(job.normal, job.normalFile, job.isWeapon ? job.weapon.normalStrength : 1.0f);
 			}
 
 			if (didConvert && job.shouldWriteSpecular)
@@ -1915,10 +2003,20 @@ namespace Components::Remix
 			job.colourHash = candidate.colourHash;
 			job.name = candidate.name;
 			job.environmentMinimum = candidate.environmentMinimum;
-			job.isMetal = candidate.isMetal;
+			job.isWeapon = candidate.isWeapon;
+
+			{
+				std::lock_guard<std::mutex> lock(exportMutex);
+				const ExpectedFiles files = ExpectFiles(candidate);
+				job.weapon = weaponLook;
+				job.isMetal = files.isMetal;
+				job.normalFile = files.normalFile;
+				job.roughnessFile = files.roughnessFile;
+				job.metallicFile = files.metallicFile;
+			}
+
 			if (candidate.normalMap)
 			{
-				job.normalFile = HashFileName(candidate.normalHash, ".n.dds");
 				job.heightFile = HeightFileName(job.normalFile);
 			}
 
@@ -1929,17 +2027,6 @@ namespace Components::Remix
 				if (floorHashes.count(candidate.colourHash) != 0)
 				{
 					job.puddleFile = HashFileName(candidate.colourHash, ".w.dds");
-				}
-			}
-
-			if (candidate.specularMap)
-			{
-				job.roughnessFile = SpecularFileName(candidate.specularHash, candidate.environmentMinimum, candidate.isMetal,
-					".r.dds");
-
-				if (candidate.isMetal)
-				{
-					job.metallicFile = SpecularFileName(candidate.specularHash, candidate.environmentMinimum, true, ".m.dds");
 				}
 			}
 
@@ -2065,6 +2152,28 @@ namespace Components::Remix
 		}
 
 		QueueCandidates();
+
+		// A weapon setting changed or a new viewmodel texture showed up: rescan so those materials get their files.
+		if (nextCandidate >= candidates.size())
+		{
+			bool isDue = false;
+
+			{
+				std::lock_guard<std::mutex> lock(exportMutex);
+				isDue = isWeaponPassDue && isScanComplete && GetTickCount64() - lastSettingChangeTick >= settingSettleMs;
+
+				if (isDue)
+				{
+					isWeaponPassDue = false;
+					isScanComplete = false;
+				}
+			}
+
+			if (isDue)
+			{
+				CollectCandidates();
+			}
+		}
 
 		std::lock_guard<std::mutex> lock(exportMutex);
 		const bool isIdle = isScanComplete && !isWorkerRunning && jobs.empty();
@@ -2817,5 +2926,58 @@ namespace Components::Remix
 		hasUnpublishedWater = true;
 		stats.glassMaterials = static_cast<int>(glassHashes.size());
 		stats.waterMaterials = static_cast<int>(waterNormals.size());
+	}
+
+	void SetWeaponLook(const WeaponLook& look)
+	{
+		std::lock_guard<std::mutex> lock(exportMutex);
+
+		if (look.isDepth == weaponLook.isDepth && look.roughnessScale == weaponLook.roughnessScale
+			&& look.metalBoost == weaponLook.metalBoost && look.normalStrength == weaponLook.normalStrength)
+		{
+			return;
+		}
+
+		const bool areFilesChanged = WeaponVariant(look) != WeaponVariant(weaponLook);
+		weaponLook = look;
+		isWeaponPassDue = isWeaponPassDue || areFilesChanged;
+		hasUnpublishedKinds = true;
+		isSettingPublishPending = true;
+		lastSettingChangeTick = GetTickCount64();
+	}
+
+	WeaponLook GetWeaponLook()
+	{
+		std::lock_guard<std::mutex> lock(exportMutex);
+		return weaponLook;
+	}
+
+	void RegisterPbrViewmodel(std::uint64_t hash)
+	{
+		std::lock_guard<std::mutex> lock(exportMutex);
+
+		if (!viewmodelHashes.insert(hash).second)
+		{
+			return;
+		}
+
+		// Only a weapon look that is not the default needs new files or a new publish for it.
+		if (!IsDefaultWeaponLook(weaponLook))
+		{
+			isWeaponPassDue = true;
+			isSettingPublishPending = true;
+		}
+
+		if (weaponLook.isDepth)
+		{
+			hasUnpublishedKinds = true;
+			isSettingPublishPending = true;
+		}
+	}
+
+	int GetViewmodelTextureCount()
+	{
+		std::lock_guard<std::mutex> lock(exportMutex);
+		return static_cast<int>(viewmodelHashes.size());
 	}
 }

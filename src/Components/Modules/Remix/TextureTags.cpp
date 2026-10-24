@@ -72,6 +72,7 @@ namespace Components::Remix
 		std::uint64_t textureHash;
 		bool isForcedCutout;
 		bool isMovedFromOpaqueRegion;
+		bool isSunSprite;
 	};
 
 	struct Classification
@@ -316,6 +317,42 @@ namespace Components::Remix
 	}
 
 	static std::uint64_t lastPassFingerprint = 0;
+	static std::unordered_set<std::uint64_t> floatingLayers;
+	static unsigned floatingLayersVersion = 0;
+
+	std::string DescribeTextureTags(std::uint64_t hash)
+	{
+		std::string text;
+
+		for (int tag = 0; tag < textureTagCount; ++tag)
+		{
+			if (pushed[tag].count(hash) != 0)
+			{
+				text += (text.empty() ? "" : ",") + std::string(tagOptions[tag]);
+			}
+		}
+
+		if (floatingLayers.count(hash) != 0)
+		{
+			text += text.empty() ? "floating-layer" : ",floating-layer";
+		}
+
+		return text.empty() ? "-" : text;
+	}
+
+	bool IsFloatingLayer(std::uint64_t hash)
+	{
+		return floatingLayers.count(hash) != 0;
+	}
+
+	void SetFloatingLayers(const std::unordered_set<std::uint64_t>& hashes)
+	{
+		if (hashes != floatingLayers)
+		{
+			floatingLayers = hashes;
+			++floatingLayersVersion;
+		}
+	}
 
 	static std::uint64_t MaterialPoolFingerprint(const Engine::MaterialPool& materialPool)
 	{
@@ -328,6 +365,7 @@ namespace Components::Remix
 
 		fingerprint ^= static_cast<std::uint64_t>(GetLookSettings().isFixtureLights) << 1;
 		fingerprint ^= static_cast<std::uint64_t>(isSharedDecalTagged) << 2;
+		fingerprint ^= static_cast<std::uint64_t>(floatingLayersVersion) << 3;
 
 		return fingerprint;
 	}
@@ -682,6 +720,11 @@ namespace Components::Remix
 			return { static_cast<int>(TextureTag::Ignore), false };
 		}
 
+		if (facts.isSunSprite)
+		{
+			return { static_cast<int>(TextureTag::Ignore), false };
+		}
+
 		if (IsZombieEyeName(name))
 		{
 			return { -1, false, false, true };
@@ -715,7 +758,13 @@ namespace Components::Remix
 
 		const bool isSkyTechniqueSet = techniqueSet == "sky" || EndsWith(techniqueSet, "_sky");
 
-		if (isSkyTechniqueSet || (sortKey == 2 && name.substr(0, 3) == "wc/"))
+		// Sort 2 is the sky sort. Converted maps (backlot) draw their sky as an unlit skydome model, mc/ not wc/, which
+		// Remix would otherwise trace as a closed sphere shading the whole map. The name has to say sky too: the
+		// heartbeat sensor's screen (mc/mtl_motion_tracker_screen, mc_unlit_replace_lin_ua) is also sort 2.
+		const bool isSkydomeModel = sortKey == 2 && Contains(techniqueSet, "unlit")
+			&& ContainsAny(name, { "sky", "dome", "pano" });
+
+		if (isSkyTechniqueSet || (sortKey == 2 && name.substr(0, 3) == "wc/") || isSkydomeModel)
 		{
 			return { static_cast<int>(TextureTag::Sky), false };
 		}
@@ -751,7 +800,12 @@ namespace Components::Remix
 			return { static_cast<int>(TextureTag::WorldSpaceUi), false };
 		}
 
-		if (Contains(techniqueSet, "objective") || (region == 1 && sortKey == 29 && HasObjectiveSuffix(name)))
+		// Weapons reuse the objective glow technique (Ray Gun Mk2's mtl_wpn_t7_zmb_hd_raygun_mk2 on factory, town and
+		// nacht); world-space UI would draw them through walls, so they stay geometry.
+		const bool isWeaponMaterial = ContainsAny(name, { "mtl_wpn_", "mtl_weapon_", "/wpn_", "_wpn_" });
+
+		if (!isWeaponMaterial
+			&& (Contains(techniqueSet, "objective") || (region == 1 && sortKey == 29 && HasObjectiveSuffix(name))))
 		{
 			return { static_cast<int>(TextureTag::WorldSpaceUi), false };
 		}
@@ -1391,6 +1445,12 @@ namespace Components::Remix
 		const std::uintptr_t entries = materialPool.entries;
 		const std::uintptr_t poolEnd = entries + materialPool.count * materialPool.stride;
 
+		// The map's sun sprite and flare (GfxWorld sun.spriteMaterial and flareMaterial) draw with the 2d technique, so
+		// the UI rule would put them on top of every wall. Remix lights its own sun.
+		const auto world = ReadAt<std::uintptr_t>(Engine::RebaseAddress(Engine::CurrentBuild().gfxWorld));
+		const std::uintptr_t sunSprite = world ? ReadAt<std::uintptr_t>(world + Iw4::worldSunSpriteMaterial) : 0;
+		const std::uintptr_t sunFlare = world ? ReadAt<std::uintptr_t>(world + Iw4::worldSunFlareMaterial) : 0;
+
 		const std::uint64_t fingerprint = MaterialPoolFingerprint(materialPool);
 
 		if (isRepeatPass && fingerprint == lastPassFingerprint && stats.texturesWithoutHash == 0)
@@ -1409,10 +1469,14 @@ namespace Components::Remix
 		{
 			MaterialFacts facts{};
 
-			if (!TryReadMaterial(entries + i * materialPool.stride, pool, poolEnd, facts))
+			const std::uintptr_t material = entries + i * materialPool.stride;
+
+			if (!TryReadMaterial(material, pool, poolEnd, facts))
 			{
 				continue;
 			}
+
+			facts.isSunSprite = material == sunSprite || material == sunFlare;
 
 			++materials;
 
@@ -1544,7 +1608,13 @@ namespace Components::Remix
 
 		for (const auto& entry : uses)
 		{
-			const int tag = ResolveTag(entry.second);
+			int tag = ResolveTag(entry.second);
+
+			if (tag == static_cast<int>(TextureTag::Decal) && floatingLayers.count(entry.first) != 0)
+			{
+				tag = -1;
+			}
+
 			const bool isSharedLayer = entry.second.hasGeometryUser && !entry.second.isCodeImage
 				&& ((entry.second.tagMask & decalBit) || entry.second.hasBlendedLayerUser);
 
@@ -1555,7 +1625,9 @@ namespace Components::Remix
 
 			for (int option = 0; option < textureTagCount; ++option)
 			{
-				if (option == tag || saved[option].count(entry.first) == 0 || !withdrawn[option].insert(entry.first).second)
+				const bool wasTagged = saved[option].count(entry.first) != 0 || pushed[option].count(entry.first) != 0;
+
+				if (option == tag || !wasTagged || !withdrawn[option].insert(entry.first).second)
 				{
 					continue;
 				}

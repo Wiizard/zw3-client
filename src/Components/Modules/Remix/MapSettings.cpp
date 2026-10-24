@@ -224,6 +224,7 @@ namespace Components::Remix
 		const bool hasYaw = TryReadNumber(*sun, "yaw", settings.sun.yawDeg);
 		const bool hasPitch = TryReadNumber(*sun, "pitch", settings.sun.pitchDeg);
 		settings.sun.hasDirection = hasYaw && hasPitch;
+		settings.sun.hasColour = TryReadVector(*sun, "colour", settings.sun.colour, 3);
 	}
 
 	static void ReadFogAndCulling(const toml::value& root)
@@ -933,6 +934,32 @@ namespace Components::Remix
 			}
 		}
 
+		// type 2 is a spot, 3 an omni (GFX_LIGHT_TYPE_SPOT / _OMNI); values are the engine's, unconverted.
+		if (const toml::value* primary = FindKey(*lights, "primary"))
+		{
+			if (primary->is_array())
+			{
+				for (const toml::value& entry : primary->as_array())
+				{
+					PrimaryLight light;
+					float type = 0.0f;
+
+					if (!TryReadNumber(entry, "type", type) || !TryReadVector(entry, "origin", light.origin, 3)
+						|| !TryReadVector(entry, "colour", light.colour, 3) || !TryReadNumber(entry, "radius", light.radius))
+					{
+						LogWarn() << "remix: a map settings primary light lacks type, origin, colour or radius, it is skipped";
+						continue;
+					}
+
+					light.type = static_cast<std::uint8_t>(type);
+					TryReadVector(entry, "direction", light.direction, 3);
+					TryReadNumber(entry, "cos_outer", light.cosOuter);
+					TryReadNumber(entry, "cos_inner", light.cosInner);
+					settings.primaryLights.push_back(light);
+				}
+			}
+		}
+
 		if (const toml::value* attached = FindKey(*lights, "attach"))
 		{
 			if (attached->is_array())
@@ -1070,7 +1097,16 @@ namespace Components::Remix
 			return;
 		}
 
-		const std::uintptr_t identity = GetMapIdentity();
+		// With no map loaded, the menu's own scene (the lobby's Kino) uses that map's file; its identity is a fixed
+		// value no world pointer can have.
+		static constexpr std::uintptr_t menuSceneIdentity = 1;
+		const std::string menuSceneMap = GetMenuSceneMap();
+		std::uintptr_t identity = GetMapIdentity();
+
+		if (identity == 0 && !menuSceneMap.empty())
+		{
+			identity = menuSceneIdentity;
+		}
 
 		if (identity == 0)
 		{
@@ -1110,7 +1146,7 @@ namespace Components::Remix
 		loadedIdentity = identity;
 		isReloadRequested = false;
 
-		LoadMapFile(GetMapName());
+		LoadMapFile(identity == menuSceneIdentity ? menuSceneMap : GetMapName());
 		ApplyMapFile(device);
 		++settingsVersion;
 	}

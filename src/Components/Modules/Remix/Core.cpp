@@ -2,15 +2,49 @@
 
 #include "Core.hpp"
 
+#include <fstream>
+#include <mutex>
 #include <variant>
 
 #include "Components/Modules/Logger.hpp"
 
 namespace Components::Remix
 {
+	// zw3's Remix lines also go to zw3_remix_log.txt next to the game, started fresh each run, so a session can be
+	// read back without the in-game console (which does not keep them). Capped so it can't grow without end.
+	static void WriteLogFile(const char* level, const std::string& text)
+	{
+		static constexpr std::streamoff maximumLogBytes = 8 * 1024 * 1024;
+		static std::mutex logMutex;
+		static std::ofstream logFile;
+		static bool isOpened = false;
+
+		const std::lock_guard lock(logMutex);
+
+		if (!isOpened)
+		{
+			isOpened = true;
+			logFile.open(Core::ModuleDirectory() + L"zw3_remix_log.txt", std::ios::trunc);
+		}
+
+		if (!logFile || logFile.tellp() > maximumLogBytes)
+		{
+			return;
+		}
+
+		SYSTEMTIME time{};
+		GetLocalTime(&time);
+		char stamp[16];
+		std::snprintf(stamp, sizeof(stamp), "%02u:%02u:%02u.%03u", time.wHour, time.wMinute, time.wSecond,
+			time.wMilliseconds);
+		logFile << stamp << " " << level << text << "\n";
+		logFile.flush();
+	}
+
 	LogLine::~LogLine()
 	{
 		const std::string text = this->stream.str();
+		WriteLogFile(this->level == Level::Warning ? "warning: " : this->level == Level::Error ? "error: " : "", text);
 
 		switch (this->level)
 		{
@@ -76,6 +110,7 @@ namespace Components::Remix::Core
 		{ "remix_steady_lod", &Config::remixSteadyModelDetail },
 		{ "remix_body_shadow", &Config::remixPlayerBodyShadow },
 		{ "remix_view_culling", &Config::remixViewCulling },
+		{ "remix_draw_distance", &Config::remixDrawDistance },
 		{ "remix_grade", &Config::remixMapGrade },
 		{ "remix_grade_strength", &Config::remixMapGradeStrength },
 		{ "remix_draw_effects", &Config::remixDrawEffects },
@@ -87,6 +122,10 @@ namespace Components::Remix::Core
 		{ "remix_sky", &Config::remixSkyScale },
 		{ "remix_tonemapper", &Config::remixTonemapper },
 		{ "remix_auto_exposure", &Config::remixAutoExposure },
+		{ "remix_area_exposure", &Config::remixAreaExposure },
+		{ "remix_area_exposure_strength", &Config::remixAreaExposureStrength },
+		{ "remix_area_exposure_sunlit", &Config::remixAreaExposureSunlit },
+		{ "remix_area_exposure_window", &Config::remixAreaExposureWindow },
 		{ "remix_ev_min", &Config::remixExposureMinEv },
 		{ "remix_ev_max", &Config::remixExposureMaxEv },
 		{ "remix_exposure_speed", &Config::remixExposureSpeed },
@@ -104,6 +143,14 @@ namespace Components::Remix::Core
 		{ "remix_tint_b", &Config::remixColourBalanceB },
 		{ "remix_global_aces", &Config::remixGlobalAces },
 		{ "remix_steady_tone_curve", &Config::remixSteadyToneCurve },
+		{ "remix_plus_tonemapper", &Config::remixPlusOperator },
+		{ "remix_plus_exposure_target", &Config::remixPlusExposureTarget },
+		{ "remix_plus_shadows", &Config::remixPlusShadows },
+		{ "remix_plus_highlights", &Config::remixPlusHighlights },
+		{ "remix_physical_sky", &Config::remixPhysicalSky },
+		{ "remix_physical_sky_map_sun", &Config::remixPhysicalSkyMapSun },
+		{ "remix_plus_weather", &Config::remixPlusWeather },
+		{ "remix_plus_rain_particles", &Config::remixPlusRainParticles },
 		{ "remix_bloom", &Config::remixBloom },
 		{ "remix_bloom_strength", &Config::remixBloomIntensity },
 		{ "remix_bloom_threshold", &Config::remixBloomThreshold },
@@ -172,7 +219,16 @@ namespace Components::Remix::Core
 		{ "remix_steady_transparency", &Config::remixSteadyTransparency },
 		{ "remix_outdoor_ev", &Config::remixOutdoorEv },
 		{ "remix_opacity_micromaps", &Config::remixOpacityMicromaps },
+		{ "remix_backface_culling", &Config::remixBackfaceCulling },
+		{ "remix_sparse_rendering", &Config::remixSparseRendering },
+		{ "remix_sparse_rate", &Config::remixSparseRate },
 		{ "remix_sky_reprojected", &Config::remixSkyReprojected },
+		{ "remix_auto_look", &Config::remixAutoLook },
+		{ "remix_hide_lamp_flares", &Config::remixHideLampFlares },
+		{ "remix_weapon_depth", &Config::remixWeaponDepth },
+		{ "remix_weapon_roughness", &Config::remixWeaponRoughness },
+		{ "remix_weapon_metal", &Config::remixWeaponMetal },
+		{ "remix_weapon_normal", &Config::remixWeaponNormal },
 		{ "remix_spot_brightness", &Config::remixSpotBrightness },
 		{ "remix_omni_brightness", &Config::remixOmniBrightness },
 		{ "remix_light_size", &Config::remixLightSize },
@@ -321,6 +377,9 @@ namespace Components::Remix::Core
 		return ModuleDirectory() + L"zw3_remix\\remix.ini";
 	}
 
+	// The menu window's place in remix.ini. It isn't a setting: the menu writes it on its own, and Save leaves it alone.
+	static constexpr const char* menuWindowKey = "menu_window";
+
 	static std::wstring MapIniPath(const std::string& mapName)
 	{
 		return ModuleDirectory() + L"zw3_remix\\maps\\" + std::wstring(mapName.begin(), mapName.end()) + L".ini";
@@ -360,6 +419,11 @@ namespace Components::Remix::Core
 			if (key == "remix_dll")
 			{
 				target.remixDll = value;
+				continue;
+			}
+
+			if (key == menuWindowKey)
+			{
 				continue;
 			}
 
@@ -479,6 +543,83 @@ namespace Components::Remix::Core
 		globalConfig = config;
 		message = "Saved to zw3_remix\\remix.ini";
 		Log() << "remix: settings saved to zw3_remix\\remix.ini";
+	}
+
+	bool TryReadMenuWindow(MenuWindow& window)
+	{
+		std::ifstream file(IniPath());
+		std::string line;
+
+		while (std::getline(file, line))
+		{
+			const std::string trimmed = Trim(line);
+			const std::size_t equals = trimmed.find('=');
+
+			if (equals == std::string::npos || Utils::String::ToLower(Trim(trimmed.substr(0, equals))) != menuWindowKey)
+			{
+				continue;
+			}
+
+			const std::string value = Trim(trimmed.substr(equals + 1));
+			return std::sscanf(value.c_str(), "%f %f %f %f", &window.x, &window.y, &window.width, &window.height) == 4
+				&& window.width > 0.0f && window.height > 0.0f;
+		}
+
+		return false;
+	}
+
+	void WriteMenuWindow(const MenuWindow& window)
+	{
+		char text[96];
+		std::snprintf(text, sizeof(text), "%s = %.0f %.0f %.0f %.0f", menuWindowKey, static_cast<double>(window.x),
+			static_cast<double>(window.y), static_cast<double>(window.width), static_cast<double>(window.height));
+
+		std::vector<std::string> lines;
+		bool hasReplaced = false;
+
+		{
+			std::ifstream existing(IniPath());
+			std::string line;
+
+			while (std::getline(existing, line))
+			{
+				const std::string trimmed = Trim(line);
+				const std::size_t equals = trimmed.find('=');
+
+				if (equals != std::string::npos && Utils::String::ToLower(Trim(trimmed.substr(0, equals))) == menuWindowKey)
+				{
+					if (hasReplaced)
+					{
+						continue;
+					}
+
+					line = text;
+					hasReplaced = true;
+				}
+
+				lines.push_back(line);
+			}
+		}
+
+		if (!hasReplaced)
+		{
+			lines.push_back(text);
+		}
+
+		CreateDirectoryW((ModuleDirectory() + L"zw3_remix").c_str(), nullptr);
+
+		std::ofstream file(IniPath(), std::ios::trunc);
+
+		if (!file)
+		{
+			LogWarn() << "remix: could not write the menu window size to zw3_remix\\remix.ini";
+			return;
+		}
+
+		for (const std::string& line : lines)
+		{
+			file << line << "\n";
+		}
 	}
 
 	void LoadConfig()

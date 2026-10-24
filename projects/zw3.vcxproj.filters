@@ -195,6 +195,15 @@
     <ClInclude Include="..\src\Components\Modules\Remix\Api.hpp">
       <Filter>Components\Modules\Remix</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\ApiStock.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\AreaExposure.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\AutoLook.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\Components\Modules\Remix\Camo.hpp">
       <Filter>Components\Modules\Remix</Filter>
     </ClInclude>
@@ -1186,6 +1195,15 @@
       <Filter>Components\Modules\BotAI</Filter>
     </ClCompile>
     <ClCompile Include="..\src\Components\Modules\Remix\Api.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\ApiStock.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\AreaExposure.cpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Remix\AutoLook.cpp">
       <Filter>Components\Modules\Remix</Filter>
     </ClCompile>
     <ClCompile Include="..\src\Components\Modules\Remix\Camo.cpp">

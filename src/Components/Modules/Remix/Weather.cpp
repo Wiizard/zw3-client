@@ -10,6 +10,7 @@
 #include <string_view>
 #include <vector>
 
+#include "Api.hpp"
 #include "Device.hpp"
 #include "Iw4.hpp"
 #include "FixedFunction.hpp"
@@ -40,6 +41,14 @@ namespace Components::Remix
 	static constexpr float farFadeStart = 1500.0f;
 	static constexpr float farFadeEnd = 2500.0f;
 	static constexpr float sceneMinZ = 0.015625f;
+	// Particle cloud budget (mp_zombie_diner sent Remix 22k-43k cloud quads a frame, every particle of every cloud):
+	// particles further than keepAllDistance and outside a cone around the view are left out, and past
+	// thinStartDistance a steady share is left out, falling with the square of the distance, the rest drawn that much
+	// more opaque (up to maximumAlphaBoost) so the cloud keeps its density.
+	static constexpr float keepAllDistance = 128.0f;
+	static constexpr float viewConeCos = 0.34f;
+	static constexpr float thinStartDistance = 400.0f;
+	static constexpr float maximumAlphaBoost = 2.0f;
 	static constexpr float sceneMaxZ = 1.0f;
 
 	static WeatherStats stats;
@@ -50,17 +59,33 @@ namespace Components::Remix
 
 	static constexpr UINT rainTextureWidth = 4;
 	static constexpr UINT rainTextureHeight = 64;
-	static constexpr float rainHalfWidth = 450.0f;
-	static constexpr float rainHalfHeight = 350.0f;
+	// The streak box around the eye. Past about 300 units streaks fade out and are under a pixel wide, so the box is
+	// kept to that and the drop count follows its volume: the same density near you for about a third of the streaks.
+	static constexpr float rainHalfWidth = 300.0f;
+	static constexpr float rainHalfHeight = 250.0f;
 	static constexpr float rainFallSpeed = 520.0f;
 	static constexpr float rainWindSpeed = 45.0f;
-	static constexpr float rainStreakLength = 48.0f;
-	static constexpr float rainStreakWidth = 0.55f;
-	static constexpr int rainAlpha = 130;
-	static constexpr D3DCOLOR rainColour = 0x00C8D2DC;
-	static constexpr int rainDropsPerAmount = 1024;
-	static constexpr float maximumRainAmount = 10.0f;
-	static constexpr int maxRainDrops = 10240;
+	static constexpr float rainStreakLength = 40.0f;
+	static constexpr float rainStreakWidth = 0.25f;
+	// Far streaks widen up to this many times so they stay about a pixel wide instead of flickering out.
+	static constexpr float rainWidthGrowthDistance = 120.0f;
+	static constexpr float maximumRainWidthGrowth = 4.0f;
+	static constexpr int rainAlpha = 85;
+	// Albedo, not light: the streaks are Remix particles, so the scene's sun, sky and lamps light them.
+	static constexpr D3DCOLOR rainColour = 0x00B4BECC;
+	// How hard zw3 rains on Remix Plus when the map or a weather preset rains and Rain on any map is off.
+	static constexpr float mapRainAmount = 3.0f;
+	static constexpr float drizzleRainAmount = 1.0f;
+	static constexpr float rainstormRainAmount = 10.0f;
+	static constexpr float thunderstormRainAmount = 14.0f;
+	static constexpr float fogDrizzleRainAmount = 0.5f;
+	// 1024 drops per amount filled the old 450 x 450 x 350 box; the count scales with the box so the density stays.
+	static constexpr float referenceRainVolume = 450.0f * 450.0f * 350.0f;
+	static constexpr int rainDropsPerAmount = static_cast<int>(1024.0f * rainHalfWidth * rainHalfWidth * rainHalfHeight
+		/ referenceRainVolume);
+	static constexpr float maximumRainAmount = 16.0f;
+	// Four vertices a drop through 16 bit indices: 16384 drops is the most one draw can address.
+	static constexpr int maxRainDrops = 16384;
 	static constexpr float gustStrength = 0.6f;
 	static constexpr float gustRate = 0.23f;
 	static constexpr float crossWindSpeed = 25.0f;
@@ -259,6 +284,20 @@ namespace Components::Remix
 			return false;
 		}
 
+		// While Remix Plus rains itself, the map's rain is still noted (auto weather follows it) but not drawn.
+		if (const char* materialName = ReadAt<const char*>(material);
+			materialName && std::string_view(materialName).find("rain") != std::string_view::npos)
+		{
+			rainyMapIdentity = GetMapIdentity();
+
+			// Remix Plus rains with path traced particles (Weather menu; Auto follows this map rain), so the game's
+			// flat rain quads are never drawn there.
+			if (IsRemixPlus())
+			{
+				return true;
+			}
+		}
+
 		if (!hasLocalPositions)
 		{
 			BuildLocalPositions();
@@ -304,9 +343,33 @@ namespace Components::Remix
 			const float dy = centre[1] - camera[1];
 			const float dz = centre[2] - camera[2];
 			const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+			if (distance > keepAllDistance && (dx * forward[0] + dy * forward[1] + dz * forward[2]) < viewConeCos * distance)
+			{
+				++stats.particlesOffscreen;
+				continue;
+			}
+
+			float keep = 1.0f;
+
+			if (distance > thinStartDistance)
+			{
+				keep = thinStartDistance * thinStartDistance / (distance * distance);
+				const std::uint32_t seed = (static_cast<std::uint32_t>(particle) * 2654435761u)
+					^ (static_cast<std::uint32_t>(cloud >> 4) * 40503u);
+				const float pick = static_cast<float>((seed * 1664525u + 1013904223u) >> 8) / 16777216.0f;
+
+				if (pick >= keep)
+				{
+					++stats.particlesThinned;
+					continue;
+				}
+			}
+
 			const float fade = Saturate((distance - nearFadeStart) / (nearFadeEnd - nearFadeStart))
 				* Saturate((farFadeEnd - distance) / (farFadeEnd - farFadeStart));
-			const int alpha = static_cast<int>(cloudAlpha * fade + 0.5f);
+			const float boost = std::min(1.0f / keep, maximumAlphaBoost);
+			const int alpha = std::min(static_cast<int>(cloudAlpha * fade * boost + 0.5f), 255);
 
 			if (alpha <= 0)
 			{
@@ -603,12 +666,55 @@ namespace Components::Remix
 		return offset - size * std::floor((offset + halfSize) / size);
 	}
 
+	// zw3's rain amount this frame: Rain on any map's slider, or on Remix Plus (whose map rain is not drawn by the
+	// game) the map's rain or the weather preset's. 0 is no rain.
+	static float GetRainAmount(const LookSettings& look)
+	{
+		if (look.isRainEverywhere)
+		{
+			return std::clamp(look.rainAmount, 0.0f, maximumRainAmount);
+		}
+
+		if (!IsRemixPlus() || IsPlusPrecipitationActive() || !IsAnyRain())
+		{
+			return 0.0f;
+		}
+
+		// Auto rains like the map (it picks Rainstorm only for the sky); a chosen preset rains as hard as its name.
+		static constexpr int autoWeather = 0;
+		const PlusWeatherPreset* preset = GetPlusWeather();
+		const std::string_view name = preset && look.plusWeather != autoWeather ? preset->name : "";
+
+		if (name == "drizzle")
+		{
+			return drizzleRainAmount;
+		}
+
+		if (name == "foggy")
+		{
+			return fogDrizzleRainAmount;
+		}
+
+		if (name == "rainstorm")
+		{
+			return rainstormRainAmount;
+		}
+
+		if (name == "thunderstorm")
+		{
+			return thunderstormRainAmount;
+		}
+
+		return mapRainAmount;
+	}
+
 	void DrawRainEverywhere(IDirect3DDevice9* device)
 	{
 		const LookSettings look = GetLookSettings();
+		const float amount = GetRainAmount(look);
 		float camera[3];
 
-		if (!look.isRainEverywhere || !device || didRainTextureFail || !TryGetCameraOrigin(camera))
+		if (amount <= 0.0f || !device || didRainTextureFail || !TryGetCameraOrigin(camera))
 		{
 			return;
 		}
@@ -645,7 +751,6 @@ namespace Components::Remix
 			rainWindSpeed * (seconds - gustStrength * std::cos(gustRate * seconds) / gustRate),
 			-crossWindSpeed * std::cos(crossWindRate * seconds + 1.0f) / crossWindRate,
 		};
-		const float amount = std::clamp(look.rainAmount, 0.0f, maximumRainAmount);
 		const int particleCount = std::min(static_cast<int>(static_cast<float>(rainDropsPerAmount) * amount), maxRainDrops);
 		int drawn = 0;
 
@@ -691,9 +796,11 @@ namespace Components::Remix
 				continue;
 			}
 
+			const float widthGrowth = std::clamp(distance / rainWidthGrowthDistance, 1.0f, maximumRainWidthGrowth);
+
 			for (float& component : side)
 			{
-				component = component / sideLength * rainStreakWidth * raindrop.width;
+				component = component / sideLength * rainStreakWidth * raindrop.width * widthGrowth;
 			}
 
 			const float streakLength = rainStreakLength * raindrop.length * raindrop.speed;
@@ -902,7 +1009,7 @@ namespace Components::Remix
 		const float seconds = lastDropTick == 0 ? 0.0f : std::min(static_cast<float>(now - lastDropTick) / 1000.0f, 0.1f);
 		lastDropTick = now;
 
-		if (!device || !look.isScreenDrops || didDropTextureFail)
+		if (!device || !look.isScreenDrops || didDropTextureFail || IsRemixPlus())
 		{
 			screenDrops.clear();
 			return;

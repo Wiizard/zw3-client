@@ -6,9 +6,13 @@
 #include "imgui_impl_dx9.h"
 #include "imgui_impl_win32.h"
 
+#include "Api.hpp"
+#include "AreaExposure.hpp"
+#include "AutoLook.hpp"
 #include "Core.hpp"
 #include "Culling.hpp"
 #include "DebugDraw.hpp"
+#include "Device.hpp"
 #include "Engine.hpp"
 #include "FixedFunction.hpp"
 #include "Fog.hpp"
@@ -428,7 +432,30 @@ namespace Components::Remix::Menu
 				static_cast<int>(remixStats.isMotionTrackerHooked)) });
 		}
 
+		switch (GetApiRuntime())
+		{
+		case ApiRuntime::Plus:
+			rows.push_back({ "Remix API", CheckState::Working, Format("Remix Plus runtime, API %d.%d.%d",
+				REMIXAPI_VERSION_MAJOR, REMIXAPI_VERSION_MINOR, REMIXAPI_VERSION_PATCH) });
+			break;
+		case ApiRuntime::Stock:
+			rows.push_back({ "Remix API", CheckState::Working,
+				"stock NVIDIA runtime, Remix Plus features (physical sky, weather, per-draw material channel) are off" });
+			break;
+		case ApiRuntime::None:
+			break;
+		}
+
 		const LightStats lightStats = GetLightStats();
+
+		if (GetLookSettings().isPhysicalSky)
+		{
+			rows.push_back({ "Physical sky", lightStats.isAtmosphereSun ? CheckState::Working : CheckState::Problem,
+				lightStats.isAtmosphereSun
+					? Format("sun sent to the atmosphere at elevation %.1f, rotation %.1f, intensity %.2f (below 0 is night)",
+						lightStats.atmosphereElevationDeg, lightStats.atmosphereRotationDeg, lightStats.atmosphereIntensity)
+					: "on, but no map sun has been sent yet (the atmosphere keeps its own sun)" });
+		}
 
 		if (!lightStats.isApiReady)
 		{
@@ -625,7 +652,7 @@ namespace Components::Remix::Menu
 		}
 
 		ImGui::SetItemTooltip("Writes every world and model draw group of the next 3D frame to"
-							  " zw3_remix_frame_N.txt. Press it while something looks wrong, then once more"
+							  " zw3_remix_frame_<map>_<time>_N.txt. Press it while something looks wrong, then once more"
 							  " while it looks right.");
 
 		ImGui::Separator();
@@ -668,6 +695,22 @@ namespace Components::Remix::Menu
 
 		isChanged |= ImGui::Checkbox("Sky follows the world camera", &look.isSkyReprojected);
 		ImGui::SetItemTooltip("For maps whose sky slides with the view like a picture: Remix redraws the sky through the world camera (rtx.skyReprojectToMainCameraSpace).");
+
+		ImGui::BeginDisabled(!IsRemixPlus());
+		isChanged |= ImGui::Checkbox("Physical sky (Remix Plus)", &look.isPhysicalSky);
+		ImGui::EndDisabled();
+		ImGui::SetItemTooltip("Replaces the map's skybox with Remix Plus's simulated atmosphere and clouds, lit by the"
+							  " map's sun from the same direction. Shaded outdoor areas get real skylight. It replaces the"
+							  " skybox outright, so leave it off on night or painted-sky maps and use Save for this map."
+							  " Sun brightness and tint still apply.");
+
+		ImGui::BeginDisabled(!IsRemixPlus() || !look.isPhysicalSky);
+		isChanged |= ImGui::Checkbox("Keep the map's sun and shadows", &look.isPhysicalSkyMapSun);
+		ImGui::EndDisabled();
+		ImGui::SetItemTooltip("With the physical sky, the map is still lit by its own sun (its direction, colour and"
+							  " sharp shadows) instead of Remix Plus's sun, which weather clouds can cover. The sky and"
+							  " clouds still follow it. Move it with Override sun direction below; turning that off puts"
+							  " it back where the map has it.");
 
 		ImGui::SeparatorText("Sun");
 
@@ -818,25 +861,69 @@ namespace Components::Remix::Menu
 		}
 	}
 
-	static void DrawExposureTab()
+	// The scene brightness range auto exposure adapts across (rtx.autoExposure.evMinValue / evMaxValue). Both runtimes
+	// clamp to it; equal values hold one fixed exposure.
+	static bool DrawAdaptRange(LookSettings& look)
 	{
-		LookSettings look = GetLookSettings();
 		bool isChanged = false;
-		ImGui::SeparatorText("Exposure");
 
-		isChanged |= ImGui::Checkbox("Auto exposure", &look.isAutoExposure);
-		ImGui::SetItemTooltip("Remix adapts the exposure like an eye or camera, so the whole image brightens or darkens"
-							  " with what is in view. Off (the default) holds a fixed exposure: set it with Exposure (EV)"
-							  " and use Save for this map.");
+		isChanged |= ImGui::SliderFloat("Darkest adapt (EV)", &look.exposureMinEv, -8.0f, 0.0f, "%.1f");
+		ImGui::SetItemTooltip("The darkest scene auto exposure adapts to. Lower lets it brighten dark rooms and nights"
+							  " further; higher keeps them dark.");
+
+		isChanged |= ImGui::SliderFloat("Brightest adapt (EV)", &look.exposureMaxEv, 0.0f, 10.0f, "%.1f");
+		ImGui::SetItemTooltip("The brightest scene auto exposure adapts to. Higher lets it darken the picture for a"
+							  " bright sky; lower stops the sky in view from turning everything else dark.");
+
+		isChanged |= ImGui::Checkbox("Area exposure", &look.isAreaExposure);
+		ImGui::SetItemTooltip("Exposure follows how lit the spot you stand on is, from the map's own baked light grid,"
+							  " instead of whatever is on screen, so looking at the floor or the sky no longer swings it."
+							  " The middle of the range above is the map's typical area; darker rooms and sunlit yards"
+							  " move from there. Works on every map without zones.");
+
+		if (look.isAreaExposure)
+		{
+			isChanged |= ImGui::SliderFloat("Area strength", &look.areaExposureStrength, 0.0f, 1.0f, "%.2f");
+			ImGui::SetItemTooltip("How much of the difference between dark and bright areas is evened out. 0 treats every"
+								  " area the same, 1 makes every area equally bright.");
+
+			isChanged |= ImGui::SliderFloat("Sunlit areas (EV)", &look.areaExposureSunlitEv, 0.0f, 3.0f, "%.2f");
+			ImGui::SetItemTooltip("Extra exposure step where the map's sun reaches you. The light grid leaves the sun"
+								  " out, so this stands in for it; lower if sunny spots look dark.");
+
+			isChanged |= ImGui::SliderFloat("Look-around range (EV)", &look.areaExposureWindowEv, 0.05f, 3.0f, "%.2f");
+			ImGui::SetItemTooltip("How far the screen based auto exposure may still move either way around the area's"
+								  " value. Small keeps the exposure steady when you look around.");
+
+			const AreaExposureState area = GetAreaExposureState();
+
+			if (!area.hasGrid)
+			{
+				ImGui::TextDisabled("This map has no light grid; the range above applies as it is.");
+			}
+			else if (area.isActive)
+			{
+				ImGui::TextDisabled("Here: %.1f EV against the map's typical area, %.0f%% sunlit, adapting %.2f to %.2f EV",
+					area.areaLog - area.mapMedianLog, area.sunlitShare * 100.0f, area.minEv, area.maxEv);
+			}
+		}
+
+		return isChanged;
+	}
+
+	// Remix Plus replaced Remix's tonemapper: no local tonemapper, an operator list instead, and an auto exposure that
+	// aims for a target brightness. Values follow rtx_fork_tonemap.h and rtx_auto_exposure.h in the fork.
+	static bool DrawPlusTonemapping(LookSettings& look)
+	{
+		bool isChanged = false;
 
 		if (look.isAutoExposure)
 		{
-			isChanged |= ImGui::SliderFloat("Darkest adapt (EV)", &look.exposureMinEv, -8.0f, 0.0f, "%.1f");
-			ImGui::SetItemTooltip("How far auto exposure may darken the image in bright scenes.");
+			isChanged |= ImGui::SliderFloat("Target brightness", &look.plusExposureTarget, 0.05f, 0.5f, "%.2f");
+			ImGui::SetItemTooltip("The average brightness auto exposure aims for. 0.18 is mid grey; higher brightens"
+								  " the image, lower darkens it.");
 
-			isChanged |= ImGui::SliderFloat("Brightest adapt (EV)", &look.exposureMaxEv, 0.0f, 10.0f, "%.1f");
-			ImGui::SetItemTooltip("How far auto exposure may brighten dark scenes. Lower keeps night and indoor areas"
-								  " dark.");
+			isChanged |= DrawAdaptRange(look);
 
 			isChanged |= ImGui::SliderFloat("Adapt speed", &look.exposureSpeed, 0.1f, 10.0f, "%.1f");
 			ImGui::SetItemTooltip("How quickly exposure follows the scene, like eyes adjusting after going outside.");
@@ -844,54 +931,157 @@ namespace Components::Remix::Menu
 
 		ImGui::SeparatorText("Tonemapping");
 
-		static const char* tonemappers[] = { "Global (default, colour grading)", "Local" };
-		isChanged |= ImGui::Combo("Tonemapper", &look.tonemapper, tonemappers, 2);
-		ImGui::SetItemTooltip("Local balances bright and dark areas separately, like an HDR photo. Global is a single"
-							  " curve for the whole image and is the one that does contrast, saturation and tint.");
+		static const char* operators[] = { "None", "ACES (Hill)", "ACES (Narkowicz)", "Hable filmic", "AgX",
+			"Lottes", "Psycho 17 (Remix Plus default)", "Gran Turismo 7", "Neutwo" };
+		isChanged |= ImGui::Combo("Tonemapper", &look.plusOperator, operators, IM_ARRAYSIZE(operators));
+		ImGui::SetItemTooltip("The curve that turns the path traced light into screen colours. ACES is the film look"
+							  " most games use; Psycho 17 is Remix Plus's default, a perceptual curve that bleaches"
+							  " very bright colours towards white like the eye does.");
 
-		if (look.tonemapper == 1)
+		isChanged |= ImGui::SliderFloat("Exposure (EV)", &look.exposureBiasEv, -5.0f, 5.0f, "%.2f");
+		ImGui::SetItemTooltip("Brightens or darkens the whole image in camera stops.");
+
+		if (look.plusOperator == 6)
 		{
-			isChanged |= ImGui::SliderFloat("Exposure", &look.localExposure, 0.0f, 3.0f, "%.2f");
-			ImGui::SetItemTooltip("Overall brightness on top of auto exposure.");
+			isChanged |= ImGui::SliderFloat("Shadows", &look.plusShadows, 0.0f, 3.0f, "%.2f");
+			ImGui::SetItemTooltip("Above 1 lifts the shadows.");
 
-			isChanged |= ImGui::SliderFloat("Shadows", &look.localShadows, 0.0f, 6.0f, "%.2f");
-			ImGui::SetItemTooltip("Higher lifts the shadows. Lower keeps them deep, closer to a real camera.");
+			isChanged |= ImGui::SliderFloat("Highlights", &look.plusHighlights, 0.0f, 3.0f, "%.2f");
+			ImGui::SetItemTooltip("Above 1 compresses bright areas harder, so lamps and skies keep detail.");
+		}
 
-			isChanged |= ImGui::SliderFloat("Highlights", &look.localHighlights, 0.0f, 8.0f, "%.2f");
-			ImGui::SetItemTooltip("Higher pulls bright areas down so skies and lamps keep detail.");
+		isChanged |= ImGui::Checkbox("Colour grading", &look.isColourGrading);
+		ImGui::SetItemTooltip("Turns on the contrast, saturation and tint below.");
 
-			isChanged |= ImGui::Checkbox("Boost local contrast", &look.isLocalContrastBoosted);
-			ImGui::SetItemTooltip("Sharper, punchier detail in surfaces.");
+		if (look.isColourGrading)
+		{
+			isChanged |= ImGui::SliderFloat("Contrast", &look.contrast, 0.0f, 3.0f, "%.2f");
 
-			isChanged |= ImGui::Checkbox("Film curve (ACES)", &look.isLocalAces);
-			ImGui::SetItemTooltip("Finishes with the ACES film curve used in film and many games.");
+			isChanged |= ImGui::SliderFloat("Saturation", &look.saturation, 0.0f, 5.0f, "%.2f");
+			ImGui::SetItemTooltip("0 is black and white, 1 is the original colour, above 1 is oversaturated.");
+
+			isChanged |= ImGui::ColorEdit3("Colour tint", look.colourBalance, ImGuiColorEditFlags_NoInputs);
+			ImGui::SetItemTooltip("Tints the final image, white leaves it neutral. Warm for golden hour, cool for night.");
+		}
+
+		return isChanged;
+	}
+
+	// A known good starting point: exposure held fixed like stock Remix with an EV range of 0 to 0, no extra EV, the
+	// ACES film curve, no grading and a white sun. Nothing is saved until Save.
+	static void ApplyNeutralLook(LookSettings& look)
+	{
+		look.isAutoExposure = true;
+		look.exposureMinEv = 0.0f;
+		look.exposureMaxEv = 0.0f;
+		look.exposureSpeed = 1.0f;
+		look.exposureBiasEv = 0.0f;
+		look.outdoorEv = 0.0f;
+		look.shadowLift = 0.0f;
+
+		look.plusExposureTarget = 0.18f;
+		look.plusOperator = 1;
+		look.plusShadows = 1.0f;
+		look.plusHighlights = 1.0f;
+		look.tonemapper = 0;
+		look.isGlobalAces = true;
+
+		look.isColourGrading = false;
+		look.contrast = 1.0f;
+		look.saturation = 1.0f;
+		look.colourBalance[0] = look.colourBalance[1] = look.colourBalance[2] = 1.0f;
+
+		SunSettings sun = GetSunSettings();
+		sun.tint[0] = sun.tint[1] = sun.tint[2] = 1.0f;
+		SetSunSettings(sun);
+	}
+
+	static void DrawExposureTab()
+	{
+		LookSettings look = GetLookSettings();
+		bool isChanged = false;
+		ImGui::SeparatorText("Exposure");
+
+		if (ImGui::Button("Neutral look"))
+		{
+			ApplyNeutralLook(look);
+			isChanged = true;
+		}
+
+		ImGui::SetItemTooltip("Starts the look over from a known good point: exposure held fixed (EV range 0 to 0, like"
+							  " stock Remix), no extra or outdoor EV, the ACES film curve, no colour grading and a white"
+							  " sun. Tune from there, then Save.");
+
+		isChanged |= ImGui::Checkbox("Auto exposure", &look.isAutoExposure);
+		ImGui::SetItemTooltip("Remix adapts the exposure like an eye or camera, so the whole image brightens or darkens"
+							  " with what is in view. Off (the default) holds a fixed exposure: set it with Exposure (EV)"
+							  " and use Save for this map.");
+
+		if (IsRemixPlus())
+		{
+			isChanged |= DrawPlusTonemapping(look);
 		}
 		else
 		{
-			isChanged |= ImGui::SliderFloat("Exposure (EV)", &look.exposureBiasEv, -5.0f, 5.0f, "%.2f");
-			ImGui::SetItemTooltip("Brightens or darkens the whole image in camera stops.");
-
-			isChanged |= ImGui::Checkbox("Steady tone curve", &look.isSteadyToneCurve);
-			ImGui::SetItemTooltip("On keeps one fixed curve, so the image only changes when the lighting does. Off lets"
-								  " Remix rebuild the curve every frame from what is on screen, which can pump and flicker"
-								  " as you look around.");
-
-			isChanged |= ImGui::Checkbox("Film curve (ACES)", &look.isGlobalAces);
-			ImGui::SetItemTooltip("Finishes with the ACES film curve used in film and many games.");
-
-			isChanged |= ImGui::Checkbox("Colour grading", &look.isColourGrading);
-			ImGui::SetItemTooltip("Turns on the contrast, saturation and tint below.");
-
-			if (look.isColourGrading)
+			if (look.isAutoExposure)
 			{
-				isChanged |= ImGui::SliderFloat("Contrast", &look.contrast, 0.0f, 3.0f, "%.2f");
+				isChanged |= DrawAdaptRange(look);
 
-				isChanged |= ImGui::SliderFloat("Saturation", &look.saturation, 0.0f, 5.0f, "%.2f");
-				ImGui::SetItemTooltip("0 is black and white, 1 is the original colour, above 1 is oversaturated.");
+				isChanged |= ImGui::SliderFloat("Adapt speed", &look.exposureSpeed, 0.1f, 10.0f, "%.1f");
+				ImGui::SetItemTooltip("How quickly exposure follows the scene, like eyes adjusting after going outside.");
+			}
 
-				isChanged |= ImGui::ColorEdit3("Colour tint", look.colourBalance, ImGuiColorEditFlags_NoInputs);
-				ImGui::SetItemTooltip("Tints the final image, white leaves it neutral. Warm for golden hour, cool"
-									  " for night.");
+			ImGui::SeparatorText("Tonemapping");
+
+			static const char* tonemappers[] = { "Global (default, colour grading)", "Local" };
+			isChanged |= ImGui::Combo("Tonemapper", &look.tonemapper, tonemappers, 2);
+			ImGui::SetItemTooltip("Local balances bright and dark areas separately, like an HDR photo. Global is a single"
+								  " curve for the whole image and is the one that does contrast, saturation and tint.");
+
+			if (look.tonemapper == 1)
+			{
+				isChanged |= ImGui::SliderFloat("Exposure", &look.localExposure, 0.0f, 3.0f, "%.2f");
+				ImGui::SetItemTooltip("Overall brightness on top of auto exposure.");
+
+				isChanged |= ImGui::SliderFloat("Shadows", &look.localShadows, 0.0f, 6.0f, "%.2f");
+				ImGui::SetItemTooltip("Higher lifts the shadows. Lower keeps them deep, closer to a real camera.");
+
+				isChanged |= ImGui::SliderFloat("Highlights", &look.localHighlights, 0.0f, 8.0f, "%.2f");
+				ImGui::SetItemTooltip("Higher pulls bright areas down so skies and lamps keep detail.");
+
+				isChanged |= ImGui::Checkbox("Boost local contrast", &look.isLocalContrastBoosted);
+				ImGui::SetItemTooltip("Sharper, punchier detail in surfaces.");
+
+				isChanged |= ImGui::Checkbox("Film curve (ACES)", &look.isLocalAces);
+				ImGui::SetItemTooltip("Finishes with the ACES film curve used in film and many games.");
+			}
+			else
+			{
+				isChanged |= ImGui::SliderFloat("Exposure (EV)", &look.exposureBiasEv, -5.0f, 5.0f, "%.2f");
+				ImGui::SetItemTooltip("Brightens or darkens the whole image in camera stops.");
+
+				isChanged |= ImGui::Checkbox("Steady tone curve", &look.isSteadyToneCurve);
+				ImGui::SetItemTooltip("On keeps one fixed curve, so the image only changes when the lighting does. Off lets"
+									  " Remix rebuild the curve every frame from what is on screen, which can pump and flicker"
+									  " as you look around.");
+
+				isChanged |= ImGui::Checkbox("Film curve (ACES)", &look.isGlobalAces);
+				ImGui::SetItemTooltip("Finishes with the ACES film curve used in film and many games.");
+
+				isChanged |= ImGui::Checkbox("Colour grading", &look.isColourGrading);
+				ImGui::SetItemTooltip("Turns on the contrast, saturation and tint below.");
+
+				if (look.isColourGrading)
+				{
+					isChanged |= ImGui::SliderFloat("Contrast", &look.contrast, 0.0f, 3.0f, "%.2f");
+
+					isChanged |= ImGui::SliderFloat("Saturation", &look.saturation, 0.0f, 5.0f, "%.2f");
+					ImGui::SetItemTooltip("0 is black and white, 1 is the original colour, above 1 is oversaturated.");
+
+					isChanged |= ImGui::ColorEdit3("Colour tint", look.colourBalance, ImGuiColorEditFlags_NoInputs);
+					ImGui::SetItemTooltip("Tints the final image, white leaves it neutral. Warm for golden hour, cool"
+										  " for night.");
+				}
 			}
 		}
 
@@ -995,6 +1185,35 @@ namespace Components::Remix::Menu
 
 		ImGui::SeparatorText("Weather");
 
+		{
+			static std::vector<const char*> weatherLabels;
+
+			if (weatherLabels.empty())
+			{
+				weatherLabels.push_back("Auto (rain where the map rains)");
+				weatherLabels.push_back("Off");
+
+				for (const PlusWeatherPreset& preset : plusWeatherPresets)
+				{
+					weatherLabels.push_back(preset.label);
+				}
+			}
+
+			ImGui::BeginDisabled(!IsRemixPlus());
+			isChanged |= ImGui::Combo("Weather (Remix Plus)", &look.plusWeather, weatherLabels.data(),
+				static_cast<int>(weatherLabels.size()));
+			ImGui::EndDisabled();
+			ImGui::SetItemTooltip("Remix Plus weather: clouds, haze and fog (these need Physical sky). Rain presets rain"
+								  " with zw3's streaks and wet the world; snow, blizzard and sandstorm are Remix Plus"
+								  " particles. Auto picks Rainstorm where the map rains.");
+
+			ImGui::BeginDisabled(!IsRemixPlus());
+			isChanged |= ImGui::Checkbox("Remix Plus rain particles (experimental)", &look.isPlusRainParticles);
+			ImGui::EndDisabled();
+			ImGui::SetItemTooltip("Uses Remix Plus's GPU rain and snow particles instead of zw3's streaks. Its drops are"
+								  " sized for centimetre worlds, so in IW4's inch units they can be too thin to see.");
+		}
+
 		bool isWeatherEnabled = IsWeatherEnabled();
 
 		if (ImGui::Checkbox("Weather (rain, snow, dust)", &isWeatherEnabled))
@@ -1015,12 +1234,14 @@ namespace Components::Remix::Menu
 							  " which the game does in a pixel shader Remix never runs.");
 
 		isChanged |= ImGui::Checkbox("Rain on any map", &look.isRainEverywhere);
-		ImGui::SetItemTooltip("Path traced rain streaks around you on every map, kept outdoors by the map's rain mask.");
+		ImGui::SetItemTooltip("Path traced rain streaks around you on every map, kept outdoors by the map's rain mask."
+							  " On Remix Plus they also replace the map's own rain.");
 
 		if (look.isRainEverywhere)
 		{
-			isChanged |= ImGui::SliderFloat("Rain amount", &look.rainAmount, 0.0f, 10.0f, "%.1f");
-			ImGui::SetItemTooltip("1 is a steady shower, 10 is a downpour (about ten thousand drops).");
+			isChanged |= ImGui::SliderFloat("Rain amount", &look.rainAmount, 0.0f, 16.0f, "%.1f");
+			ImGui::SetItemTooltip("1 is a steady shower, 10 is a downpour, 16 is the most (about sixteen thousand"
+								  " drops around you). The Rainstorm weather rains at 10 and Thunderstorm at 14.");
 		}
 
 		isChanged |= ImGui::Checkbox("Rain drops on screen", &look.isScreenDrops);
@@ -1308,6 +1529,71 @@ namespace Components::Remix::Menu
 		}
 	}
 
+	static void DrawWeaponsTab()
+	{
+		LookSettings look = GetLookSettings();
+		bool isChanged = false;
+
+		ImGui::SeparatorText("First person weapon");
+		ImGui::TextWrapped("Only the weapon and arms in your hands: zw3 notes the textures drawn in the viewmodel depth"
+						   " range (%d so far) and gives them their own normal, roughness and metal maps with these"
+						   " baked in. A change shows about a second after you let go, once Remix reloads the mod.",
+			GetViewmodelTextureCount());
+
+		isChanged |= ImGui::Checkbox("Weapon depth", &look.isWeaponDepth);
+		ImGui::SetItemTooltip("Real depth on the weapon from height maps made from its normal maps (Remix displacement,"
+							  " the same as Parallax depth for the world, which this turns on).");
+
+		isChanged |= ImGui::SliderFloat("Weapon roughness", &look.weaponRoughness, 0.25f, 2.0f, "x%.2f");
+		ImGui::SetItemTooltip("Lower is glossier and shows sharper reflections, higher is more matte.");
+
+		isChanged |= ImGui::SliderFloat("Weapon metal", &look.weaponMetal, 0.0f, 1.0f, "%.2f");
+		ImGui::SetItemTooltip("Turns the shiny parts of the weapon (where its specular map reflects) more metallic."
+							  " Wood, grips and paint are left as they are.");
+
+		isChanged |= ImGui::SliderFloat("Weapon surface detail", &look.weaponNormal, 0.0f, 3.0f, "x%.2f");
+		ImGui::SetItemTooltip("Depth of scratches, grain and machining on the weapon's normal maps.");
+
+		if (ImGui::Button("Default weapon look"))
+		{
+			const LookSettings defaults{};
+			look.isWeaponDepth = defaults.isWeaponDepth;
+			look.weaponRoughness = defaults.weaponRoughness;
+			look.weaponMetal = defaults.weaponMetal;
+			look.weaponNormal = defaults.weaponNormal;
+			isChanged = true;
+		}
+
+		ImGui::TextDisabled("Each setting you settle on keeps its own files in rtx-remix\\mods\\zw3_pbr\\textures.");
+
+		if (isChanged)
+		{
+			SetLookSettings(look);
+		}
+	}
+
+	static void DrawAutoLookSection()
+	{
+		const MapTraits traits = GetMapTraits();
+		Core::Config& config = Core::MutableConfig();
+
+		ImGui::Checkbox("Automatic look for maps without a file", &config.remixAutoLook);
+		ImGui::SetItemTooltip("On a map with no zw3_remix\\maps\\<map>.ini, zw3 reads its sun, sky, fog and how much of"
+							  " it is sun lit, and starts from a look for day, dusk or night, indoor or outdoor and fog."
+							  " Save for this map keeps it; a saved map file always wins. Takes effect on the next map.");
+
+		if (!traits.isKnown)
+		{
+			ImGui::TextDisabled("Reading this map...");
+		}
+		else
+		{
+			ImGui::TextWrapped("This map: %s", traits.summary.c_str());
+			ImGui::TextDisabled(traits.isApplied ? "The automatic look is in use (not saved yet)."
+				: "Not applied: this map has its own file, or the automatic look is off.");
+		}
+	}
+
 	static void DrawQualityTab()
 	{
 		LookSettings look = GetLookSettings();
@@ -1363,6 +1649,26 @@ namespace Components::Remix::Menu
 							  " converted maps it baked block-shaped holes into curtains and flags. On is a little faster"
 							  " on maps with lots of foliage.");
 
+		isChanged |= ImGui::Checkbox("Back-face culling", &look.isBackfaceCulling);
+		ImGui::SetItemTooltip("Remix leaves out the back of one-sided walls, as the game does. Untick if you can see"
+							  " the sky through a wall from one side (converted maps sometimes have walls only built to be"
+							  " seen from the front). Save for this map keeps it.");
+
+		ImGui::SeparatorText("Speed");
+
+		ImGui::BeginDisabled(!IsRemixPlus());
+		isChanged |= ImGui::Checkbox("Sparse rendering (Remix Plus)", &look.isSparseRendering);
+		ImGui::EndDisabled();
+		ImGui::SetItemTooltip("Lights only part of the pixels each frame and lets DLSS Ray Reconstruction fill in the"
+							  " rest: a large frame rate gain on heavy maps for some softness in motion. Needs Ray"
+							  " Reconstruction on in the Remix menu (ALT+X).");
+
+		if (look.isSparseRendering)
+		{
+			isChanged |= ImGui::SliderFloat("Pixels lit per frame", &look.sparseRate, 0.25f, 1.0f, "%.2f");
+			ImGui::SetItemTooltip("0.5 lights half the pixels each frame. Below about 0.3 it gets unstable.");
+		}
+
 		ImGui::SeparatorText("CPU");
 
 		Core::Config& threadConfig = Core::MutableConfig();
@@ -1383,8 +1689,10 @@ namespace Components::Remix::Menu
 
 		ImGui::SeparatorText("Path tracing");
 
-		static const char* indirectModes[] = { "Reference (noisiest)", "ReSTIR GI", "Neural radiance cache (NRC)" };
-		isChanged |= ImGui::Combo("Bounced light", &look.indirectMode, indirectModes, 3);
+		// SHARC is Remix Plus's own radiance cache (IntegrateIndirectMode::Sharc = 3); stock has only the first three.
+		static const char* indirectModes[] = { "Reference (noisiest)", "ReSTIR GI", "Neural radiance cache (NRC)",
+			"SHARC radiance cache (Remix Plus)" };
+		isChanged |= ImGui::Combo("Bounced light", &look.indirectMode, indirectModes, IsRemixPlus() ? 4 : 3);
 		ImGui::SetItemTooltip("How light bouncing between surfaces is traced. NRC allows unlimited bounces and is usually"
 							  " closest to a real photo. ReSTIR GI is cleaner than Reference.");
 
@@ -1418,6 +1726,19 @@ namespace Components::Remix::Menu
 
 		ImGui::SetItemTooltip("How much the engine keeps out of view. Remix only lights what is drawn, so less"
 							  " culling means steadier light and shadows, at a frame rate cost.");
+
+		Core::Config& distanceConfig = Core::MutableConfig();
+
+		if (ImGui::SliderFloat("Draw distance", &distanceConfig.remixDrawDistance, 0.0f, 20000.0f,
+				distanceConfig.remixDrawDistance > 0.0f ? "%.0f units" : "whole map"))
+		{
+			SetDrawDistance(distanceConfig.remixDrawDistance);
+		}
+
+		ImGui::SetItemTooltip("How far the map is sent to Remix. 0 sends the whole map. Lower keeps big maps (TranZit"
+							  " diner) light: the map is cut into 4096 unit pieces and pieces past this are left out,"
+							  " and the game stops drawing models and effects there too (r_zfar). Past it is the sky,"
+							  " so keep it beyond what you can see on open maps. Save for this map keeps it.");
 
 		bool isOffscreenWorldEnabled = IsOffscreenWorldEnabled();
 
@@ -2340,7 +2661,29 @@ namespace Components::Remix::Menu
 		Core::Config& config = Core::MutableConfig();
 		CaptureConfig(config);
 
-		ImGui::SetNextWindowSize(ImVec2(460, 0), ImGuiCond_FirstUseEver);
+		static Core::MenuWindow savedWindow{};
+		static bool hasReadWindow = false;
+
+		if (!hasReadWindow)
+		{
+			hasReadWindow = true;
+			const ImVec2 display = ImGui::GetIO().DisplaySize;
+
+			if (!Core::TryReadMenuWindow(savedWindow))
+			{
+				savedWindow = { 60.0f, 60.0f, 720.0f, 700.0f };
+			}
+
+			// A window saved on a bigger screen still has to fit this one.
+			savedWindow.width = std::min(savedWindow.width, std::max(display.x, 200.0f));
+			savedWindow.height = std::min(savedWindow.height, std::max(display.y, 200.0f));
+			savedWindow.x = std::clamp(savedWindow.x, 0.0f, std::max(display.x - savedWindow.width, 0.0f));
+			savedWindow.y = std::clamp(savedWindow.y, 0.0f, std::max(display.y - savedWindow.height, 0.0f));
+
+			ImGui::SetNextWindowPos(ImVec2(savedWindow.x, savedWindow.y));
+			ImGui::SetNextWindowSize(ImVec2(savedWindow.width, savedWindow.height));
+		}
+
 		ImGui::Begin("zw3 RTX Remix (INSERT)");
 
 		DrawSettingsButtons(config);
@@ -2383,8 +2726,16 @@ namespace Components::Remix::Menu
 				ImGui::EndTabItem();
 			}
 
+			if (ImGui::BeginTabItem("Weapons"))
+			{
+				DrawWeaponsTab();
+				ImGui::EndTabItem();
+			}
+
 			if (ImGui::BeginTabItem("Map"))
 			{
+				ImGui::SeparatorText("Automatic look");
+				DrawAutoLookSection();
 				DrawRemixTab();
 				ImGui::SeparatorText("Photo mode");
 				DrawPhotoSection();
@@ -2397,6 +2748,21 @@ namespace Components::Remix::Menu
 				ImGui::EndTabItem();
 			}
 			ImGui::EndTabBar();
+		}
+
+		// Written once a move or resize is let go, so a drag doesn't rewrite the file every frame.
+		if (!ImGui::IsWindowCollapsed() && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+		{
+			const ImVec2 position = ImGui::GetWindowPos();
+			const ImVec2 size = ImGui::GetWindowSize();
+			const Core::MenuWindow current{ position.x, position.y, size.x, size.y };
+
+			if (std::fabs(current.x - savedWindow.x) >= 1.0f || std::fabs(current.y - savedWindow.y) >= 1.0f
+				|| std::fabs(current.width - savedWindow.width) >= 1.0f || std::fabs(current.height - savedWindow.height) >= 1.0f)
+			{
+				savedWindow = current;
+				Core::WriteMenuWindow(current);
+			}
 		}
 
 		ImGui::End();
@@ -2475,7 +2841,13 @@ namespace Components::Remix::Menu
 		const bool isRemixChord = hookedWindow && GetForegroundWindow() == GetAncestor(hookedWindow, GA_ROOT)
 			&& IsHeld(VK_MENU) && IsHeld('X');
 
-		if (isRemixChord && !wasRemixChord)
+		// Remix Plus reports its menu, which it can also open by itself (the first-use guide). Stock Remix can't, so
+		// Alt+X presses are counted there.
+		if (const remixapi_Interface* api = IsRemixPlus() ? GetReadyApi() : nullptr; api && api->GetUIState)
+		{
+			isRemixMenuOpen = api->GetUIState() != REMIXAPI_UI_STATE_NONE;
+		}
+		else if (isRemixChord && !wasRemixChord)
 		{
 			isRemixMenuOpen = !isRemixMenuOpen;
 		}
@@ -2503,7 +2875,7 @@ namespace Components::Remix::Menu
 		ImGui::EndFrame();
 		ImGui::Render();
 
-		if (SUCCEEDED(device->BeginScene()))
+		if (SUCCEEDED(Device::BeginOwnScene(device)))
 		{
 			ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
 			device->EndScene();

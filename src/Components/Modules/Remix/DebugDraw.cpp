@@ -72,6 +72,11 @@ namespace Components::Remix
 			opaque.opacityConstant = 1.0f;
 			opaque.roughnessConstant = 1.0f;
 			opaque.metallicConstant = 0.0f;
+			// Remix Plus reads these from 0.1000.1 callers, its defaults for older callers are on and 1. Stock ignores them.
+			opaque.enableDlssControlMask = true;
+			opaque.dlssControlMaskIntensity = 1.0f;
+			opaque.dlssControlMaskToneStrength = 1.0f;
+			opaque.dlssControlMaskStructuralStrength = 1.0f;
 
 			remixapi_MaterialInfo info{};
 			info.sType = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO;

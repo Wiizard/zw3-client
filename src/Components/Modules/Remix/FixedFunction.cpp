@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <mutex>
 #include <string>
@@ -107,8 +108,17 @@ namespace Components::Remix
 		float maxZ = 1.0f;
 	};
 
+	// A spatial piece of a batch: its own index range, drawn as one fixed draw so Remix caches it, with its bounds.
+	struct BatchChunk
+	{
+		UINT startIndex = 0;
+		UINT triCount = 0;
+		float bounds[6] = { FLT_MAX, FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX, -FLT_MAX };
+	};
+
 	struct MaterialBatch
 	{
+		std::vector<BatchChunk> chunks;
 		UINT startIndex = 0;
 		UINT triCount = 0;
 		UINT firstVertex = 0;
@@ -121,6 +131,24 @@ namespace Components::Remix
 		int colourHigh[4] = {};
 		std::uint64_t colourSum[4] = {};
 	};
+
+	static constexpr float chunkCellSize = 4096.0f;
+	static constexpr UINT minChunkedTriangles = 4096;
+	static std::uint64_t ChunkCell(const float* position)
+	{
+		const auto x = static_cast<std::int32_t>(std::floor(position[0] / chunkCellSize));
+		const auto y = static_cast<std::int32_t>(std::floor(position[1] / chunkCellSize));
+		return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(x)) << 32) | static_cast<std::uint32_t>(y);
+	}
+
+	static void GrowBounds(float* bounds, const float* position)
+	{
+		for (int axis = 0; axis < 3; ++axis)
+		{
+			bounds[axis] = std::min(bounds[axis], position[axis]);
+			bounds[3 + axis] = std::max(bounds[3 + axis], position[axis]);
+		}
+	}
 
 	static IDirect3DStateBlock9* completeSceneState = nullptr;
 	static unsigned culledFillScene = 0;
@@ -706,6 +734,345 @@ namespace Components::Remix
 		return totalArea > 0.0f && upArea >= floorShare * totalArea;
 	}
 
+	// Blend op of the lit technique's state bits (bits 8-10, 0 = blending off; double multiply 0x139 decodes as op 1).
+	static bool IsBlendedMaterial(std::uintptr_t material)
+	{
+		const auto entry = ReadAt<std::uint8_t>(material + Iw4::materialStateBitsEntry + Iw4::techniqueLit);
+		const auto stateBitsCount = ReadAt<std::uint8_t>(material + Iw4::materialStateBitsCount);
+		const auto stateBits = ReadAt<std::uintptr_t>(material + Iw4::materialStateBitsTable);
+
+		if (entry >= stateBitsCount || !stateBits)
+		{
+			return false;
+		}
+
+		return ((ReadAt<std::uint32_t>(stateBits + entry * Iw4::stateBitsStride) >> 8) & 7) != 0;
+	}
+
+	static void ReadTriangle(const WorldSource& source, const BatchSurface& surface, UINT triangle, float corners[3][3])
+	{
+		for (int corner = 0; corner < 3; ++corner)
+		{
+			std::uint32_t engineVertex = surface.firstVertex + source.indices[surface.baseIndex + triangle * 3 + corner];
+
+			if (engineVertex >= source.vertexCount)
+			{
+				engineVertex = surface.firstVertex;
+			}
+
+			std::memcpy(corners[corner], source.vertices + engineVertex * Iw4::worldVertexStride, sizeof(corners[corner]));
+		}
+	}
+
+	static bool TryWriteStaticSurface(const StaticSurfaceRecord& record, const D3DMATRIX& placement, WorldVertex* vertices,
+		std::uint32_t* indices, UINT baseVertex);
+	static D3DMATRIX StaticModelMatrix(std::uintptr_t drawInst);
+
+	// Black Ops terrain materials carry "ter_" after their prefix or folder (wc/eb_ter_trashpile_blend, jun_ter_...).
+	static bool IsTerrainLayerName(std::string_view name)
+	{
+		const std::size_t slash = name.rfind('/');
+
+		if (slash != std::string_view::npos)
+		{
+			name.remove_prefix(slash + 1);
+		}
+
+		return name.substr(0, 4) == "ter_" || name.find("_ter_") != std::string_view::npos;
+	}
+
+	// Converted maps sometimes cover a gap with a blended layer alone (Kino's eb_ter_trashpile_blend over the gap in
+	// the static model floor mtl_p_jun_floor_broken). Layers are tagged as decals so they sit cleanly on their base,
+	// but a Remix decal over nothing shows the sky. Every opaque triangle of the world and of the static models goes
+	// into a grid; a blended world material with more than a fifth of its sampled triangles over nothing is a
+	// floating layer and is kept as plain blended geometry.
+	static void FindFloatingLayers(const WorldSource& source,
+		std::unordered_map<std::uintptr_t, std::vector<BatchSurface>>& surfacesByMaterial,
+		const std::vector<std::uintptr_t>& materialOrder, const std::vector<StaticSurfaceRecord>& props,
+		std::uintptr_t drawInsts)
+	{
+		static constexpr float cellSize = 128.0f;
+		static constexpr int maximumCellSpan = 32;
+		static constexpr float flushDistance = 4.0f;
+		static constexpr float edgeTolerance = 2.0f;
+		static constexpr int samplesPerLayer = 96;
+		static constexpr float floatingShare = 0.2f;
+
+		struct Triangle
+		{
+			float corners[3][3];
+		};
+
+		std::vector<Triangle> opaque;
+		std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> grid;
+		std::vector<std::uintptr_t> layers;
+
+		const auto cellKey = [](int x, int y, int z)
+		{
+			return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(x) & 0x1FFFFF) << 42)
+				| (static_cast<std::uint64_t>(static_cast<std::uint32_t>(y) & 0x1FFFFF) << 21)
+				| (static_cast<std::uint64_t>(static_cast<std::uint32_t>(z) & 0x1FFFFF));
+		};
+
+		const auto addOpaque = [&](const Triangle& entry)
+		{
+			int low[3];
+			int high[3];
+
+			for (int axis = 0; axis < 3; ++axis)
+			{
+				const float minimum = std::min({ entry.corners[0][axis], entry.corners[1][axis], entry.corners[2][axis] });
+				const float maximum = std::max({ entry.corners[0][axis], entry.corners[1][axis], entry.corners[2][axis] });
+				low[axis] = static_cast<int>(std::floor((minimum - flushDistance) / cellSize));
+				high[axis] = static_cast<int>(std::floor((maximum + flushDistance) / cellSize));
+			}
+
+			if (high[0] - low[0] > maximumCellSpan || high[1] - low[1] > maximumCellSpan
+				|| high[2] - low[2] > maximumCellSpan)
+			{
+				return;
+			}
+
+			const auto index = static_cast<std::uint32_t>(opaque.size());
+			opaque.push_back(entry);
+
+			for (int x = low[0]; x <= high[0]; ++x)
+			{
+				for (int y = low[1]; y <= high[1]; ++y)
+				{
+					for (int z = low[2]; z <= high[2]; ++z)
+					{
+						grid[cellKey(x, y, z)].push_back(index);
+					}
+				}
+			}
+		};
+
+		for (const std::uintptr_t material : materialOrder)
+		{
+			if (IsBlendedMaterial(material))
+			{
+				layers.push_back(material);
+				continue;
+			}
+
+			for (const BatchSurface& surface : surfacesByMaterial[material])
+			{
+				for (UINT triangle = 0; triangle < surface.triCount; ++triangle)
+				{
+					Triangle entry{};
+					ReadTriangle(source, surface, triangle, entry.corners);
+					addOpaque(entry);
+				}
+			}
+		}
+
+		std::vector<WorldVertex> propVertices;
+		std::vector<std::uint32_t> propIndices;
+
+		for (const StaticSurfaceRecord& record : props)
+		{
+			if (IsBlendedMaterial(record.material))
+			{
+				continue;
+			}
+
+			propVertices.resize(record.vertexCount);
+			propIndices.resize(3u * record.triCount);
+			const D3DMATRIX placement = StaticModelMatrix(drawInsts + record.instance * Iw4::smodelDrawInstStride);
+
+			if (!TryWriteStaticSurface(record, placement, propVertices.data(), propIndices.data(), 0))
+			{
+				continue;
+			}
+
+			for (UINT triangle = 0; triangle < record.triCount; ++triangle)
+			{
+				Triangle entry{};
+
+				for (int corner = 0; corner < 3; ++corner)
+				{
+					std::memcpy(entry.corners[corner], propVertices[propIndices[triangle * 3 + corner]].position,
+						sizeof(entry.corners[corner]));
+				}
+
+				addOpaque(entry);
+			}
+		}
+
+		const auto isOnOpaque = [&](const float* point)
+		{
+			const auto found = grid.find(cellKey(static_cast<int>(std::floor(point[0] / cellSize)),
+				static_cast<int>(std::floor(point[1] / cellSize)), static_cast<int>(std::floor(point[2] / cellSize))));
+
+			if (found == grid.end())
+			{
+				return false;
+			}
+
+			for (const std::uint32_t index : found->second)
+			{
+				const auto& c = opaque[index].corners;
+				const float edgeA[3] = { c[1][0] - c[0][0], c[1][1] - c[0][1], c[1][2] - c[0][2] };
+				const float edgeB[3] = { c[2][0] - c[0][0], c[2][1] - c[0][1], c[2][2] - c[0][2] };
+				float normal[3] = {
+					edgeA[1] * edgeB[2] - edgeA[2] * edgeB[1],
+					edgeA[2] * edgeB[0] - edgeA[0] * edgeB[2],
+					edgeA[0] * edgeB[1] - edgeA[1] * edgeB[0],
+				};
+				const float length = std::sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
+
+				if (length < 1e-4f)
+				{
+					continue;
+				}
+
+				for (float& component : normal)
+				{
+					component /= length;
+				}
+
+				const float offset[3] = { point[0] - c[0][0], point[1] - c[0][1], point[2] - c[0][2] };
+				const float distance = offset[0] * normal[0] + offset[1] * normal[1] + offset[2] * normal[2];
+
+				if (std::fabs(distance) > flushDistance)
+				{
+					continue;
+				}
+
+				// Inside the triangle (with a little slack) once projected onto its plane: every edge keeps the point
+				// on its inner side.
+				bool isInside = true;
+
+				for (int edge = 0; edge < 3 && isInside; ++edge)
+				{
+					const float* from = c[edge];
+					const float* to = c[(edge + 1) % 3];
+					const float along[3] = { to[0] - from[0], to[1] - from[1], to[2] - from[2] };
+					const float toPoint[3] = { point[0] - from[0], point[1] - from[1], point[2] - from[2] };
+					const float cross[3] = {
+						along[1] * toPoint[2] - along[2] * toPoint[1],
+						along[2] * toPoint[0] - along[0] * toPoint[2],
+						along[0] * toPoint[1] - along[1] * toPoint[0],
+					};
+					const float alongLength = std::sqrt(along[0] * along[0] + along[1] * along[1] + along[2] * along[2]);
+					const float side = (cross[0] * normal[0] + cross[1] * normal[1] + cross[2] * normal[2])
+						/ std::max(alongLength, 1e-4f);
+
+					isInside = side >= -edgeTolerance;
+				}
+
+				if (isInside)
+				{
+					return true;
+				}
+			}
+
+			return false;
+		};
+
+		std::unordered_set<std::uint64_t> floating;
+
+		for (const std::uintptr_t material : layers)
+		{
+			const std::vector<BatchSurface>& surfaces = surfacesByMaterial[material];
+			std::size_t triangleTotal = 0;
+
+			for (const BatchSurface& surface : surfaces)
+			{
+				triangleTotal += surface.triCount;
+			}
+
+			if (triangleTotal == 0)
+			{
+				continue;
+			}
+
+			const std::size_t step = std::max<std::size_t>(1, triangleTotal / samplesPerLayer);
+			int sampled = 0;
+			int supported = 0;
+			std::size_t running = 0;
+
+			for (const BatchSurface& surface : surfaces)
+			{
+				for (UINT triangle = 0; triangle < surface.triCount; ++triangle, ++running)
+				{
+					if (running % step != 0)
+					{
+						continue;
+					}
+
+					float corners[3][3];
+					ReadTriangle(source, surface, triangle, corners);
+					const float centre[3] = {
+						(corners[0][0] + corners[1][0] + corners[2][0]) / 3.0f,
+						(corners[0][1] + corners[1][1] + corners[2][1]) / 3.0f,
+						(corners[0][2] + corners[1][2] + corners[2][2]) / 3.0f,
+					};
+
+					++sampled;
+					supported += isOnOpaque(centre) ? 1 : 0;
+				}
+			}
+
+			const char* name = ReadAt<const char*>(material);
+
+			// Only terrain layers (eb_ter_, jun_ter_, glo_ter_...): decals often hang past a wall's edge and glass
+			// floats on purpose, so the share alone flagged cracks, stains and windows (Kino, 2026-10-23).
+			if (!name || !IsTerrainLayerName(name))
+			{
+				continue;
+			}
+
+			std::uint64_t colourHash = 0;
+			const bool isFloating = static_cast<float>(sampled - supported) > floatingShare * static_cast<float>(sampled);
+
+			if (isFloating && TryGetMaterialColourHash(material, colourHash))
+			{
+				floating.insert(colourHash);
+			}
+
+			Log() << "remix: terrain layer " << name << " has nothing under " << sampled - supported << " of " << sampled
+				  << " sampled triangles" << (isFloating ? ", it plugs a gap: drawn solid, not as a decal" : "");
+		}
+
+		Log() << "remix: layer check against " << opaque.size() << " opaque triangles (" << props.size()
+			  << " static model surfaces), " << floating.size() << " floating layers";
+		SetFloatingLayers(floating);
+	}
+
+	// The check needs the world's surfaces and the static models, which are read at different moments; it runs once
+	// both are in for this map.
+	static std::unordered_map<std::uintptr_t, std::vector<BatchSurface>> layerCheckSurfaces;
+	static std::vector<std::uintptr_t> layerCheckOrder;
+	static bool hasLayerCheckWorld = false;
+	static std::vector<StaticSurfaceRecord> layerCheckProps;
+	static std::uintptr_t layerCheckDrawInsts = 0;
+	static bool hasLayerCheckProps = false;
+
+	// Copies kept for the frame dump's area probe: what the loaded map has around the camera.
+	static std::unordered_map<std::uintptr_t, std::vector<BatchSurface>> probeWorldSurfaces;
+	static std::vector<StaticSurfaceRecord> probeProps;
+	static std::uintptr_t probeDrawInsts = 0;
+
+	static void TryCheckFloatingLayers()
+	{
+		WorldSource source;
+
+		if (!hasLayerCheckWorld || !hasLayerCheckProps || !TryReadWorldSource(source))
+		{
+			return;
+		}
+
+		FindFloatingLayers(source, layerCheckSurfaces, layerCheckOrder, layerCheckProps, layerCheckDrawInsts);
+
+		hasLayerCheckWorld = false;
+		hasLayerCheckProps = false;
+		layerCheckSurfaces.clear();
+		layerCheckOrder.clear();
+		layerCheckProps.clear();
+	}
+
 	static bool TryBuildMaterialBatches(IDirect3DDevice9* device, const WorldSource& source)
 	{
 		const std::uintptr_t worldDpvs = ReadAt<std::uintptr_t>(Engine::RebaseAddress(Engine::CurrentBuild().g_worldDpvs));
@@ -779,6 +1146,12 @@ namespace Components::Remix
 			}
 		}
 
+		layerCheckSurfaces = surfacesByMaterial;
+		layerCheckOrder = materialOrder;
+		probeWorldSurfaces = surfacesByMaterial;
+		hasLayerCheckWorld = true;
+		TryCheckFloatingLayers();
+
 		if (totalIndices == 0)
 		{
 			return false;
@@ -839,9 +1212,59 @@ namespace Components::Remix
 			batch.firstVertex = vertexCursor;
 
 			std::unordered_set<std::uint64_t> triangleKeys;
+			std::vector<BatchSurface>& materialSurfaces = surfacesByMaterial[material];
+			UINT materialTriangles = 0;
 
-			for (const BatchSurface& surface : surfacesByMaterial[material])
+			for (const BatchSurface& surface : materialSurfaces)
 			{
+				materialTriangles += surface.triCount;
+			}
+
+			// Big batches are laid out cell by cell so each cell is one contiguous chunk; small ones stay one chunk.
+			const bool isChunked = materialTriangles >= minChunkedTriangles;
+			const auto surfaceCell = [&source](const BatchSurface& surface)
+			{
+				float position[3];
+				std::uint32_t engineVertex = surface.firstVertex + source.indices[surface.baseIndex];
+
+				if (engineVertex >= source.vertexCount)
+				{
+					engineVertex = surface.firstVertex;
+				}
+
+				std::memcpy(position, source.vertices + engineVertex * Iw4::worldVertexStride, sizeof(position));
+				return ChunkCell(position);
+			};
+
+			if (isChunked)
+			{
+				std::stable_sort(materialSurfaces.begin(), materialSurfaces.end(),
+					[&surfaceCell](const BatchSurface& left, const BatchSurface& right)
+					{
+						return surfaceCell(left) < surfaceCell(right);
+					});
+			}
+
+			BatchChunk chunk;
+			chunk.startIndex = indexCursor;
+			std::uint64_t chunkCell = 0;
+			bool hasChunkCell = false;
+
+			for (const BatchSurface& surface : materialSurfaces)
+			{
+				const std::uint64_t cell = isChunked ? surfaceCell(surface) : 0;
+
+				if (hasChunkCell && cell != chunkCell && indexCursor > chunk.startIndex)
+				{
+					chunk.triCount = (indexCursor - chunk.startIndex) / 3u;
+					batch.chunks.push_back(chunk);
+					chunk = BatchChunk{};
+					chunk.startIndex = indexCursor;
+				}
+
+				chunkCell = cell;
+				hasChunkCell = true;
+
 				for (UINT triangle = 0; triangle < surface.triCount; ++triangle)
 				{
 					std::uint32_t engineVertices[3];
@@ -877,9 +1300,16 @@ namespace Components::Remix
 						}
 
 						indices[indexCursor] = remap[engineVertex];
+						GrowBounds(chunk.bounds, vertices[remap[engineVertex]].position);
 						++indexCursor;
 					}
 				}
+			}
+
+			if (indexCursor > chunk.startIndex)
+			{
+				chunk.triCount = (indexCursor - chunk.startIndex) / 3u;
+				batch.chunks.push_back(chunk);
 			}
 
 			batch.isDoubleSided = batch.removedTwins != 0;
@@ -1009,6 +1439,121 @@ namespace Components::Remix
 		return EnsureWorldBuffers(sceneDevice);
 	}
 
+	// World and model draws carry Remix Plus wetness (render states 149 and 210, see GetPlusWetnessState). They are
+	// cleared after the draw, so effects, characters and the HUD drawn later read 0, which the runtime treats as unset.
+	// Remix's own viewmodel test (rtx.viewModel.maxZThreshold in rtx.conf): the game draws the first person weapon and
+	// arms with the depth hack's narrow viewport.
+	static constexpr float viewmodelMaxZ = 0.1f;
+
+	static void NoteViewmodelTexture(IDirect3DDevice9* device)
+	{
+		static std::unordered_set<std::uint64_t> noted;
+		IDirect3DBaseTexture9* texture = nullptr;
+
+		if (FAILED(device->GetTexture(0, &texture)) || !texture)
+		{
+			return;
+		}
+
+		std::uint64_t hash = 0;
+
+		if (Device::TryGetTextureHash(texture, hash) && hash != 0 && noted.insert(hash).second)
+		{
+			RegisterPbrViewmodel(hash);
+		}
+
+		texture->Release();
+	}
+
+	static void DrawWetIndexed(IDirect3DDevice9* device, INT baseVertex, UINT minVertex, UINT vertexCount, UINT startIndex,
+		UINT triCount)
+	{
+		D3DVIEWPORT9 viewport{};
+
+		if (SUCCEEDED(device->GetViewport(&viewport)) && viewport.MaxZ <= viewmodelMaxZ)
+		{
+			NoteViewmodelTexture(device);
+		}
+
+		static constexpr auto modifierState = static_cast<D3DRENDERSTATETYPE>(149);
+		static constexpr auto wetnessState = static_cast<D3DRENDERSTATETYPE>(210);
+		const PlusWetnessState wetness = GetPlusWetnessState();
+
+		if (wetness.modifier)
+		{
+			device->SetRenderState(modifierState, wetness.modifier);
+			device->SetRenderState(wetnessState, wetness.packed);
+		}
+
+		device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, baseVertex, minVertex, vertexCount, startIndex, triCount);
+
+		if (wetness.modifier)
+		{
+			device->SetRenderState(modifierState, 0);
+			device->SetRenderState(wetnessState, 0);
+		}
+	}
+
+	static float drawDistance = 0.0f;
+	static float appliedZfar = -1.0f;
+
+	void SetDrawDistance(float distance)
+	{
+		drawDistance = std::max(distance, 0.0f);
+	}
+
+	// The whole batch with the draw distance off (the same single draw as before chunks), otherwise each chunk whose
+	// bounds come within the draw distance of the camera.
+	static void DrawBatchRanges(IDirect3DDevice9* device, const MaterialBatch& batch)
+	{
+		float camera[3];
+
+		if (drawDistance <= 0.0f || batch.chunks.size() <= 1 || !TryGetCameraOrigin(camera))
+		{
+			DrawWetIndexed(device, 0, batch.firstVertex, batch.vertexCount, batch.startIndex, batch.triCount);
+			return;
+		}
+
+		for (const BatchChunk& chunk : batch.chunks)
+		{
+			float distanceSquared = 0.0f;
+
+			for (int axis = 0; axis < 3; ++axis)
+			{
+				const float outside = std::max({ chunk.bounds[axis] - camera[axis], 0.0f, camera[axis] - chunk.bounds[3 + axis] });
+				distanceSquared += outside * outside;
+			}
+
+			if (distanceSquared > drawDistance * drawDistance)
+			{
+				++stats.chunksBeyondDrawDistance;
+				continue;
+			}
+
+			DrawWetIndexed(device, 0, batch.firstVertex, batch.vertexCount, chunk.startIndex, chunk.triCount);
+			++stats.chunksDrawn;
+		}
+	}
+
+	// r_zfar is the engine's own far cull distance (R_RegisterDvars, 0 = off); applied when the setting changes.
+	static void ApplyEngineDrawDistance()
+	{
+		if (drawDistance == appliedZfar)
+		{
+			return;
+		}
+
+		char value[32];
+		std::snprintf(value, sizeof(value), "%g", drawDistance);
+
+		if (Engine::SetDvar("r_zfar", value))
+		{
+			appliedZfar = drawDistance;
+			Log() << "remix: draw distance " << drawDistance << (drawDistance > 0.0f ? " units" : " (whole map)")
+				  << ", r_zfar set to match";
+		}
+	}
+
 	static void DrawWorldSurface(IDirect3DDevice9* device, std::uintptr_t surface)
 	{
 		const auto firstVertex = ReadAt<std::uint32_t>(surface + Iw4::gfxSurfaceFirstVertex);
@@ -1022,12 +1567,26 @@ namespace Components::Remix
 
 		if (!isInRange)
 		{
+			static int loggedRejects = 0;
+
+			// Surfaces with no triangles (Kino has a few of global_black) are simply empty.
+			if (loggedRejects < 16 && triCount != 0)
+			{
+				++loggedRejects;
+				const auto material = ReadAt<std::uintptr_t>(surface + Iw4::gfxSurfaceMaterial);
+				const char* name = material ? ReadAt<const char*>(material) : nullptr;
+				LogWarn() << "remix: world surface of " << (name ? name : "?") << " is outside the static world copy"
+						  << " (first vertex " << firstVertex << " + " << vertexCount << " of " << builtFrom.vertexCount
+						  << ", base index " << baseIndex << " + 3 x " << triCount << " of " << builtFrom.indexCount
+						  << "), it is not drawn";
+			}
+
 			return;
 		}
 
 		device->SetStreamSource(0, worldVertexBuffer, firstVertex * static_cast<UINT>(sizeof(WorldVertex)),
 			static_cast<UINT>(sizeof(WorldVertex)));
-		device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, vertexCount, baseIndex, triCount);
+		DrawWetIndexed(device, 0, 0, vertexCount, baseIndex, triCount);
 		++viewSurfaces;
 		++groupDraws;
 	}
@@ -1168,8 +1727,7 @@ namespace Components::Remix
 
 		device->SetStreamSource(0, batchVertexBuffer, 0, static_cast<UINT>(sizeof(WorldVertex)));
 		device->SetIndices(batchIndexBuffer);
-		device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, batch->firstVertex, batch->vertexCount, batch->startIndex,
-			batch->triCount);
+		DrawBatchRanges(device, *batch);
 
 		if (batch->isDoubleSided)
 		{
@@ -2108,6 +2666,12 @@ namespace Components::Remix
 		staticBatchDrawInsts = drawInsts;
 		staticBatchModelCount = modelCount;
 
+		// The layer check also waits for the static models; a map without any still gets it.
+		layerCheckProps.clear();
+		layerCheckDrawInsts = drawInsts;
+		hasLayerCheckProps = !drawInsts || modelCount == 0;
+		TryCheckFloatingLayers();
+
 		if (!drawInsts || modelCount == 0)
 		{
 			return;
@@ -2122,6 +2686,13 @@ namespace Components::Remix
 			LogWarn() << "remix: reading the map's static models faulted, props stay drawn one by one";
 			return;
 		}
+
+		layerCheckProps.assign(records.begin(), records.begin() + static_cast<std::ptrdiff_t>(recordCount));
+		layerCheckDrawInsts = drawInsts;
+		probeProps = layerCheckProps;
+		probeDrawInsts = drawInsts;
+		hasLayerCheckProps = true;
+		TryCheckFloatingLayers();
 
 		for (std::size_t i = 0; i < recordCount; ++i)
 		{
@@ -2225,10 +2796,53 @@ namespace Components::Remix
 			batch.startIndex = indexCursor;
 			batch.firstVertex = vertexCursor;
 
-			for (const std::size_t recordIndex : recordsByMaterial[material])
+			std::vector<std::size_t>& materialRecords = recordsByMaterial[material];
+			UINT materialTriangles = 0;
+
+			for (const std::size_t recordIndex : materialRecords)
+			{
+				materialTriangles += records[recordIndex].triCount;
+			}
+
+			const bool isChunked = materialTriangles >= minChunkedTriangles;
+			const auto recordCell = [&records, drawInsts](std::size_t recordIndex)
+			{
+				float origin[3];
+				std::memcpy(origin, reinterpret_cast<const void*>(drawInsts + records[recordIndex].instance
+					* Iw4::smodelDrawInstStride + Iw4::smodelDrawInstOrigin), sizeof(origin));
+				return ChunkCell(origin);
+			};
+
+			if (isChunked)
+			{
+				std::stable_sort(materialRecords.begin(), materialRecords.end(),
+					[&recordCell](std::size_t left, std::size_t right)
+					{
+						return recordCell(left) < recordCell(right);
+					});
+			}
+
+			BatchChunk chunk;
+			chunk.startIndex = indexCursor;
+			std::uint64_t chunkCell = 0;
+			bool hasChunkCell = false;
+
+			for (const std::size_t recordIndex : materialRecords)
 			{
 				const StaticSurfaceRecord& record = records[recordIndex];
 				const D3DMATRIX placement = StaticModelMatrix(drawInsts + record.instance * Iw4::smodelDrawInstStride);
+				const std::uint64_t cell = isChunked ? recordCell(recordIndex) : 0;
+
+				if (hasChunkCell && cell != chunkCell && indexCursor > chunk.startIndex)
+				{
+					chunk.triCount = (indexCursor - chunk.startIndex) / 3u;
+					batch.chunks.push_back(chunk);
+					chunk = BatchChunk{};
+					chunk.startIndex = indexCursor;
+				}
+
+				chunkCell = cell;
+				hasChunkCell = true;
 
 				if (!TryWriteStaticSurface(record, placement, vertices + vertexCursor, indices + indexCursor, vertexCursor))
 				{
@@ -2236,8 +2850,19 @@ namespace Components::Remix
 					break;
 				}
 
+				for (UINT vertex = 0; vertex < record.vertexCount; ++vertex)
+				{
+					GrowBounds(chunk.bounds, vertices[vertexCursor + vertex].position);
+				}
+
 				vertexCursor += record.vertexCount;
 				indexCursor += 3u * record.triCount;
+			}
+
+			if (didWriteAll && indexCursor > chunk.startIndex)
+			{
+				chunk.triCount = (indexCursor - chunk.startIndex) / 3u;
+				batch.chunks.push_back(chunk);
 			}
 
 			if (!didWriteAll)
@@ -2528,8 +3153,7 @@ namespace Components::Remix
 			device->SetTransform(D3DTS_WORLD, &identity);
 			device->SetStreamSource(0, staticBatchVertexBuffer, 0, static_cast<UINT>(sizeof(WorldVertex)));
 			device->SetIndices(staticBatchIndexBuffer);
-			device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, staticBatch->firstVertex, staticBatch->vertexCount,
-				staticBatch->startIndex, staticBatch->triCount);
+			DrawBatchRanges(device, *staticBatch);
 
 			++groupDraws;
 			++stats.staticBatchDraws;
@@ -2584,7 +3208,7 @@ namespace Components::Remix
 				}
 
 				device->SetTransform(D3DTS_WORLD, &placement);
-				device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, buffers->vertexCount, 0, buffers->triCount);
+				DrawWetIndexed(device, 0, 0, buffers->vertexCount, 0, buffers->triCount);
 				++groupDraws;
 			}
 		}
@@ -3364,7 +3988,7 @@ namespace Components::Remix
 
 					device->SetStreamSource(0, buffers->vertexBuffer, 0, static_cast<UINT>(sizeof(WorldVertex)));
 					device->SetIndices(buffers->indexBuffer);
-					device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, buffers->vertexCount, 3 * triOffset, triCount);
+					DrawWetIndexed(device, 0, 0, buffers->vertexCount, 3 * triOffset, triCount);
 					++groupDraws;
 				}
 			}
@@ -3909,12 +4533,390 @@ namespace Components::Remix
 		dumpRows.push_back(CaptureDumpRow(sceneDevice, ReadAt<std::uintptr_t>(state + Iw4::stateMaterial), kind));
 	}
 
+	static const char* MaterialName(std::uintptr_t material)
+	{
+		const char* name = material ? ReadAt<const char*>(material) : nullptr;
+		return name ? name : "?";
+	}
+
+	static std::string HashText(std::uint64_t hash)
+	{
+		char text[24];
+		std::snprintf(text, sizeof(text), "0x%016llX", static_cast<unsigned long long>(hash));
+		return text;
+	}
+
+	// Everything the loaded map has within probeRadius of the camera, read from the map in memory (the fastfile is
+	// protected, so this is the way to see it): world surfaces per material and every static model surface, with
+	// their texture, Remix tags, blending and whether zw3 drew them in the dumped frame.
+	static void WriteAreaProbe(std::ofstream& file)
+	{
+		static constexpr float probeRadius = 400.0f;
+		float camera[3];
+
+		if (!TryGetCameraOrigin(camera))
+		{
+			file << "# area probe: no camera\n";
+			return;
+		}
+
+		WorldSource source;
+		const bool hasSource = TryReadWorldSource(source);
+
+		file << "\n# area probe around " << camera[0] << " " << camera[1] << " " << camera[2] << ", radius " << probeRadius
+			 << ", scene " << sceneNumber << "\n";
+		file << "kind\tmaterial\ttexture hash\ttags\tblended\ttriangles nearCount\tnearest\tnearest point\tlast drawn scene\textra\n";
+
+		const auto distanceTo = [&camera](const float* point)
+		{
+			const float dx = point[0] - camera[0];
+			const float dy = point[1] - camera[1];
+			const float dz = point[2] - camera[2];
+			return std::sqrt(dx * dx + dy * dy + dz * dz);
+		};
+
+		if (hasSource)
+		{
+			for (auto& entry : probeWorldSurfaces)
+			{
+				int nearCount = 0;
+				float nearest = FLT_MAX;
+				float nearestPoint[3] = {};
+
+				for (const BatchSurface& surface : entry.second)
+				{
+					for (UINT triangle = 0; triangle < surface.triCount; ++triangle)
+					{
+						float corners[3][3];
+						ReadTriangle(source, surface, triangle, corners);
+
+						for (const auto& corner : corners)
+						{
+							const float distance = distanceTo(corner);
+
+							if (distance < nearest)
+							{
+								nearest = distance;
+								std::memcpy(nearestPoint, corner, sizeof(nearestPoint));
+							}
+						}
+
+						const float centre[3] = {
+							(corners[0][0] + corners[1][0] + corners[2][0]) / 3.0f,
+							(corners[0][1] + corners[1][1] + corners[2][1]) / 3.0f,
+							(corners[0][2] + corners[1][2] + corners[2][2]) / 3.0f,
+						};
+
+						nearCount += distanceTo(centre) <= probeRadius ? 1 : 0;
+					}
+				}
+
+				if (nearCount == 0)
+				{
+					continue;
+				}
+
+				std::uint64_t hash = 0;
+				TryGetMaterialColourHash(entry.first, hash);
+				const auto batch = materialBatches.find(entry.first);
+				const unsigned drawn = batch != materialBatches.end() ? batch->second.drawnScene : 0;
+
+				file << "world\t" << MaterialName(entry.first) << "\t" << HashText(hash) << "\t" << DescribeTextureTags(hash)
+					 << "\t" << IsBlendedMaterial(entry.first) << "\t" << nearCount << "\t" << nearest << "\t" << nearestPoint[0]
+					 << " " << nearestPoint[1] << " " << nearestPoint[2] << "\t" << drawn << "\t"
+					 << (batch != materialBatches.end() ? "batched" : "not batched") << "\n";
+			}
+		}
+
+		std::vector<WorldVertex> vertices;
+		std::vector<std::uint32_t> indices;
+
+		for (const StaticSurfaceRecord& record : probeProps)
+		{
+			const std::uintptr_t drawInst = probeDrawInsts + record.instance * Iw4::smodelDrawInstStride;
+			vertices.resize(record.vertexCount);
+			indices.resize(3u * record.triCount);
+
+			if (!TryWriteStaticSurface(record, StaticModelMatrix(drawInst), vertices.data(), indices.data(), 0))
+			{
+				continue;
+			}
+
+			int nearCount = 0;
+			float nearest = FLT_MAX;
+			float nearestPoint[3] = {};
+
+			for (UINT triangle = 0; triangle < record.triCount; ++triangle)
+			{
+				float centre[3] = {};
+
+				for (int corner = 0; corner < 3; ++corner)
+				{
+					const float* position = vertices[indices[triangle * 3 + corner]].position;
+					const float distance = distanceTo(position);
+
+					if (distance < nearest)
+					{
+						nearest = distance;
+						std::memcpy(nearestPoint, position, sizeof(nearestPoint));
+					}
+
+					for (int axis = 0; axis < 3; ++axis)
+					{
+						centre[axis] += position[axis] / 3.0f;
+					}
+				}
+
+				nearCount += distanceTo(centre) <= probeRadius ? 1 : 0;
+			}
+
+			if (nearCount == 0)
+			{
+				continue;
+			}
+
+			std::uint64_t hash = 0;
+			TryGetMaterialColourHash(record.material, hash);
+			const auto model = ReadAt<std::uintptr_t>(drawInst + Iw4::smodelDrawInstModel);
+			const char* modelName = model ? ReadAt<const char*>(model + Iw4::xModelName) : nullptr;
+			const bool isBaked = record.instance < isStaticModelBaked.size() && isStaticModelBaked[record.instance] != 0;
+			unsigned drawn = 0;
+
+			if (isBaked)
+			{
+				const auto batch = staticModelBatches.find(record.material);
+				drawn = batch != staticModelBatches.end() ? batch->second.drawnScene : 0;
+			}
+			else if (record.instance < bigPropDrawnScene.size())
+			{
+				drawn = bigPropDrawnScene[record.instance];
+			}
+
+			file << "staticmodel\t" << MaterialName(record.material) << "\t" << HashText(hash) << "\t"
+				 << DescribeTextureTags(hash) << "\t" << IsBlendedMaterial(record.material) << "\t" << nearCount << "\t" << nearest
+				 << "\t" << nearestPoint[0] << " " << nearestPoint[1] << " " << nearestPoint[2] << "\t" << drawn << "\t"
+				 << "model " << (modelName ? modelName : "?") << " instance " << record.instance
+				 << (isBaked ? " baked" : " drawn per instance") << "\n";
+		}
+	}
+
+	// Every triangle of the world and of the static models near the camera, with each corner's position and vertex
+	// alpha, so the map's real shape around a problem can be read back (the fastfile itself is protected).
+	static void WriteAreaTriangles(const std::string& fileName)
+	{
+		static constexpr float areaRadius = 400.0f;
+		float camera[3];
+		WorldSource source;
+
+		if (!TryGetCameraOrigin(camera) || !TryReadWorldSource(source))
+		{
+			return;
+		}
+
+		std::ofstream file(Core::ModuleDirectory() + std::wstring(fileName.begin(), fileName.end()), std::ios::trunc);
+
+		if (!file)
+		{
+			return;
+		}
+
+		file << "# camera " << camera[0] << " " << camera[1] << " " << camera[2] << "\n";
+		file << "source\tmaterial\towner\ttexture hash\ttags\tblended\tx0\ty0\tz0\ta0\tx1\ty1\tz1\ta1\tx2\ty2\tz2\ta2\n";
+
+		const auto isNear = [&camera](const float* point)
+		{
+			const float dx = point[0] - camera[0];
+			const float dy = point[1] - camera[1];
+			const float dz = point[2] - camera[2];
+			return dx * dx + dy * dy + dz * dz <= areaRadius * areaRadius;
+		};
+
+		std::size_t written = 0;
+
+		for (auto& entry : probeWorldSurfaces)
+		{
+			std::uint64_t hash = 0;
+			TryGetMaterialColourHash(entry.first, hash);
+			const std::string head = std::string("world\t") + MaterialName(entry.first) + "\t-\t" + HashText(hash) + "\t"
+				+ DescribeTextureTags(hash) + "\t" + (IsBlendedMaterial(entry.first) ? "1" : "0");
+
+			for (const BatchSurface& surface : entry.second)
+			{
+				for (UINT triangle = 0; triangle < surface.triCount; ++triangle)
+				{
+					std::uint32_t corners[3];
+					float positions[3][3];
+					bool isAnyNear = false;
+
+					for (int corner = 0; corner < 3; ++corner)
+					{
+						corners[corner] = surface.firstVertex + source.indices[surface.baseIndex + triangle * 3 + corner];
+
+						if (corners[corner] >= source.vertexCount)
+						{
+							corners[corner] = surface.firstVertex;
+						}
+
+						std::memcpy(positions[corner], source.vertices + corners[corner] * Iw4::worldVertexStride,
+							sizeof(positions[corner]));
+						isAnyNear = isAnyNear || isNear(positions[corner]);
+					}
+
+					if (!isAnyNear)
+					{
+						continue;
+					}
+
+					file << head;
+
+					for (int corner = 0; corner < 3; ++corner)
+					{
+						D3DCOLOR colour = 0;
+						std::memcpy(&colour, source.vertices + corners[corner] * Iw4::worldVertexStride + Iw4::worldVertexColor,
+							sizeof(colour));
+						file << "\t" << positions[corner][0] << "\t" << positions[corner][1] << "\t" << positions[corner][2]
+							 << "\t" << (colour >> 24);
+					}
+
+					file << "\n";
+					++written;
+				}
+			}
+		}
+
+		// Brush models (doors, buyable debris): GfxWorld models (count 0x160, array 0x168, GfxBrushModel 0x3C:
+		// writable.bounds = where it is now, bounds = where it was built, surfaceCount 0x34, startSurfIndex 0x36 into the
+		// dpvs surfaces). Model 0 is the world. Positions are as built; "moved" says the entity is elsewhere now.
+		const auto world = ReadAt<std::uintptr_t>(Engine::RebaseAddress(Engine::CurrentBuild().gfxWorld));
+		const auto worldDpvs = ReadAt<std::uintptr_t>(Engine::RebaseAddress(Engine::CurrentBuild().g_worldDpvs));
+		const auto dpvsSurfaces = worldDpvs ? ReadAt<std::uintptr_t>(worldDpvs + Iw4::worldDpvsSurfaces) : 0;
+		const int brushModelCount = world ? ReadAt<int>(world + 0x160) : 0;
+		const auto brushModels = world ? ReadAt<std::uintptr_t>(world + 0x168) : 0;
+
+		for (int modelIndex = 1; modelIndex < brushModelCount && brushModels && dpvsSurfaces; ++modelIndex)
+		{
+			const std::uintptr_t brush = brushModels + static_cast<std::uintptr_t>(modelIndex) * 0x3C;
+			const auto surfaceCount = ReadAt<std::uint16_t>(brush + 0x34);
+			const auto startSurface = ReadAt<std::uint16_t>(brush + 0x36);
+			float built[6];
+			float now[6];
+			std::memcpy(built, reinterpret_cast<const void*>(brush + 0x18), sizeof(built));
+			std::memcpy(now, reinterpret_cast<const void*>(brush), sizeof(now));
+			const bool isMoved = std::memcmp(built, now, sizeof(built)) != 0;
+
+			for (unsigned surfaceIndex = startSurface; surfaceIndex < static_cast<unsigned>(startSurface) + surfaceCount;
+				++surfaceIndex)
+			{
+				const std::uintptr_t surface = dpvsSurfaces + surfaceIndex * Iw4::gfxSurfaceStride;
+				const auto material = ReadAt<std::uintptr_t>(surface + Iw4::gfxSurfaceMaterial);
+				const BatchSurface batchSurface{ ReadAt<std::uint32_t>(surface + Iw4::gfxSurfaceFirstVertex),
+					ReadAt<std::uint32_t>(surface + Iw4::gfxSurfaceBaseIndex),
+					ReadAt<std::uint16_t>(surface + Iw4::gfxSurfaceTriCount) };
+
+				if (static_cast<std::uint64_t>(batchSurface.baseIndex) + 3u * batchSurface.triCount > source.indexCount)
+				{
+					continue;
+				}
+
+				std::uint64_t hash = 0;
+				TryGetMaterialColourHash(material, hash);
+
+				for (UINT triangle = 0; triangle < batchSurface.triCount; ++triangle)
+				{
+					float corners[3][3];
+					ReadTriangle(source, batchSurface, triangle, corners);
+
+					if (!isNear(corners[0]) && !isNear(corners[1]) && !isNear(corners[2]))
+					{
+						continue;
+					}
+
+					file << "brushmodel\t" << MaterialName(material) << "\tmodel " << modelIndex
+						 << (isMoved ? " moved now" : " in place") << "\t" << HashText(hash) << "\t"
+						 << DescribeTextureTags(hash) << "\t" << (IsBlendedMaterial(material) ? 1 : 0);
+
+					for (const auto& corner : corners)
+					{
+						file << "\t" << corner[0] << "\t" << corner[1] << "\t" << corner[2] << "\t-";
+					}
+
+					file << "\n";
+					++written;
+				}
+			}
+		}
+
+		std::vector<WorldVertex> vertices;
+		std::vector<std::uint32_t> indices;
+
+		for (const StaticSurfaceRecord& record : probeProps)
+		{
+			const std::uintptr_t drawInst = probeDrawInsts + record.instance * Iw4::smodelDrawInstStride;
+			vertices.resize(record.vertexCount);
+			indices.resize(3u * record.triCount);
+
+			if (!TryWriteStaticSurface(record, StaticModelMatrix(drawInst), vertices.data(), indices.data(), 0))
+			{
+				continue;
+			}
+
+			std::uint64_t hash = 0;
+			TryGetMaterialColourHash(record.material, hash);
+			const auto model = ReadAt<std::uintptr_t>(drawInst + Iw4::smodelDrawInstModel);
+			const char* modelName = model ? ReadAt<const char*>(model + Iw4::xModelName) : nullptr;
+			const std::string head = std::string("staticmodel\t") + MaterialName(record.material) + "\t"
+				+ (modelName ? modelName : "?") + "#" + std::to_string(record.instance) + "\t" + HashText(hash) + "\t"
+				+ DescribeTextureTags(hash) + "\t" + (IsBlendedMaterial(record.material) ? "1" : "0");
+
+			for (UINT triangle = 0; triangle < record.triCount; ++triangle)
+			{
+				const WorldVertex* corners[3] = {
+					&vertices[indices[triangle * 3]],
+					&vertices[indices[triangle * 3 + 1]],
+					&vertices[indices[triangle * 3 + 2]],
+				};
+
+				if (!isNear(corners[0]->position) && !isNear(corners[1]->position) && !isNear(corners[2]->position))
+				{
+					continue;
+				}
+
+				file << head;
+
+				for (const WorldVertex* corner : corners)
+				{
+					file << "\t" << corner->position[0] << "\t" << corner->position[1] << "\t" << corner->position[2] << "\t"
+						 << (corner->colour >> 24);
+				}
+
+				file << "\n";
+				++written;
+			}
+		}
+
+		Log() << "remix: wrote " << written << " triangles around the camera to " << fileName;
+	}
+
 	static void WriteSceneDump()
 	{
 		++dumpIndex;
 
-		const std::wstring fileName = L"zw3_remix_frame_" + std::to_wstring(dumpIndex) + L".txt";
-		std::ofstream file(Core::ModuleDirectory() + fileName, std::ios::trunc);
+		// One file per dump, named after the map and the time, so a dump on one map never replaces another's.
+		const std::time_t now = std::time(nullptr);
+		std::tm local{};
+		localtime_s(&local, &now);
+		char stamp[32];
+		std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &local);
+
+		std::string mapName = Core::GetActiveMap();
+
+		if (mapName.empty())
+		{
+			mapName = "nomap";
+		}
+
+		const std::string fileName = "zw3_remix_frame_" + mapName + "_" + stamp + "_" + std::to_string(dumpIndex) + ".txt";
+		std::ofstream file(Core::ModuleDirectory() + std::wstring(fileName.begin(), fileName.end()), std::ios::trunc);
 
 		if (!file)
 		{
@@ -3936,8 +4938,10 @@ namespace Components::Remix
 				 << row.isDecalTagged << "\t" << row.vertexColour << "\n";
 		}
 
-		Log() << "remix: wrote " << dumpRows.size() << " draw groups of one scene frame to zw3_remix_frame_"
-			  << dumpIndex << ".txt";
+		WriteAreaProbe(file);
+		WriteAreaTriangles(fileName.substr(0, fileName.size() - 4) + "_area.tsv");
+
+		Log() << "remix: wrote " << dumpRows.size() << " draw groups of one scene frame to " << fileName;
 	}
 
 	static bool TryReadTextureScroll(std::uintptr_t source, std::uintptr_t material, D3DMATRIX& transform)
@@ -4510,7 +5514,21 @@ namespace Components::Remix
 		device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
 		device->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
 
-		if (isBlending && !isAdditiveOverlay && !isMultiplyDecal)
+		std::uint64_t layerHash = 0;
+		const bool isFloatingLayer = isBlending && TryGetMaterialColourHash(material, layerHash)
+			&& IsFloatingLayer(layerHash);
+
+		if (isFloatingLayer)
+		{
+			// A terrain layer that is the only surface in a gap (Kino's eb_ter_trashpile_blend: a flat sheet at z -18
+			// under a jagged hole in the stage floor at z -16, vertex alpha 255 inside it; read from the map with the
+			// dump's area export). Drawn blended, Remix showed the sky through it; drawn solid it fills the hole, and
+			// where it lies under the floor the floor covers it.
+			device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+			device->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+			device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+		}
+		else if (isBlending && !isAdditiveOverlay && !isMultiplyDecal)
 		{
 			device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
 		}
@@ -4734,6 +5752,12 @@ namespace Components::Remix
 		if (isAdditiveLayer)
 		{
 			device->SetRenderState(D3DRS_SRCBLEND, sourceBlend);
+		}
+
+		if (isFloatingLayer)
+		{
+			device->SetRenderState(D3DRS_ALPHABLENDENABLE, isBlending);
+			device->SetRenderState(D3DRS_ALPHATESTENABLE, isAlphaTested);
 		}
 
 		if (isCutoutDecal)
@@ -6084,8 +7108,7 @@ namespace Components::Remix
 				device->SetRenderState(D3DRS_TEXTUREFACTOR, neonColour);
 			}
 
-			device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, batch.firstVertex, batch.vertexCount, batch.startIndex,
-				batch.triCount);
+			DrawBatchRanges(device, batch);
 
 			batch.drawnScene = sceneNumber;
 			++drawn;
@@ -6148,7 +7171,7 @@ namespace Components::Remix
 			device->SetTransform(D3DTS_WORLD, &placement);
 			device->SetStreamSource(0, buffers->vertexBuffer, 0, static_cast<UINT>(sizeof(WorldVertex)));
 			device->SetIndices(buffers->indexBuffer);
-			device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, buffers->vertexCount, 0, buffers->triCount);
+			DrawWetIndexed(device, 0, 0, buffers->vertexCount, 0, buffers->triCount);
 			++drawn;
 		}
 
@@ -6262,6 +7285,7 @@ namespace Components::Remix
 		sceneDevice = device;
 		viewSurfaces = 0;
 		++sceneNumber;
+		ApplyEngineDrawDistance();
 		didBuildCamoThisView = false;
 
 		const bool isControlling = IsControllingLocalPlayer();

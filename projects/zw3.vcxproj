@@ -175,6 +175,7 @@
     <ClInclude Include="..\src\Components\Modules\Remix\Dxt.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\Engine.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\FixedFunction.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Remix\EffectNames.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\Fog.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\Hook.hpp" />
     <ClInclude Include="..\src\Components\Modules\Remix\Iw4.hpp" />

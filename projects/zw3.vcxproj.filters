@@ -234,6 +234,9 @@
     <ClInclude Include="..\src\Components\Modules\Remix\FixedFunction.hpp">
       <Filter>Components\Modules\Remix</Filter>
     </ClInclude>
+    <ClInclude Include="..\src\Components\Modules\Remix\EffectNames.hpp">
+      <Filter>Components\Modules\Remix</Filter>
+    </ClInclude>
     <ClInclude Include="..\src\Components\Modules\Remix\Fog.hpp">
       <Filter>Components\Modules\Remix</Filter>
     </ClInclude>

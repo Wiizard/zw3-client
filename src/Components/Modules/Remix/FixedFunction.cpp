@@ -21,6 +21,7 @@
 #include "Core.hpp"
 #include "Device.hpp"
 #include "Dxt.hpp"
+#include "EffectNames.hpp"
 #include "Engine.hpp"
 #include "Hook.hpp"
 #include "Iw4.hpp"
@@ -6213,8 +6214,7 @@ namespace Components::Remix
 		if (name)
 		{
 			const std::string_view effectName(name);
-			isScript = effectName.starts_with("zw3/") || effectName.starts_with("misc/aircraft_light_wingtip")
-				|| effectName.starts_with("misc/glow_weapon");
+			isScript = IsProtectedScriptEffectName(effectName);
 		}
 
 		scriptEffectDefs[definition] = isScript;
@@ -6355,8 +6355,7 @@ namespace Components::Remix
 		if (name)
 		{
 			const std::string_view effectName(name);
-			isEye = effectName.starts_with("misc/aircraft_light_wingtip")
-				|| (effectName.starts_with("zw3/") && effectName.find("eye") != std::string_view::npos);
+			isEye = IsEyeEffectName(effectName);
 		}
 
 		known[definition] = isEye;

@@ -2562,34 +2562,15 @@ namespace Components
 			return;
 		}
 
-		// In Remix mode the room is Remix's 3D scene: drawn straight to the screen with the game's depth, fixed function
-		// only (no lightmap or film shaders), lit by its own settings and map file (zw3_remix\maps\zw3_lobby.ini and
-		// .toml, copies of Kino's), and the menu UI composited after it. The room image the menu shows is cleared to transparent so the path-traced room shows through it.
-		const bool isRemixScene = Remix::Remix::IsActive();
-		IDirect3DSurface9* const drawTarget = isRemixScene ? oldTarget : sceneTarget;
-		IDirect3DSurface9* const drawDepth = isRemixScene && oldDepth ? oldDepth : roomDepth;
-
-		if (isRemixScene)
-		{
-			Remix::Remix::BeginMenuScene("zw3_lobby");
-		}
-		else
-		{
-			Remix::Remix::BeginUiDrawing(device);
-		}
+		// The frontend disables raytracing, so keep the lobby's baked lighting and film shaders in Remix mode too.
+		Remix::Remix::BeginUiDrawing(device);
 
 		bool isRendered = false;
 		float whiteOpacity = 0.0f;
 
-		if (SUCCEEDED(device->SetRenderTarget(0, drawTarget)) && SUCCEEDED(device->SetDepthStencilSurface(drawDepth)))
+		if (SUCCEEDED(device->SetRenderTarget(0, sceneTarget)) && SUCCEEDED(device->SetDepthStencilSurface(roomDepth)))
 		{
 			D3DVIEWPORT9 viewport{ 0, 0, textureWidth, textureHeight, 0.0f, 1.0f };
-
-			if (isRemixScene)
-			{
-				viewport.Width = oldViewport.Width;
-				viewport.Height = oldViewport.Height;
-			}
 
 			device->SetViewport(&viewport);
 			device->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, D3DCOLOR_ARGB(255, 6, 7, 9), 1.0f, 0);
@@ -2756,7 +2737,7 @@ namespace Components
 			device->SetRenderState(D3DRS_ALPHAFUNC, D3DCMP_GREATER);
 			device->SetRenderState(D3DRS_ALPHAREF, 24);
 
-			const auto drawGroups = [device, &eye, isRemixScene](const std::vector<LobbyDrawGroup>& groups, const auto& vertices, const bool isBlendPass, const bool isRoomPass, IDirect3DVertexBuffer9* staticBuffer, const int selectedWeapon) -> bool
+			const auto drawGroups = [device, &eye](const std::vector<LobbyDrawGroup>& groups, const auto& vertices, const bool isBlendPass, const bool isRoomPass, IDirect3DVertexBuffer9* staticBuffer, const int selectedWeapon) -> bool
 			{
 				using VertexType = typename std::decay_t<decltype(vertices)>::value_type;
 				constexpr UINT stride = sizeof(VertexType);
@@ -2849,7 +2830,7 @@ namespace Components
 						device->SetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, 0);
 					}
 
-					const bool isLightmapped = !isRemixScene && isRoomPass
+					const bool isLightmapped = isRoomPass
 						&& group.lightmapIndex >= 0
 						&& group.lightmapIndex < static_cast<int>(roomLightmaps.size())
 						&& roomLightmaps[group.lightmapIndex];
@@ -2902,7 +2883,7 @@ namespace Components
 						shader = filmShader;
 					}
 
-					device->SetPixelShader(isRemixScene ? nullptr : shader);
+					device->SetPixelShader(shader);
 
 					const bool isFixedLightmap = isLightmapped && !lightmapFilmShader;
 
@@ -4280,7 +4261,7 @@ namespace Components
 
 						const float flareFlags[4] = { 0.0f, 0.0f, -2.0f, 0.0f };
 						device->SetPixelShaderConstantF(0, flareFlags, 1);
-						device->SetPixelShader(isRemixScene ? nullptr : filmShader);
+						device->SetPixelShader(filmShader);
 
 						if (!eyeFlares.empty())
 						{
@@ -4312,19 +4293,7 @@ namespace Components
 
 		device->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
 
-		if (isRemixScene)
-		{
-			if (isRendered)
-			{
-				device->ColorFill(target, nullptr, D3DCOLOR_ARGB(0, 0, 0, 0));
-			}
-
-			device->SetRenderTarget(0, oldTarget);
-			device->SetDepthStencilSurface(oldDepth);
-			device->SetViewport(&oldViewport);
-			Remix::Remix::EndMenuScene(device);
-		}
-		else if (isRendered && SUCCEEDED(device->SetRenderTarget(0, target)) && SUCCEEDED(device->SetDepthStencilSurface(nullptr)))
+		if (isRendered && SUCCEEDED(device->SetRenderTarget(0, target)) && SUCCEEDED(device->SetDepthStencilSurface(nullptr)))
 		{
 			if (visionShader)
 			{
@@ -4519,23 +4488,8 @@ namespace Components
 			AttachMaterialToLobbies(IsSceneReady() && !shouldRefreshMaterial);
 		});
 
-		// Remix mode draws the room as the frame's 3D scene, so before the frame's UI (the device's BeginScene); drawn at
-		// the end of the frame it would cover the menus.
-		Remix::Remix::OnFrameStart([](IDirect3DDevice9* device)
-		{
-			if (Remix::Remix::IsActive() && !IsCinematicActive())
-			{
-				RenderRoom(device);
-			}
-		});
-
 		Renderer::OnBackendFrame([](IDirect3DDevice9* device)
 		{
-			if (Remix::Remix::IsActive())
-			{
-				return;
-			}
-
 			if (IsCinematicActive())
 			{
 				if (!isFrameReady.load(std::memory_order_acquire))

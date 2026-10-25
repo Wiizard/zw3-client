@@ -47,6 +47,8 @@ namespace Components
 		static bool IsInstalled();
 
 		static bool IsDrawSurfKeyWide();
+		// Database must be idle. Supports both stock and widened entry links.
+		static std::size_t ReleaseZoneReferences(std::span<const bool> zones);
 
 		static void OnLoad(const std::function<LoadCallback>& callback);
 

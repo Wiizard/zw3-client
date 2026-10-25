@@ -1759,6 +1759,25 @@ namespace Components
 	constexpr std::size_t engineAssetEntryCount = 37000;
 	constexpr std::size_t narrowAssetEntryCount = 0x10000;
 	constexpr std::size_t wideAssetEntryCount = 4 * engineAssetEntryCount;
+	static std::uint8_t* activeEntryPool = nullptr;
+	static std::size_t activeEntryCount = engineAssetEntryCount;
+
+	std::size_t AssetHandler::ReleaseZoneReferences(std::span<const bool> zones)
+	{
+		auto* pool = activeEntryPool ? activeEntryPool : reinterpret_cast<std::uint8_t*>(Utils::Hook::Rebase(g_assetEntryPool));
+		std::size_t released = 0;
+		for (std::size_t i = 1; i < activeEntryCount; ++i)
+		{
+			auto* entry = pool + i * assetEntrySize;
+			const auto zone = entry[0x10];
+			if (zone < zones.size() && zones[zone] && (entry[0x11] & 1))
+			{
+				entry[0x11] &= static_cast<std::uint8_t>(~1u);
+				++released;
+			}
+		}
+		return released;
+	}
 	constexpr std::uintptr_t DB_InitThread_LinkCount = 0x14012E05B;
 	constexpr std::uint32_t lastEntryNext = (engineAssetEntryCount - 1) * assetEntrySize;
 
@@ -2132,6 +2151,8 @@ namespace Components
 		}
 
 		Utils::Hook::Set<std::uint32_t>(DB_InitThread_LinkCount + 1, static_cast<std::uint32_t>(entryCount - 2));
+		activeEntryPool = pool;
+		activeEntryCount = entryCount;
 	}
 
 	constexpr std::size_t xmodelNumLods = 0x141;

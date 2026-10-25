@@ -15,7 +15,6 @@ if (-not (Test-Path -LiteralPath $Target -PathType Container))
 }
 
 $artifacts = @('zw3.dll', 'd3d9.dll')
-
 function Assert-X64Image([string]$Path)
 {
 	$stream = [System.IO.File]::OpenRead($Path)

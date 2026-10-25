@@ -85,6 +85,8 @@ namespace Components
 		static std::unordered_map<std::string, std::string> ParseCustomMapArena(const std::string& singleMapArena);
 		static void SynchronizeMapDvars(const std::string& rawMapName);
 		static void PrefetchMapAssets(const std::string& map);
+		static void LoadMapZones(Game::XZoneInfo* zoneInfo, unsigned int zoneCount, int sync);
+		static void PrepareUsermap(const char* mapname, bool updateSelection = true);
 
 		static void HandleAsSPMap();
 
@@ -115,14 +117,12 @@ namespace Components
 		static void GetBSPName(char* buffer, size_t size, const char* format, const char* mapname);
 		static void LoadNewMapCommand(char* buffer, int size, const char* format, const char* mapname, const char* gametype);
 		static void LoadAssetRestrict(unsigned int type, void* asset, const std::string& name, bool* restrict);
-		static void LoadMapZones(Game::XZoneInfo* zoneInfo, unsigned int zoneCount, int sync);
 		static void UnloadMapZones(Game::XZoneInfo* zoneInfo, unsigned int zoneCount, int sync);
 
 		static MapDependencies GetDependenciesForMap(const std::string& map);
 
 		static int IgnoreEntityStub(const char* entity);
 
-		static void PrepareUsermap(const char* mapname);
 		static void LoadLoadscreenZone_Stub(Game::XZoneInfo* zoneInfo, unsigned int zoneCount, int sync);
 
 		static const char* LoadArenaFileStub(const char* name, char* buffer, int size);

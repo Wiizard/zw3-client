@@ -127,6 +127,17 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="..\src\Components\Loader.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Menu\Backdrop.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Menu\Budget.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Menu\Camera.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Menu\Director.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Menu\Cast.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Menu\Engine.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Menu\Hooks.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Menu\Mask.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Menu\Stage.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Menu\Turntable.hpp" />
+    <ClInclude Include="..\src\Components\Modules\Menu\Types.hpp" />
     <ClInclude Include="..\src\Components\Modules\ArenaLength.hpp" />
     <ClInclude Include="..\src\Components\Modules\AssetHandler.hpp" />
     <ClInclude Include="..\src\Components\Modules\AssetInterfaces\ILoadedSound.hpp" />
@@ -467,6 +478,36 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\src\Components\Loader.cpp" />
+    <ClCompile Include="..\src\Components\Modules\Menu\Backdrop.cpp">
+      <ObjectFileName>$(IntDir)\MenuBackdrop.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Menu\Budget.cpp">
+      <ObjectFileName>$(IntDir)\MenuBudget.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Menu\Camera.cpp">
+      <ObjectFileName>$(IntDir)\MenuCamera.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Menu\Director.cpp">
+      <ObjectFileName>$(IntDir)\MenuDirector.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Menu\Cast.cpp">
+      <ObjectFileName>$(IntDir)\MenuCast.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Menu\Engine.cpp">
+      <ObjectFileName>$(IntDir)\MenuEngine.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Menu\Hooks.cpp">
+      <ObjectFileName>$(IntDir)\MenuHooks.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Menu\Mask.cpp">
+      <ObjectFileName>$(IntDir)\MenuMask.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Menu\Stage.cpp">
+      <ObjectFileName>$(IntDir)\MenuStage.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Menu\Turntable.cpp">
+      <ObjectFileName>$(IntDir)\MenuTurntable.obj</ObjectFileName>
+    </ClCompile>
     <ClCompile Include="..\src\Components\Modules\ArenaLength.cpp" />
     <ClCompile Include="..\src\Components\Modules\AssetHandler.cpp" />
     <ClCompile Include="..\src\Components\Modules\AssetInterfaces\ILoadedSound.cpp" />
@@ -1089,4 +1130,10 @@
   <ImportGroup Label="ExtensionTargets">
     <Import Project="$(VCTargetsPath)\BuildCustomizations\masm.targets" />
   </ImportGroup>
+  <ItemGroup>
+    <ClInclude Include="..\src\Components\Modules\Menu\Actors.hpp" />
+    <ClCompile Include="..\src\Components\Modules\Menu\Actors.cpp">
+      <ObjectFileName>$(IntDir)\MenuActors.obj</ObjectFileName>
+    </ClCompile>
+  </ItemGroup>
 </Project>

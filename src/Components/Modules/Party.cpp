@@ -14,6 +14,7 @@
 #include "Flags.hpp"
 #include "Gamepad.hpp"
 #include "LobbyScene.hpp"
+#include "Menu/Actors.hpp"
 #include "Localization.hpp"
 #include "Logger.hpp"
 #include "Maps.hpp"
@@ -1908,7 +1909,7 @@ namespace Components
 
 	void Party::Connect(const Network::Address& target, bool downloadOnly, bool isUnmanagedRequired, bool preserveLobbyTransition)
 	{
-		LobbyScene::ClearRemoteScene();
+		Menu::Actors::ClearRemoteScene();
 		if (!preserveLobbyTransition) LobbyScene::StopTransition();
 
 		Node::Add(target);
@@ -3214,7 +3215,7 @@ namespace Components
 			if (!IsLobbySceneClient() || !(address == Target()) || data.size() != sizeof(DWORD) * 2) return;
 			std::array<DWORD, 2> sample{};
 			std::memcpy(sample.data(), data.data(), sizeof(sample));
-			LobbyScene::ReceiveSceneClock(sample[0], sample[1]);
+			Menu::Actors::ReceiveSceneClock(sample[0], sample[1]);
 		});
 		Scheduler::Loop([]
 		{
@@ -3225,13 +3226,13 @@ namespace Components
 
 		Network::OnPacket("lobbyScene", [](Network::Address& address, const std::string& data)
 		{
-			if (IsLobbySceneClient() && address == Target()) LobbyScene::ReceiveSceneSnapshot(data);
+			if (IsLobbySceneClient() && address == Target()) Menu::Actors::ReceiveSceneSnapshot(data);
 		});
 
 		Scheduler::Loop([]
 		{
 			if (!IsHostingParty() || Dedicated::IsEnabled() || Game::CL_IsCgameInitialized(0)) return;
-			const auto snapshot = LobbyScene::GetSceneSnapshot();
+			const auto snapshot = Menu::Actors::GetSceneSnapshot();
 			if (snapshot.empty()) return;
 			std::unordered_set<std::string> sent;
 			for (int slot = 0; slot < maxPartySlots; ++slot)
@@ -3246,18 +3247,6 @@ namespace Components
 				}
 			}
 		}, Scheduler::Pipeline::MAIN, 16ms);
-
-		Network::OnPacket("lobbyTransition", [](Network::Address& address, const std::string& data)
-		{
-			if (!IsPrivateMatchClient() || !(address == Target()) || data.empty() || data.size() > 64
-				|| data.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != std::string::npos) return;
-			Scheduler::Once([address, map = data]
-			{
-				if (!IsPrivateMatchClient() || !(address == Target())) return;
-				Dvar::Var("ui_mapname").Set(map);
-				LobbyScene::StartTransition();
-			}, Scheduler::Pipeline::MAIN);
-		});
 
 		Network::OnPacket("dvarUpdate", [](Network::Address&, const std::string& data)
 		{

@@ -26,6 +26,7 @@
 #include "Hook.hpp"
 #include "Iw4.hpp"
 #include "Look.hpp"
+#include "Options.hpp"
 #include "Api.hpp"
 #include "Camo.hpp"
 #include "PatchCalls.hpp"
@@ -1412,7 +1413,7 @@ namespace Components::Remix
 
 	static bool IsDynamicLightList(void* context)
 	{
-		if (!stats.isHookInstalled || !sceneDevice)
+		if (!stats.isHookInstalled || !sceneDevice || IsFrontendRendering())
 		{
 			return false;
 		}
@@ -1425,7 +1426,7 @@ namespace Components::Remix
 
 	static bool ShouldDrawFixedFunction(void* context)
 	{
-		if (!stats.isHookInstalled || !sceneDevice)
+		if (!stats.isHookInstalled || !sceneDevice || IsFrontendRendering())
 		{
 			return false;
 		}
@@ -3119,6 +3120,12 @@ namespace Components::Remix
 
 	static void __fastcall AddStaticModelSurfacesDetour(void* view)
 	{
+		if (IsFrontendRendering())
+		{
+			originalAddStaticModelSurfaces(view);
+			return;
+		}
+
 		HideBakedPropsFromEngine();
 		originalAddStaticModelSurfaces(view);
 		RestoreBakedPropVisibility();

@@ -11,6 +11,7 @@
 #include <Utils/AesCtr.hpp>
 
 #include "FastFiles.hpp"
+#include "AssetBundleZones.hpp"
 #include "Command.hpp"
 #include "Dedicated.hpp"
 #include "Events.hpp"
@@ -1152,6 +1153,14 @@ namespace Components
 		return Utils::IO::FileExists(std::format("{}\\{}{}.ff", InstallPath(), directory, zoneName));
 	}
 
+	static std::vector<std::string> FindOptionalAssetZones()
+	{
+		std::error_code error;
+		auto zones = AssetBundleZones::Discover(std::filesystem::path(InstallPath()) / "zw3", error);
+		if (error) Logger::Warning("fastfiles: could not enumerate optional zw3_assets bundles: {}\n", error.message());
+		return zones;
+	}
+
 	void FastFiles::LoadInitialZones(Game::XZoneInfo* zoneInfo, unsigned int zoneCount, int sync)
 	{
 		g_loadingInitialZones.Set(true);
@@ -1194,27 +1203,30 @@ namespace Components
 			zones.push_back({ "mod", 1, 0 });
 		}
 
+		// Keep the discovered names alive until the engine has copied the zone requests.
+		std::vector<std::string> assetZoneNames;
 		if (isDev)
 		{
-			Logger::Print("Skipping zw3/zw3.ff and zw3/zw3_assets.ff because -dev is enabled.\n");
+			Logger::Print("Skipping zw3/zw3.ff and optional zw3/zw3_assets*.ff because -dev is enabled.\n");
 		}
 		else
 		{
-			for (const char* const zoneName : { "zw3", "zw3_assets" })
+			const auto zonePath = std::format("{}\\zw3\\zw3.ff", InstallPath());
+			if (!Utils::IO::FileExists(zonePath))
 			{
-				const auto zonePath = std::format("{}\\zw3\\{}.ff", InstallPath(), zoneName);
+				ExitWithZW3Error(std::format("Missing 'zw3.ff':\n{}\n\nPlease run the Zombie Warfare 3 Launcher to verify game files or place it inside the zw3 folder.", zonePath));
+			}
 
-				if (!Utils::IO::FileExists(zonePath))
-				{
-					ExitWithZW3Error(std::format("Missing '{}.ff':\n{}\n\nPlease run the Zombie Warfare 3 Launcher to verify game files or place it inside the zw3 folder.", zoneName, zonePath));
-				}
+			if (!Zones::IsReady())
+			{
+				ExitWithZW3Error(std::format("'zw3.ff' cannot be read:\n{}\n\nIt is a 32 bit zone and this build's 32 bit zone reader did not start. See iw4x\\iw4x.log.", zonePath));
+			}
 
-				if (!Zones::IsReady())
-				{
-					ExitWithZW3Error(std::format("'{}.ff' cannot be read:\n{}\n\nIt is a 32 bit zone and this build's 32 bit zone reader did not start. See iw4x\\iw4x.log.", zoneName, zonePath));
-				}
-
-				zones.push_back({ zoneName, 1, 0 });
+			zones.push_back({ "zw3", 1, 0 });
+			assetZoneNames = FindOptionalAssetZones();
+			for (const auto& name : assetZoneNames)
+			{
+				zones.push_back({ name.c_str(), 1, 0 });
 			}
 		}
 
@@ -1549,7 +1561,7 @@ namespace Components
 				if (!Flags::HasFlag("dev"))
 				{
 					PrefetchZone("zw3");
-					PrefetchZone("zw3_assets");
+					for (const auto& name : FindOptionalAssetZones()) PrefetchZone(name);
 				}
 
 				PrefetchZone("iw4x_patch_mp");

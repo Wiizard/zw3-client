@@ -21,7 +21,9 @@ namespace Components
 
 		static bool LockExceptionFilter();
 
-		static bool WriteMiniDump(LPEXCEPTION_POINTERS exceptionInfo, std::string& path);
+		static bool WriteMiniDump(LPEXCEPTION_POINTERS exceptionInfo, std::string& path, int extraFlags = 0);
+		static void HunkHighError_Hook(const char* format, std::size_t requestedBytes, std::size_t totalMB,
+			std::size_t lowMB, std::size_t highMB);
 		static void CopyToClipboard(const std::string& text);
 		static std::string DescribeException(LPEXCEPTION_POINTERS exceptionInfo);
 		static std::string GetErrorMessage(const std::string& error);

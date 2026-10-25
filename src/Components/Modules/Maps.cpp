@@ -17,6 +17,7 @@
 #include "Theatre.hpp"
 #include "UIScript.hpp"
 #include "Zones.hpp"
+#include "WeaponAssetPolicy.hpp"
 
 #include "GSC/Script.hpp"
 
@@ -376,7 +377,6 @@ namespace Components
 		FastFiles::LoadLocalizeZones(data.data(), static_cast<unsigned int>(data.size()), sync);
 	}
 
-	constexpr std::uint32_t iw4xFirstVersion = 316;
 	constexpr std::uint32_t iw4xBrokenMenusVersion = 359;
 
 	void Maps::LoadAssetRestrict(unsigned int type, void* asset, const std::string& name, bool* restrict)
@@ -418,7 +418,7 @@ namespace Components
 
 		if (type == Game::ASSET_TYPE_WEAPON)
 		{
-			if ((!std::strstr(name.data(), "_mp") && name != "none" && name != "destructible_car") || Zones::Version() >= iw4xFirstVersion)
+			if (WeaponAssetPolicy::ShouldRestrict(name, FastFiles::Current(), Zones::Version()))
 			{
 				*restrict = true;
 				return;

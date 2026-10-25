@@ -58,6 +58,7 @@ int main(int argc, char** argv)
 		for (int visit = 0; visit < 3; ++visit)
 		{
 			SetFrontendRendering(true);
+			if (!IsFrontendRendering()) throw std::runtime_error("Menu draw hooks did not enter raster mode");
 			UpdateOptions(device);
 			RequireMode("False");
 			const auto writes = raytracingWrites.size();
@@ -65,6 +66,7 @@ int main(int argc, char** argv)
 			UpdateOptions(device);
 			if (raytracingWrites.size() != writes) throw std::runtime_error("An unchanged lobby rewrote the rendering mode");
 			SetFrontendRendering(false);
+			if (IsFrontendRendering()) throw std::runtime_error("Game draw hooks did not restore Remix mode");
 			UpdateOptions(device);
 			RequireMode(baseline == "default" ? "True" : baseline);
 		}

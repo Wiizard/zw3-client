@@ -17,6 +17,7 @@
 #include "Cast.hpp"
 #include "Mask.hpp"
 #include "Stage.hpp"
+#include "ClipMapState.hpp"
 #include "Budget.hpp"
 #include "Camera.hpp"
 #include "Director.hpp"
@@ -1432,19 +1433,20 @@ namespace Components
         // if we may, since loading another one would put two clip maps in
         // the one the engine has. Either way nothing more is loaded.
         //
-        // Note that the clip map keeps its name when a level load frees its
-        // zone, so we ask the database whether the zone is still there.
+        // CM_Unload leaves the old name pointing into the released zone. Check
+        // the remaining clip-map state before reading that string at all.
         //
-        if (cm->name != nullptr &&
-            DB_IsFileLoaded (map_name (cm->name).c_str ()))
+        const char* resident_world (loaded_clip_map_name (cm));
+        if (resident_world != nullptr &&
+            DB_IsFileLoaded (map_name (resident_world).c_str ()))
         {
-          const string m (map_name (cm->name));
+          const string m (map_name (resident_world));
           const stage* st (find_stage (m));
 
           if (st == nullptr)
           {
             fail (format ("level '{}' is still loaded and isn't a backdrop "
-                          "stage", cm->name));
+                          "stage", resident_world));
             return;
           }
 
@@ -1705,16 +1707,17 @@ namespace Components
         // shared base map, a converted campaign level): take the world the
         // zone actually brought.
         //
-        if (cm->name != nullptr && s.world != cm->name &&
-            string_view (cm->name).ends_with (".d3dbsp") &&
-            cm->mapEnts != nullptr && cm->mapEnts->entityString != nullptr)
+        const char* loaded_world (loaded_clip_map_name (cm));
+        if (loaded_world != nullptr && s.world != loaded_world &&
+            string_view (loaded_world).ends_with (".d3dbsp") &&
+            cm->mapEnts->entityString != nullptr)
         {
-          LogLine{} << "backdrop: " << s.map << "'s world is " << cm->name;
-          s.world = cm->name;
+          LogLine{} << "backdrop: " << s.map << "'s world is " << loaded_world;
+          s.world = loaded_world;
         }
 
-        if (cm->name == nullptr || s.world != cm->name ||
-            cm->mapEnts == nullptr || cm->mapEnts->entityString == nullptr)
+        if (loaded_world == nullptr || s.world != loaded_world ||
+            cm->mapEnts->entityString == nullptr)
         {
           retry_or_fail (format ("{} loaded without its clip map", s.map));
           return;

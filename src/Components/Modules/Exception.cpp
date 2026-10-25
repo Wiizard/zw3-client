@@ -6,6 +6,7 @@
 #include "Flags.hpp"
 #include "Network.hpp"
 #include "Party.hpp"
+#include "RawFiles.hpp"
 #include "TextRenderer.hpp"
 
 namespace Components
@@ -15,6 +16,9 @@ namespace Components
 
 	LPTOP_LEVEL_EXCEPTION_FILTER Exception::previousFilter = nullptr;
 	PVOID Exception::importThunk = nullptr;
+	static Utils::Hook hunkHighErrorHook;
+	static constexpr std::uintptr_t hunkHighErrorCall = 0x14027F470;
+	static constexpr std::uintptr_t nativeSysError = 0x1402A4F90;
 
 	void Exception::SetMiniDumpType(bool codeSegment, bool dataSegment)
 	{
@@ -136,7 +140,7 @@ namespace Components
 		return std::format("{}\n\n{}\n\n{}", clientInfo, serverInfo, error);
 	}
 
-	bool Exception::WriteMiniDump(LPEXCEPTION_POINTERS exceptionInfo, std::string& path)
+	bool Exception::WriteMiniDump(LPEXCEPTION_POINTERS exceptionInfo, std::string& path, int extraFlags)
 	{
 		char executable[MAX_PATH]{};
 		GetModuleFileNameA(nullptr, executable, MAX_PATH);
@@ -168,11 +172,66 @@ namespace Components
 		information.ClientPointers = FALSE;
 
 		const BOOL written = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file,
-			static_cast<MINIDUMP_TYPE>(miniDumpType), &information, nullptr, nullptr);
+			static_cast<MINIDUMP_TYPE>(miniDumpType | extraFlags), &information, nullptr, nullptr);
 
 		CloseHandle(file);
 
 		return written == TRUE;
+	}
+
+	void Exception::HunkHighError_Hook(const char* format, std::size_t requestedBytes, std::size_t totalMB,
+		std::size_t lowMB, std::size_t highMB)
+	{
+		// Sys_Error displays a dialog and exits without an SEH exception. Capture the actual allocation
+		// caller before that happens; increasing the hunk cannot repair a corrupt script-file length.
+		static std::atomic_flag isWriting = ATOMIC_FLAG_INIT;
+		if (!isWriting.test_and_set())
+		{
+			try
+			{
+				CONTEXT context{};
+				RtlCaptureContext(&context);
+				EXCEPTION_RECORD record{};
+				record.ExceptionCode = 0xE05A5733; // Application-defined diagnostic, not a hardware exception.
+				record.ExceptionAddress = reinterpret_cast<void*>(context.Rip);
+				record.NumberParameters = 5;
+				record.ExceptionInformation[0] = requestedBytes;
+				record.ExceptionInformation[1] = totalMB;
+				record.ExceptionInformation[2] = lowMB;
+				record.ExceptionInformation[3] = highMB;
+				record.ExceptionInformation[4] = reinterpret_cast<ULONG_PTR>(RawFiles::LastScriptRead());
+				EXCEPTION_POINTERS pointers{ &record, &context };
+				std::string dumpPath;
+				const bool written = WriteMiniDump(&pointers, dumpPath, MiniDumpWithIndirectlyReferencedMemory);
+
+				if (!dumpPath.empty())
+				{
+					char description[512]{};
+					const int length = sprintf_s(description,
+						"Hunk_AllocateTempMemoryHigh: requested %llu bytes; total %llu MB, low %llu MB, high %llu MB\r\n"
+						"Last script read: %s\r\nDump written: %u\r\n",
+						static_cast<unsigned long long>(requestedBytes), static_cast<unsigned long long>(totalMB),
+						static_cast<unsigned long long>(lowMB), static_cast<unsigned long long>(highMB),
+						RawFiles::LastScriptRead(), written ? 1u : 0u);
+					const std::string reportPath = dumpPath + ".txt";
+					const HANDLE report = CreateFileA(reportPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+						CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+					if (report != INVALID_HANDLE_VALUE)
+					{
+						DWORD bytesWritten = 0;
+						if (length > 0) WriteFile(report, description, static_cast<DWORD>(length), &bytesWritten, nullptr);
+						CloseHandle(report);
+					}
+				}
+			}
+			catch (...)
+			{
+				// Diagnostics must not replace the original fatal-error path, including on allocation failure.
+			}
+		}
+
+		reinterpret_cast<void(*)(const char*, ...)>(Utils::Hook::Rebase(nativeSysError))(
+			format, requestedBytes, totalMB, lowMB, highMB);
 	}
 
 	void Exception::CopyToClipboard(const std::string& text)
@@ -370,5 +429,17 @@ namespace Components
 		previousFilter = SetUnhandledExceptionFilter(ExceptionFilter);
 
 		LockExceptionFilter();
+
+		// Hook only this fatal call site so Console retains its Sys_Error handler for dedicated/-stdout launches.
+		if (Utils::Hook::BranchesTo(hunkHighErrorCall, nativeSysError, HOOK_CALL)
+			&& hunkHighErrorHook.Initialize(hunkHighErrorCall, reinterpret_cast<void*>(HunkHighError_Hook), HOOK_CALL)
+				->Install()->IsInstalled())
+		{
+			hunkHighErrorHook.Quick();
+		}
+		else
+		{
+			OutputDebugStringA("zw3: high-hunk allocation diagnostics could not be installed\n");
+		}
 	}
 }

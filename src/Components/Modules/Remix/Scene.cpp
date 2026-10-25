@@ -129,6 +129,13 @@ namespace Components::Remix
 
 	static void __fastcall StandardDrawDetour(void* viewInfo)
 	{
+		// Menu maps need their baked lighting and shaders while frontend raytracing is disabled.
+		if (IsFrontendRendering())
+		{
+			originalStandardDraw(viewInfo);
+			return;
+		}
+
 		D3DMATRIX view{};
 		D3DMATRIX projection{};
 
@@ -359,6 +366,12 @@ namespace Components::Remix
 
 	static void __fastcall PostEffectsDetour(void* viewInfo)
 	{
+		if (IsFrontendRendering() && originalPostEffects)
+		{
+			originalPostEffects(viewInfo);
+			return;
+		}
+
 		if (!isMapColourGrade || !originalPostEffects || !viewInfo)
 		{
 			return;
@@ -477,7 +490,7 @@ namespace Components::Remix
 
 	static void __fastcall EmissivePassDetour(void* viewInfo)
 	{
-		if (!sceneDevice)
+		if (!sceneDevice || IsFrontendRendering())
 		{
 			originalEmissivePass(viewInfo);
 			return;
@@ -508,7 +521,7 @@ namespace Components::Remix
 
 	static void DrawWithPremultipliedRemap(TessDrawList original, void* context, void** iterator)
 	{
-		if (!sceneDevice)
+		if (!sceneDevice || IsFrontendRendering())
 		{
 			original(context, iterator);
 			return;
@@ -547,7 +560,7 @@ namespace Components::Remix
 
 	static void __fastcall ParticleCloudTessDetour(void* context, void** iterator)
 	{
-		if (!sceneDevice)
+		if (!sceneDevice || IsFrontendRendering())
 		{
 			originalParticleCloudTess(context, iterator);
 			return;
@@ -1069,7 +1082,7 @@ namespace Components::Remix
 
 	void OnPostEffectsBegin()
 	{
-		if (!sceneDevice)
+		if (!sceneDevice || IsFrontendRendering())
 		{
 			return;
 		}

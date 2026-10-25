@@ -3,6 +3,7 @@
 #include "Options.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -52,7 +53,7 @@ namespace Components::Remix
 	static int diSampleCount = 0;
 	static unsigned reassertFrame = 0;
 	static constexpr unsigned reassertInterval = 60;
-	static bool isFrontendRendering = false;
+	static std::atomic_bool isFrontendRendering = false;
 	static const std::string raytracingOption = "rtx.enableRaytracing";
 	static const std::string raytracingDisabled = "False";
 	static const std::string raytracingDefault = "True";
@@ -205,6 +206,11 @@ namespace Components::Remix
 			Log() << "remix: " << (isFrontend ? "frontend uses the original raster renderer"
 				: "game scene restores the configured raytracing mode");
 		}
+	}
+
+	bool IsFrontendRendering()
+	{
+		return isFrontendRendering.load();
 	}
 
 	std::wstring GetRemixDataDirectory()

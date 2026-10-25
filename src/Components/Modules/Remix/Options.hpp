@@ -45,6 +45,7 @@ namespace Components::Remix
 
 	void UpdateOptions(IDirect3DDevice9* device);
 	void SetFrontendRendering(bool isFrontend);
+	bool IsFrontendRendering();
 
 	void SetDiSampleCount(int count);
 

@@ -1,6 +1,7 @@
 #include "STDInclude.hpp"
 
 #include "FileSystem.hpp"
+#include "IwdReadLock.hpp"
 #include "D3D9Ex.hpp"
 #include "Flags.hpp"
 #include "Logger.hpp"
@@ -86,6 +87,61 @@ namespace Components
 		const auto* const live = reinterpret_cast<const std::uint8_t*>(Utils::Hook::Rebase(address));
 
 		return std::memcmp(live, expected, length) == 0;
+	}
+
+	constexpr std::uintptr_t unzGetCurrentFileInfoInternal = 0x1402CC980;
+	constexpr std::uintptr_t unzMetadataCalls[] =
+	{
+		0x1402CBE5F, 0x1402CBEF8, 0x1402CBF76, 0x1402CC2C2, 0x1402CC762,
+	};
+	constexpr std::uintptr_t nativeFileLock = 0x14032D17C;
+	constexpr std::uintptr_t nativeFileUnlock = 0x14032D188;
+	static Utils::Hook iwdMetadataHooks[std::size(unzMetadataCalls)];
+
+	static int ReadIwdMetadataLocked(void* archive, void* info, void* internalInfo, char* filename,
+		unsigned int filenameSize, void* extra, unsigned int extraSize, char* comment, unsigned int commentSize)
+	{
+		// Streaming can seek this same FILE between the ZIP reader's individual header reads.
+		// Use the engine CRT's recursive FILE lock for the complete seek/read transaction.
+		void* file = archive ? *static_cast<void**>(archive) : nullptr;
+		const IwdReadLock::FileLock lock(file,
+			reinterpret_cast<IwdReadLock::FileLock::Operation>(Utils::Hook::Rebase(nativeFileLock)),
+			reinterpret_cast<IwdReadLock::FileLock::Operation>(Utils::Hook::Rebase(nativeFileUnlock)));
+		using Reader = int(*)(void*, void*, void*, char*, unsigned int, void*, unsigned int, char*, unsigned int);
+		return reinterpret_cast<Reader>(Utils::Hook::Rebase(unzGetCurrentFileInfoInternal))(
+			archive, info, internalInfo, filename, filenameSize, extra, extraSize, comment, commentSize);
+	}
+
+	static void HookIwdMetadataReads()
+	{
+		// These are the engine CRT's lock/unlock thunks, also called by its fread/fseek.
+		constexpr std::uint8_t fileLockEntry[] = { 0x48, 0x83, 0xC1, 0x30, 0x48, 0xFF, 0x25 };
+		bool expected = MatchesBytes(nativeFileLock, fileLockEntry, sizeof(fileLockEntry))
+			&& MatchesBytes(nativeFileUnlock, fileLockEntry, sizeof(fileLockEntry));
+		for (const auto site : unzMetadataCalls)
+		{
+			expected = expected && Utils::Hook::BranchesTo(site, unzGetCurrentFileInfoInternal, HOOK_CALL);
+		}
+		if (!expected)
+		{
+			Logger::Error("filesystem: IWD metadata reader or CRT file locks do not match; read locking not installed\n");
+			return;
+		}
+
+		bool installed = true;
+		for (std::size_t index = 0; index < std::size(unzMetadataCalls); ++index)
+		{
+			installed = iwdMetadataHooks[index].Initialize(unzMetadataCalls[index],
+				reinterpret_cast<void*>(ReadIwdMetadataLocked), HOOK_CALL)->Install()->IsInstalled() && installed;
+		}
+		if (!installed)
+		{
+			for (auto& hook : iwdMetadataHooks) hook.Uninstall();
+			Logger::Error("filesystem: could not install all IWD metadata read locks\n");
+			return;
+		}
+		for (auto& hook : iwdMetadataHooks) hook.Quick();
+		Logger::Print("filesystem: IWD metadata seek/read transactions protected against concurrent streaming\n");
 	}
 
 	constexpr std::uintptr_t FS_Restart = 0x140277FB0;
@@ -1374,6 +1430,7 @@ namespace Components
 		HookLocalizedDirectories();
 
 		HookSync();
+		HookIwdMetadataReads();
 
 		if (!Utils::Hook::BranchesTo(Load_GfxTextureLoad_LoadTextureCall, Load_Texture, HOOK_CALL)
 			|| !loadTextureHook.Initialize(Load_GfxTextureLoad_LoadTextureCall, reinterpret_cast<void*>(LoadTextureSync), HOOK_CALL)->Install()->IsInstalled())

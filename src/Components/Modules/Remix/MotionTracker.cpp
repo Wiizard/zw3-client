@@ -267,14 +267,14 @@ namespace Components::Remix
 		return isFlare;
 	}
 
-	static std::uintptr_t FindScriptRunEnd(std::uintptr_t cursor, std::uintptr_t end, bool& isScript)
+	static std::uintptr_t FindScriptRunEnd(std::uintptr_t cursor, std::uintptr_t end, ScriptEffectKind& kind)
 	{
 		const auto key = ReadAt<std::uint32_t>(cursor);
-		isScript = IsScriptEffectSurface(ReadAt<const void*>(cursor + Iw4::codeSurfIndices));
+		kind = GetScriptEffectSurfaceKind(ReadAt<const void*>(cursor + Iw4::codeSurfIndices));
 		cursor += Iw4::codeSurfStride;
 
 		while (cursor < end && ReadAt<std::uint32_t>(cursor) == key
-			&& IsScriptEffectSurface(ReadAt<const void*>(cursor + Iw4::codeSurfIndices)) == isScript)
+			&& GetScriptEffectSurfaceKind(ReadAt<const void*>(cursor + Iw4::codeSurfIndices)) == kind)
 		{
 			cursor += Iw4::codeSurfStride;
 		}
@@ -282,27 +282,30 @@ namespace Components::Remix
 		return cursor;
 	}
 
-	static char DrawEffectRun(void* context, void** iterator, void* placement, std::uintptr_t material, bool isScript)
+	static char DrawEffectRun(void* context, void** iterator, void* placement, std::uintptr_t material, ScriptEffectKind kind)
 	{
 		IDirect3DDevice9* sceneDevice = GetSceneDevice();
 		IDirect3DTexture9* twin = nullptr;
 		const char* action = "";
 
-		if (sceneDevice && isScript)
+		if (sceneDevice && kind != ScriptEffectKind::None)
 		{
-			twin = TryGetParticleColorMapTwin(sceneDevice, material);
+			const bool isEye = kind == ScriptEffectKind::Eye;
+			twin = isEye ? TryGetEyeColorMapTwin(sceneDevice, material) : TryGetParticleColorMapTwin(sceneDevice, material);
 			std::uint64_t twinHash = 0;
 
 			if (twin && Device::TryGetTextureHash(twin, twinHash))
 			{
-				static char twinAction[64];
-				std::snprintf(twinAction, sizeof(twinAction), "zw3 script effect, particle copy 0x%016llX",
+				static char twinAction[96];
+				std::snprintf(twinAction, sizeof(twinAction), isEye
+					? "zombie eye, no soft-particle fade copy 0x%016llX"
+					: "zw3 script effect, particle copy 0x%016llX",
 					static_cast<unsigned long long>(twinHash));
 				action = twinAction;
 			}
 			else
 			{
-				action = "zw3 script effect, particle copy FAILED";
+				action = isEye ? "zombie eye, no soft-particle fade copy FAILED" : "zw3 script effect, particle copy FAILED";
 			}
 		}
 		else if (sceneDevice && isHidingLampFlares && IsEyeOffsetLampFlare(material))
@@ -362,11 +365,11 @@ namespace Components::Remix
 
 			while (true)
 			{
-				bool isScript = false;
-				const std::uintptr_t runEnd = FindScriptRunEnd(cursor, endAddress, isScript);
+				ScriptEffectKind kind = ScriptEffectKind::None;
+				const std::uintptr_t runEnd = FindScriptRunEnd(cursor, endAddress, kind);
 
 				iterator[1] = reinterpret_cast<void*>(runEnd);
-				result = DrawEffectRun(context, iterator, placement, material, isScript);
+				result = DrawEffectRun(context, iterator, placement, material, kind);
 				iterator[1] = end;
 
 				cursor = reinterpret_cast<std::uintptr_t>(iterator[0]);

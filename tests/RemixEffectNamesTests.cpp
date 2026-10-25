@@ -15,21 +15,44 @@ int main()
 			"misc/aircraft_light_wingtip_red", "misc/aircraft_light_wingtip_green",
 			"zombie/eye_glow_red_single", "zombie/eye_glow_blue_single", "zombie/eye_glow_lightyellow" })
 		{
-			if (!IsEyeEffectName(name) || !IsProtectedScriptEffectName(name))
-				throw std::runtime_error("An eye colour lost its protected particle path: " + std::string(name));
+			if (ClassifyScriptEffectName(name) != ScriptEffectKind::Eye)
+				throw std::runtime_error("An eye colour lost its separate non-particle path: " + std::string(name));
 		}
 		for (const std::string_view name : { "maps/mp_maps/fx_mp_ash_falling_large", "zw3/snow", "misc/glow_weapon_fx" })
 		{
-			if (!IsProtectedScriptEffectName(name) || IsEyeEffectName(name))
+			if (ClassifyScriptEffectName(name) != ScriptEffectKind::Particle)
 				throw std::runtime_error("A protected non-eye effect was lost or received eye size/brightness adjustments");
 		}
 		for (const std::string_view name : { "", "misc/lamp_flare", "maps/ambient_smoke",
 			"smc_t6/zm_prison/fx/unrelated", "maps/mp_maps/fx_mp_ash_falling_large_unrelated" })
 		{
-			if (IsEyeEffectName(name) || IsProtectedScriptEffectName(name))
+			if (ClassifyScriptEffectName(name) != ScriptEffectKind::None)
 				throw std::runtime_error("An unrelated effect bypassed its normal filtering");
 		}
-		std::cout << "Remix effects: imported red eyes, all eye colours, ash/snow particles and unrelated-effect filtering passed\n";
+		EffectSurfaces surfaces;
+		const int eyeIndices = 0;
+		const int ashIndices = 0;
+		const int unrelatedIndices = 0;
+		surfaces.BeginFrame();
+		surfaces.Add(&eyeIndices, ScriptEffectKind::Eye);
+		surfaces.Add(&ashIndices, ScriptEffectKind::Particle);
+		if (surfaces.Get(&eyeIndices) != ScriptEffectKind::Eye
+			|| surfaces.Get(&ashIndices) != ScriptEffectKind::Particle
+			|| surfaces.Get(&unrelatedIndices) != ScriptEffectKind::None)
+			throw std::runtime_error("Eye, particle and ordinary surfaces must remain distinct even with shared textures");
+
+		surfaces.BeginFrame();
+		if (surfaces.Get(&eyeIndices) != ScriptEffectKind::Eye)
+			throw std::runtime_error("The render thread lost the previous frame's surfaces");
+		surfaces.Add(&eyeIndices, ScriptEffectKind::Particle);
+		if (surfaces.Get(&eyeIndices) != ScriptEffectKind::Particle)
+			throw std::runtime_error("An old eye classification overrode a reused current-frame address");
+
+		surfaces.BeginFrame();
+		if (surfaces.Get(&ashIndices) != ScriptEffectKind::None)
+			throw std::runtime_error("An expired surface retained its effect classification");
+
+		std::cout << "Remix effects: separate eye sprites, ash/snow particles, filtering and frame-buffer reuse passed\n";
 		return 0;
 	}
 	catch (const std::exception& error)

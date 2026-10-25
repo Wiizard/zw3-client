@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "EffectSurfaces.hpp"
+
 namespace Components::Remix
 {
 	struct FixtureSpot
@@ -79,7 +81,9 @@ namespace Components::Remix
 
 	IDirect3DTexture9* TryGetParticleColorMapTwin(IDirect3DDevice9* device, std::uintptr_t material);
 
-	bool IsScriptEffectSurface(const void* indices);
+	IDirect3DTexture9* TryGetEyeColorMapTwin(IDirect3DDevice9* device, std::uintptr_t material);
+
+	ScriptEffectKind GetScriptEffectSurfaceKind(const void* indices);
 
 	void RecordDumpEffect(IDirect3DDevice9* device, std::uintptr_t material, const char* action);
 

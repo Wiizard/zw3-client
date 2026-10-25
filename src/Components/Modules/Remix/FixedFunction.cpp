@@ -314,6 +314,7 @@ namespace Components::Remix
 	static std::unordered_map<std::uint64_t, IDirect3DTexture9*> layerTwins;
 	static std::unordered_map<std::uint64_t, IDirect3DTexture9*> ignoredTwins;
 	static std::unordered_map<std::uint64_t, IDirect3DTexture9*> particleTwins;
+	static std::unordered_map<std::uint64_t, IDirect3DTexture9*> eyeTwins;
 	static std::unordered_map<std::uintptr_t, bool> fakeLightVolumes;
 
 	static std::unordered_map<std::uintptr_t, IDirect3DTexture9*> camoTextures;
@@ -3492,6 +3493,7 @@ namespace Components::Remix
 	static constexpr unsigned char ignoredTwinMark = 0x01;
 	static constexpr unsigned char layerTwinMark = 0x02;
 	static constexpr unsigned char particleTwinMark = 0x08;
+	static constexpr unsigned char eyeTwinMark = 0x10;
 
 	static IDirect3DTexture9* TryBuildBodyTwin(IDirect3DDevice9* device, IDirect3DTexture9* source, std::uint64_t& hash,
 		unsigned char mark = bodyTwinMark)
@@ -5345,6 +5347,16 @@ namespace Components::Remix
 
 		particleTwins.clear();
 
+		for (auto& entry : eyeTwins)
+		{
+			if (entry.second)
+			{
+				entry.second->Release();
+			}
+		}
+
+		eyeTwins.clear();
+
 		for (auto& entry : overlayTwins)
 		{
 			if (entry.second)
@@ -6191,15 +6203,14 @@ namespace Components::Remix
 		std::uint32_t indexCount, std::uint16_t argOffset, std::int16_t argCount);
 	static FxDrawElement originalDrawElement = nullptr;
 	static std::mutex scriptEffectMutex;
-	static std::unordered_map<std::uintptr_t, bool> scriptEffectDefs;
-	static std::vector<const void*> scriptSurfaces[2];
-	static int scriptSurfaceFrame = 0;
+	static std::unordered_map<std::uintptr_t, ScriptEffectKind> scriptEffectDefs;
+	static EffectSurfaces scriptSurfaces;
 
 	static constexpr std::uintptr_t fxSystemPendingIndices = 352;
 	static constexpr std::uintptr_t fxSystemPendingIndexCount = 360;
 	static constexpr std::uintptr_t fxSystemPendingMaterial = 368;
 
-	static bool IsScriptEffect(std::uintptr_t definition)
+	static ScriptEffectKind GetScriptEffectKind(std::uintptr_t definition)
 	{
 		const auto found = scriptEffectDefs.find(definition);
 
@@ -6209,16 +6220,9 @@ namespace Components::Remix
 		}
 
 		const char* name = definition ? ReadAt<const char*>(definition) : nullptr;
-		bool isScript = false;
-
-		if (name)
-		{
-			const std::string_view effectName(name);
-			isScript = IsProtectedScriptEffectName(effectName);
-		}
-
-		scriptEffectDefs[definition] = isScript;
-		return isScript;
+		const auto kind = name ? ClassifyScriptEffectName(name) : ScriptEffectKind::None;
+		scriptEffectDefs[definition] = kind;
+		return kind;
 	}
 
 	static void ClosePendingCodeSurf(std::uintptr_t system, std::uintptr_t codeSurfs)
@@ -6339,29 +6343,6 @@ namespace Components::Remix
 	static constexpr std::size_t codeMeshVertexStride = 32;
 	static constexpr std::uintptr_t codeSurfsVertices = 16;
 
-	static bool IsEyeEffect(std::uintptr_t definition)
-	{
-		static std::unordered_map<std::uintptr_t, bool> known;
-		const auto found = known.find(definition);
-
-		if (found != known.end())
-		{
-			return found->second;
-		}
-
-		const char* name = definition ? ReadAt<const char*>(definition) : nullptr;
-		bool isEye = false;
-
-		if (name)
-		{
-			const std::string_view effectName(name);
-			isEye = IsEyeEffectName(effectName);
-		}
-
-		known[definition] = isEye;
-		return isEye;
-	}
-
 	static void AdjustEyeGlowVerticesUnsafe(std::uintptr_t codeSurfs, std::uintptr_t system, float size, float alphaScale)
 	{
 		const auto vertices = ReadAt<std::uintptr_t>(codeSurfs + codeSurfsVertices);
@@ -6471,17 +6452,15 @@ namespace Components::Remix
 		const auto system = ReadAt<std::uintptr_t>(drawState);
 		const auto effect = ReadAt<std::uintptr_t>(drawState + 8);
 		const auto codeSurfs = ReadAt<std::uintptr_t>(drawState + 32);
-		bool isScript = false;
-		bool isEye = false;
+		ScriptEffectKind kind = ScriptEffectKind::None;
 
 		if (codeSurfs && effect)
 		{
 			std::lock_guard lock(scriptEffectMutex);
-			isScript = IsScriptEffect(ReadAt<std::uintptr_t>(effect));
-			isEye = isScript && IsEyeEffect(ReadAt<std::uintptr_t>(effect));
+			kind = GetScriptEffectKind(ReadAt<std::uintptr_t>(effect));
 		}
 
-		if (!isScript || !originalDrawSpriteElems)
+		if (kind == ScriptEffectKind::None || !originalDrawSpriteElems)
 		{
 			originalDrawElement(elemDef, elem, drawState);
 			return;
@@ -6499,6 +6478,7 @@ namespace Components::Remix
 
 		float eyeBrightness = 1.0f;
 		float eyeSize = 1.0f;
+		const bool isEye = kind == ScriptEffectKind::Eye;
 
 		if (isEye)
 		{
@@ -6536,33 +6516,23 @@ namespace Components::Remix
 
 		{
 			std::lock_guard lock(scriptEffectMutex);
-			scriptSurfaces[scriptSurfaceFrame & 1].push_back(ReadAt<const void*>(system + fxSystemPendingIndices));
+			scriptSurfaces.Add(ReadAt<const void*>(system + fxSystemPendingIndices), kind);
 		}
 
 		ClosePendingCodeSurf(system, codeSurfs);
 	}
 
-	bool IsScriptEffectSurface(const void* indices)
+	ScriptEffectKind GetScriptEffectSurfaceKind(const void* indices)
 	{
 		std::lock_guard lock(scriptEffectMutex);
-
-		for (const auto& surfaces : scriptSurfaces)
-		{
-			if (std::find(surfaces.begin(), surfaces.end(), indices) != surfaces.end())
-			{
-				return true;
-			}
-		}
-
-		return false;
+		return scriptSurfaces.Get(indices);
 	}
 
 	static void __fastcall DrawSpriteElemsDetour(void* codeSurfs, std::uintptr_t system, int drawTime)
 	{
 		{
 			std::lock_guard lock(scriptEffectMutex);
-			++scriptSurfaceFrame;
-			scriptSurfaces[scriptSurfaceFrame & 1].clear();
+			scriptSurfaces.BeginFrame();
 		}
 
 		if (isEffectSurveyRequested)
@@ -7603,6 +7573,36 @@ namespace Components::Remix
 	IDirect3DTexture9* TryGetParticleColorMapTwin(IDirect3DDevice9* device, std::uintptr_t material)
 	{
 		return TryGetTaggedTwin(device, TryGetColorMap(material), particleTwins, TextureTag::Particle, particleTwinMark);
+	}
+
+	IDirect3DTexture9* TryGetEyeColorMapTwin(IDirect3DDevice9* device, std::uintptr_t material)
+	{
+		IDirect3DTexture9* colorMap = TryGetColorMap(material);
+		std::uint64_t colourHash = 0;
+
+		if (!colorMap || !Device::TryGetTextureHash(colorMap, colourHash))
+		{
+			return nullptr;
+		}
+
+		const auto [entry, inserted] = eyeTwins.try_emplace(colourHash, nullptr);
+
+		if (inserted)
+		{
+			std::uint64_t twinHash = 0;
+			entry->second = TryBuildBodyTwin(device, colorMap, twinHash, eyeTwinMark);
+
+			if (entry->second)
+			{
+				// Soft particles fade against the zombie's face. Keep eye textures separate from ash/fog,
+				// preserving their additive colour, alpha and normal geometry occlusion without that fade.
+				WithdrawGeneratedTag(device, twinHash, TextureTag::Particle);
+				WithdrawGeneratedTag(device, twinHash, TextureTag::Ignore);
+				ExcludeFromOpacityMicromaps(device, twinHash);
+			}
+		}
+
+		return entry->second;
 	}
 
 	void RecordDumpEffect(IDirect3DDevice9* device, std::uintptr_t material, const char* action)

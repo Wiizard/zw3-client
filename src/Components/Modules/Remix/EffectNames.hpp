@@ -2,6 +2,8 @@
 
 #include <string_view>
 
+#include "EffectSurfaces.hpp"
+
 namespace Components::Remix
 {
 	inline bool IsEyeEffectName(const std::string_view name)
@@ -18,5 +20,15 @@ namespace Components::Remix
 		return IsEyeEffectName(name) || name.starts_with("zw3/")
 			|| name.starts_with("misc/glow_weapon")
 			|| name == "maps/mp_maps/fx_mp_ash_falling_large";
+	}
+
+	inline ScriptEffectKind ClassifyScriptEffectName(const std::string_view name)
+	{
+		if (IsEyeEffectName(name))
+		{
+			return ScriptEffectKind::Eye;
+		}
+
+		return IsProtectedScriptEffectName(name) ? ScriptEffectKind::Particle : ScriptEffectKind::None;
 	}
 }

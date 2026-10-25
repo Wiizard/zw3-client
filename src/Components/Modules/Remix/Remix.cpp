@@ -5,6 +5,7 @@
 #include "Device.hpp"
 #include "Engine.hpp"
 #include "FixedFunction.hpp"
+#include "Lights.hpp"
 #include "Menu.hpp"
 #include "PbrMaterials.hpp"
 #include "Scene.hpp"
@@ -264,6 +265,30 @@ namespace Components::Remix
 		{
 			Device::NoteFrameEvent("UI marker from zw3's own drawing (lobby scene)");
 			MarkUiPhase(device);
+		}
+	}
+
+	void Remix::BeginMenuScene(const char* mapName)
+	{
+		if (Core::IsRemixMode())
+		{
+			SetMenuSceneMap(mapName ? mapName : "");
+		}
+	}
+
+	void Remix::OnFrameStart(void (*callback)(IDirect3DDevice9* device))
+	{
+		Device::OnBeginScene(callback);
+	}
+
+	void Remix::EndMenuScene(IDirect3DDevice9* device)
+	{
+		if (Core::IsRemixMode())
+		{
+			SubmitMenuSceneLights(device);
+			Device::NoteFrameEvent("UI marker after zw3's lobby scene");
+			MarkUiPhase(device);
+			Device::KeepSceneUntilFrameEnd();
 		}
 	}
 

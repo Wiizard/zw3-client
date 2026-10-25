@@ -344,6 +344,7 @@ namespace Components::Remix::Iw4
 	inline constexpr std::uintptr_t worldDpvsEmissiveEnd = 0x28;
 	inline constexpr std::uintptr_t worldName = 0x0;
 	inline constexpr std::uintptr_t worldCellCount = 0x40;
+	inline constexpr std::uintptr_t worldCellHasSunLitSurfsBits = 0x258;
 	inline constexpr std::uintptr_t worldCellTreeCounts = 0x60;
 	inline constexpr std::uintptr_t worldCellTrees = 0x68;
 	inline constexpr std::uintptr_t worldCells = 0x70;
@@ -402,6 +403,8 @@ namespace Components::Remix::Iw4
 	inline constexpr std::uint8_t gfxLightTypeSpot = 2;
 	inline constexpr std::uint8_t gfxLightTypeOmni = 3;
 	inline constexpr std::uintptr_t worldSkies = 0x20;
+	inline constexpr std::uintptr_t worldSunSpriteMaterial = 0x198 + 0x8;
+	inline constexpr std::uintptr_t worldSunFlareMaterial = 0x198 + 0x10;
 	inline constexpr std::size_t gfxSkyStride = 32;
 	inline constexpr std::uintptr_t gfxSkySurfaceCount = 0x00;
 	inline constexpr std::uintptr_t gfxSkyStartSurfaces = 0x08;

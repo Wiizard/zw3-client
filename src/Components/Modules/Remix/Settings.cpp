@@ -46,6 +46,10 @@ namespace Components::Remix
 		look.exposureMinEv = config.remixExposureMinEv;
 		look.exposureMaxEv = config.remixExposureMaxEv;
 		look.exposureSpeed = config.remixExposureSpeed;
+		look.isAreaExposure = config.remixAreaExposure;
+		look.areaExposureStrength = config.remixAreaExposureStrength;
+		look.areaExposureSunlitEv = config.remixAreaExposureSunlit;
+		look.areaExposureWindowEv = config.remixAreaExposureWindow;
 		look.localExposure = config.remixLocalExposure;
 		look.localShadows = config.remixLocalShadows;
 		look.localHighlights = config.remixLocalHighlights;
@@ -60,6 +64,14 @@ namespace Components::Remix
 		look.colourBalance[2] = config.remixColourBalanceB;
 		look.isGlobalAces = config.remixGlobalAces;
 		look.isSteadyToneCurve = config.remixSteadyToneCurve;
+		look.plusOperator = config.remixPlusOperator;
+		look.plusExposureTarget = config.remixPlusExposureTarget;
+		look.plusShadows = config.remixPlusShadows;
+		look.plusHighlights = config.remixPlusHighlights;
+		look.isPhysicalSky = config.remixPhysicalSky;
+		look.isPhysicalSkyMapSun = config.remixPhysicalSkyMapSun;
+		look.plusWeather = config.remixPlusWeather;
+		look.isPlusRainParticles = config.remixPlusRainParticles;
 		look.isBloom = config.remixBloom;
 		look.bloomIntensity = config.remixBloomIntensity;
 		look.bloomThreshold = config.remixBloomThreshold;
@@ -114,7 +126,14 @@ namespace Components::Remix
 		look.isSteadyTransparency = config.remixSteadyTransparency;
 		look.outdoorEv = config.remixOutdoorEv;
 		look.isOpacityMicromaps = config.remixOpacityMicromaps;
+		look.isBackfaceCulling = config.remixBackfaceCulling;
+		look.isSparseRendering = config.remixSparseRendering;
+		look.sparseRate = config.remixSparseRate;
 		look.isSkyReprojected = config.remixSkyReprojected;
+		look.isWeaponDepth = config.remixWeaponDepth;
+		look.weaponRoughness = config.remixWeaponRoughness;
+		look.weaponMetal = config.remixWeaponMetal;
+		look.weaponNormal = config.remixWeaponNormal;
 		return look;
 	}
 
@@ -125,6 +144,10 @@ namespace Components::Remix
 		config.remixExposureMinEv = look.exposureMinEv;
 		config.remixExposureMaxEv = look.exposureMaxEv;
 		config.remixExposureSpeed = look.exposureSpeed;
+		config.remixAreaExposure = look.isAreaExposure;
+		config.remixAreaExposureStrength = look.areaExposureStrength;
+		config.remixAreaExposureSunlit = look.areaExposureSunlitEv;
+		config.remixAreaExposureWindow = look.areaExposureWindowEv;
 		config.remixLocalExposure = look.localExposure;
 		config.remixLocalShadows = look.localShadows;
 		config.remixLocalHighlights = look.localHighlights;
@@ -139,6 +162,14 @@ namespace Components::Remix
 		config.remixColourBalanceB = look.colourBalance[2];
 		config.remixGlobalAces = look.isGlobalAces;
 		config.remixSteadyToneCurve = look.isSteadyToneCurve;
+		config.remixPlusOperator = look.plusOperator;
+		config.remixPlusExposureTarget = look.plusExposureTarget;
+		config.remixPlusShadows = look.plusShadows;
+		config.remixPlusHighlights = look.plusHighlights;
+		config.remixPhysicalSky = look.isPhysicalSky;
+		config.remixPhysicalSkyMapSun = look.isPhysicalSkyMapSun;
+		config.remixPlusWeather = look.plusWeather;
+		config.remixPlusRainParticles = look.isPlusRainParticles;
 		config.remixBloom = look.isBloom;
 		config.remixBloomIntensity = look.bloomIntensity;
 		config.remixBloomThreshold = look.bloomThreshold;
@@ -193,7 +224,14 @@ namespace Components::Remix
 		config.remixSteadyTransparency = look.isSteadyTransparency;
 		config.remixOutdoorEv = look.outdoorEv;
 		config.remixOpacityMicromaps = look.isOpacityMicromaps;
+		config.remixBackfaceCulling = look.isBackfaceCulling;
+		config.remixSparseRendering = look.isSparseRendering;
+		config.remixSparseRate = look.sparseRate;
 		config.remixSkyReprojected = look.isSkyReprojected;
+		config.remixWeaponDepth = look.isWeaponDepth;
+		config.remixWeaponRoughness = look.weaponRoughness;
+		config.remixWeaponMetal = look.weaponMetal;
+		config.remixWeaponNormal = look.weaponNormal;
 	}
 
 	void ApplyConfig(const Core::Config& config)
@@ -211,6 +249,7 @@ namespace Components::Remix
 		}
 
 		SetGlowBrightness(config.remixGlowBrightness);
+		SetLampFlaresHidden(config.remixHideLampFlares);
 
 		SetLightBrightness(config.remixLightBrightness);
 
@@ -276,6 +315,7 @@ namespace Components::Remix
 		}
 
 		SetDiSampleCount(config.remixDiSamples);
+		SetDrawDistance(config.remixDrawDistance);
 
 		CullingTuning cullingTuning;
 		cullingTuning.radius = config.remixCullingRadius;
@@ -342,6 +382,7 @@ namespace Components::Remix
 		config.remixMapFog = fogStats.isEnabled;
 		config.remixFogStrength = fogStats.strength;
 		config.remixGlowBrightness = GetGlowBrightness();
+		config.remixHideLampFlares = AreLampFlaresHidden();
 		config.remixLightBrightness = GetLightBrightness();
 
 		const LightTuning tuning = GetLightTuning();

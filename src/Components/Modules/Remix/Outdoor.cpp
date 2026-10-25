@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -284,7 +285,17 @@ namespace Components::Remix
 			return false;
 		}
 
-		const bool isMasked = std::strstr(name, "outdoor") != nullptr;
+		// Only rain and snow are kept outdoors. Other clouds with an outdoor technique (dust, embers, motes, fog wisps)
+		// are also placed indoors by maps, and the height map test removed them there.
+		const char* materialName = ReadAt<const char*>(material);
+		bool isPrecipitation = false;
+
+		for (const char* word : { "rain", "snow", "sleet", "drizzle", "hail", "blizzard" })
+		{
+			isPrecipitation = isPrecipitation || (materialName && std::strstr(materialName, word) != nullptr);
+		}
+
+		const bool isMasked = std::strstr(name, "outdoor") != nullptr && isPrecipitation;
 
 		if (seenMaterials.insert(material).second)
 		{
@@ -295,7 +306,8 @@ namespace Components::Remix
 
 			if (loggedTechniqueSets.size() < maxLoggedTechniqueSets && loggedTechniqueSets.insert(name).second)
 			{
-				Log() << "remix: particle cloud technique set " << name << ", outdoor mask " << isMasked;
+				Log() << "remix: particle cloud technique set " << name << " (" << (materialName ? materialName : "?")
+					  << "), outdoor mask " << isMasked;
 			}
 		}
 

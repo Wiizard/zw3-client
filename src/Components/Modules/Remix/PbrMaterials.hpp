@@ -94,4 +94,22 @@ namespace Components::Remix
 	bool IsNeonFoliageHash(std::uint64_t hash);
 
 	void CollectUntaggedPbrHashes(std::unordered_set<std::uint64_t>& hashes);
+
+	// Look of the first person weapon and arms only: the textures of draws in the viewmodel depth range get their own
+	// exported maps with these baked in (Remix materials have no per material roughness, metal or normal scale).
+	struct WeaponLook
+	{
+		bool isDepth = false;
+		float roughnessScale = 1.0f;
+		float metalBoost = 0.0f;
+		float normalStrength = 1.0f;
+	};
+
+	void SetWeaponLook(const WeaponLook& look);
+
+	WeaponLook GetWeaponLook();
+
+	void RegisterPbrViewmodel(std::uint64_t hash);
+
+	int GetViewmodelTextureCount();
 }

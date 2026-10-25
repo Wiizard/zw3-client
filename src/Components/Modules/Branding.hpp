@@ -8,12 +8,16 @@ namespace Components
 		Branding();
 
 		static const char* GetBuildNumber();
+		static const char* GetTestingBuildNumber();
 		static const char* GetVersionString();
 
 	private:
 		static Game::dvar_t* cg_drawVersion;
 		static Game::dvar_t* cg_drawVersionX;
 		static Game::dvar_t* cg_drawVersionY;
+		static Game::dvar_t* testing;
+
+		static void DrawTestingBuildNumber();
 
 		static void CG_DrawVersion();
 		static void CG_DrawVersion_Hk();

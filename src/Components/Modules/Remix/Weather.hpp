@@ -11,6 +11,8 @@ namespace Components::Remix
 		unsigned long long particlesDrawn = 0;
 		unsigned long long particlesUnderCover = 0;
 		unsigned long long particlesFaded = 0;
+		unsigned long long particlesOffscreen = 0;
+		unsigned long long particlesThinned = 0;
 	};
 
 	bool TryDrawWeatherCloud(IDirect3DDevice9* device, std::uintptr_t cloud, std::uintptr_t material, bool isOutdoorMasked);

@@ -5,10 +5,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 #include <string>
+#include <string_view>
 
+#include "Core.hpp"
 #include "Device.hpp"
 #include "Api.hpp"
+#include "AreaExposure.hpp"
 #include "Options.hpp"
 #include "PbrMaterials.hpp"
 #include "Culling.hpp"
@@ -271,6 +275,149 @@ namespace Components::Remix
 		return hasZoneValues ? zoneValues.shadowLift : desired.shadowLift;
 	}
 
+	const PlusWeatherPreset* GetPlusWeather()
+	{
+		if (!IsRemixPlus())
+		{
+			return nullptr;
+		}
+
+		static constexpr int autoWeather = 0;
+		static constexpr int firstPreset = 2;
+		static constexpr const char* autoRainPreset = "rainstorm";
+
+		if (desired.plusWeather == autoWeather)
+		{
+			if (!IsRaining())
+			{
+				return nullptr;
+			}
+
+			for (const PlusWeatherPreset& preset : plusWeatherPresets)
+			{
+				if (std::string_view(preset.name) == autoRainPreset)
+				{
+					return &preset;
+				}
+			}
+
+			return nullptr;
+		}
+
+		const int index = desired.plusWeather - firstPreset;
+		return index >= 0 && index < static_cast<int>(std::size(plusWeatherPresets)) ? &plusWeatherPresets[index] : nullptr;
+	}
+
+	static bool IsRainPreset(const PlusWeatherPreset& preset)
+	{
+		const std::string_view name = preset.name;
+		return preset.hasPrecipitation && name != "snow" && name != "blizzard" && name != "sandstorm";
+	}
+
+	// Rain is zw3's streaks unless the fork's particles are asked for; snow and sand only exist as fork particles.
+	static bool IsForkParticleWeather(const PlusWeatherPreset* preset)
+	{
+		return preset && preset->hasPrecipitation && (desired.isPlusRainParticles || !IsRainPreset(*preset));
+	}
+
+	bool IsPlusPrecipitationActive()
+	{
+		return IsForkParticleWeather(GetPlusWeather());
+	}
+
+	// Remix Plus weather goes through its game-value store (remixapi_SetGameValue, __weather.* in rtx_remix_api.cpp).
+	// An empty target leaves the blender dormant.
+	static void SendPlusWeather(const remixapi_Interface* api)
+	{
+		static std::string sentTarget = "unsent";
+		static constexpr const char* blendSeconds = "5";
+
+		if (!api->SetGameValue)
+		{
+			return;
+		}
+
+		if (!hasSentAll)
+		{
+			api->SetGameValue("__weather.blend_seconds", blendSeconds);
+		}
+
+		const PlusWeatherPreset* preset = GetPlusWeather();
+		const std::string target = preset ? preset->name : "";
+
+		// zw3 draws the rain itself (Weather.cpp); the preset still sets the sky, clouds and fog either way.
+		static int sentParticles = -1;
+		const int isParticles = IsForkParticleWeather(preset) ? 1 : 0;
+
+		if (isParticles != sentParticles || !hasSentAll)
+		{
+			SendBool(api, "rtx.weather.precipitation.enable", isParticles != 0);
+			sentParticles = isParticles;
+		}
+
+		if (target != sentTarget)
+		{
+			api->SetGameValue("__weather.target", target.c_str());
+			sentTarget = target;
+			Log() << "remix: Remix Plus weather " << (target.empty() ? "off" : target);
+		}
+	}
+
+	// Remix Plus has no local tonemapper, EV range or tone curve rebuild. It picks an operator, and its auto exposure
+	// The auto exposure's EV range: the configured one, or with Area exposure a window inside it placed by the light
+	// of the spot the player stands on (AreaExposure.cpp), the same on both runtimes.
+	static void SendExposureRange(const remixapi_Interface* api)
+	{
+		float minEv = desired.exposureMinEv;
+		float maxEv = desired.exposureMaxEv;
+
+		if (desired.isAutoExposure)
+		{
+			AreaExposureSettings area;
+			area.isEnabled = desired.isAreaExposure;
+			area.strength = desired.areaExposureStrength;
+			area.sunlitEv = desired.areaExposureSunlitEv;
+			area.windowEv = desired.areaExposureWindowEv;
+			TryGetAreaExposure(area, desired.exposureMinEv, desired.exposureMaxEv, minEv, maxEv);
+		}
+
+		SendFloatIfChanged(api, "rtx.autoExposure.evMinValue", minEv, submitted.exposureMinEv);
+		SendFloatIfChanged(api, "rtx.autoExposure.evMaxValue", maxEv, submitted.exposureMaxEv);
+	}
+
+	// takes a target brightness, a cap on brightening and adaptation times.
+	static void SendPlusTonemapping(const remixapi_Interface* api)
+	{
+		if (desired.plusOperator != submitted.plusOperator || !hasSentAll)
+		{
+			SendInt(api, "rtx.tonemap.tonemapOperator", desired.plusOperator);
+			submitted.plusOperator = desired.plusOperator;
+		}
+
+		SendFloatIfChanged(api, "rtx.autoExposure.targetAdaptedYf", desired.plusExposureTarget, submitted.plusExposureTarget);
+
+		// zw3's fork build bounds the exposure by the same EV range as stock (rtx_auto_exposure.cpp), so saved maps
+		// behave the same on both. The fork's own brightening cap is lifted so only that range applies, like stock.
+		SendExposureRange(api);
+
+		if (!hasSentAll)
+		{
+			SendFloat(api, "rtx.autoExposure.maxExposure", 1000000.0f);
+		}
+
+		// Adapt speed divides the fork's default adaptation times (0.15 s to dim, 0.75 s to brighten).
+		if (desired.exposureSpeed != submitted.exposureSpeed || !hasSentAll)
+		{
+			const float speed = std::max(desired.exposureSpeed, 0.01f);
+			SendFloat(api, "rtx.autoExposure.lightAdaptTau", 0.15f / speed);
+			SendFloat(api, "rtx.autoExposure.darkAdaptTau", 0.75f / speed);
+			submitted.exposureSpeed = desired.exposureSpeed;
+		}
+
+		SendFloatIfChanged(api, "rtx.tonemap.psycho17.shadows", desired.plusShadows, submitted.plusShadows);
+		SendFloatIfChanged(api, "rtx.tonemap.psycho17.highlights", desired.plusHighlights, submitted.plusHighlights);
+	}
+
 	void UpdateLook(IDirect3DDevice9* device)
 	{
 		const remixapi_Interface* api = TryGetApi(device);
@@ -288,40 +435,78 @@ namespace Components::Remix
 		const float exposureBiasNow = desired.exposureBiasEv + extraEv;
 		const float localExposureNow = desired.localExposure * std::pow(2.0f, extraEv);
 
-		if (desired.tonemapper != submitted.tonemapper || !hasSentAll)
-		{
-			SendInt(api, "rtx.tonemappingMode", desired.tonemapper);
-			submitted.tonemapper = desired.tonemapper;
-		}
+		const bool isPlus = IsRemixPlus();
 
 		SendBoolIfChanged(api, "rtx.autoExposure.enabled", desired.isAutoExposure, submitted.isAutoExposure);
-		SendFloatIfChanged(api, "rtx.autoExposure.evMinValue", desired.exposureMinEv, submitted.exposureMinEv);
-		SendFloatIfChanged(api, "rtx.autoExposure.evMaxValue", desired.exposureMaxEv, submitted.exposureMaxEv);
-		SendFloatIfChanged(api, "rtx.autoExposure.autoExposureSpeed", desired.exposureSpeed, submitted.exposureSpeed);
 
-		SendFloatIfChanged(api, "rtx.localtonemap.exposure", localExposureNow, submitted.localExposure);
-		SendFloatIfChanged(api, "rtx.localtonemap.shadows", desired.localShadows, submitted.localShadows);
-		SendFloatIfChanged(api, "rtx.localtonemap.highlights", desired.localHighlights, submitted.localHighlights);
-		SendBoolIfChanged(api, "rtx.localtonemap.boostLocalContrast", desired.isLocalContrastBoosted,
-			submitted.isLocalContrastBoosted);
-		SendBoolIfChanged(api, "rtx.localtonemap.finalizeWithACES", desired.isLocalAces, submitted.isLocalAces);
+		if (isPlus)
+		{
+			SendPlusTonemapping(api);
+
+			// rtx.skyMode 1 is Numos. Stock has no such option, so it is only sent to Remix Plus.
+			if (desired.isPhysicalSky != submitted.isPhysicalSky || !hasSentAll)
+			{
+				SendInt(api, "rtx.skyMode", desired.isPhysicalSky ? 1 : 0);
+				submitted.isPhysicalSky = desired.isPhysicalSky;
+			}
+
+			SendPlusWeather(api);
+		}
+		else
+		{
+			if (desired.tonemapper != submitted.tonemapper || !hasSentAll)
+			{
+				SendInt(api, "rtx.tonemappingMode", desired.tonemapper);
+				submitted.tonemapper = desired.tonemapper;
+			}
+
+			SendExposureRange(api);
+			SendFloatIfChanged(api, "rtx.autoExposure.autoExposureSpeed", desired.exposureSpeed, submitted.exposureSpeed);
+
+			SendFloatIfChanged(api, "rtx.localtonemap.exposure", localExposureNow, submitted.localExposure);
+			SendFloatIfChanged(api, "rtx.localtonemap.shadows", desired.localShadows, submitted.localShadows);
+			SendFloatIfChanged(api, "rtx.localtonemap.highlights", desired.localHighlights, submitted.localHighlights);
+			SendBoolIfChanged(api, "rtx.localtonemap.boostLocalContrast", desired.isLocalContrastBoosted,
+				submitted.isLocalContrastBoosted);
+			SendBoolIfChanged(api, "rtx.localtonemap.finalizeWithACES", desired.isLocalAces, submitted.isLocalAces);
+		}
 
 		SendFloatIfChanged(api, "rtx.tonemap.exposureBias", exposureBiasNow, submitted.exposureBiasEv);
 
 		static bool isMicromapSent = false;
 		SendBoolIfChanged(api, "rtx.opacityMicromap.enable", desired.isOpacityMicromaps, isMicromapSent);
+		static bool isCullingSent = true;
+		SendBoolIfChanged(api, "rtx.enableCulling", desired.isBackfaceCulling, isCullingSent);
+
+		if (isPlus)
+		{
+			static bool isSparseSent = false;
+			static float sentSparseRate = 1.0f;
+			SendBoolIfChanged(api, "rtx.sparseRendering.enableSparseRendering", desired.isSparseRendering, isSparseSent);
+			SendFloatIfChanged(api, "rtx.sparseRendering.samplingRate", std::clamp(desired.sparseRate, 0.25f, 1.0f),
+				sentSparseRate);
+		}
 		const auto grade = [](float value) { return std::round(value * 200.0f) / 200.0f; };
 		SendBoolIfChanged(api, "rtx.tonemap.colorGradingEnabled", desired.isColourGrading || isZoneGrading,
 			submitted.isColourGrading);
 		SendFloatIfChanged(api, "rtx.tonemap.contrast", grade(zoneValues.contrast), submitted.contrast);
 		SendFloatIfChanged(api, "rtx.tonemap.saturation", grade(zoneValues.saturation), submitted.saturation);
-		SendBoolIfChanged(api, "rtx.tonemap.finalizeWithACES", desired.isGlobalAces, submitted.isGlobalAces);
 		static bool isToneCurveSent = false;
-		SendBoolIfChanged(api, "rtx.tonemap.tonemappingEnabled", !desired.isSteadyToneCurve, isToneCurveSent);
 
-		if (!hasSentAll)
+		if (isPlus)
 		{
-			SendInt(api, "rtx.autoExposure.exposureAverageMode", 1);
+			// Remix Plus removed the per-frame tone curve; this flag now switches the whole operator off.
+			SendBoolIfChanged(api, "rtx.tonemap.tonemappingEnabled", true, isToneCurveSent);
+		}
+		else
+		{
+			SendBoolIfChanged(api, "rtx.tonemap.finalizeWithACES", desired.isGlobalAces, submitted.isGlobalAces);
+			SendBoolIfChanged(api, "rtx.tonemap.tonemappingEnabled", !desired.isSteadyToneCurve, isToneCurveSent);
+
+			if (!hasSentAll)
+			{
+				SendInt(api, "rtx.autoExposure.exposureAverageMode", 1);
+			}
 		}
 
 		const float balance[3] = { grade(zoneValues.tint[0]), grade(zoneValues.tint[1]), grade(zoneValues.tint[2]) };
@@ -387,7 +572,11 @@ namespace Components::Remix
 
 		if (desired.indirectMode != submitted.indirectMode || !hasSentAll)
 		{
-			SendInt(api, "rtx.integrateIndirectMode", desired.indirectMode);
+			// SHARC (3) exists only in Remix Plus; a map saved with it falls back to ReSTIR GI on stock.
+			static constexpr int sharcMode = 3;
+			static constexpr int restirGiMode = 1;
+			SendInt(api, "rtx.integrateIndirectMode",
+				desired.indirectMode == sharcMode && !IsRemixPlus() ? restirGiMode : desired.indirectMode);
 			submitted.indirectMode = desired.indirectMode;
 		}
 
@@ -413,7 +602,10 @@ namespace Components::Remix
 		float roughnessScale = desired.roughnessScale;
 		float metallicBias = 0.0f;
 
-		if (IsWetActive())
+		// On Remix Plus the shader wets each surface itself (GetPlusWetnessState), only where rain reaches.
+		const bool isShaderWetness = GetPlusWetnessState().modifier != 0;
+
+		if (IsWetActive() && !isShaderWetness)
 		{
 			albedoScale *= wetAlbedoScale;
 			roughnessScale *= wetRoughnessScale;
@@ -434,12 +626,20 @@ namespace Components::Remix
 		SendFloatIfChanged(api, "rtx.opaqueMaterial.normalIntensity", desired.normalIntensity,
 			submitted.normalIntensity);
 
-		SetPuddlesActive(IsWetActive() && desired.isPuddles);
+		SetPuddlesActive(IsWetActive() && desired.isPuddles && !isShaderWetness);
 		SetFixtureGlow(desired.isFixtureLights, desired.fixtureBrightness);
+
+		WeaponLook weapon;
+		weapon.isDepth = desired.isWeaponDepth;
+		weapon.roughnessScale = desired.weaponRoughness;
+		weapon.metalBoost = desired.weaponMetal;
+		weapon.normalStrength = desired.weaponNormal;
+		SetWeaponLook(weapon);
 
 		int displacementMode = 0;
 
-		if (desired.isParallax)
+		// Height maps only show with Remix's displacement on; weapon depth turns it on for the weapon's own maps.
+		if (desired.isParallax || desired.isWeaponDepth)
 		{
 			displacementMode = raymarchDisplacement;
 		}
@@ -470,6 +670,17 @@ namespace Components::Remix
 		hasSentAll = true;
 	}
 
+	bool IsAnyRain()
+	{
+		if (IsRaining())
+		{
+			return true;
+		}
+
+		const PlusWeatherPreset* preset = GetPlusWeather();
+		return preset && IsRainPreset(*preset);
+	}
+
 	bool IsWetActive()
 	{
 		if (desired.wetMode == 2)
@@ -477,6 +688,53 @@ namespace Components::Remix
 			return true;
 		}
 
-		return desired.wetMode == 1 && IsRaining();
+		return desired.wetMode == 1 && IsAnyRain();
+	}
+
+	// Packed exactly as the GTA4 mod's set_remix_roughness_scalar (renderer.cpp) and decoded by the ported shader:
+	// low 16 bits = roughness scalar + 2 over 0..4 in 6 bits, max z (wet above this normal z) and blend width in 5 bits
+	// each; high 16 bits = raindrop scale over 0..10 in 8 bits, then the wetness flags. Values are the mod's world
+	// surface defaults (comp_settings.hpp timecycle_wetness_world_*); scalar 0 is fully wet.
+	PlusWetnessState GetPlusWetnessState()
+	{
+		static constexpr std::uint32_t roughnessScalarModifier = 1u << 1;
+		static constexpr std::uint8_t flagVariation = 1u << 0;
+		static constexpr std::uint8_t flagRaindrops = 1u << 1;
+		static constexpr std::uint8_t flagPuddleLayer = 1u << 5;
+		static constexpr std::uint8_t flagOcclusionTest = 1u << 6;
+		static constexpr std::uint8_t flagOcclusionSmoothing = 1u << 7;
+		static constexpr float wetScalar = 0.0f;
+		static constexpr float maxZ = 0.30f;
+		static constexpr float blendWidth = 0.65f;
+		static constexpr float raindropScale = 0.23f;
+
+		if (!IsRemixPlus() || !IsWetActive())
+		{
+			return {};
+		}
+
+		const auto encode = [](float value, int bits, float range)
+		{
+			const int maximum = (1 << bits) - 1;
+			return static_cast<std::uint32_t>(std::lround(std::clamp(value, 0.0f, range) / range * static_cast<float>(maximum)));
+		};
+
+		std::uint8_t flags = flagVariation | flagOcclusionTest | flagOcclusionSmoothing;
+
+		if (desired.isPuddles)
+		{
+			flags |= flagPuddleLayer;
+		}
+
+		if (IsAnyRain())
+		{
+			flags |= flagRaindrops;
+		}
+
+		const std::uint32_t params1 = (encode(wetScalar + 2.0f, 6, 4.0f) << 10) | (encode(maxZ, 5, 1.0f) << 5)
+			| encode(blendWidth, 5, 1.0f);
+		const std::uint32_t params2 = encode(raindropScale, 8, 10.0f) | (static_cast<std::uint32_t>(flags) << 8);
+
+		return { roughnessScalarModifier, (params2 << 16) | params1 };
 	}
 }

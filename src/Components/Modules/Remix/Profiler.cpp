@@ -4,6 +4,15 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
+#include <string>
+#include <vector>
+
+#include "Core.hpp"
+#include "FixedFunction.hpp"
+#include "Lights.hpp"
+#include "Look.hpp"
+#include "Weather.hpp"
 
 namespace Components::Remix
 {
@@ -21,6 +30,8 @@ namespace Components::Remix
 		"markers",
 		"texture tags",
 		"pbr materials",
+		"rain",
+		"particle clouds",
 	};
 
 	struct SectionHistory
@@ -89,6 +100,105 @@ namespace Components::Remix
 				timing.spikeMs = timing.lastMs;
 			}
 		}
+	}
+
+	void LogPerformance()
+	{
+		static constexpr double reportMs = 10000.0;
+		static std::vector<float> frameMs;
+		static std::int64_t lastFrameTicks = 0;
+		static std::int64_t reportStartTicks = 0;
+		static WorldStats lastWorld{};
+		static WeatherStats lastWeather{};
+		static std::array<float, profileSectionCount> sectionMsSum{};
+
+		LARGE_INTEGER now{};
+		QueryPerformanceCounter(&now);
+
+		if (lastFrameTicks != 0)
+		{
+			frameMs.push_back(static_cast<float>(static_cast<double>(now.QuadPart - lastFrameTicks) / TicksPerMs()));
+		}
+
+		lastFrameTicks = now.QuadPart;
+
+		for (int index = 0; index < profileSectionCount; ++index)
+		{
+			sectionMsSum[index] += sections[index].timing.lastMs;
+		}
+
+		if (reportStartTicks == 0)
+		{
+			reportStartTicks = now.QuadPart;
+			lastWorld = GetWorldStats();
+			lastWeather = GetWeatherStats();
+			return;
+		}
+
+		if (static_cast<double>(now.QuadPart - reportStartTicks) / TicksPerMs() < reportMs || frameMs.empty())
+		{
+			return;
+		}
+
+		const double frames = static_cast<double>(frameMs.size());
+		double totalMs = 0.0;
+
+		for (const float ms : frameMs)
+		{
+			totalMs += ms;
+		}
+
+		std::vector<float> sorted = frameMs;
+		std::sort(sorted.begin(), sorted.end());
+		const float worstPercent = sorted[std::min(sorted.size() - 1, static_cast<std::size_t>(frames * 0.99))];
+		const float worst = sorted.back();
+
+		const WorldStats world = GetWorldStats();
+		const WeatherStats weather = GetWeatherStats();
+		const LightStats lights = GetLightStats();
+		const auto perFrame = [frames](unsigned long long now, unsigned long long before)
+		{
+			return static_cast<double>(now - before) / frames;
+		};
+
+		std::string sectionText;
+
+		for (int index = 0; index < profileSectionCount; ++index)
+		{
+			const double averageMs = sectionMsSum[index] / frames;
+
+			if (averageMs >= 0.05)
+			{
+				char part[64];
+				std::snprintf(part, sizeof(part), "%s%s %.2f", sectionText.empty() ? "" : ", ", sectionNames[index], averageMs);
+				sectionText += part;
+			}
+
+			sectionMsSum[index] = 0.0f;
+		}
+
+		char text[768];
+		std::snprintf(text, sizeof(text),
+			"perf %s: %.1f fps, frame %.2f ms (worst 1%% %.2f, worst %.2f); zw3 per frame: %s; drawn per frame: world"
+			" batches %.0f, prop batches %.0f (chunks %.0f drawn, %.0f past the draw distance), entity lists %.0f, skinned lists %.0f, rain and cloud quads %.0f (%.0f cloud"
+			" particles left out by the budget); lights %d map"
+			" %d fixtures %d dynamic",
+			Core::GetActiveMap().empty() ? "menu" : Core::GetActiveMap().c_str(), 1000.0 * frames / totalMs, totalMs / frames,
+			worstPercent, worst, sectionText.empty() ? "-" : sectionText.c_str(), perFrame(world.batchDraws, lastWorld.batchDraws),
+			perFrame(world.staticBatchDraws, lastWorld.staticBatchDraws), perFrame(world.chunksDrawn, lastWorld.chunksDrawn),
+			perFrame(world.chunksBeyondDrawDistance, lastWorld.chunksBeyondDrawDistance),
+			perFrame(world.entityModelLists, lastWorld.entityModelLists),
+			perFrame(world.skinnedModelLists, lastWorld.skinnedModelLists),
+			perFrame(weather.particlesDrawn, lastWeather.particlesDrawn),
+			perFrame(weather.particlesOffscreen + weather.particlesThinned, lastWeather.particlesOffscreen + lastWeather.particlesThinned),
+			lights.mapLights, lights.drawnFixtureLights,
+			lights.dynamicLights);
+		Log() << text;
+
+		frameMs.clear();
+		reportStartTicks = now.QuadPart;
+		lastWorld = world;
+		lastWeather = weather;
 	}
 
 	std::vector<SectionTiming> GetProfile()

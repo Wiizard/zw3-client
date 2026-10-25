@@ -23,6 +23,7 @@
 #include "Look.hpp"
 #include "Culling.hpp"
 #include "MapSettings.hpp"
+#include "Options.hpp"
 #include "Read.hpp"
 #include "Scene.hpp"
 #include "Triggers.hpp"
@@ -242,10 +243,86 @@ namespace Components::Remix
 		return sun;
 	}
 
+	static bool IsPhysicalSky()
+	{
+		return IsRemixPlus() && GetLookSettings().isPhysicalSky;
+	}
+
+	static void SendAtmosphereOption(const char* name, float value, std::string& sent)
+	{
+		char text[32];
+		std::snprintf(text, sizeof(text), "%.3f", value);
+
+		if (sent != text)
+		{
+			SendOption(api, name, text);
+			sent = text;
+		}
+	}
+
+	// Remix Plus's Numos sky lights the scene with its own sun (RtxAtmosphere::syncDistantLights), so on the physical
+	// sky zw3 places that sun rather than adding a second one. The fork turns elevation e and rotation a into the Y-up
+	// vector (cos e sin a, sin e, cos e cos a) and, with rtx.zUp, into world (x, z, y), so for the direction towards
+	// the sun: e = asin(z), a = atan2(x, y).
+	// With "Keep the map's sun" zw3 still lights the scene with its own sun (the map's colour and brightness, never
+	// shaded by the fork's clouds, which is what took Kino's shadows under the rainstorm preset); the fork's sun light
+	// gets radiance 0 through rtx.atmosphere.directionalLightRadianceScale, and its sky is still placed at this sun.
+	static void SubmitAtmosphereSun(const float* travel, const SunSettings& sun, bool isBelowHorizon, bool isMapSunKept)
+	{
+		static std::string sentElevation;
+		static std::string sentRotation;
+		static std::string sentIntensity;
+		static std::string sentIlluminance;
+		static std::string sentRadianceScale;
+		static constexpr float nightElevationDeg = -20.0f;
+		static constexpr float forkSunIntensity = 1.09f;
+		static constexpr float forkSunIlluminance = 15.0f;
+		static constexpr float radToDeg = 180.0f / 3.14159265f;
+
+		SendAtmosphereOption("rtx.atmosphere.directionalLightRadianceScale", isMapSunKept ? 0.0f : 1.0f, sentRadianceScale);
+
+		if (sunLight && !isMapSunKept)
+		{
+			DestroyCountedLight(sunLight);
+			sunLight = nullptr;
+		}
+
+		const float toSun[3] = { -travel[0], -travel[1], -travel[2] };
+		const float elevation = isBelowHorizon ? nightElevationDeg : std::asin(std::clamp(toSun[2], -1.0f, 1.0f)) * radToDeg;
+		const float rotation = std::atan2(toSun[0], toSun[1]) * radToDeg;
+
+		SendAtmosphereOption("rtx.atmosphere.sunElevation", elevation, sentElevation);
+		SendAtmosphereOption("rtx.atmosphere.sunRotation", rotation, sentRotation);
+		SendAtmosphereOption("rtx.atmosphere.sunIntensity", forkSunIntensity * sun.brightness, sentIntensity);
+
+		char illuminance[64];
+		std::snprintf(illuminance, sizeof(illuminance), "%.3f, %.3f, %.3f", forkSunIlluminance * SrgbToLinear(sun.tint[0]),
+			forkSunIlluminance * SrgbToLinear(sun.tint[1]), forkSunIlluminance * SrgbToLinear(sun.tint[2]));
+
+		if (sentIlluminance != illuminance)
+		{
+			SendOption(api, "rtx.atmosphere.sunIlluminance", illuminance);
+			sentIlluminance = illuminance;
+		}
+
+		std::memcpy(stats.sunDirection, travel, sizeof(stats.sunDirection));
+		stats.hasSun = !isBelowHorizon;
+		stats.isAtmosphereSun = !isMapSunKept;
+		stats.atmosphereElevationDeg = elevation;
+		stats.atmosphereRotationDeg = rotation;
+		stats.atmosphereIntensity = forkSunIntensity * sun.brightness;
+	}
+
 	static void SubmitSun(std::uintptr_t backEnd, std::uintptr_t world, float colourScale)
 	{
 		if (GetLookSettings().isNight)
 		{
+			if (IsPhysicalSky())
+			{
+				const float straightDown[3] = { 0.0f, 0.0f, -1.0f };
+				SubmitAtmosphereSun(straightDown, GetEffectiveSun(), true, false);
+			}
+
 			stats.hasSun = false;
 			return;
 		}
@@ -253,9 +330,31 @@ namespace Components::Remix
 		const SunSettings effectiveSun = GetEffectiveSun();
 
 		float direction[3];
-		std::memcpy(direction, reinterpret_cast<const void*>(backEnd + Iw4::backEndSunDirection), sizeof(direction));
+		std::memset(direction, 0, sizeof(direction));
 
-		const float length = std::sqrt(direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2]);
+		// No back end (the menu scene): the map file's [sun] gives the direction.
+		if (backEnd)
+		{
+			std::memcpy(direction, reinterpret_cast<const void*>(backEnd + Iw4::backEndSunDirection), sizeof(direction));
+		}
+
+		float length = std::sqrt(direction[0] * direction[0] + direction[1] * direction[1] + direction[2] * direction[2]);
+		float colour[3] = { 1.0f, 1.0f, 1.0f };
+
+		// A converted map whose zone lost its sun gets it from the map settings: [sun] yaw/pitch (the direction towards
+		// the sun, as the override below) and colour (the engine's sun colour).
+		const MapSunOverride& mapSun = GetMapSettings().sun;
+		const bool isSettingsSun = length < 0.001f && mapSun.hasDirection && mapSun.hasColour;
+
+		if (isSettingsSun)
+		{
+			const float degToRad = 3.14159265f / 180.0f;
+			direction[0] = std::cos(mapSun.pitchDeg * degToRad) * std::cos(mapSun.yawDeg * degToRad);
+			direction[1] = std::cos(mapSun.pitchDeg * degToRad) * std::sin(mapSun.yawDeg * degToRad);
+			direction[2] = std::sin(mapSun.pitchDeg * degToRad);
+			length = 1.0f;
+			std::memcpy(colour, mapSun.colour, sizeof(colour));
+		}
 
 		if (length < 0.001f)
 		{
@@ -263,13 +362,11 @@ namespace Components::Remix
 			return;
 		}
 
-		const auto lastSun = ReadAt<std::uint32_t>(world + Iw4::worldLastSunPrimaryLightIndex);
-		const auto lightCount = ReadAt<std::uint32_t>(world + Iw4::worldPrimaryLightCount);
+		const std::uint32_t lastSun = world ? ReadAt<std::uint32_t>(world + Iw4::worldLastSunPrimaryLightIndex) : 0;
+		const std::uint32_t lightCount = world ? ReadAt<std::uint32_t>(world + Iw4::worldPrimaryLightCount) : 0;
 		const std::uintptr_t lights = backEnd + Iw4::backEndPrimaryLights;
 
-		float colour[3] = { 1.0f, 1.0f, 1.0f };
-
-		for (std::uint32_t i = 1; i <= lastSun && i < lightCount; ++i)
+		for (std::uint32_t i = 1; !isSettingsSun && i <= lastSun && i < lightCount; ++i)
 		{
 			const std::uintptr_t light = lights + i * Iw4::gfxLightStride;
 
@@ -346,6 +443,17 @@ namespace Components::Remix
 			travel[2] = -std::sin(pitch);
 		}
 
+		if (IsPhysicalSky())
+		{
+			const bool isMapSunKept = look.isPhysicalSkyMapSun;
+			SubmitAtmosphereSun(travel, effectiveSun, false, isMapSunKept);
+
+			if (!isMapSunKept)
+			{
+				return;
+			}
+		}
+
 		float volumetricScale = 1.0f;
 
 		if (look.isGodRays)
@@ -415,9 +523,8 @@ namespace Components::Remix
 		return nullptr;
 	}
 
-	static void BuildMapLights(std::uintptr_t backEnd, std::uintptr_t world, float colourScale)
+	static void BuildMapLights(std::uintptr_t backEnd, std::uintptr_t world, float colourScale, std::uintptr_t mapIdentity)
 	{
-		const std::uintptr_t mapIdentity = GetMapIdentity();
 		const bool isNewMap = mapIdentity != mapLightsWorld;
 
 		DestroyMapLights();
@@ -430,18 +537,39 @@ namespace Components::Remix
 		stats.ignoredMapLights = 0;
 		stats.changedMapLights = 0;
 
-		const auto lastSun = ReadAt<std::uint32_t>(world + Iw4::worldLastSunPrimaryLightIndex);
-		const auto lightCount = ReadAt<std::uint32_t>(world + Iw4::worldPrimaryLightCount);
+		// No world (the menu scene): no engine lights, only the map file's.
+		const std::uint32_t lastSun = world ? ReadAt<std::uint32_t>(world + Iw4::worldLastSunPrimaryLightIndex) : 0;
+		const std::uint32_t lightCount = world && backEnd ? ReadAt<std::uint32_t>(world + Iw4::worldPrimaryLightCount) : 0;
 		const std::uintptr_t lights = backEnd + Iw4::backEndPrimaryLights;
 
-		const std::string mapName = GetMapName();
+		const std::string mapName = world ? GetMapName() : GetMapSettings().mapName;
 		const std::uint64_t mapSeed = XXH3_64bits_withSeed(mapName.data(), mapName.size(), mapLightHashBase);
 		const MapSettings& mapSettings = GetMapSettings();
 
-		for (std::uint32_t i = lastSun + 1; i < lightCount && mapLightCount < maxMapLights; ++i)
+		// The zone's own lights, then any the map settings restore for a converted map that lost them. Both are the
+		// engine's ComPrimaryLight values (R_InitPrimaryLights copies them unchanged), so one conversion serves both.
+		std::vector<PrimaryLight> sources;
+
+		for (std::uint32_t i = lastSun + 1; i < lightCount; ++i)
 		{
 			const std::uintptr_t light = lights + i * Iw4::gfxLightStride;
-			const auto type = ReadAt<std::uint8_t>(light + Iw4::gfxLightType);
+			PrimaryLight source;
+			source.type = ReadAt<std::uint8_t>(light + Iw4::gfxLightType);
+			std::memcpy(source.colour, reinterpret_cast<const void*>(light + Iw4::gfxLightColor), sizeof(source.colour));
+			std::memcpy(source.direction, reinterpret_cast<const void*>(light + Iw4::gfxLightDir), sizeof(source.direction));
+			std::memcpy(source.origin, reinterpret_cast<const void*>(light + Iw4::gfxLightOrigin), sizeof(source.origin));
+			source.radius = ReadAt<float>(light + Iw4::gfxLightRadius);
+			source.cosOuter = ReadAt<float>(light + Iw4::gfxLightCosHalfFovOuter);
+			source.cosInner = ReadAt<float>(light + Iw4::gfxLightCosHalfFovInner);
+			sources.push_back(source);
+		}
+
+		sources.insert(sources.end(), mapSettings.primaryLights.begin(), mapSettings.primaryLights.end());
+
+		for (std::uint32_t i = 0; i < sources.size() && mapLightCount < maxMapLights; ++i)
+		{
+			const PrimaryLight& source = sources[i];
+			const auto type = source.type;
 
 			if (type != Iw4::gfxLightTypeSpot && type != Iw4::gfxLightTypeOmni)
 			{
@@ -451,13 +579,13 @@ namespace Components::Remix
 			float colour[3];
 			float direction[3];
 			float origin[3];
-			std::memcpy(colour, reinterpret_cast<const void*>(light + Iw4::gfxLightColor), sizeof(colour));
-			std::memcpy(direction, reinterpret_cast<const void*>(light + Iw4::gfxLightDir), sizeof(direction));
-			std::memcpy(origin, reinterpret_cast<const void*>(light + Iw4::gfxLightOrigin), sizeof(origin));
+			std::memcpy(colour, source.colour, sizeof(colour));
+			std::memcpy(direction, source.direction, sizeof(direction));
+			std::memcpy(origin, source.origin, sizeof(origin));
 
-			const float radius = ReadAt<float>(light + Iw4::gfxLightRadius);
-			const float cosOuter = std::clamp(ReadAt<float>(light + Iw4::gfxLightCosHalfFovOuter), -1.0f, 1.0f);
-			const float cosInner = std::clamp(ReadAt<float>(light + Iw4::gfxLightCosHalfFovInner), -1.0f, 1.0f);
+			const float radius = source.radius;
+			const float cosOuter = std::clamp(source.cosOuter, -1.0f, 1.0f);
+			const float cosInner = std::clamp(source.cosInner, -1.0f, 1.0f);
 
 			const std::int32_t placement[4] = {
 				static_cast<std::int32_t>(std::lround(origin[0])),
@@ -468,11 +596,14 @@ namespace Components::Remix
 
 			std::uint64_t hash = XXH3_64bits_withSeed(placement, sizeof(placement), mapSeed);
 
+			// The engine light index, as before, so saved overrides of colliding lights keep their hashes.
+			const std::uint32_t lightIndex = lastSun + 1 + i;
+
 			for (const MapLightInfo& earlier : mapLightInfo)
 			{
 				if (earlier.hash == hash)
 				{
-					hash = XXH3_64bits_withSeed(&i, sizeof(i), hash);
+					hash = XXH3_64bits_withSeed(&lightIndex, sizeof(lightIndex), hash);
 					break;
 				}
 			}
@@ -1453,6 +1584,37 @@ namespace Components::Remix
 		stats.animatedLights = animated;
 	}
 
+	// The menu's own 3D scene (the lobby draws Kino with no map loaded): the map file's sun and [[lights.primary]]
+	// through the same conversion as in a match.
+	void SubmitMenuSceneLights(IDirect3DDevice9* device)
+	{
+		static constexpr std::uintptr_t menuSceneIdentity = 1;
+		static constexpr float menuColourScale = 1.0f;
+
+		api = TryGetApi(device);
+
+		if (!api || GetMapIdentity() != 0)
+		{
+			return;
+		}
+
+		SettleBrightness(GetLookSettings());
+		SubmitSun(0, 0, menuColourScale);
+
+		if (mapLightsWorld != menuSceneIdentity || mapLightsBrightness != settledLightBrightness
+			|| mapLightsSettingsVersion != GetMapSettingsVersion() || mapLightsTuningVersion != tuningVersion)
+		{
+			BuildMapLights(0, 0, menuColourScale, menuSceneIdentity);
+		}
+
+		for (int i = 0; i < mapLightCount; ++i)
+		{
+			api->DrawLightInstance(mapLights[i]);
+		}
+
+		++stats.submittedFrames;
+	}
+
 	void SubmitSceneLights(IDirect3DDevice9* device, const void* viewInfo)
 	{
 		api = TryGetApi(device);
@@ -1493,7 +1655,7 @@ namespace Components::Remix
 			|| mapLightsColourScale != colourScale || mapLightsSettingsVersion != GetMapSettingsVersion()
 			|| mapLightsTuningVersion != tuningVersion)
 		{
-			BuildMapLights(backEnd, world, colourScale);
+			BuildMapLights(backEnd, world, colourScale, GetMapIdentity());
 		}
 
 		for (int i = 0; i < mapLightCount; ++i)

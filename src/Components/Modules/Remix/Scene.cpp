@@ -14,6 +14,7 @@
 #include "Iw4.hpp"
 #include "Api.hpp"
 #include "FixedFunction.hpp"
+#include "AutoLook.hpp"
 #include "Culling.hpp"
 #include "DebugDraw.hpp"
 #include "Fog.hpp"
@@ -567,6 +568,7 @@ namespace Components::Remix
 		const auto colour = ReadAt<std::uint32_t>(cloud + Iw4::particleCloudColor);
 		const auto material = ReadAt<std::uintptr_t>(state + Iw4::stateMaterial);
 		const bool isOutdoorMasked = IsOutdoorMaskedMaterial(material);
+		const ProfileScope scope(ProfileSection::ParticleClouds);
 
 		if (TryDrawWeatherCloud(sceneDevice, cloud, material, isOutdoorMasked))
 		{
@@ -879,6 +881,10 @@ namespace Components::Remix
 			{
 				mapName = GetMapName();
 			}
+			else
+			{
+				mapName = GetMenuSceneMap();
+			}
 
 			if (mapName != configMap)
 			{
@@ -887,6 +893,8 @@ namespace Components::Remix
 				Core::LoadConfigForMap(mapName);
 				ApplyConfig(Core::GetConfig());
 			}
+
+			UpdateAutoLook();
 		}
 
 		{
@@ -923,6 +931,7 @@ namespace Components::Remix
 		}
 
 		EndProfileFrame();
+		LogPerformance();
 		LogEngineLimits();
 
 		static unsigned keyboardTick = 0;
@@ -1085,7 +1094,10 @@ namespace Components::Remix
 			DrawCulledBatches(sceneDevice);
 		}
 
-		DrawRainEverywhere(sceneDevice);
+		{
+			const ProfileScope scope(ProfileSection::Rain);
+			DrawRainEverywhere(sceneDevice);
+		}
 
 		{
 			const ProfileScope scope(ProfileSection::Markers);
@@ -1171,6 +1183,26 @@ namespace Components::Remix
 		}
 
 		return world ^ (static_cast<std::uintptr_t>(ReadAt<std::uint32_t>(world + Iw4::worldSModelCount)) << 44);
+	}
+
+	static std::string menuSceneMap;
+	static ULONGLONG menuSceneTick = 0;
+	static constexpr ULONGLONG menuSceneTimeoutMs = 500;
+
+	void SetMenuSceneMap(const std::string& mapName)
+	{
+		menuSceneMap = mapName;
+		menuSceneTick = GetTickCount64();
+	}
+
+	std::string GetMenuSceneMap()
+	{
+		if (GetMapIdentity() != 0 || menuSceneMap.empty() || GetTickCount64() - menuSceneTick > menuSceneTimeoutMs)
+		{
+			return {};
+		}
+
+		return menuSceneMap;
 	}
 
 	std::string GetMapName()

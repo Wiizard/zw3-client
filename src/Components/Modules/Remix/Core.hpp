@@ -86,6 +86,7 @@ namespace Components::Remix::Core
 		bool remixSteadyModelDetail = true;
 		bool remixPlayerBodyShadow = false;
 		int remixViewCulling = 0;
+		float remixDrawDistance = 0.0f;
 		bool remixMapGrade = true;
 		float remixMapGradeStrength = 0.5f;
 		bool remixDrawEffects = true;
@@ -100,6 +101,10 @@ namespace Components::Remix::Core
 		float remixExposureMinEv = -1.0f;
 		float remixExposureMaxEv = 2.0f;
 		float remixExposureSpeed = 1.0f;
+		bool remixAreaExposure = true;
+		float remixAreaExposureStrength = 0.7f;
+		float remixAreaExposureSunlit = 1.0f;
+		float remixAreaExposureWindow = 0.75f;
 		float remixLocalExposure = 0.75f;
 		float remixLocalShadows = 2.0f;
 		float remixLocalHighlights = 4.0f;
@@ -114,6 +119,14 @@ namespace Components::Remix::Core
 		float remixColourBalanceB = 1.0f;
 		bool remixGlobalAces = true;
 		bool remixSteadyToneCurve = true;
+		int remixPlusOperator = 6;
+		float remixPlusExposureTarget = 0.18f;
+		float remixPlusShadows = 1.0f;
+		float remixPlusHighlights = 1.0f;
+		bool remixPhysicalSky = false;
+		bool remixPhysicalSkyMapSun = false;
+		int remixPlusWeather = 0;
+		bool remixPlusRainParticles = false;
 		bool remixBloom = true;
 		float remixBloomIntensity = 1.0f;
 		float remixBloomThreshold = 0.25f;
@@ -165,7 +178,7 @@ namespace Components::Remix::Core
 		int remixWetMode = 0;
 		bool remixRainEverywhere = false;
 		float remixRainAmount = 1.0f;
-		bool remixScreenDrops = true;
+		bool remixScreenDrops = false;
 		bool remixTimeOfDay = false;
 		float remixTimeOfDayHours = 17.5f;
 		bool remixNight = false;
@@ -182,7 +195,16 @@ namespace Components::Remix::Core
 		bool remixSteadyTransparency = true;
 		float remixOutdoorEv = 0.0f;
 		bool remixOpacityMicromaps = false;
+		bool remixBackfaceCulling = true;
+		bool remixSparseRendering = false;
+		float remixSparseRate = 0.5f;
 		bool remixSkyReprojected = false;
+		bool remixAutoLook = true;
+		bool remixHideLampFlares = true;
+		bool remixWeaponDepth = false;
+		float remixWeaponRoughness = 1.0f;
+		float remixWeaponMetal = 0.0f;
+		float remixWeaponNormal = 1.0f;
 		float remixSpotBrightness = 1.0f;
 		float remixOmniBrightness = 1.0f;
 		float remixLightSize = 4.0f;
@@ -205,6 +227,19 @@ namespace Components::Remix::Core
 	void ReloadConfig();
 
 	void SaveConfig(std::string& message);
+
+	struct MenuWindow
+	{
+		float x = 0.0f;
+		float y = 0.0f;
+		float width = 0.0f;
+		float height = 0.0f;
+	};
+
+	// The menu window's last place and size, kept in remix.ini as menu_window. Written straight away, not by Save.
+	bool TryReadMenuWindow(MenuWindow& window);
+
+	void WriteMenuWindow(const MenuWindow& window);
 
 	void LoadConfigForMap(const std::string& mapName);
 

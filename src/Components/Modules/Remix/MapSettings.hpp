@@ -20,6 +20,23 @@ namespace Components::Remix
 		bool hasDirection = false;
 		float yawDeg = 0.0f;
 		float pitchDeg = 45.0f;
+		// The engine's sun colour (GfxLight colour of the map's sun), for a map whose zone has no sun. With a direction
+		// it gives the map a sun.
+		bool hasColour = false;
+		float colour[3] = { 1.0f, 1.0f, 1.0f };
+	};
+
+	// A primary light as the engine stores it (ComPrimaryLight, copied unchanged into GfxLight by R_InitPrimaryLights),
+	// for converted maps whose zone lost its lights. They go through the same conversion as the zone's own lights.
+	struct PrimaryLight
+	{
+		std::uint8_t type = 0;
+		float colour[3] = {};
+		float direction[3] = {};
+		float origin[3] = {};
+		float radius = 0.0f;
+		float cosOuter = 0.0f;
+		float cosInner = 0.0f;
 	};
 
 	struct LightKeyframe
@@ -146,6 +163,7 @@ namespace Components::Remix
 
 		std::vector<std::uint64_t> ignoredLights;
 		std::vector<LightOverride> lightOverrides;
+		std::vector<PrimaryLight> primaryLights;
 		std::vector<AuthoredLight> addedLights;
 		std::vector<AuthoredLight> attachedLights;
 

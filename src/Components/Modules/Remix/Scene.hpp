@@ -41,6 +41,12 @@ namespace Components::Remix
 
 	std::string GetMapName();
 
+	// The map whose settings and lights the menu's own 3D scene uses (the lobby draws Kino). Set every frame the
+	// lobby is drawn in Remix mode; empty once it has not been for a few frames or while a map is loaded.
+	void SetMenuSceneMap(const std::string& mapName);
+
+	std::string GetMenuSceneMap();
+
 	void SetGlowBrightness(float brightness);
 
 	void SetEffectCullingDisabled(bool isDisabled);

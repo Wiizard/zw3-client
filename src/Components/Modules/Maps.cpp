@@ -577,7 +577,7 @@ namespace Components
 		Dvar::Var("uiDisplayMapName").Set(displayName);
 	}
 
-	void Maps::PrepareUsermap(const char* mapname, bool updateSelection)
+	void Maps::PrepareUsermap(const char* mapname, bool updateSelection, bool showLoadscreen)
 	{
 		if (!mapname || !*mapname)
 		{
@@ -585,7 +585,7 @@ namespace Components
 		}
 
 		if (updateSelection) SynchronizeMapDvars(mapname);
-		SPLoadscreens::SetLoadingMap(mapname);
+		if (showLoadscreen) SPLoadscreens::SetLoadingMap(mapname);
 
 		if (userMap.IsValid() && userMap.GetName() == mapname)
 		{
@@ -603,7 +603,7 @@ namespace Components
 			userMap = UserMapContainer(mapname);
 			userMap.LoadIwd();
 
-			SPLoadscreens::SetLoadingMap(mapname);
+			if (showLoadscreen) SPLoadscreens::SetLoadingMap(mapname);
 		}
 		else
 		{

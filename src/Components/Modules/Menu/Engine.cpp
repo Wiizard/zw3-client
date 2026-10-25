@@ -63,8 +63,11 @@ namespace Components::Menu::Engine
 	void LoadMap(Game::XZoneInfo* zones, unsigned int count, int sync)
 	{
 		// Reuse the project's team, dependency, patch and localization routing.
-		// Mount custom-map IWDs without changing the user's selected lobby map.
-		if (count && zones[0].name) Maps::PrepareUsermap(zones[0].name, false);
+		// Mount custom-map IWDs without changing the user's selected lobby map,
+		// and without the loading screen a real level load opens: for campaign
+		// maps (gulag, oilrig, the test map...) that screen took the menus'
+		// input and never closed, since no level load follows.
+		if (count && zones[0].name) Maps::PrepareUsermap(zones[0].name, false, false);
 		Maps::LoadMapZones(zones, count, sync);
 	}
 }

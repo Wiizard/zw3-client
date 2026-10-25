@@ -86,7 +86,10 @@ namespace Components
 		static void SynchronizeMapDvars(const std::string& rawMapName);
 		static void PrefetchMapAssets(const std::string& map);
 		static void LoadMapZones(Game::XZoneInfo* zoneInfo, unsigned int zoneCount, int sync);
-		static void PrepareUsermap(const char* mapname, bool updateSelection = true);
+		// showLoadscreen false mounts a usermap's IWD without anything a real
+		// level load does to the front end (the loading screen, the map dvars,
+		// the renderer's map-load state): the menu backdrop loads maps that way.
+		static void PrepareUsermap(const char* mapname, bool updateSelection = true, bool showLoadscreen = true);
 
 		static void HandleAsSPMap();
 

@@ -10,6 +10,11 @@ namespace Components::Menu
 	public:
 		Actors();
 		static bool IsReady();
+		// Whether the crew stands together posing for the camera (the
+		// default) rather than fighting off a horde.
+		static void SetLineup(bool enabled, float room = 1.0f);
+		// The middle of the crew as last drawn, on the floor, if any is.
+		static std::optional<std::array<float, 3>> CrewCenter();
 		// The fraction of the segment that is clear of the map's world
 		// geometry (1 when nothing is hit, 0 when it starts in solid).
 		static float Clearance(const std::array<float, 3>& from, const std::array<float, 3>& to);

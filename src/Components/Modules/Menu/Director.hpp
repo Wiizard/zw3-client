@@ -11,24 +11,21 @@ namespace Components::Menu
 {
   namespace BackdropData
   {
-    // The backdrop's cinematography: an endless, looping sequence of camera
-    // shots around the scene's subject (the spot the survivors hold), for
-    // whichever map is shown.
+    // The backdrop's camera: the crew standing together posing (see
+    // Actors::SetLineup), filmed from the front at chest height, gliding
+    // slowly from one side to the other and back.
     //
-    // Every map gets a sequence. Without a script one is made up from the
-    // map's name, so that no two maps are filmed the same way, and each shot
-    // is fitted to the map when it is planned: turned around the subject and
-    // pulled in until the world geometry no longer blocks it. A script (see
-    // lobby/backdrop_scenes.json) can choose a style for a map, move the
-    // subject, or lay out its shots one by one.
+    // The same for every map, fitted to it when the map is shown: the crew
+    // is turned to face wherever the camera has a clear view of all four
+    // (no wall, prop or tree in between, floor under the camera, inside the
+    // world), and comes in closer only when no direction has room.
     //
-    // Like the rest of BackdropData this knows nothing about the engine: the
-    // collision it fits shots against is a function it is given.
+    // Like the rest of BackdropData this knows nothing about the engine:
+    // the collision it fits the shot against is a function it is given.
 
-    // Where on the screen the subject is kept, in fractions of the screen
-    // from its top left corner. The menus keep this part of the screen clear
-    // (ui_mp/common/zw3_layout.inc lays them out around the same point), so
-    // the two must change together.
+    // Where on the screen the crew is kept, in fractions of the screen from
+    // its top left corner: the gap the menus leave between their left
+    // column and the panels on the right.
     //
     struct focus_point
     {
@@ -36,59 +33,32 @@ namespace Components::Menu
       float y;
     };
 
-    inline constexpr focus_point default_focus {0.50f, 0.60f};
-
-    enum class shot_kind
-    {
-      orbit,  // Circles the subject by arc degrees.
-      dolly,  // Slides sideways past it by travel units.
-      crane,  // Rises by rise units while looking at it.
-      push,   // Closes in on it by travel units.
-      hold    // Stays put, drifting only.
-    };
-
-    struct shot
-    {
-      shot_kind kind {shot_kind::orbit};
-      float duration {12.0f};  // Seconds, the blend into the next included.
-      float blend {3.0f};      // Seconds spent turning into the next shot.
-      float yaw {0.0f};        // Where the camera stands around the subject:
-                               // degrees from the way the subject faces.
-      float arc {30.0f};       // Orbit: degrees swept.
-      float distance {280.0f}; // From the subject, along the floor.
-      float travel {0.0f};     // Dolly: sideways; push: closer.
-      float height {80.0f};    // Of the camera, above the subject's floor.
-      float rise {0.0f};       // Crane: height gained.
-      float aim_height {45.0f};// Of the point looked at.
-      float fov {60.0f};       // As cg_fov, at the start of the shot...
-      float fov_end {60.0f};   // ...and at its end.
-    };
-
+    // How the crew is filmed.
+    //
     struct scene_script
     {
-      vector<shot> shots;
-      focus_point focus {default_focus};
-      optional<spawn> anchor;  // Instead of the spawn found in the map.
-      float sway {1.0f};       // Of the handheld drift, 0 for none.
-      string style;            // What it was made from, for the log.
+      focus_point focus {0.50f, 0.56f};
+      float distance {300.0f};   // Of the camera in front of the crew.
+      float height {150.0f};     // Of the camera, above the crew's floor.
+      float aim_height {46.0f};  // Of the point looked at (chest height).
+      float glide {70.0f};       // How far it glides to either side.
+      float period {38.0f};      // Seconds for one glide there and back.
+      float fov {50.0f};         // As cg_fov, before fitting the crew in.
+      float sway {0.25f};        // Of the handheld drift, 0 for none.
+
+      // The crew's half-width, the outer two included, and how much of the
+      // screen's half-width either side of the focus point it may take: the
+      // view widens until it fits.
+      //
+      float spread {100.0f};
+      float fit {0.40f};
     };
 
-    // Return the made-up sequence for a seed (see the header comment). The
-    // scale multiplies its distances, the height scale its heights: tight
-    // interiors want both below 1, open exteriors above.
+    // Return the line-up for a seed: the same shot with a slightly
+    // different glide, so maps don't all move in step.
     //
     scene_script
-    automatic_script (uint64_t seed, float scale = 1.0f, float height_scale = 1.0f);
-
-    // Return the script for a map from the scene file's text: the map's own
-    // entry, else the file's default, else the automatic one. The seed picks
-    // among automatic sequences where the entry doesn't fix one. An empty
-    // text means there is no file.
-    //
-    // Throw std::invalid_argument if the text is not a valid scene file.
-    //
-    scene_script
-    script_for (string_view text, string_view map, uint64_t seed);
+    lineup_script (uint64_t seed);
 
     // The fraction of the segment that is clear of the world (1 if all of
     // it, 0 if it starts in solid).
@@ -98,64 +68,100 @@ namespace Components::Menu
     class director
     {
     public:
-      // Fit the script's shots around the subject. Without a clearance the
-      // shots are taken as they are.
+      // The rendered world's bounds, which the camera never leaves (it
+      // would see the void outside, and on maps without collision nothing
+      // else tells it where the walls are). Set or cleared before plan ().
+      //
+      void
+      bound (const vec3& lo, const vec3& hi) noexcept;
+
+      void
+      unbound () noexcept {bounded_ = false;}
+
+      // Fit the shot to the map around the crew's spawn. Without a
+      // clearance the shot is taken as it is.
       //
       void
       plan (const spawn& subject, scene_script script, const clearance& clear);
 
-      bool
-      planned () const noexcept {return !shots_.empty ();}
-
-      size_t
-      shot_count () const noexcept {return shots_.size ();}
-
-      // The length of one pass through the shots, in seconds.
+      // Where the crew stands and the way it faces, as plan () turned it.
       //
-      double
-      loop_length () const noexcept {return length_;}
-
       const spawn&
       subject () const noexcept {return subject_;}
 
-      // Return the view seconds into the scene. The sequence repeats, the
-      // last shot turning into the first, so any time is valid. With a
-      // clearance the camera is also kept out of walls frame by frame.
+      // How much room plan () found, 1 for all it wanted: the crew stands
+      // closer together in tight rooms.
+      //
+      float
+      room () const noexcept {return room_;}
+
+      // Where the crew actually stands, as drawn: the shot is framed on it
+      // rather than on the spawn, which uneven floors move them away from.
+      //
+      void
+      track (const vec3& center) const noexcept {target_ = center;}
+
+      // Return the view seconds into the scene. Any time is valid: the
+      // glide repeats. Successive calls should move forward in time, since
+      // the camera's easing follows the time between them; a time earlier
+      // than the last starts the easing over. With a clearance the camera
+      // is also kept out of walls frame by frame.
       //
       view
       at (double seconds, float aspect, const clearance* clear = nullptr) const;
 
-      // Which shot is on, for the log.
-      //
-      size_t
-      shot_index (double seconds) const noexcept;
-
     private:
-      struct placed
-      {
-        shot s;
-        float yaw;    // The shot's yaw, turned to where it fits.
-        float reach;  // The fraction of its distances that fit.
-      };
-
       struct pose
       {
         vec3 eye;
         vec3 aim;
-        float fov;
       };
 
+      // The camera at a point of the glide (t from 0 to 1) around a crew
+      // standing at o, turned by turn degrees from the subject's facing,
+      // with its distances scaled by scale, and at a height.
+      //
       pose
-      evaluate (const placed&, float t) const noexcept;
+      place (const vec3& o, float turn, float scale, float t, float height) const noexcept;
 
       pose
-      evaluate (const shot&, float yaw, float reach, float t) const noexcept;
+      place (const vec3& o, float turn, float scale, float t) const noexcept
+      {
+        return place (o, turn, scale, t, height_);
+      }
+
+      struct fit
+      {
+        float score;
+        float turn;
+        float scale;
+      };
+
+      // The best turn and scale for the shot at a height.
+      //
+      fit
+      search (float height, const clearance&) const;
+
+      bool
+      inside (const vec3&) const noexcept;
 
       spawn subject_ {};
       scene_script script_;
-      vector<placed> shots_;
-      double length_ {0};
-      mutable float pull_ {1.0f}; // The smoothed per-frame wall clearance.
+      float room_ {1.0f};
+      float height_ {150.0f};    // As plan () found room for it.
+      bool planned_ {false};
+
+      vec3 lo_ {}, hi_ {};
+      bool bounded_ {false};
+
+      // What the caller last said and where the easing has got to.
+      //
+      mutable optional<vec3> target_;
+
+      mutable double last_ {-1.0};
+      mutable optional<vec3> crew_;
+      mutable float pull_ {1.0f};
+      mutable float fov_ {0.0f};
     };
   }
 }

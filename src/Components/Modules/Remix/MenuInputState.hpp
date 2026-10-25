@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 namespace Components::Remix::Menu
 {
 	class MenuInputState
@@ -7,9 +9,10 @@ namespace Components::Remix::Menu
 	public:
 		bool overlayOpen = false;
 
-		void UpdateRemixChord(const bool held)
+		void UpdateRemixChord(const bool held, const std::optional<bool> reportedMenuOpen = std::nullopt)
 		{
-			if (held && !wasRemixChord) remixOpen = !remixOpen;
+			if (reportedMenuOpen.has_value()) remixOpen = *reportedMenuOpen;
+			else if (held && !wasRemixChord) remixOpen = !remixOpen;
 			wasRemixChord = held;
 		}
 

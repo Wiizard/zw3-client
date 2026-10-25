@@ -66,7 +66,24 @@ int main()
 		state.ApplyMouse(mouse);
 		Require(mouse == 1, "An old suspension survived the reset");
 
-		std::cout << "Remix menu input: map/device transitions, held Alt+X, repeated frames, overlapping menus and engine input ownership passed\n";
+		state.UpdateRemixChord(false, true);
+		state.ApplyMouse(mouse);
+		Require(mouse == 0, "The Remix Plus first-use menu did not suspend camera input");
+		state.UpdateRemixChord(true, true);
+		state.ApplyMouse(mouse);
+		Require(mouse == 0, "Alt+X overrode the open menu state reported by Remix Plus");
+		state.UpdateRemixChord(false, false);
+		state.ApplyMouse(mouse);
+		Require(mouse == 1, "Closing Remix Plus without Alt+X left the camera suspended");
+		state.UpdateRemixChord(true, false);
+		state.ApplyMouse(mouse);
+		Require(mouse == 1, "A closed Remix Plus menu was treated as open after Alt+X");
+		state.UpdateRemixChord(false);
+		OpenRemix(state, mouse);
+		state.Reset(mouse, false);
+		Require(mouse == 1, "The stock fallback lost transition cleanup after using the Plus API");
+
+		std::cout << "Remix menu input: map/device transitions, held Alt+X, overlapping menus, Plus UI reports, stock fallback and input ownership passed\n";
 		return 0;
 	}
 	catch (const std::exception& error)

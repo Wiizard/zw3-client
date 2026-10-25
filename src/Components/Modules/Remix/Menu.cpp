@@ -2849,26 +2849,16 @@ namespace Components::Remix::Menu
 			inputState.overlayOpen = !inputState.overlayOpen;
 		}
 
-		inputState.UpdateRemixChord(IsRemixChordHeld());
-
-<<<<<<< HEAD
-		if (inputState.overlayOpen)
-=======
 		// Remix Plus reports its menu, which it can also open by itself (the first-use guide). Stock Remix can't, so
 		// Alt+X presses are counted there.
+		std::optional<bool> reportedMenuOpen;
 		if (const remixapi_Interface* api = IsRemixPlus() ? GetReadyApi() : nullptr; api && api->GetUIState)
 		{
-			isRemixMenuOpen = api->GetUIState() != REMIXAPI_UI_STATE_NONE;
+			reportedMenuOpen = api->GetUIState() != REMIXAPI_UI_STATE_NONE;
 		}
-		else if (isRemixChord && !wasRemixChord)
-		{
-			isRemixMenuOpen = !isRemixMenuOpen;
-		}
+		inputState.UpdateRemixChord(IsRemixChordHeld(), reportedMenuOpen);
 
-		wasRemixChord = isRemixChord;
-
-		if (isOpen)
->>>>>>> af3f26c2d20e86345f943b421ae515e61da965b1
+		if (inputState.overlayOpen)
 		{
 			DrawWindow();
 		}

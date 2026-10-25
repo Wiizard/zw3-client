@@ -59,6 +59,7 @@ namespace Components::Menu
 		Backdrop();
 		static bool IsEnabled();
 		static bool IsShown();
+		static bool IsStartupLoading();
 		static bool Hides(const Game::Material* material);
 		static void Direct(BackdropDirection direction);
 		static void AddZone(std::string name);

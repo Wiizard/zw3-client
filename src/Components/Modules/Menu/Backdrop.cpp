@@ -10,6 +10,8 @@
 #include "../Party.hpp"
 #include "../UIScript.hpp"
 #include "../Dvar.hpp"
+#include "../Materials.hpp"
+#include "../Renderer.hpp"
 #include "Backdrop.hpp"
 #include "Actors.hpp"
 #include "Engine.hpp"
@@ -21,6 +23,8 @@
 #include "Budget.hpp"
 #include "Camera.hpp"
 #include "Director.hpp"
+#include "Transition.hpp"
+#include "Selection.hpp"
 
 
 #include <windows.h>
@@ -60,9 +64,8 @@ namespace Components
       // the disassembler's annotations, which are 0x10 low in .data.
 
       // SCR_UpdateScreen's call to SCR_DrawScreenField (0x1401018A0), made
-      // every frame after R_ToggleSmpFrame and before UI_RefreshFullscreen
-      // draws the menus. With the menus fullscreen, all the call draws is a
-      // clear of the screen, so the scene goes right after it.
+      // every frame after R_ToggleSmpFrame. It clears the screen and calls
+      // UI_RefreshViewport to paint the menus, so overlays must precede it.
       //
       constexpr uintptr_t screen_field_call (0x140101D15);
 
@@ -297,24 +300,6 @@ namespace Components
         "animbg_blur_front"
       };
 
-      // The menus that show a map of their choosing, and the dvar that
-      // names it. The private match lobby shows the map the match is set up
-      // for, which it would otherwise show as a picture in its corner (see
-      // shown_map_dvar() for how it tells).
-      //
-      struct followed_menu
-      {
-        string_view menu;
-        const char* map_dvar;
-      };
-
-      constexpr followed_menu followed_menus[]
-      {
-        {"menu_xboxlive_privatelobby", "ui_mapname"},
-        {"zwnet_matchmaking", "ui_mapname"},
-        {"zwnet_party_lobby", "ui_mapname"}
-      };
-
       // Memory for the animation trees.
       //
       // The engine allocates a tree's memory through a callback and the
@@ -442,9 +427,9 @@ namespace Components
         // a change waits for the next load rather than repeating it.
         //
         string chosen_for;
-        string invalid_value;
 
         uint64_t seed {0};
+        backdrop_selector selector;
 
         // The direction for the frame being drawn, if a menu gave one, and
         // the map of the last direction that was refused, to say once why.
@@ -494,17 +479,9 @@ namespace Components
         string wanted_map;
         int wanted_since {0};
 
-        // The curtain between two maps, as H1's front end changes its
-        // scene: the shown map fades to black, the next one loads behind
-        // the black, and fades in once it is up (see draw_shade()). When it
-        // started closing over the shown map (-1 if it isn't), whether it
-        // is down (closing, closed or opening), when it went down, and when
-        // the next map started fading in (-1 before it does).
-        //
-        int closing_since {-1};
-        bool curtain {false};
-        int curtain_since {0};
-        int opening_since {-1};
+        teleport_transition transition;
+        bool startup_presented {false};
+        int startup_since {-1};
         string prefetched_map;  // The lobby map last read ahead.
 
         // The private lobby's ready countdown (see ready_toggle ()).
@@ -531,8 +508,76 @@ namespace Components
 
       state s;
 
-      // The ui_backdrop dvar: off, random, or one of the maps in
-      // Stage.cpp. Read every frame; explicit map changes unload safely.
+      Material* teleport_arc = nullptr;
+      Material* teleport_veil = nullptr;
+      vector<Game::GfxStateBits> teleport_blend;
+      atomic_bool teleport_needs_load {true};
+
+      // Own the image, material and blend state independently of Kino's zone.
+      // Copy state bits: changing the shared white material would affect UI.
+      void
+      prepare_teleport ()
+      {
+        if (!teleport_needs_load.exchange (false)) return;
+        R_SyncRenderThread ();
+        if (teleport_arc != nullptr) Materials::Delete (teleport_arc, true);
+        if (teleport_veil != nullptr) Materials::Delete (teleport_veil, true);
+        teleport_arc = teleport_veil = nullptr;
+        teleport_blend.clear ();
+
+        Maps::UserMapContainer kino ("mp_zombie_theater");
+        kino.LoadIwd ();
+        if (Game::GfxImage* image = Materials::LoadPreviewImage ("sac_kino/fxt_env_electric_arc2"))
+        {
+          teleport_arc = Materials::Create ("zw3_menu_teleport_arc", image);
+          if (teleport_arc == nullptr) Materials::DeleteImage (image);
+          else if (teleport_arc->stateBitsTable != nullptr && teleport_arc->stateBitsCount > 0)
+          {
+            teleport_blend.assign (teleport_arc->stateBitsTable,
+                                   teleport_arc->stateBitsTable + teleport_arc->stateBitsCount);
+            for (Game::GfxStateBits& bits: teleport_blend)
+              bits.loadBits[0] = (bits.loadBits[0] & ~0x7FFu) | 0x125u; // SRCALPHA + ONE, ADD.
+            teleport_arc->stateBitsTable = teleport_blend.data ();
+          }
+          else
+          {
+            Materials::Delete (teleport_arc, true);
+            teleport_arc = nullptr;
+          }
+        }
+
+        // A smooth, restrained blue-grey veil covers unloaded geometry. This
+        // low-frequency gradient scales cleanly; no enlarged lightning pixels.
+        constexpr unsigned int size = 256;
+        Game::GfxImage* image (Materials::CreateImage ("zw3_menu_teleport_veil", size, size, 1,
+                                                      0x1000003, D3DFMT_A8R8G8B8));
+        D3DLOCKED_RECT pixels {};
+        if (image->texture.map != nullptr && SUCCEEDED (image->texture.map->LockRect (0, &pixels, nullptr, 0)))
+        {
+          for (unsigned int y = 0; y < size; ++y)
+            for (unsigned int x = 0; x < size; ++x)
+            {
+              const float u ((static_cast<float> (x) + 0.5f) / size * 2 - 1);
+              const float v ((static_cast<float> (y) + 0.5f) / size * 2 - 1);
+              const float glow (exp (-(u * u + v * v) * 2.2f));
+              auto* pixel (static_cast<unsigned char*> (pixels.pBits) + y * pixels.Pitch + x * 4);
+              // Sub-byte ordered dithering avoids visible bands in dark tones.
+              const float dither (((x & 1) + 2 * (y & 1)) * 0.25f);
+              pixel[0] = static_cast<unsigned char> (21 + 30 * glow + dither);
+              pixel[1] = static_cast<unsigned char> (16 + 22 * glow + dither);
+              pixel[2] = static_cast<unsigned char> (12 + 16 * glow + dither);
+              pixel[3] = 255;
+            }
+          image->texture.map->UnlockRect (0);
+          teleport_veil = Materials::Create ("zw3_menu_teleport_veil", image);
+        }
+        if (teleport_veil == nullptr) Materials::DeleteImage (image);
+        if (teleport_arc == nullptr)
+          LogLine{} << "backdrop: Kino electric arc unavailable; using the transport veil";
+      }
+
+      // The ui_backdrop switch. Legacy map-name values still enable it;
+      // the lobby and the five-map random pool now choose the actual map.
       //
       // Note that it cannot be a row of the declaration table: being a
       // string, its registration copies the value into the engine's script
@@ -554,7 +599,7 @@ namespace Components
             "ui_backdrop",
             "random",
             DVAR_ARCHIVE,
-            "The map shown behind the main menu: off, random, or a map name.");
+            "Menu backdrop: off or random. Lobbies follow the selected match map.");
 
           LogLine{} << "backdrop: ui_backdrop registered as '"
                     << (d != nullptr && d->current.string != nullptr
@@ -626,36 +671,22 @@ namespace Components
         return false;
       }
 
-      // Return the direction of the first open menu that follows a map (see
-      // followed_menus), or nullopt if there is none or its dvar names no
-      // map.
-      //
       void
       prefetch_map (string_view map);
 
-      optional<BackdropDirection>
-      followed_direction ()
+      backdrop_request
+      requested_backdrop ()
       {
-        // Lobbies keep the menu's backdrop: switching it to the lobby's map
-        // on every change cost a load each time. The lobby's map is read
-        // ahead into the file cache instead, and loaded for real behind the
-        // ready countdown (see ready_tick ()), so the match starts from it.
-        //
-        for (const followed_menu& f: followed_menus)
+        const auto text = [] (const char* name) -> string_view
         {
-          if (!menu_open (f.menu))
-            continue;
-
-          const char* m (Dvar_GetString (f.map_dvar));
-
-          if (m != nullptr && *m != '\0' && s.prefetched_map != m && s.map != m)
-          {
-            prefetch_map (m);
-            s.prefetched_map = m;
-          }
-        }
-
-        return nullopt;
+          const char* value (Dvar_GetString (name));
+          return value != nullptr ? value : "";
+        };
+        const dvar_t* vote (Game::Dvar_FindVar ("zwnet_vote_active"));
+        return s.selector.choose ({
+          menu_open ("menu_xboxlive_privatelobby") || menu_open ("zwnet_party_lobby"),
+          menu_open ("zwnet_matchmaking"), vote != nullptr && vote->current.enabled,
+          text ("ui_zwnet_state"), text ("ui_mapname"), text ("zwnet_vote_winner_id")});
       }
 
       // Return true if we are in the front end proper: the renderer and the
@@ -893,8 +924,7 @@ namespace Components
         enter (phase::failed);
         s.failure = why;
         s.shown = false;
-        s.curtain = false;
-        s.closing_since = s.opening_since = -1;
+        s.transition.reset ();
       }
 
       // Return the figure's placement: where its first model's origin is in
@@ -1182,6 +1212,7 @@ namespace Components
         LogLine{} << "backdrop: " << why << (from_menu ? "; showing the usual backdrop instead" : "; picking another map");
 
         s.rejected.push_back (s.map);
+        s.selector.reject (s.map);
         ++s.retries;
         s.seed = (s.seed * 6364136223846793005ull + 1442695040888963407ull) | 1;
 
@@ -1193,23 +1224,10 @@ namespace Components
       constexpr int reveal_msec (1400);
       constexpr int swap_delay_msec (350);
 
-      // The curtain (see draw_shade()): how long the shown map takes to fade
-      // to black, how long the black holds before it is let go (so that the
-      // black frame is on screen before the stall of letting it go), how
-      // long the next one takes to fade in, and how long the curtain stays
-      // down at most waiting for it.
-      //
-      constexpr int fade_out_msec (450);
-      constexpr int curtain_hold_msec (120);
-      constexpr int fade_in_msec (900);
-      constexpr int curtain_max_msec (20000);
-
       void
       lift_curtain () noexcept
       {
-        s.curtain = false;
-        s.closing_since = -1;
-        s.opening_since = -1;
+        s.transition.reset ();
       }
 
       // The world collision the director fits its shots against.
@@ -1362,6 +1380,13 @@ namespace Components
           return;
         }
 
+        const char* selected (Dvar_GetString ("ui_mapname"));
+        if (selected == nullptr || I_stricmp (selected, s.ready_map.c_str ()) != 0)
+        {
+          ready_cancel ("the selected map changed");
+          return;
+        }
+
         const int now (Sys_Milliseconds ());
         const int left (s.ready_deadline - now);
 
@@ -1399,21 +1424,12 @@ namespace Components
       // The maps the backdrop shows when no lobby has chosen one: the
       // classic zombies maps. In a lobby it shows the lobby's map.
       //
-      constexpr const char* zombie_backdrops[]
-      {
-        "mp_zombie_theater",  // Kino der Toten
-        "mp_zombie_pentagon", // Five
-        "mp_cod5_prototype",  // Nacht der Untoten
-        "mp_factory_sh",      // Der Riese
-        "mp_zombie_diner"     // Diner
-      };
-
       vector<const stage*>
       random_pool ()
       {
         vector<const stage*> r;
 
-        for (const char* m: zombie_backdrops)
+        for (string_view m: default_backdrop_maps)
           if (const stage* st = find_stage (m))
             r.push_back (st);
 
@@ -1425,51 +1441,48 @@ namespace Components
       void
       start (const selection& sel)
       {
-        // Whatever a renderer shutdown kept is the front end's again.
-        //
-        s.held.clear ();
+        if (s.startup_presented && !s.transition.active ())
+          s.transition.hold (Sys_Milliseconds ());
 
-        // If a level is resident (the one the last match was on), use it
-        // if we may, since loading another one would put two clip maps in
-        // the one the engine has. Either way nothing more is loaded.
+        s.random_pick = sel.kind == selection_kind::random || s.chosen_for.starts_with ("random");
+        const string held (exchange (s.held, {}));
+
+        // A resident level may only be reused when it is the requested map.
+        // Otherwise free it before loading another clip map into the engine.
         //
         // CM_Unload leaves the old name pointing into the released zone. Check
         // the remaining clip-map state before reading that string at all.
         //
         const char* resident_world (loaded_clip_map_name (cm));
-        if (resident_world != nullptr &&
-            DB_IsFileLoaded (map_name (resident_world).c_str ()))
+        if (resident_world != nullptr || (!held.empty () && DB_IsFileLoaded (held.c_str ())))
         {
-          const string m (map_name (resident_world));
+          const string m (!held.empty () ? held :
+                          (!s.resident_level.empty () && DB_IsFileLoaded (s.resident_level.c_str ())
+                           ? s.resident_level : map_name (resident_world)));
           const stage* st (find_stage (m));
 
-          if (st == nullptr)
+          if (resident_world != nullptr && st != nullptr && sel.kind == selection_kind::map && sel.stage == st && DB_IsFileLoaded (st->map))
           {
-            fail (format ("level '{}' is still loaded and isn't a backdrop "
-                          "stage", resident_world));
+            s.shown_stage = st;
+            s.map = st->map;
+            s.world = resident_world;
+            enter (phase::loading);
+            s.loading_since = Sys_Milliseconds ();
+            LogLine{} << "backdrop: using the requested resident " << s.map;
             return;
           }
 
-          if (sel.kind == selection_kind::map && sel.stage != st)
-            LogLine{} << "backdrop: " << m << " is still loaded from the "
-                      << "last match, so it is shown instead of "
-                      << sel.stage->map;
-
-          s.shown_stage = st;
-          s.map = st->map;
-          s.world = world_name (s.map);
-          enter (phase::loading);
-          s.loading_since = Sys_Milliseconds ();
-
-          LogLine{} << "backdrop: using the resident " << s.map;
-          return;
+          LogLine{} << "backdrop: freeing resident " << m << " for the requested backdrop";
+          const int settled (s.front_end_since);
+          s.map = m;
+          unload ();
+          Sys_SyncDatabase ();
+          s.front_end_since = settled;
         }
 
         // Choose among the stages that are installed.
         //
         vector<const stage*> cs;
-
-        s.random_pick = sel.kind != selection_kind::map;
 
         if (sel.kind == selection_kind::map)
           cs.push_back (sel.stage);
@@ -1516,16 +1529,19 @@ namespace Components
         // A lobby's map that can't be shown here is passed over for the
         // usual backdrop (show() drops directions to rejected maps).
         //
-        auto reject_menu_map = [&sel] ()
+        auto reject_selection = [&sel] ()
         {
           if (sel.kind == selection_kind::map && sel.stage != nullptr &&
-              s.chosen_for.starts_with ("menu "))
+              (s.random_pick || s.chosen_for.starts_with ("menu ")))
+          {
             s.rejected.emplace_back (sel.stage->map);
+            s.selector.reject (sel.stage->map);
+          }
         };
 
         if (installed.empty ())
         {
-          reject_menu_map ();
+          reject_selection ();
           fail (sel.kind == selection_kind::map
                 ? format ("{} is not installed", sel.stage->map)
                 : string ("no backdrop stage is installed"));
@@ -1615,7 +1631,7 @@ namespace Components
 
         if (optional<string> why = shortfall (r, q))
         {
-          reject_menu_map ();
+          reject_selection ();
           fail (format ("not loading {}: {}", st.map, *why));
           return;
         }
@@ -1807,20 +1823,27 @@ namespace Components
         memset (s.refdef.get (), 0, sizeof (refdef_t));
         init_primary_lights (s.refdef->primaryLights);
 
+        // Gameplay normally supplies vision settings. Our independent refdef
+        // needs a valid grade too: lift deep shadows gently without changing
+        // global gamma, baked lights, UI colours or gameplay vision settings.
+        s.refdef->film.enabled = true;
+        s.refdef->film.brightness = 0.035f;
+        s.refdef->film.contrast = 0.96f;
+        ranges::fill (s.refdef->film.tintDark, 1.8f);
+        ranges::fill (s.refdef->film.tintMedium, 1.35f);
+        ranges::fill (s.refdef->film.tintLight, 1.0f);
+
         plan_scene ();
         Actors::Prepare ();
         s.retries = 0;
+        if (s.random_pick) s.selector.remember_default (s.map);
 
         enter (phase::ready);
         s.start_time = s.last_time = s.heartbeat = Sys_Milliseconds ();
         s.frames = 0;
         s.hidden = 0;
 
-        if (s.curtain)
-        {
-          s.closing_since = -1;
-          s.opening_since = s.start_time;
-        }
+        s.transition.open (s.start_time);
 
         LogLine{} << format ("backdrop: showing {} from ({}, {}, {}) facing "
                              "{}",
@@ -1871,9 +1894,8 @@ namespace Components
 
         s.bad_screen = false;
 
-        // Fill the view. Everything else in the refdef stays as finish()
-        // left it: no depth of field, film, or glow, and the primary
-        // lights.
+        // Keep the map's primary lights and the backdrop-only exposure grade
+        // prepared by finish(). Depth of field is configured below.
         //
         refdef_t& r (*s.refdef);
 
@@ -2092,6 +2114,33 @@ namespace Components
       //
       screen_field_fn screen_field (nullptr);
 
+      // Start the actual zone load while the intro is still playing, then
+      // finish collision, world and actors before the first menu scene.
+      void
+      startup_tick ()
+      {
+        if (!hooksInstalled || s.startup_presented || !Backdrop::IsEnabled () ||
+            *renderer_started == 0 || *ui_started == 0 || Com_ErrorEntered ()) return;
+
+        const connstate_t connection (Game::CL_GetLocalClientConnectionState (0));
+        if (connection != CA_DISCONNECTED && connection != Game::CA_CINEMATIC &&
+            connection != Game::CA_LOGO) return;
+
+        if (s.startup_since < 0) s.startup_since = Sys_Milliseconds ();
+        if (!FastFiles::Ready ()) return;
+
+        if (s.current == phase::idle)
+        {
+          prepare_teleport ();
+          const selection sel (s.selector.choose ({}).choice);
+          if (s.seed == 0) s.seed = random_device {} () | 1;
+          s.chosen_for = sel.stage != nullptr ? "random " + string (sel.stage->map) : "random";
+          start (sel);
+        }
+        else if (s.current == phase::loading)
+          finish (false);
+      }
+
       // Show the backdrop for this frame, if there is one to show.
       //
       void
@@ -2106,6 +2155,11 @@ namespace Components
         s.direction.reset ();
 
         if (!Game::Sys_IsMainThread ()) return;
+
+        // A preloaded world belongs to the upcoming menu through the intro.
+        const connstate_t connection (Game::CL_GetLocalClientConnectionState (0));
+        if (!s.startup_presented &&
+            (connection == Game::CA_CINEMATIC || connection == Game::CA_LOGO)) return;
 
         if (!front_end ())
         {
@@ -2176,6 +2230,7 @@ namespace Components
           if (setting == nullptr || setting->current.string == nullptr ||
               parse_selection (setting->current.string).kind == selection_kind::off)
           {
+            lift_curtain ();
             if (s.current == phase::loading)
             {
               if (!Sys_IsDatabaseReady2 ()) return;
@@ -2187,37 +2242,23 @@ namespace Components
         }
         catch (const invalid_argument&)
         {
+          lift_curtain ();
           if (s.current == phase::ready) unload ();
           return;
         }
 
-        // A menu that doesn't direct the backdrop may still follow a map.
-        //
-        if (!dir)
-          dir = followed_direction ();
+        // Only a private lobby or a confirmed matchmaking map can override
+        // the session's random backdrop. Preserve directed figures on that map.
+        const backdrop_request request (requested_backdrop ());
+        if (!request.follows_lobby)
+          dir.reset ();
+        else if (!dir || dir->map != request.choice.stage->map)
+          dir = BackdropDirection {request.choice.stage->map, nullopt, nullopt};
 
-        // Behind the ready countdown the backdrop loads the match's map, so
-        // the level load that follows finds it in memory (see level_load ()).
-        //
-        if (!dir && s.ready && !s.ready_map.empty ())
-          dir = BackdropDirection {s.ready_map, nullopt, nullopt};
-
-        // See what is asked for: the map of a menu's direction, if there
-        // is one with a map we may show, and the ui_backdrop dvar
-        // otherwise.
+        // A rejected lobby map falls back to the session's default.
         //
         if (dir && ranges::find (s.rejected, dir->map) != s.rejected.end ())
           dir.reset ();
-
-        // A lobby that moves to another map: start reading it at once, so
-        // it's in memory by the time the choice has settled (see the swap
-        // in the ready phase below).
-        //
-        if (dir && dir->map != s.map && dir->map != s.prefetched_map)
-        {
-          prefetch_map (dir->map);
-          s.prefetched_map = dir->map;
-        }
 
         if (dir)
         {
@@ -2246,28 +2287,16 @@ namespace Components
         }
         else
         {
-          const dvar_t* d (backdrop_dvar ());
+          sel = s.selector.choose ({}).choice;
+          value = sel.stage != nullptr ? "random " + string (sel.stage->map) : "random";
+        }
 
-          if (d == nullptr || d->current.string == nullptr)
-            return;
-
-          value = d->current.string;
-
-          try
-          {
-            sel = parse_selection (value);
-          }
-          catch (const invalid_argument& e)
-          {
-            if (value != s.invalid_value)
-            {
-              LogLine{} << "backdrop: ui_backdrop: " << e.what ()
-                           << ", so there is no backdrop";
-              s.invalid_value = value;
-            }
-
-            return;
-          }
+        // Read the requested map ahead during the selection debounce, including
+        // the return to the default map when a lobby closes.
+        if (sel.stage != nullptr && sel.stage->map != s.map && sel.stage->map != s.prefetched_map)
+        {
+          prefetch_map (sel.stage->map);
+          s.prefetched_map = sel.stage->map;
         }
 
         if (value != s.last_value)
@@ -2293,7 +2322,7 @@ namespace Components
         if (s.front_end_since < 0)
           s.front_end_since = now;
 
-        if (now - s.front_end_since < settle_msec)
+        if (s.startup_presented && now - s.front_end_since < settle_msec)
         {
           if (!s.settling && s.current == phase::idle)
             LogLine{} << "backdrop: waiting " << settle_msec
@@ -2324,6 +2353,7 @@ namespace Components
               LogLine{} << "backdrop: database idle";
 
             s.database_busy = false;
+            prepare_teleport ();
 
             if (s.seed == 0)
               s.seed = random_device {} () | 1;
@@ -2345,11 +2375,12 @@ namespace Components
             // scrolling through the map list shouldn't load every map it
             // passes over.
             //
-            if (sel.stage != nullptr && sel.stage->map != s.map)
+            if (sel.kind == selection_kind::random || (sel.stage != nullptr && sel.stage->map != s.map))
             {
-              if (s.wanted_map != sel.stage->map)
+              const string wanted (sel.stage != nullptr ? sel.stage->map : "random");
+              if (s.wanted_map != wanted)
               {
-                s.wanted_map = sel.stage->map;
+                s.wanted_map = wanted;
                 s.wanted_since = now;
               }
 
@@ -2361,27 +2392,11 @@ namespace Components
                 break;
               }
 
-              // Fade the shown map to black first and let it go behind the
-              // black (see draw_shade()).
-              //
-              if (s.closing_since < 0)
-              {
-                // From wherever a fade in had got to, so the black never
-                // jumps.
-                //
-                const float opened (s.opening_since >= 0
-                                    ? clamp (static_cast<float> (now - s.opening_since) / fade_in_msec, 0.0f, 1.0f)
-                                    : 1.0f);
-                s.closing_since = now - static_cast<int> ((1.0f - opened) * fade_out_msec);
-                s.opening_since = -1;
+              // Put a full transport frame on screen before releasing the
+              // old world. Keep animating it until the next scene is ready.
+              if (!s.transition.closing ()) s.transition.close (now);
 
-                if (!s.curtain)
-                  s.curtain_since = now;
-
-                s.curtain = true;
-              }
-
-              if (now - s.closing_since < fade_out_msec + curtain_hold_msec)
+              if (!s.transition.covered (now))
               {
                 render (dir && dir->view ? &*dir->view : nullptr,
                         dir && dir->figure ? &*dir->figure : nullptr);
@@ -2391,8 +2406,6 @@ namespace Components
 
               LogLine{} << "backdrop: asked for '" << value << "' with "
                         << s.map << " loaded, swapping it";
-              s.closing_since = -1;
-              s.curtain_since = now;
               const int settled (s.front_end_since);
               unload ();
               s.front_end_since = settled; // Already settled: load at once.
@@ -2404,12 +2417,7 @@ namespace Components
             // Asked for the shown map again while it was fading out: fade
             // it back in from wherever the fade had got to.
             //
-            if (s.closing_since >= 0)
-            {
-              const float closed (clamp (static_cast<float> (now - s.closing_since) / fade_out_msec, 0.0f, 1.0f));
-              s.closing_since = -1;
-              s.opening_since = now - static_cast<int> ((1.0f - closed) * fade_in_msec);
-            }
+            if (s.transition.closing ()) s.transition.open (now);
 
             if (value != s.chosen_for)
             {
@@ -2423,6 +2431,7 @@ namespace Components
                     dir && dir->figure ? &*dir->figure : nullptr);
 
             s.last_direction = move (dir);
+            if (s.shown) s.startup_presented = true;
             break;
           }
           case phase::failed:
@@ -2430,51 +2439,20 @@ namespace Components
         }
       }
 
-      // Darken the scene behind the menus so the fight going on in it
-      // doesn't pull the eye off them.
-      // A 2D quad queued ahead of the menus: the scene is 3D and drawn
-      // before every 2D command, so this lands between the two and only
-      // the scene is darkened.
-      //
+      // Cover only a changing backdrop. A ready scene keeps its own lighting;
+      // no permanent black quad is drawn over it.
       void
-      draw_shade ()
+      draw_transport ()
       {
-        constexpr float shade (0.4f);
-
-        const auto smooth = [] (float t) noexcept
-        {
-          t = clamp (t, 0.0f, 1.0f);
-          return t * t * (3.0f - 2.0f * t);
-        };
-
         const int now (Sys_Milliseconds ());
-        const bool scene (s.shown && s.current == phase::ready);
-        float alpha (shade);
-
-        // The curtain between two maps (see the swap in show()): only ever
-        // in the front end, and never left down for long.
-        //
-        if (s.curtain && (!front_end () || now - s.curtain_since > curtain_max_msec))
-          lift_curtain ();
-
-        if (s.curtain)
+        if (!front_end ()) lift_curtain ();
+        const bool startup (Backdrop::IsStartupLoading ());
+        const float cover (startup ? 1.0f : s.transition.amount (now));
+        if (cover <= 0.0f)
         {
-          if (scene && s.closing_since >= 0)
-            alpha = shade + (1.0f - shade) * smooth (static_cast<float> (now - s.closing_since) / fade_out_msec);
-          else if (scene && s.opening_since >= 0)
-          {
-            const float t (static_cast<float> (now - s.opening_since) / fade_in_msec);
-
-            alpha = 1.0f - (1.0f - shade) * smooth (t);
-
-            if (t >= 1.0f)
-              lift_curtain ();
-          }
-          else
-            alpha = 1.0f; // Closed: the next map is loading.
-        }
-        else if (!scene)
+          if (s.transition.finished (now)) lift_curtain ();
           return;
+        }
 
         // Looked up every frame (a hash lookup): a cached handle would not
         // survive the material system restarting with the renderer.
@@ -2490,26 +2468,53 @@ namespace Components
         if (white == nullptr || w <= 0 || h <= 0)
           return;
 
-        const float color[4] {0.0f, 0.0f, 0.0f, alpha};
-        Engine::Bind<Game::CL_DrawStretchPicPhysical_t> (0x14001BE90) (
-          0.0f, 0.0f, static_cast<float> (w), static_cast<float> (h),
-          0.0f, 0.0f, 1.0f, 1.0f, color, white);
+        const auto draw = [w, h] (Material* material, const float* color)
+        {
+          Engine::Bind<Game::CL_DrawStretchPicPhysical_t> (0x14001BE90) (
+            0.0f, 0.0f, static_cast<float> (w), static_cast<float> (h),
+            0.0f, 0.0f, 1.0f, 1.0f, color, material);
+        };
+
+        const float veil[4] {1.0f, 1.0f, 1.0f, cover};
+        if (teleport_veil != nullptr) draw (teleport_veil, veil);
+        else
+        {
+          const float fallback[4] {0.07f, 0.09f, 0.12f, cover};
+          draw (white, fallback);
+        }
+
+        if (teleport_arc != nullptr)
+        {
+          const int elapsed (now - s.transition.started_at (s.startup_since));
+          transport_arcs (w, h, elapsed, [cover] (const transport_arc& arc)
+          {
+            // Kino's white-pink source is cooled slightly, with no fullscreen
+            // flash. Additive blending removes its black texture background.
+            const float color[4] {0.62f, 0.82f, 1.0f, arc.alpha * cover};
+            using quad_fn = void (*) (const float (*)[2], const float*, Material*);
+            Engine::Bind<quad_fn> (0x14001CCE0) (arc.vertices, color, teleport_arc);
+          });
+        }
+        if (s.transition.finished (now)) lift_curtain ();
       }
 
       void
       draw_screen_field (unsigned int local_client_num, int refresh_ui)
       {
-        // The shade has to be queued before the menus, which the screen
-        // field draws, or it darkens them too.
-        //
-        if (Game::Sys_IsMainThread ())
-          draw_shade ();
-
+        // screen_field starts the shared UI command list. menu_clear queues
+        // the transport inside that list, before UI_RefreshViewport paints.
         screen_field (local_client_num, refresh_ui);
         if (!Game::Sys_IsMainThread ()) return;
 
         show ();
         publish_shown_map ();
+      }
+
+      void
+      draw_menu_viewport (int local_client)
+      {
+        if (!Backdrop::IsStartupLoading ())
+          Engine::Bind<void (*) (int)> (0x140270C60) (local_client);
       }
 
       // The renderer is going down, and the world with it, whether for a
@@ -2586,9 +2591,9 @@ namespace Components
       // a zone being waited for), the render thread draws the screen in its
       // stead. Those frames can't skin models: the skinned vertex cache is
       // there for the main thread's frames (R_SkinXModelCmd faults writing
-      // to it), so the character can't be in them. While the scene is up,
-      // they are left out, and the screen keeps the last frame the main
-      // thread drew until it draws again.
+      // to it), so the character can't be in them. Keep the last scene or
+      // transport frame during those stalls; a remote frame's clear would
+      // otherwise flash black over the transport while the world changes.
       //
       R_BeginRemoteScreenUpdate_t begin_remote_update (nullptr);
       R_EndRemoteScreenUpdate_t end_remote_update (nullptr);
@@ -2599,8 +2604,8 @@ namespace Components
       begin_remote_screen_update ()
       {
         const bool suppressed (Game::Sys_IsMainThread () &&
-                               s.current == phase::ready &&
-                               (*rendererWorld) != nullptr && joining ());
+                               ((s.current == phase::ready && (*rendererWorld) != nullptr && joining ()) ||
+                                (front_end () && (s.transition.active () || Backdrop::IsStartupLoading ()))));
         remote_updates.push_back (suppressed);
         if (!suppressed) begin_remote_update ();
       }
@@ -2741,6 +2746,14 @@ namespace Components
       menu_clear (int which, const float* color, float depth,
                   unsigned char total)
       {
+        // SCR_DrawScreenField has started its shared command list by now.
+        // Drawing before screen_field would leave the transport outside it.
+        if (front_end () && (s.transition.active () || Backdrop::IsStartupLoading ()))
+        {
+          if (Game::Sys_IsMainThread ()) draw_transport ();
+          return;
+        }
+
         if (s.current == phase::ready && (*rendererWorld) != nullptr &&
             (Backdrop::IsEnabled () && (front_end () || joining ())))
           return;
@@ -2835,6 +2848,11 @@ namespace Components
 
     bool Backdrop::IsShown () { return hooksInstalled && s.shown; }
 
+    bool Backdrop::IsStartupLoading ()
+    {
+      return hooksInstalled && !s.startup_presented && front_end () && IsEnabled ();
+    }
+
     void Backdrop::BeforeZoneLoad (const XZoneInfo* zones, unsigned int count)
     {
       if (hooksInstalled && zones != nullptr) zone_load (zones, static_cast<int> (count), 0);
@@ -2843,7 +2861,8 @@ namespace Components
     bool
     Backdrop::Hides (const Material* material)
     {
-      if (!s.shown || material == nullptr || material->info.name == nullptr)
+      if ((!s.shown && !s.transition.active () && !IsStartupLoading ()) ||
+          material == nullptr || material->info.name == nullptr)
         return false;
 
       const string_view n (material->info.name);
@@ -2955,19 +2974,13 @@ namespace Components
         Dvar::Register ("zw3_ready_countdown", 0, -1, 60, 0u,
                         "The private lobby's ready countdown: 0 idle, seconds left, or -1 loading the map");
 
-        // Choose this session's backdrop now and start reading it (and the
-        // other default maps after it) into the system's file cache while
-        // the game finishes starting, so that by the time the menus are up
-        // its load is a decompression from memory rather than a disk read.
-        //
+        // startup_tick loads the chosen map; avoid reading every other map
+        // into the file cache while that load is in progress.
         if (s.seed == 0)
           s.seed = random_device {} () | 1;
-
-        const vector<const stage*> pool (random_pool ());
-
-        for (size_t i (0); i != pool.size (); ++i)
-          prefetch_map (pool[(s.seed + i) % pool.size ()]->map);
       }, Scheduler::Pipeline::MAIN);
+      Scheduler::Loop (startup_tick, Scheduler::Pipeline::MAIN);
+      Renderer::OnDeviceRecoveryBegin ([] { teleport_needs_load = true; });
       Command::Add ("ui_backdrop_status", []
       {
         const dvar_t* setting (backdrop_dvar ());
@@ -2982,6 +2995,7 @@ namespace Components
       Command::Add ("ui_backdrop_reload", []
       {
         if (!hooksInstalled) { Logger::Print ("menu backdrop: hooks failed to install; restart with a compatible client\n"); return; }
+        if (Backdrop::IsEnabled ()) s.transition.hold (Sys_Milliseconds ());
         if (s.current == phase::loading) Sys_SyncDatabase ();
         if (s.current != phase::idle) unload ();
       });
@@ -3010,7 +3024,11 @@ namespace Components
       const HookRequest requests[] =
       {
         {0x140101D15, 0x1401018a0, reinterpret_cast<void*> (&draw_screen_field), false},
+        {0x1401019D2, 0x140270c60, reinterpret_cast<void*> (&draw_menu_viewport), false},
+        {0x140101BAA, 0x140270c60, reinterpret_cast<void*> (&draw_menu_viewport), false},
+        {0x140101D63, 0x140270c60, reinterpret_cast<void*> (&draw_menu_viewport), false},
         {0x140101B81, 0x14001d630, reinterpret_cast<void*> (&menu_clear), false},
+        {0x14010199F, 0x14001d630, reinterpret_cast<void*> (&menu_clear), false},
         {0x1401019CB, 0x14001d630, reinterpret_cast<void*> (&menu_clear), false},
         {0x14002481D, 0x1400b8f80, reinterpret_cast<void*> (&cgame_shellshock_blend), false},
         {0x14002334B, 0x1400b42f0, reinterpret_cast<void*> (&cgame_motion_tracker), false},

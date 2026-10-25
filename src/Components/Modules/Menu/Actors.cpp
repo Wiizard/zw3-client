@@ -20,15 +20,31 @@ namespace Components::Menu
 		using namespace Engine;
 		constexpr std::size_t survivorCount = 4, zombieCount = 32;
 		constexpr float radians = std::numbers::pi_v<float> / 180.0f;
-		enum Clip : unsigned int { Idle, Fire, Death, Walk, RifleIdle, RifleFire, ShotgunFire, Run, Melee, Attack, ClipCount };
+		enum Clip : unsigned int { Idle, Fire, Death, Walk, RifleIdle, RifleFire, ShotgunFire, Run, Melee, Attack,
+			PosePistol, PoseLow, PoseReady, PoseShoulder, ClipCount };
 		constexpr const char* modelNames[] = {"zw3_richtofen_hd", "zw3_dempsey_hd", "zw3_nikolai_hd", "zw3_takeo_hd", "fsm_zombie_barechest"};
 		constexpr const char* weaponNames[] = {"wm_t5_1911", "t5_wm_commando", "t5_wm_ak74u", "t5_wm_beretta682"};
 		constexpr const char* playerClips[ClipCount] = {
 			"pb_stand_ads_pistol", "pt_stand_shoot_pistol", nullptr, "pb_combatwalk_forward_loop_pistol",
-			"pb_rifle_idlea_ads", "pt_rifle_fire_ads", "pt_stand_shoot_shotgun", nullptr, "pt_melee_pistol_1", nullptr};
+			"pb_rifle_idlea_ads", "pt_rifle_fire_ads", "pt_stand_shoot_shotgun", nullptr, "pt_melee_pistol_1", nullptr,
+			// The line-up's poses, all standing idles in common_mp: a pistol
+			// held at the ready, a heavy weapon held low, a rifle at the
+			// ready, and a weapon rested on the shoulder.
+			"pb_stand_alert_pistol", "pb_stand_alert_mg", "pb_stand_alert", "pb_stand_alert_rpg"};
 		constexpr const char* zombieClips[ClipCount] = {
 			"ai_zombie_walk_v1", nullptr, "fsm_zombie_death", "ai_zombie_walk_v1",
-			nullptr, nullptr, nullptr, "ai_zombie_run_v1", nullptr, "zw2_zombie_attack01"};
+			nullptr, nullptr, nullptr, "ai_zombie_run_v1", nullptr, "zw2_zombie_attack01",
+			nullptr, nullptr, nullptr, nullptr};
+
+		// The line-up (see Actors::SetLineup): each character's pose and
+		// weapon, by model (Richtofen, Dempsey, Nikolai, Takeo).
+		constexpr Clip lineupPoses[] = {PosePistol, PoseLow, PoseReady, PoseShoulder};
+		constexpr int lineupWeapons[] = {0, 2, 1, 3};
+		bool lineup = true;
+		int lineupCount = -1;
+		std::array<int, 4> lineupRoster{-1, -1, -1, -1};
+		float lineupSpacing = 52.0f;
+		std::optional<Vec> crewCenter;
 		// Kino's zombies: the Black Ops honor guard bodies with their separate
 		// heads, the pairing the old lobby actor was exported from. The
 		// fallback body already carries its head, so nothing is attached to it.
@@ -189,7 +205,7 @@ namespace Components::Menu
 		};
 		struct Packet
 		{
-			unsigned int version = 3, time = 0;
+			unsigned int version = 4, time = 0;
 			std::string map;
 			std::array<State, survivorCount> survivors{};
 			std::array<State, zombieCount> zombies{};
@@ -367,8 +383,147 @@ namespace Components::Menu
 			}
 		}
 
+		// What a standing character must not overlap or stand behind: what
+		// a bullet would hit (walls, props, trees) and player clips (where a
+		// player can't stand either).
+		constexpr int bodyMask = 0x2806811 | 0x10000;
+		// A character's body, from knee height (so a stair step or a gentle
+		// slope under its feet doesn't count) to the top of its head, a
+		// little wider than a player.
+		constexpr Game::Bounds body{{0, 0, 44}, {15, 15, 28}};
+		// How far apart two characters' feet have to be.
+		constexpr float personalSpace = 34.0f;
+
+		// Whether a character can stand at place (already on the floor):
+		// its body clear of the world, clear of the spots already taken,
+		// and in the same space as the spawn, with nothing between the two
+		// at knee or chest height, so never through a wall or a floor (below
+		// the map), and never far above or below the spawn.
+		bool Fits(const Vec& place, const std::vector<Vec>& taken)
+		{
+			if (std::abs(place[2] - standing.origin[2]) >= 24) return false;
+			for (const auto& other : taken)
+				if (Distance(place, other) < personalSpace) return false;
+			Vec lifted = place;
+			lifted[2] += 1;
+			const auto inside = Trace(place, lifted, false, &body, bodyMask);
+			if (inside.startsolid || inside.allsolid) return false;
+			for (float height : {24.0f, 56.0f})
+			{
+				Vec from = standing.origin, to = place;
+				from[2] += height;
+				to[2] += height;
+				const auto hit = Trace(from, to, false, nullptr, bodyMask);
+				if (hit.allsolid || (!hit.startsolid && hit.fraction < 0.99f)) return false;
+			}
+			return true;
+		}
+
+		// Whether the map has any floor under its spawn: maps without
+		// collision (iw4_credits) have none anywhere, and there the crew
+		// stands in line at the spawn's height since nothing can be checked.
+		bool HasCollision()
+		{
+			Vec top = standing.origin, bottom = standing.origin;
+			top[2] += 48;
+			bottom[2] -= 4096;
+			const auto hit = Trace(top, bottom, false, nullptr, bodyMask);
+			return hit.startsolid || hit.allsolid || hit.fraction < 1;
+		}
+
+		// Find where a character stands nearest to its spot in the line
+		// (forward and side from the spawn, as Offset()): the spot itself,
+		// the line squeezed in or a step forward or back, then rings around
+		// the spot, then rings around the spawn itself. Each place is put
+		// on the floor and checked with Fits().
+		std::optional<Vec> PlaceInLine(float forward, float side, const std::vector<Vec>& taken)
+		{
+			const auto tryAt = [&](Vec place) -> std::optional<Vec>
+			{
+				if (Ground(place) && Fits(place, taken)) return place;
+				return std::nullopt;
+			};
+			for (float squeeze : {1.0f, 0.85f, 0.7f})
+				for (float step : {0.0f, 18.0f, -18.0f})
+					if (auto p = tryAt(Offset(forward + step + std::abs(side) * (1.0f - squeeze) * 0.25f, side * squeeze))) return p;
+			for (float radius : {20.0f, 36.0f, 52.0f, 72.0f, 96.0f})
+				for (int i = 0; i < 8; ++i)
+				{
+					const float a = static_cast<float>(i) * 45.0f * radians;
+					if (auto p = tryAt(Offset(forward + std::cos(a) * radius, side + std::sin(a) * radius))) return p;
+				}
+			for (float radius : {0.0f, 36.0f, 72.0f, 108.0f, 144.0f})
+				for (int i = 0; i < (radius > 0 ? 12 : 1); ++i)
+				{
+					const float a = static_cast<float>(i) * 30.0f * radians;
+					if (auto p = tryAt(Offset(std::cos(a) * radius, std::sin(a) * radius))) return p;
+				}
+			return std::nullopt;
+		}
+
+		// The crew standing together facing the camera, the outer two a step
+		// back, each turned a little toward the middle, in their own pose.
+		// Every character is placed with traces (see PlaceInLine()): never
+		// inside a wall, a prop or another character, never under the map.
+		// One that has nowhere to stand is left out rather than drawn in a
+		// wall.
+		void UpdateLineup()
+		{
+			// A lobby shows the characters of the players in it; everywhere
+			// else the whole crew stands together.
+			const bool inLobby = MenuVisible("menu_xboxlive_privatelobby") || MenuVisible("zwnet_matchmaking") || MenuVisible("zwnet_party_lobby");
+			const auto roster = inLobby ? Roster() : std::array<int, 4>{0, 1, 2, 3};
+			if (lineupCount >= 0 && roster == lineupRoster) return;
+			const int count = static_cast<int>(std::ranges::count_if(roster, [](int m) { return m >= 0; }));
+			lineupRoster = roster;
+			lineupCount = count;
+			for (auto& zombie : zombies) zombie = {};
+			const bool collision = HasCollision();
+			const float middle = (static_cast<float>(count) - 1.0f) * 0.5f;
+			// The middle of the line first, so the crew stays together around
+			// the spawn when room is short and the outer ones give way.
+			std::array<std::size_t, survivorCount> order{};
+			for (std::size_t i = 0; i < survivorCount; ++i) order[i] = i;
+			std::ranges::stable_sort(order, [&](std::size_t a, std::size_t b)
+			{
+				return std::abs(static_cast<float>(a) - middle) < std::abs(static_cast<float>(b) - middle);
+			});
+			std::vector<Vec> taken;
+			for (std::size_t slot : order)
+			{
+				auto& survivor = survivors[slot];
+				survivor = {};
+				if (roster[slot] < 0 || static_cast<int>(slot) >= count) continue;
+				const int model = roster[slot];
+				const float side = (middle - static_cast<float>(slot)) * lineupSpacing;
+				const float forward = -std::abs(side) * 0.25f;
+				Vec place{};
+				if (collision)
+				{
+					const auto found = PlaceInLine(forward, side, taken);
+					if (!found) continue;
+					place = *found;
+				}
+				else
+					place = Offset(forward, side);
+				taken.push_back(place);
+				survivor.home = survivor.state.origin = place;
+				survivor.state.model = model;
+				survivor.state.weapon = lineupWeapons[model];
+				survivor.state.base = lineupPoses[model];
+				survivor.state.yaw = standing.yaw - side * 0.18f;
+				survivor.state.visible = true;
+			}
+		}
+
 		void Simulate(unsigned int now, float dt)
 		{
+			if (lineup)
+			{
+				UpdateLineup();
+				return;
+			}
+			lineupCount = -1;
 			UpdateRoster(now);
 			const int count = static_cast<int>(std::ranges::count_if(survivors, [](const Survivor& s) { return s.state.visible; }));
 			if (!count) return;
@@ -638,15 +793,33 @@ namespace Components::Menu
 
 	bool Actors::IsReady() { return ready; }
 
+	std::optional<std::array<float, 3>> Actors::CrewCenter()
+	{
+		return crewCenter;
+	}
+
+	void Actors::SetLineup(bool enabled, float room)
+	{
+		const float spacing = 52.0f * std::clamp(room, 0.65f, 1.0f);
+		if (lineup == enabled && spacing == lineupSpacing) return;
+		lineup = enabled;
+		lineupSpacing = spacing;
+		lineupCount = -1;
+		crewCenter.reset();
+		survivors = {};
+		zombies = {};
+	}
+
 	float Actors::Clearance(const std::array<float, 3>& from, const std::array<float, 3>& to)
 	{
 		// The camera collides with what you can see, not with player clips
-		// (0x10000), which fill the air around many spawns, and it keeps a
+		// (0x10000, not in the mask), which fill the air around many spawns, and it keeps a
 		// small box clear around itself so it never grazes a wall. A trace
 		// that starts in solid (the subject's point inside a prop) says
 		// nothing about the camera's path, so it counts as clear.
+		// What a bullet would hit (MASK_SHOT less water): walls, props, trees.
 		constexpr Game::Bounds camera{{0, 0, 0}, {8, 8, 8}};
-		const auto hit = Trace(from, to, false, &camera, 0x1);
+		const auto hit = Trace(from, to, false, &camera, 0x2806811);
 		if (hit.startsolid || hit.allsolid) return 1;
 		return std::clamp(hit.fraction, 0.0f, 1.0f);
 	}
@@ -688,6 +861,8 @@ namespace Components::Menu
 		if (std::ranges::any_of(entities, [](const NativeActor& actor) { return actor.created; })) R_SyncRenderThread();
 		for (auto& actor : entities) actor.Release();
 		RestoreEyes();
+		lineupCount = -1;
+		crewCenter.reset();
 		survivors = {};
 		zombies = {};
 		currentMap.clear();
@@ -752,6 +927,19 @@ namespace Components::Menu
 				|| (state.model == 4 && actor.variant != state.variant))) actor.Release();
 			if (state.visible && !actor.created) actor.Create(state.model, state.weapon, state.variant, static_cast<unsigned int>(i) + 32);
 		}
+		// Where the crew stands, for the camera to frame them.
+		{
+			Vec sum{};
+			int seen = 0;
+			for (std::size_t i = 0; i < survivorCount; ++i)
+				if (states[i].visible)
+				{
+					for (std::size_t axis = 0; axis < 3; ++axis) sum[axis] += states[i].origin[axis];
+					++seen;
+				}
+			if (seen) crewCenter = Vec{sum[0] / seen, sum[1] / seen, sum[2] / seen};
+			else crewCenter.reset();
+		}
 		ready = false;
 		for (std::size_t i = 0; i < states.size(); ++i)
 			if (states[i].visible && entities[i].created)
@@ -775,7 +963,7 @@ namespace Components::Menu
 		try
 		{
 			auto packet = nlohmann::json::from_msgpack(unpacked.data(), unpacked.data() + length).get<Packet>();
-			if (packet.version != 3 || !BackdropData::find_stage(packet.map)
+			if (packet.version != 4 || !BackdropData::find_stage(packet.map)
 				|| !std::ranges::all_of(packet.survivors, Valid) || !std::ranges::all_of(packet.zombies, Valid)) return;
 			std::lock_guard lock(snapshotMutex);
 			if (remote && remote->map == packet.map && !Due(packet.time, remote->time)) return;

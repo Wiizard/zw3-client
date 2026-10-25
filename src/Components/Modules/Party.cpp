@@ -2761,6 +2761,20 @@ namespace Components
 		ConnectError(error);
 	}
 
+	void Party::PreparePrivateMatchStart()
+	{
+		Dvar::Var("autosave_load").Set(false);
+		isAutosaveLaunchPending = false;
+
+		DeleteFileA(GetAutosavePath().data());
+
+		SaveZombieModePreference();
+
+		zombieModeStartValue = std::clamp(Dvar::Var("zw3_pref_zombiemode").Get<int>(), 0, zombieModeCount - 1);
+		isZombieModeRestorePending = true;
+		ApplyPendingZombieMode();
+	}
+
 	Party::Party()
 	{
 		SkipConfigStringChecksum();
@@ -2943,16 +2957,7 @@ namespace Components
 
 		UIScript::Add("PreparePrivateMatchStart", [](const UIScript::Token&)
 		{
-			Dvar::Var("autosave_load").Set(false);
-			isAutosaveLaunchPending = false;
-
-			DeleteFileA(GetAutosavePath().data());
-
-			SaveZombieModePreference();
-
-			zombieModeStartValue = std::clamp(Dvar::Var("zw3_pref_zombiemode").Get<int>(), 0, zombieModeCount - 1);
-			isZombieModeRestorePending = true;
-			ApplyPendingZombieMode();
+			PreparePrivateMatchStart();
 		});
 
 		UIScript::Add("SaveMapSetting", [](const UIScript::Token&)

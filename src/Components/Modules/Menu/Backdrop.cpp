@@ -7,6 +7,9 @@
 #include "../Scheduler.hpp"
 #include "../Command.hpp"
 #include "../Maps.hpp"
+#include "../Party.hpp"
+#include "../UIScript.hpp"
+#include "../Dvar.hpp"
 #include "Backdrop.hpp"
 #include "Actors.hpp"
 #include "Engine.hpp"
@@ -17,7 +20,6 @@
 #include "Budget.hpp"
 #include "Camera.hpp"
 #include "Director.hpp"
-#include "../FileSystem.hpp"
 
 
 #include <windows.h>
@@ -265,7 +267,7 @@ namespace Components
       // renderer is about to restart), whatever we loaded would be freed
       // again right away.
       //
-      constexpr int settle_msec (500);
+      constexpr int settle_msec (250);
 
       // The near plane, as the engine's own r_znear default.
       //
@@ -482,11 +484,33 @@ namespace Components
         unsigned int retries {0};
         bool random_pick {false};
 
-        // The cinematography of the map shown (see Director.hpp), and the
-        // shot last logged.
+        // The camera on the map shown (see Director.hpp).
         //
         director scene;
-        size_t logged_shot {static_cast<size_t> (-1)};
+
+        // The map a lobby has moved on to, and since when (see show()).
+        //
+        string wanted_map;
+        int wanted_since {0};
+
+        // The curtain between two maps, as H1's front end changes its
+        // scene: the shown map fades to black, the next one loads behind
+        // the black, and fades in once it is up (see draw_shade()). When it
+        // started closing over the shown map (-1 if it isn't), whether it
+        // is down (closing, closed or opening), when it went down, and when
+        // the next map started fading in (-1 before it does).
+        //
+        int closing_since {-1};
+        bool curtain {false};
+        int curtain_since {0};
+        int opening_since {-1};
+        string prefetched_map;  // The lobby map last read ahead.
+
+        // The private lobby's ready countdown (see ready_toggle ()).
+        //
+        bool ready {false};
+        int ready_deadline {0};
+        string ready_map;
 
         // What the log has already been told, so that per-frame conditions
         // are said once when they start rather than every frame.
@@ -605,9 +629,17 @@ namespace Components
       // followed_menus), or nullopt if there is none or its dvar names no
       // map.
       //
+      void
+      prefetch_map (string_view map);
+
       optional<BackdropDirection>
       followed_direction ()
       {
+        // Lobbies keep the menu's backdrop: switching it to the lobby's map
+        // on every change cost a load each time. The lobby's map is read
+        // ahead into the file cache instead, and loaded for real behind the
+        // ready countdown (see ready_tick ()), so the match starts from it.
+        //
         for (const followed_menu& f: followed_menus)
         {
           if (!menu_open (f.menu))
@@ -615,8 +647,11 @@ namespace Components
 
           const char* m (Dvar_GetString (f.map_dvar));
 
-          if (m != nullptr && *m != '\0')
-            return BackdropDirection {m, nullopt, nullopt};
+          if (m != nullptr && *m != '\0' && s.prefetched_map != m && s.map != m)
+          {
+            prefetch_map (m);
+            s.prefetched_map = m;
+          }
         }
 
         return nullopt;
@@ -857,6 +892,8 @@ namespace Components
         enter (phase::failed);
         s.failure = why;
         s.shown = false;
+        s.curtain = false;
+        s.closing_since = s.opening_since = -1;
       }
 
       // Return the figure's placement: where its first model's origin is in
@@ -1130,13 +1167,18 @@ namespace Components
       {
         constexpr unsigned int max_retries (6);
 
-        if (!s.random_pick || s.retries >= max_retries)
+        // A map a lobby chose that can't be shown gives way to the usual
+        // backdrop rather than leaving the lobby without one.
+        //
+        const bool from_menu (s.chosen_for.starts_with ("menu "));
+
+        if ((!s.random_pick && !from_menu) || s.retries >= max_retries)
         {
           fail (why);
           return;
         }
 
-        LogLine{} << "backdrop: " << why << "; picking another map";
+        LogLine{} << "backdrop: " << why << (from_menu ? "; showing the usual backdrop instead" : "; picking another map");
 
         s.rejected.push_back (s.map);
         ++s.retries;
@@ -1148,14 +1190,25 @@ namespace Components
       }
 
       constexpr int reveal_msec (1400);
+      constexpr int swap_delay_msec (350);
 
-      // The scene file's text (see Director.hpp), empty if there is none.
+      // The curtain (see draw_shade()): how long the shown map takes to fade
+      // to black, how long the black holds before it is let go (so that the
+      // black frame is on screen before the stall of letting it go), how
+      // long the next one takes to fade in, and how long the curtain stays
+      // down at most waiting for it.
       //
-      string
-      scene_file ()
+      constexpr int fade_out_msec (450);
+      constexpr int curtain_hold_msec (120);
+      constexpr int fade_in_msec (900);
+      constexpr int curtain_max_msec (20000);
+
+      void
+      lift_curtain () noexcept
       {
-        FileSystem::File f ("lobby/backdrop_scenes.json");
-        return f.Exists () ? f.GetBuffer () : string ();
+        s.curtain = false;
+        s.closing_since = -1;
+        s.opening_since = -1;
       }
 
       // The world collision the director fits its shots against.
@@ -1172,87 +1225,196 @@ namespace Components
       void
       plan_scene ()
       {
-        scene_script script;
+        // Every map gets the same treatment: the crew posing together,
+        // filmed from the front (see BackdropData::lineup_script).
+        //
+        scene_script script (lineup_script (s.seed ^ std::hash<string> {} (s.map)));
 
-        try
+        // Keep the camera inside the rendered world, a little in from its
+        // edges. A world without usable bounds leaves it unbounded.
+        //
+        s.scene.unbound ();
+
+        if (const GfxWorld* w = *rendererWorld;
+            w != nullptr && w->bounds.halfSize[0] > 64.0f &&
+            w->bounds.halfSize[1] > 64.0f && w->bounds.halfSize[2] > 32.0f)
         {
-          script = script_for (scene_file (), s.map, s.seed);
-        }
-        catch (const exception& e)
-        {
-          LogLine{} << "backdrop: lobby/backdrop_scenes.json: " << e.what ()
-                    << ", filming " << s.map << " automatically";
-          script = automatic_script (s.seed);
+          const Game::Bounds& b (w->bounds);
+          vec3 lo, hi;
+
+          for (size_t i (0); i != 3; ++i)
+          {
+            const float inset (min (b.halfSize[i] * 0.5f, 24.0f));
+            lo[i] = b.midPoint[i] - b.halfSize[i] + inset;
+            hi[i] = b.midPoint[i] + b.halfSize[i] - inset;
+          }
+
+          s.scene.bound (lo, hi);
         }
 
-        const string style (script.style);
         s.scene.plan (s.standing, move (script), clearance (&scene_clearance));
         s.standing = s.scene.subject ();
-        s.logged_shot = static_cast<size_t> (-1);
+        Actors::SetLineup (true, s.scene.room ());
 
-        LogLine{} << format ("backdrop: filming {} ({}): {} shots, a {:.0f} s loop",
+        LogLine{} << format ("backdrop: filming {} at ({:.0f}, {:.0f}, {:.0f}) facing {:.0f}, {:.0f}% of the room wanted",
                              s.map,
-                             style,
-                             s.scene.shot_count (),
-                             s.scene.loop_length ());
+                             s.standing.origin[0], s.standing.origin[1], s.standing.origin[2],
+                             s.standing.yaw, s.scene.room () * 100.0f);
       }
 
       // The maps a random backdrop may be: the curated stock ones, every map
       // of the lobby's map list, and the custom maps found installed. Which
       // of them are installed and fit is decided when one is picked.
       //
+      // Start reading a map's files into the system's file cache in the
+      // background, at low I/O priority, so that loading it afterwards
+      // doesn't wait on the disk. Asking again is cheap: the prefetcher
+      // skips files it has queued or read in the last minute.
+      //
+      void
+      prefetch_map (string_view map)
+      {
+        const string m (map);
+
+        if (optional<filesystem::path> f = zone_file (m))
+          FastFiles::PrefetchPath (*f);
+
+        Maps::PrefetchMapAssets (m);
+      }
+
+      // The private lobby's ready countdown, in the style of Black Ops II:
+      // the host readies up, a countdown runs, and the match starts when it
+      // ends. Behind it the backdrop loads the match's map (see show ()),
+      // so when the countdown ends the level load finds the map in memory
+      // already and the match comes up at once. Pressing the button again
+      // during the countdown cancels it.
+      //
+      // zw3_ready_countdown tells the menu what to show: 0 when idle, the
+      // seconds left while counting, -1 while waiting for the map to finish
+      // loading after the count reached zero.
+      //
+      constexpr int ready_msec (6000);
+      constexpr int ready_wait_msec (12000); // At most, for the map, after.
+
+      void
+      ready_set (int value)
+      {
+        Dvar::Var countdown ("zw3_ready_countdown");
+
+        if (countdown.IsValid () && countdown.Get<int> () != value)
+          countdown.Set (value);
+      }
+
+      void
+      ready_cancel (string_view why)
+      {
+        if (!s.ready)
+          return;
+
+        LogLine{} << "backdrop: ready countdown cancelled: " << why;
+        s.ready = false;
+        s.ready_map.clear ();
+        ready_set (0);
+      }
+
+      void
+      ready_toggle ()
+      {
+        if (s.ready)
+        {
+          ready_cancel ("the host cancelled it");
+          return;
+        }
+
+        if (!Party::IsHostingParty ())
+          return;
+
+        const char* m (Dvar_GetString ("ui_mapname"));
+
+        s.ready = true;
+        s.ready_deadline = Sys_Milliseconds () + ready_msec;
+        s.ready_map = m != nullptr ? m : "";
+        ready_set (ready_msec / 1000);
+
+        if (!s.ready_map.empty ())
+          prefetch_map (s.ready_map);
+
+        LogLine{} << "backdrop: ready countdown started for "
+                  << (s.ready_map.empty () ? string ("?") : s.ready_map);
+      }
+
+      void
+      ready_tick ()
+      {
+        if (!s.ready)
+          return;
+
+        if (!menu_open ("menu_xboxlive_privatelobby"))
+        {
+          ready_cancel ("the lobby closed");
+          return;
+        }
+
+        if (!Party::IsHostingParty ())
+        {
+          ready_cancel ("no longer the host");
+          return;
+        }
+
+        const int now (Sys_Milliseconds ());
+        const int left (s.ready_deadline - now);
+
+        if (left > 0)
+        {
+          ready_set ((left + 999) / 1000);
+          return;
+        }
+
+        // Counted down: go once the match's map is in, or it can't be, or
+        // it has had long enough.
+        //
+        const bool in (s.current == phase::ready && I_stricmp (s.map.c_str (), s.ready_map.c_str ()) == 0);
+        const bool hopeless (s.ready_map.empty () || s.current == phase::failed || !Backdrop::IsEnabled () ||
+                             ranges::find (s.rejected, s.ready_map) != s.rejected.end ());
+
+        if (!in && !hopeless && -left < ready_wait_msec)
+        {
+          ready_set (-1);
+          return;
+        }
+
+        LogLine{} << "backdrop: ready countdown over, starting "
+                  << s.ready_map << (in ? " (in memory)" : " (not preloaded)");
+
+        s.ready = false;
+        s.ready_map.clear ();
+        ready_set (0);
+
+        Party::PreparePrivateMatchStart ();
+        Command::Execute ("selectStringTableEntryInDvar mp/didyouknow.csv 0 didyouknow", false);
+        Command::Execute ("xpartygo", false);
+      }
+
+      // The maps the backdrop shows when no lobby has chosen one: the
+      // classic zombies maps. In a lobby it shows the lobby's map.
+      //
+      constexpr const char* zombie_backdrops[]
+      {
+        "mp_zombie_theater",  // Kino der Toten
+        "mp_zombie_pentagon", // Five
+        "mp_cod5_prototype",  // Nacht der Untoten
+        "mp_factory_sh",      // Der Riese
+        "mp_zombie_diner"     // Diner
+      };
+
       vector<const stage*>
       random_pool ()
       {
         vector<const stage*> r;
 
-        auto add = [&r] (string_view m)
-        {
+        for (const char* m: zombie_backdrops)
           if (const stage* st = find_stage (m))
-            if (ranges::find (r, st) == r.end ())
-              r.push_back (st);
-        };
-
-        for (const stage& st: stages ())
-          r.push_back (&st);
-
-        const dvar_t* pool (Game::Dvar_FindVar ("ui_backdrop_pool"));
-        const char* p (pool != nullptr && pool->current.string != nullptr ? pool->current.string : "all");
-
-        if (I_stricmp (p, "curated") == 0)
-          return r;
-
-        // The campaign and Spec Ops levels of the list are left to an
-        // explicit ui_backdrop unless asked for: they were built for a
-        // different front end and some (the credits) are no place to stand.
-        //
-        const bool everything (I_stricmp (p, "everything") == 0);
-
-        try
-        {
-          FileSystem::File f ("lobby/maps.json");
-
-          if (f.Exists ())
-          {
-            const nlohmann::json j (nlohmann::json::parse (f.GetBuffer ()));
-
-            for (const nlohmann::json& m: j.value ("maps", nlohmann::json::array ()))
-              if (m.is_object () && m.contains ("id") && m["id"].is_string ())
-              {
-                const string id (m["id"].get<string> ());
-
-                if (everything || id.starts_with ("mp_"))
-                  add (id);
-              }
-          }
-        }
-        catch (const nlohmann::json::exception& e)
-        {
-          LogLine{} << "backdrop: lobby/maps.json: " << e.what ();
-        }
-
-        for (const string& m: Maps::GetCustomMaps ())
-          add (m);
+            r.push_back (st);
 
         return r;
       }
@@ -1349,8 +1511,19 @@ namespace Components
         LogLine{} << "backdrop: " << installed.size () << " of " << cs.size ()
                   << " stages are installed, seed " << s.seed;
 
+        // A lobby's map that can't be shown here is passed over for the
+        // usual backdrop (show() drops directions to rejected maps).
+        //
+        auto reject_menu_map = [&sel] ()
+        {
+          if (sel.kind == selection_kind::map && sel.stage != nullptr &&
+              s.chosen_for.starts_with ("menu "))
+            s.rejected.emplace_back (sel.stage->map);
+        };
+
         if (installed.empty ())
         {
+          reject_menu_map ();
           fail (sel.kind == selection_kind::map
                 ? format ("{} is not installed", sel.stage->map)
                 : string ("no backdrop stage is installed"));
@@ -1440,6 +1613,7 @@ namespace Components
 
         if (optional<string> why = shortfall (r, q))
         {
+          reject_menu_map ();
           fail (format ("not loading {}: {}", st.map, *why));
           return;
         }
@@ -1475,7 +1649,7 @@ namespace Components
       // build the scene.
       //
       void
-      finish ()
+      finish (bool spread = true)
       {
         // Don't ask about the zone while the database is still working:
         // DB_IsFileLoaded waits for it if it is. Give the request a frame
@@ -1527,6 +1701,18 @@ namespace Components
         // the renderer reads the map's entities from it every scene, to
         // find the stage the view is in.
         //
+        // A map's zone may name its world differently from the zone (a
+        // shared base map, a converted campaign level): take the world the
+        // zone actually brought.
+        //
+        if (cm->name != nullptr && s.world != cm->name &&
+            string_view (cm->name).ends_with (".d3dbsp") &&
+            cm->mapEnts != nullptr && cm->mapEnts->entityString != nullptr)
+        {
+          LogLine{} << "backdrop: " << s.map << "'s world is " << cm->name;
+          s.world = cm->name;
+        }
+
         if (cm->name == nullptr || s.world != cm->name ||
             cm->mapEnts == nullptr || cm->mapEnts->entityString == nullptr)
         {
@@ -1586,6 +1772,14 @@ namespace Components
 
           LogLine{} << "backdrop: handing " << s.world << " to the renderer";
           LoadWorld (s.world.c_str ());
+
+          // Build the scene on the next frame: handing the world over is the
+          // longest step on the main thread, and the menus get a frame in
+          // between rather than one long stall.
+          //
+          if (spread && (*rendererWorld) != nullptr && (*rendererWorld)->name != nullptr &&
+              s.world == (*rendererWorld)->name)
+            return;
         }
         else
           LogLine{} << "backdrop: the renderer already has "
@@ -1618,6 +1812,12 @@ namespace Components
         s.start_time = s.last_time = s.heartbeat = Sys_Milliseconds ();
         s.frames = 0;
         s.hidden = 0;
+
+        if (s.curtain)
+        {
+          s.closing_since = -1;
+          s.opening_since = s.start_time;
+        }
 
         LogLine{} << format ("backdrop: showing {} from ({}, {}, {}) facing "
                              "{}",
@@ -1701,17 +1901,16 @@ namespace Components
         {
           const double seconds ((now - s.start_time) / 1000.0);
           const clearance clear (&scene_clearance);
+
+          // Keep the crew where they actually stand in the frame, wherever
+          // the floor and the room put them (see director::track).
+          //
+          if (const optional<array<float, 3>> c = Actors::CrewCenter ())
+            s.scene.track (*c);
+
           const view v (s.scene.at (seconds,
                                     static_cast<float> (w) / static_cast<float> (h),
                                     &clear));
-
-          if (const size_t shot = s.scene.shot_index (seconds); shot != s.logged_shot)
-          {
-            LogLine{} << format ("backdrop: shot {} of {} at ({:.0f}, {:.0f}, {:.0f})",
-                                 shot + 1, s.scene.shot_count (),
-                                 v.origin[0], v.origin[1], v.origin[2]);
-            s.logged_shot = shot;
-          }
 
           r.view.tanHalfFovX = v.fov.x;
           r.view.tanHalfFovY = v.fov.y;
@@ -1726,6 +1925,17 @@ namespace Components
         }
 
         r.view.zNear = z_near;
+
+        // Push the near plane out toward the crew, so the leaves, grass and
+        // bushes the camera stands among (foliage has no collision for it to
+        // avoid) are clipped away instead of filling the frame.
+        //
+        if (directed == nullptr)
+          if (const optional<array<float, 3>> c = Actors::CrewCenter ())
+          {
+            const float d (static_cast<float> (hypot (r.view.org[0] - (*c)[0], hypot (r.view.org[1] - (*c)[1], r.view.org[2] - (*c)[2]))));
+            r.view.zNear = clamp (d * 0.32f, z_near, 110.0f);
+          }
         r.time = now;
 
         // A popup that blurs the world in a match blurs the backdrop too.
@@ -1775,8 +1985,11 @@ namespace Components
           r.dof.farBlur = figure->background_blur;
         }
 
-        r.charPrimaryLightScale.diffuseScale = 1.0f;
-        r.charPrimaryLightScale.specularScale = 1.0f;
+        // Light the crew a little brighter than the map would, so they read
+        // in dark maps as well as lit ones.
+        //
+        r.charPrimaryLightScale.diffuseScale = 1.8f;
+        r.charPrimaryLightScale.specularScale = 1.4f;
         r.localClientNum = 0;
 
         // Build the scene.
@@ -1917,6 +2130,7 @@ namespace Components
 
           s.joining = false;
           s.remote_updates_logged = false;
+          lift_curtain ();
 
           // Once the match is up, the world is the match's (see
           // match_load_world()), and only the character is ours to let go.
@@ -1979,10 +2193,29 @@ namespace Components
         if (!dir)
           dir = followed_direction ();
 
+        // Behind the ready countdown the backdrop loads the match's map, so
+        // the level load that follows finds it in memory (see level_load ()).
+        //
+        if (!dir && s.ready && !s.ready_map.empty ())
+          dir = BackdropDirection {s.ready_map, nullopt, nullopt};
+
         // See what is asked for: the map of a menu's direction, if there
         // is one with a map we may show, and the ui_backdrop dvar
         // otherwise.
         //
+        if (dir && ranges::find (s.rejected, dir->map) != s.rejected.end ())
+          dir.reset ();
+
+        // A lobby that moves to another map: start reading it at once, so
+        // it's in memory by the time the choice has settled (see the swap
+        // in the ready phase below).
+        //
+        if (dir && dir->map != s.map && dir->map != s.prefetched_map)
+        {
+          prefetch_map (dir->map);
+          s.prefetched_map = dir->map;
+        }
+
         if (dir)
         {
           if (const stage* st = find_stage (dir->map))
@@ -2045,6 +2278,8 @@ namespace Components
 
         if (sel.kind == selection_kind::off)
         {
+          lift_curtain ();
+
           if (s.current == phase::loading && Sys_IsDatabaseReady2 ()) finish ();
           if (s.current == phase::ready || s.current == phase::failed) unload ();
           return;
@@ -2103,12 +2338,74 @@ namespace Components
           {
             // unload() synchronizes the render thread before a map swap.
             //
+            // Wait for a lobby's choice to settle before swapping maps:
+            // scrolling through the map list shouldn't load every map it
+            // passes over.
+            //
             if (sel.stage != nullptr && sel.stage->map != s.map)
             {
+              if (s.wanted_map != sel.stage->map)
+              {
+                s.wanted_map = sel.stage->map;
+                s.wanted_since = now;
+              }
+
+              if (now - s.wanted_since < swap_delay_msec)
+              {
+                render (dir && dir->view ? &*dir->view : nullptr,
+                        dir && dir->figure ? &*dir->figure : nullptr);
+                s.last_direction = move (dir);
+                break;
+              }
+
+              // Fade the shown map to black first and let it go behind the
+              // black (see draw_shade()).
+              //
+              if (s.closing_since < 0)
+              {
+                // From wherever a fade in had got to, so the black never
+                // jumps.
+                //
+                const float opened (s.opening_since >= 0
+                                    ? clamp (static_cast<float> (now - s.opening_since) / fade_in_msec, 0.0f, 1.0f)
+                                    : 1.0f);
+                s.closing_since = now - static_cast<int> ((1.0f - opened) * fade_out_msec);
+                s.opening_since = -1;
+
+                if (!s.curtain)
+                  s.curtain_since = now;
+
+                s.curtain = true;
+              }
+
+              if (now - s.closing_since < fade_out_msec + curtain_hold_msec)
+              {
+                render (dir && dir->view ? &*dir->view : nullptr,
+                        dir && dir->figure ? &*dir->figure : nullptr);
+                s.last_direction = move (dir);
+                break;
+              }
+
               LogLine{} << "backdrop: asked for '" << value << "' with "
                         << s.map << " loaded, swapping it";
+              s.closing_since = -1;
+              s.curtain_since = now;
+              const int settled (s.front_end_since);
               unload ();
+              s.front_end_since = settled; // Already settled: load at once.
               return;
+            }
+
+            s.wanted_map.clear (); // Back on the map shown: nothing pending.
+
+            // Asked for the shown map again while it was fading out: fade
+            // it back in from wherever the fade had got to.
+            //
+            if (s.closing_since >= 0)
+            {
+              const float closed (clamp (static_cast<float> (now - s.closing_since) / fade_out_msec, 0.0f, 1.0f));
+              s.closing_since = -1;
+              s.opening_since = now - static_cast<int> ((1.0f - closed) * fade_in_msec);
             }
 
             if (value != s.chosen_for)
@@ -2130,9 +2427,81 @@ namespace Components
         }
       }
 
+      // Darken the scene behind the menus so the fight going on in it
+      // doesn't pull the eye off them.
+      // A 2D quad queued ahead of the menus: the scene is 3D and drawn
+      // before every 2D command, so this lands between the two and only
+      // the scene is darkened.
+      //
+      void
+      draw_shade ()
+      {
+        constexpr float shade (0.4f);
+
+        const auto smooth = [] (float t) noexcept
+        {
+          t = clamp (t, 0.0f, 1.0f);
+          return t * t * (3.0f - 2.0f * t);
+        };
+
+        const int now (Sys_Milliseconds ());
+        const bool scene (s.shown && s.current == phase::ready);
+        float alpha (shade);
+
+        // The curtain between two maps (see the swap in show()): only ever
+        // in the front end, and never left down for long.
+        //
+        if (s.curtain && (!front_end () || now - s.curtain_since > curtain_max_msec))
+          lift_curtain ();
+
+        if (s.curtain)
+        {
+          if (scene && s.closing_since >= 0)
+            alpha = shade + (1.0f - shade) * smooth (static_cast<float> (now - s.closing_since) / fade_out_msec);
+          else if (scene && s.opening_since >= 0)
+          {
+            const float t (static_cast<float> (now - s.opening_since) / fade_in_msec);
+
+            alpha = 1.0f - (1.0f - shade) * smooth (t);
+
+            if (t >= 1.0f)
+              lift_curtain ();
+          }
+          else
+            alpha = 1.0f; // Closed: the next map is loading.
+        }
+        else if (!scene)
+          return;
+
+        // Looked up every frame (a hash lookup): a cached handle would not
+        // survive the material system restarting with the renderer.
+        //
+        Material* const white (Game::Material_RegisterHandle != nullptr
+                               ? Game::Material_RegisterHandle ("white", 0)
+                               : nullptr);
+
+        int w, h;
+        float aspect;
+        CL_GetScreenDimensions (&w, &h, &aspect);
+
+        if (white == nullptr || w <= 0 || h <= 0)
+          return;
+
+        const float color[4] {0.0f, 0.0f, 0.0f, alpha};
+        Engine::Bind<Game::CL_DrawStretchPicPhysical_t> (0x14001BE90) (
+          0.0f, 0.0f, static_cast<float> (w), static_cast<float> (h),
+          0.0f, 0.0f, 1.0f, 1.0f, color, white);
+      }
+
       void
       draw_screen_field (unsigned int local_client_num, int refresh_ui)
       {
+        // The shade has to be queued before the menus, which the screen
+        // field draws, or it darkens them too.
+        //
+        if (Game::Sys_IsMainThread ())
+          draw_shade ();
+
         screen_field (local_client_num, refresh_ui);
         if (!Game::Sys_IsMainThread ()) return;
 
@@ -2181,7 +2550,7 @@ namespace Components
         enter (phase::loading);
         s.loading_since = Sys_Milliseconds () - 1000;
 
-        finish ();
+        finish (false); // All at once: the level load is waiting on it.
       }
 
       // CG_Init's call to LoadWorld, which hands the match's world to the
@@ -2576,7 +2945,26 @@ namespace Components
     {
       if (headless ()) return;
       Engine::Initialize ();
-      Scheduler::OnGameInitialized ([] { backdrop_dvar (); shown_map_dvar (); }, Scheduler::Pipeline::MAIN);
+      Scheduler::OnGameInitialized ([]
+      {
+        backdrop_dvar ();
+        shown_map_dvar ();
+        Dvar::Register ("zw3_ready_countdown", 0, -1, 60, 0u,
+                        "The private lobby's ready countdown: 0 idle, seconds left, or -1 loading the map");
+
+        // Choose this session's backdrop now and start reading it (and the
+        // other default maps after it) into the system's file cache while
+        // the game finishes starting, so that by the time the menus are up
+        // its load is a decompression from memory rather than a disk read.
+        //
+        if (s.seed == 0)
+          s.seed = random_device {} () | 1;
+
+        const vector<const stage*> pool (random_pool ());
+
+        for (size_t i (0); i != pool.size (); ++i)
+          prefetch_map (pool[(s.seed + i) % pool.size ()]->map);
+      }, Scheduler::Pipeline::MAIN);
       Command::Add ("ui_backdrop_status", []
       {
         const dvar_t* setting (backdrop_dvar ());
@@ -2586,29 +2974,8 @@ namespace Components
                        static_cast<int> (Game::CL_GetLocalClientConnectionState (0)), Actors::IsReady ());
         if (!s.failure.empty ()) Logger::Print ("menu backdrop: {}\n", s.failure);
       });
-      Scheduler::OnGameInitialized ([]
-      {
-        Game::Dvar_RegisterString ("ui_backdrop_pool", "all", Game::DVAR_ARCHIVE,
-                                   "Maps a random backdrop is picked from: all (every installed multiplayer and zombies map that fits), everything (campaign levels too), or curated (the stock maps)");
-      }, Scheduler::Pipeline::MAIN);
-      Command::Add ("ui_backdrop_scene_reload", []
-      {
-        // Re-read lobby/backdrop_scenes.json and refilm the map shown,
-        // without reloading it: what a scene author iterates with.
-        if (s.current != phase::ready) { Logger::Print ("menu backdrop: no map is shown\n"); return; }
-        Actors::Reset (); // An anchor that moved takes the fight with it.
-        plan_scene ();
-        s.start_time = Sys_Milliseconds ();
-      });
-      Command::Add ("ui_backdrop_scene_status", []
-      {
-        if (s.current != phase::ready) { Logger::Print ("menu backdrop: no map is shown\n"); return; }
-        const double seconds ((Sys_Milliseconds () - s.start_time) / 1000.0);
-        const spawn& a (s.scene.subject ());
-        Logger::Print ("menu backdrop: {} shot {} of {}, {:.1f} s into a {:.0f} s loop; subject at ({:.0f}, {:.0f}, {:.0f}) facing {:.0f}\n",
-                       s.map, s.scene.shot_index (seconds) + 1, s.scene.shot_count (),
-                       seconds, s.scene.loop_length (), a.origin[0], a.origin[1], a.origin[2], a.yaw);
-      });
+      UIScript::Add ("ZW3_ReadyToggle", [] (const UIScript::Token&) { ready_toggle (); });
+      Scheduler::Loop ([] { ready_tick (); }, Scheduler::Pipeline::MAIN);
       Command::Add ("ui_backdrop_reload", []
       {
         if (!hooksInstalled) { Logger::Print ("menu backdrop: hooks failed to install; restart with a compatible client\n"); return; }

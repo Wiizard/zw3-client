@@ -706,7 +706,7 @@ namespace Components
         // The spinner's skull: decoded and shrunk here (see load_icon ()),
         // or, failing that, the image as the game would load it. Our own
         // copy either way, so it outlives any zone.
-        // Made at the size it is drawn at for this resolution (64 at 720p,
+        // Made at the size it is drawn at for this resolution (72 at 720p,
         // see draw_spinner ()), so it is neither shrunk nor stretched; made
         // again when the renderer restarts (a resolution change).
         unsigned int icon_size (256);
@@ -715,7 +715,7 @@ namespace Components
           float aspect;
           CL_GetScreenDimensions (&sw, &sh, &aspect);
           if (sh > 0)
-            icon_size = static_cast<unsigned int> (clamp (static_cast<float> (sh) * 64.0f / 720.0f, 48.0f, 1024.0f));
+            icon_size = static_cast<unsigned int> (clamp (static_cast<float> (sh) * 72.0f / 720.0f, 48.0f, 1024.0f));
         }
         Game::GfxImage* skull (load_icon ("skullicon_old", icon_size));
         if (skull == nullptr) skull = Materials::LoadPreviewImage ("skullicon_old");
@@ -796,11 +796,23 @@ namespace Components
 
         if (d == nullptr)
         {
+          // The backdrop is always on: the dvar only reports it, and a
+          // value left in a config by an older build (`seta ui_backdrop
+          // off`) is overridden and no longer saved.
           d = Dvar_RegisterString (
             "ui_backdrop",
             "random",
-            DVAR_ARCHIVE,
-            "Menu backdrop: off or random. Lobbies follow the selected match map.");
+            DVAR_ROM,
+            "Menu backdrop: always on. Lobbies follow the selected match map.");
+
+          if (d != nullptr)
+          {
+            const_cast<dvar_t*> (d)->flags &= ~static_cast<unsigned int> (DVAR_ARCHIVE);
+            const_cast<dvar_t*> (d)->flags |= DVAR_ROM;
+
+            if (d->current.string == nullptr || string_view (d->current.string) != "random")
+              Game::Dvar_SetString (d, "random");
+          }
 
           LogLine{} << "backdrop: ui_backdrop registered as '"
                     << (d != nullptr && d->current.string != nullptr
@@ -849,6 +861,44 @@ namespace Components
         s.published_map = m;
       }
 
+      // The backdrop's dvars are read-only: nothing a user types in the
+      // console or leaves in a config changes them. They are registered
+      // read-only and never archived, and if anything still writes them
+      // (a config that ran before they were registered, a `set` that got
+      // through), they are put back the next frame.
+      //
+      bool dvars_registered (false);
+
+      void
+      lock_backdrop_dvars ()
+      {
+        if (!dvars_registered) return; // Not before Com_Init (see backdrop_dvar ()).
+
+        const dvar_t* setting (backdrop_dvar ());
+        const dvar_t* shown (shown_map_dvar ());
+
+        for (const dvar_t* d : {setting, shown})
+        {
+          if (d == nullptr) continue;
+          auto* w (const_cast<dvar_t*> (d));
+          w->flags = (w->flags & ~static_cast<unsigned int> (DVAR_ARCHIVE)) | DVAR_ROM;
+        }
+
+        if (setting != nullptr &&
+            (setting->current.string == nullptr || string_view (setting->current.string) != "random"))
+        {
+          LogLine{} << "backdrop: ui_backdrop is read-only, putting it back";
+          Dvar_SetString (setting, "random");
+        }
+
+        if (shown != nullptr &&
+            (shown->current.string == nullptr || shown->current.string != s.published_map))
+        {
+          LogLine{} << "backdrop: ui_backdrop_map is read-only, putting it back";
+          Dvar_SetString (shown, s.published_map.c_str ());
+        }
+      }
+
       // Return true if the menu is open in the front end's UI context.
       //
       bool
@@ -875,6 +925,180 @@ namespace Components
       void
       prefetch_map (string_view map);
 
+      // The map zones installed: every map's fast file in usermaps/<map>/
+      // and anywhere under zone/ (english, dlc, the mod's own dlc...), the
+      // ones a lobby can name. Read once, the first time a name is needed
+      // that isn't installed as it is.
+      //
+      const vector<string>&
+      installed_maps ()
+      {
+        static optional<vector<string>> r;
+
+        if (r)
+          return *r;
+
+        r.emplace ();
+
+        using install_path_fn = const char* (*) ();
+        const char* base (Engine::Bind<install_path_fn> (0x14028E230) ());
+        if (base == nullptr)
+          return *r;
+
+        const filesystem::path root (base);
+        std::error_code ec;
+
+        auto consider = [] (const filesystem::path& f, bool usermap)
+        {
+          if (f.extension () != ".ff") return;
+          const string stem (f.stem ().string ());
+          if (stem.ends_with ("_load")) return;
+
+          std::error_code e;
+          const bool mp (stem.starts_with ("mp_") || stem.starts_with ("zm_"));
+          if (!usermap && !mp &&
+              !filesystem::is_regular_file (f.parent_path () / (stem + "_load.ff"), e))
+            return;
+
+          string name;
+          for (char c: stem) name.push_back (c >= 'A' && c <= 'Z' ? static_cast<char> (c - 'A' + 'a') : c);
+          if (ranges::find (*r, name) == r->end ()) r->push_back (move (name));
+        };
+
+        for (filesystem::directory_iterator i (root / "usermaps", ec), e; !ec && i != e; i.increment (ec))
+        {
+          std::error_code e2;
+          if (!i->is_directory (e2)) continue;
+          const filesystem::path f (i->path () / (i->path ().filename ().string () + ".ff"));
+          if (filesystem::is_regular_file (f, e2)) consider (f, true);
+        }
+
+        ec.clear ();
+        for (filesystem::recursive_directory_iterator i (root / "zone", filesystem::directory_options::skip_permission_denied, ec), e;
+             !ec && i != e; i.increment (ec))
+        {
+          if (i.depth () > 4) { i.disable_recursion_pending (); continue; }
+          std::error_code e2;
+          if (i->is_regular_file (e2)) consider (i->path (), false);
+        }
+
+        // Only what the engine itself finds by name.
+        erase_if (*r, [] (const string& m) { return !Engine::ZoneFile (m); });
+
+        LogLine{} << "backdrop: " << r->size () << " map zones are installed";
+        return *r;
+      }
+
+      // The installed map a lobby's map name stands for.
+      //
+      // Usually the same name. But the lobby's lists don't always spell a
+      // map the way its files are named (Hijacked is mp_hijacked in the
+      // arena and mp_box_hijacked in maps.json, and its files are
+      // usermaps/mp_box_hjacked), and a map shouldn't lose its backdrop
+      // over that. A name that isn't installed is matched against the
+      // installed maps by its words (mp_, and the cod5/sh/ss/box style tags
+      // aside), then by its consonants (hijacked, hjacked), and taken only
+      // if exactly one installed map matches best.
+      //
+      map<string, string, less<>> lobby_alias; // Installed map -> lobby's name.
+
+      string
+      installed_map (string_view requested)
+      {
+        if (requested.empty ())
+          return {};
+
+        static map<string, string, less<>> cache;
+
+        if (auto i (cache.find (requested)); i != cache.end ())
+          return i->second;
+
+        string lower;
+        for (char c: requested) lower.push_back (c >= 'A' && c <= 'Z' ? static_cast<char> (c - 'A' + 'a') : c);
+
+        string r (lower);
+
+        if (!Engine::ZoneFile (lower))
+        {
+          static const string_view tags[] {"mp", "zm", "cod5", "waw", "sh", "ss", "box", "bo2", "zombie"};
+
+          auto words = [] (string_view n)
+          {
+            vector<string> w;
+            size_t b (0);
+            while (b <= n.size ())
+            {
+              const size_t e (min (n.find ('_', b), n.size ()));
+              const string_view t (n.substr (b, e - b));
+              if (!t.empty () && ranges::find (tags, t) == ranges::end (tags)) w.emplace_back (t);
+              b = e + 1;
+            }
+            return w;
+          };
+
+          auto consonants = [] (const vector<string>& w)
+          {
+            string c;
+            for (const string& t: w)
+              for (char x: t)
+                if (string_view ("aeiou").find (x) == string_view::npos) c.push_back (x);
+            return c;
+          };
+
+          const vector<string> want (words (lower));
+          const string want_c (consonants (want));
+
+          int best (0);
+          vector<string> found;
+
+          for (const string& m: installed_maps ())
+          {
+            const vector<string> have (words (m));
+            const string have_c (consonants (have));
+
+            int score (0);
+            if (!want.empty () && have == want)                               score = 4;
+            else if (!want_c.empty () && have_c == want_c)                    score = 3;
+            else if (want_c.size () >= 4 && have_c.find (want_c) != string::npos) score = 2;
+            else if (have_c.size () >= 4 && want_c.find (have_c) != string::npos) score = 1;
+
+            if (score == 0) continue;
+
+            // Between equals, prefer the one sharing more of the full name
+            // (mp_cod5_prototype over mp_prototype_sh for mp_cod5_prototype_waw).
+            if (score > best) { best = score; found.clear (); }
+            if (score == best) found.push_back (m);
+          }
+
+          if (found.size () > 1)
+          {
+            auto shared = [&lower] (const string& m)
+            {
+              size_t n (0);
+              while (n < m.size () && n < lower.size () && m[n] == lower[n]) ++n;
+              return n;
+            };
+            ranges::sort (found, greater<> {}, shared);
+            if (shared (found[0]) == shared (found[1])) found.clear ();
+            else found.resize (1);
+          }
+
+          if (found.size () == 1)
+          {
+            r = found.front ();
+            LogLine{} << "backdrop: the lobby's " << lower << " is installed as " << r;
+          }
+          else
+            LogLine{} << "backdrop: the lobby's " << lower << " is not installed under that or a similar name";
+        }
+
+        if (r != lower)
+          lobby_alias.insert_or_assign (r, lower);
+
+        cache.emplace (string (requested), r);
+        return r;
+      }
+
       backdrop_request
       requested_backdrop ()
       {
@@ -883,11 +1107,17 @@ namespace Components
           const char* value (Dvar_GetString (name));
           return value != nullptr ? value : "";
         };
+
+        // The lobby's names, as the installed maps they stand for.
+        static string lobby_map, vote_map;
+        lobby_map = installed_map (text ("ui_mapname"));
+        vote_map = installed_map (text ("zwnet_vote_winner_id"));
+
         const dvar_t* vote (Game::Dvar_FindVar ("zwnet_vote_active"));
         return s.selector.choose ({
           menu_open ("menu_xboxlive_privatelobby") || menu_open ("zwnet_party_lobby"),
           menu_open ("zwnet_matchmaking"), vote != nullptr && vote->current.enabled,
-          text ("ui_zwnet_state"), text ("ui_mapname"), text ("zwnet_vote_winner_id")});
+          text ("ui_zwnet_state"), lobby_map, vote_map});
       }
 
       // Return true if we are in the front end proper: the renderer and the
@@ -1119,8 +1349,7 @@ namespace Components
       void
       fail (const string& why)
       {
-        LogLine{} << "backdrop: " << why
-                     << "; change ui_backdrop or use ui_backdrop_reload to retry";
+        LogLine{} << "backdrop: " << why;
 
         release_character ();
         release_figure ();
@@ -1679,7 +1908,7 @@ namespace Components
         ready_set (ready_msec / 1000);
 
         if (!s.ready_map.empty ())
-          prefetch_map (s.ready_map);
+          prefetch_map (installed_map (s.ready_map));
 
         LogLine{} << "backdrop: ready countdown started for "
                   << (s.ready_map.empty () ? string ("?") : s.ready_map);
@@ -1722,7 +1951,7 @@ namespace Components
         // Counted down: go once the match's map is in, or it can't be, or
         // it has had long enough.
         //
-        const bool in (s.current == phase::ready && I_stricmp (s.map.c_str (), s.ready_map.c_str ()) == 0);
+        const bool in (s.current == phase::ready && I_stricmp (s.map.c_str (), installed_map (s.ready_map).c_str ()) == 0);
         const bool hopeless (s.ready_map.empty () || s.current == phase::failed || !Backdrop::IsEnabled () ||
                              ranges::find (s.rejected, s.ready_map) != s.rejected.end ());
 
@@ -2070,6 +2299,12 @@ namespace Components
         try
         {
           optional<spawn> sp (mod_spawn (s.map));
+
+          // The mod's spawns are keyed by the lobby's name for a map, which
+          // may not be its files' (see installed_map ()).
+          if (!sp)
+            if (auto a (lobby_alias.find (s.map)); a != lobby_alias.end ())
+              sp = mod_spawn (a->second);
 
           if (sp)
             LogLine{} << format ("backdrop: standing on the mod's spawn for {} at ({:.0f}, {:.0f}, {:.0f})",
@@ -2548,28 +2783,7 @@ namespace Components
           s.in_front_end = true;
         }
 
-        const dvar_t* setting (backdrop_dvar ());
-        try
-        {
-          if (setting == nullptr || setting->current.string == nullptr ||
-              parse_selection (setting->current.string).kind == selection_kind::off)
-          {
-            lift_curtain ();
-            if (s.current == phase::loading)
-            {
-              if (!Sys_IsDatabaseReady2 ()) return;
-              Sys_SyncDatabase ();
-            }
-            if (s.current != phase::idle) unload ();
-            return;
-          }
-        }
-        catch (const invalid_argument&)
-        {
-          lift_curtain ();
-          if (s.current == phase::ready) unload ();
-          return;
-        }
+        backdrop_dvar (); // Always on; registered for menus that read it.
 
         // Only a private lobby or a confirmed matchmaking map can override
         // the session's random backdrop. Preserve directed figures on that map.
@@ -2763,9 +2977,11 @@ namespace Components
         }
       }
 
-      // A loading spinner in the bottom right corner, in the veil's red: a
-      // faint track, and a bright head sweeping round it with a tail fading
-      // out behind, its length breathing as it goes. Joined, slanted pieces
+      // A loading spinner in the middle of the screen, in the veil's red,
+      // around the skull: a faint track, a bright head sweeping round it
+      // with a tail fading out behind (its length breathing as it goes,
+      // tipped with a spark), and an outer ring of three thin arcs turning
+      // slowly the other way. It eases in, growing slightly as it fades up. Joined, slanted pieces
       // (R_AddCmdDrawQuadPic) with a soft glow under a thin core, so it is
       // smooth at any resolution; plain white quads, tinted, so nothing is
       // loaded for it.
@@ -2798,8 +3014,9 @@ namespace Components
         //
         const float shown (clamp (tt / 0.35f, 0.0f, 1.0f));
 
-        const float radius (46.0f * px);
-        const float cx (fw - 80.0f * px), cy (fh - 80.0f * px);
+        const float grow (0.9f + 0.1f * (1.0f - (1.0f - shown) * (1.0f - shown)));
+        const float radius (52.0f * px * grow);
+        const float cx (fw * 0.5f), cy (fh * 0.5f);
 
         // The skull at its middle, breathing a little.
         //
@@ -2807,7 +3024,7 @@ namespace Components
         {
           const auto pic (Engine::Bind<Game::CL_DrawStretchPicPhysical_t> (0x14001BE90));
           const float breath (0.5f + 0.5f * static_cast<float> (sin (tt * 3.0)));
-          const float size (64.0f * px * (0.97f + 0.03f * breath));
+          const float size (72.0f * px * grow * (0.97f + 0.03f * breath));
           const float c[4] {1.0f, 1.0f, 1.0f, clamp (shown * cover, 0.0f, 1.0f)};
           pic (cx - size * 0.5f, cy - size * 0.5f, size, size, 0.0f, 0.0f, 1.0f, 1.0f, c, spinner_icon);
 
@@ -2840,6 +3057,29 @@ namespace Components
           line (ax, ay, bx, by, 2.5f * px, 0.55f, 0.06f, 0.05f, 0.40f * shown);
         }
 
+        // The outer ring: three thin arcs, a sixth of a turn each, turning
+        // slowly against the head.
+        //
+        {
+          const float outer (radius * 1.3f);
+          const float spin (-tt * 0.6f);
+          for (int arc (0); arc != 3; ++arc)
+          {
+            const float start (spin + tau * static_cast<float> (arc) / 3.0f);
+            constexpr int steps (24);
+            for (int i (0); i != steps; ++i)
+            {
+              const float a0 (start + tau / 6.0f * static_cast<float> (i) / steps);
+              const float a1 (start + tau / 6.0f * static_cast<float> (i + 1) / steps);
+              // Fading at both ends of each arc.
+              const float m (static_cast<float> (sin (3.14159f * (static_cast<float> (i) + 0.5f) / steps)));
+              line (cx + outer * static_cast<float> (cos (a0)), cy + outer * static_cast<float> (sin (a0)),
+                    cx + outer * static_cast<float> (cos (a1)), cy + outer * static_cast<float> (sin (a1)),
+                    1.6f * px, 0.9f, 0.12f, 0.08f, 0.45f * m * shown);
+            }
+          }
+        }
+
         // The head, eased so it surges and settles each turn, and its tail,
         // between a quarter and three quarters of a turn long.
         //
@@ -2863,6 +3103,16 @@ namespace Components
             if (pass == 0) line (ax, ay, bx, by, th, 1.0f, 0.10f, 0.06f, 0.18f * fade * shown);
             else line (ax, ay, bx, by, th, 1.0f, 0.22f + 0.4f * fade, 0.16f + 0.3f * fade, (0.15f + 0.85f * fade) * shown);
           }
+        }
+
+        // The spark at the head: a short bright stroke along the ring.
+        //
+        {
+          float ax, ay, bx, by;
+          at (head - 0.06f, &ax, &ay);
+          at (head + 0.02f, &bx, &by);
+          line (ax, ay, bx, by, 14.0f * px, 1.0f, 0.35f, 0.25f, 0.25f * shown);
+          line (ax, ay, bx, by, 5.0f * px, 1.0f, 0.85f, 0.8f, 0.95f * shown);
         }
       }
 
@@ -3125,13 +3375,21 @@ namespace Components
       // renderer, is at least named in the log before the engine's own
       // error about it.
       //
+      void track_level_zones (int allocated, int freed);
+
       void
       zone_load (const XZoneInfo* zones, int count, int)
       {
         int freed (0);
+        int allocated (0);
 
         for (int i (0); i != count; ++i)
+        {
           freed |= zones[i].freeFlags;
+          allocated |= zones[i].allocFlags;
+        }
+
+        track_level_zones (allocated, freed);
 
 
 
@@ -3206,6 +3464,11 @@ namespace Components
       stop_sounds_fn stop_stream (nullptr);
       std::atomic<int> menu_music (0);
 
+      // Zone frees in progress (see Backdrop::BeginZoneFree ()), and
+      // whether the one in progress frees only level zones.
+      std::atomic<int> zone_frees (0);
+      std::atomic<bool> level_only_free (false);
+
       int
       music_kind (const char* name)
       {
@@ -3213,6 +3476,103 @@ namespace Components
         if (string_view (name) == "music_mainmenu_mp") return 1;
         if (string_view (name) == "music_mainmenu") return 2;
         return 0;
+      }
+
+      // The menu tracks as the front end's own zones (ui_mp, common_mp)
+      // define them, as opposed to a backdrop map's copy of the same alias,
+      // which overrides them while the map is loaded and goes with it.
+      //
+      // The music is always started from these, so the track that plays
+      // lives in memory a backdrop map change never frees, and it can keep
+      // playing straight through the change instead of being stopped and
+      // started over. They are looked up only while no level zone is
+      // loaded (nothing can override them then), and forgotten whenever a
+      // zone other than a level's is freed (the front end's own may be).
+      //
+      using find_alias_fn = const Game::snd_alias_t* (*) (const char*);
+      using play_alias_fn = int (*) (int, const Game::snd_alias_t*, int);
+
+      std::atomic<bool> level_zones (false);
+      std::atomic<const Game::snd_alias_t*> resident_music[3] {};
+
+      // The alias the asset table holds for a name right now, without
+      // waiting for loads in progress (DB_FindXAssetHeader waits for a
+      // missing asset, and this runs as a zone load starts). It reads the
+      // table under the database's own reader protocol, as
+      // DB_FindXAssetHeader does (0x14012D6F6).
+      //
+      const Game::snd_alias_t*
+      current_alias (const char* name)
+      {
+        auto* readers (reinterpret_cast<volatile long*> (Utils::Hook::Rebase (0x14151D630)));
+        auto* writing (reinterpret_cast<volatile long*> (Utils::Hook::Rebase (0x14151D634)));
+
+        InterlockedIncrement (readers);
+        while (*writing != 0) Sleep (1);
+        const auto* entry (Game::DB_FindXAssetEntry (Game::ASSET_TYPE_SOUND, name));
+        const Game::snd_alias_list_t* list (entry != nullptr ? entry->asset.header.sound : nullptr);
+        InterlockedDecrement (readers);
+
+        return list != nullptr && list->count != 0 ? list->head : nullptr;
+      }
+
+      void
+      capture_resident_music ()
+      {
+        if (level_zones.load () || !Game::Sys_IsMainThread ())
+          return;
+
+        for (const char* name : {"music_mainmenu_mp", "music_mainmenu"})
+        {
+          const int kind (music_kind (name));
+
+          if (resident_music[kind].load () != nullptr)
+            continue;
+
+          const auto* alias (current_alias (name));
+
+          if (alias != nullptr && music_kind (alias->aliasName) == kind)
+          {
+            resident_music[kind].store (alias);
+            LogLine{} << "backdrop: the menu music '" << name
+                      << "' is the front end's own";
+          }
+        }
+      }
+
+      void
+      forget_resident_music ()
+      {
+        for (auto& a : resident_music)
+          a.store (nullptr);
+      }
+
+      bool
+      resident (const Game::snd_alias_t* alias, int kind)
+      {
+        return alias != nullptr && kind > 0 && kind < 3 &&
+               alias == resident_music[kind].load ();
+      }
+
+      void
+      track_level_zones (int allocated, int freed)
+      {
+        if ((freed & ~zone_flag_level) != 0)
+          forget_resident_music ();
+
+        if ((freed & zone_flag_level) != 0)
+          level_zones.store (false);
+
+        // A level is about to be loaded over the front end: last chance to
+        // see the front end's own tracks before the level's copies (if it
+        // has any) override them.
+        if ((allocated & zone_flag_level) != 0)
+        {
+          if (freed == 0)
+            capture_resident_music ();
+
+          level_zones.store (true);
+        }
       }
 
       const Game::snd_alias_t*
@@ -3239,6 +3599,14 @@ namespace Components
             if (alias != nullptr && music_kind (alias->aliasName) == kind)
               return 0; // Menu_Paint ignores the playback ID.
           }
+
+          capture_resident_music ();
+
+          if (const auto* alias = resident_music[kind].load ())
+          {
+            static const auto play (Engine::Bind<play_alias_fn> (0x140246CC0));
+            return play (local_client, alias, system);
+          }
         }
         return Game::SND_PlayLocalSoundAliasByName (local_client, name, system);
       }
@@ -3250,11 +3618,23 @@ namespace Components
         // The UI's soundLoop actually plays music_mainmenu_mp on stream 44.
         // Keep only the track the visible menu requested, across both zone
         // cleanup and native stale-loop cleanup. Other streams stop normally.
+        //
+        // Never while zones are being freed, though: the track may be the
+        // map's own (its zone's music_mainmenu_mp), whose sample data goes
+        // with the zone, and kept playing XAudio2 reads it after it is
+        // freed (the crash on changing the backdrop's map). The visible
+        // menu asks for it again afterwards (see play_menu_loop ()), and it
+        // starts over from what is still loaded.
+        //
+        // A track started from the front end's own zones (see
+        // capture_resident_music ()) is the exception: a backdrop map change
+        // frees only level zones, which it doesn't live in, so it plays on.
         if (channel >= 40 && channel < 52 && Backdrop::PreserveMenuMusic ())
         {
           const auto* alias (stream_alias (channel));
           const int wanted (menu_music.load ());
-          if (wanted != 0 && alias != nullptr && music_kind (alias->aliasName) == wanted)
+          if (wanted != 0 && alias != nullptr && music_kind (alias->aliasName) == wanted &&
+              (zone_frees.load () == 0 || (level_only_free.load () && resident (alias, wanted))))
             return;
         }
         stop_stream (channel);
@@ -3357,10 +3737,8 @@ namespace Components
     {
       if (!hooksInstalled || headless ()) return false;
       if (!Game::Sys_IsMainThread ()) return enabled.load (std::memory_order_acquire);
-      const dvar_t* d (backdrop_dvar ());
-      if (d == nullptr || d->current.string == nullptr) return false;
-      try { enabled = parse_selection (d->current.string).kind != selection_kind::off && s.current != phase::failed; }
-      catch (const invalid_argument&) { enabled = false; }
+      // Always on; users can't turn it off. Only a failed map stops it.
+      enabled = s.current != phase::failed;
       return enabled;
     }
 
@@ -3382,6 +3760,51 @@ namespace Components
       s.held_direction.reset ();
       s.ready = false;
       LogLine{} << "backdrop: the game is quitting";
+    }
+
+    // A zone load that frees zones is about to run (see LoadAssets in
+    // Hooks.cpp). Stop the menu music first, the native way, so none of
+    // its sample data is in use when its zone goes, and keep it stopped
+    // until the free is done.
+    //
+    //
+    // Except a track started from the front end's own zones, when only
+    // level zones go: that is a backdrop map change, and the track is
+    // nowhere in what it frees, so the music carries on through it.
+    //
+    void Backdrop::BeginZoneFree (int freed)
+    {
+      if (zone_frees.fetch_add (1) != 0 || stop_stream == nullptr || !Game::Sys_IsMainThread ())
+        return;
+
+      const bool level_only ((freed & ~zone_flag_level) == 0 && PreserveMenuMusic ());
+      level_only_free.store (level_only);
+
+      for (int channel (40); channel < 52; ++channel)
+      {
+        const auto* alias (stream_alias (channel));
+        if (alias == nullptr) continue;
+        const int kind (music_kind (alias->aliasName));
+        if (kind == 0) continue;
+        const bool keep (level_only && resident (alias, kind));
+        LogLine{} << "backdrop: " << (keep ? "keeping" : "stopping") << " the menu music '"
+                  << alias->aliasName << "' (stream " << channel << ") through a zone free";
+        if (!keep)
+          stop_stream (channel);
+      }
+    }
+
+    void Backdrop::EndZoneFree ()
+    {
+      if (zone_frees.fetch_sub (1) == 1)
+      {
+        level_only_free.store (false);
+
+        // With the level gone nothing overrides the front end's tracks,
+        // so this is when they can be looked up if they weren't already.
+        if (PreserveMenuMusic ())
+          capture_resident_music ();
+      }
     }
 
     bool Backdrop::PreserveMenuMusic ()
@@ -3507,6 +3930,7 @@ namespace Components
       {
         backdrop_dvar ();
         shown_map_dvar ();
+        dvars_registered = true;
         Dvar::Register ("zw3_ready_countdown", 0, -1, 60, 0u,
                         "The private lobby's ready countdown: 0 idle, seconds left, or -1 loading the map");
 
@@ -3528,13 +3952,7 @@ namespace Components
       });
       UIScript::Add ("ZW3_ReadyToggle", [] (const UIScript::Token&) { ready_toggle (); });
       Scheduler::Loop ([] { ready_tick (); }, Scheduler::Pipeline::MAIN);
-      Command::Add ("ui_backdrop_reload", []
-      {
-        if (!hooksInstalled) { Logger::Print ("menu backdrop: hooks failed to install; restart with a compatible client\n"); return; }
-        if (Backdrop::IsEnabled ()) s.transition.hold (Sys_Milliseconds ());
-        if (s.current == phase::loading) Sys_SyncDatabase ();
-        if (s.current != phase::idle) unload ();
-      });
+      Scheduler::Loop ([] { if (!headless ()) lock_backdrop_dvars (); }, Scheduler::Pipeline::MAIN);
       renderer_started = reinterpret_cast<const volatile int*> (Utils::Hook::Rebase (0x140C5CEA8));
       ui_started = reinterpret_cast<const volatile int*> (Utils::Hook::Rebase (0x140C5CEB0));
       pmem_low = reinterpret_cast<const volatile int32_t*> (Utils::Hook::Rebase (0x146707B74));

@@ -151,6 +151,20 @@ namespace Components::Menu::WorldEffects
         view.glow = glow;
         view.charPrimaryLightScale.diffuseScale = diffuse;
         view.charPrimaryLightScale.specularScale = specular;
+
+        // The map's vision grades a match seen from a player's eye, with the
+        // gun and HUD in front; our crew stand in it as the subject, and
+        // under a dark grade (Kino, Ascension's caves) they all but vanish.
+        // Keep the map's look, but lift what sits in shadow, as a key light
+        // on a set would: the dark tint up, a touch of brightness, and more
+        // of the sun on the characters themselves (charPrimaryLightScale
+        // only touches character models, not the world).
+        view.film.enabled = true;
+        view.film.brightness = std::max(view.film.brightness, 0.0f) + 0.03f;
+        for (float& c : view.film.tintDark) c = std::clamp(c * 1.6f, 1.2f, 2.2f);
+        for (float& c : view.film.tintMedium) c = std::clamp(c * 1.15f, 1.0f, 1.6f);
+        view.charPrimaryLightScale.diffuseScale = std::max(diffuse, 1.0f) * 1.6f;
+        view.charPrimaryLightScale.specularScale = std::max(specular, 1.0f) * 1.2f;
         if (effects.empty()) return;
         if (!active)
         {

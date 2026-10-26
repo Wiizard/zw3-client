@@ -69,5 +69,7 @@ namespace Components::Menu
 		static std::optional<BackdropFigure> FindFigure(std::string_view name);
 		static std::optional<Position> FindTag(const BackdropFigure& figure, std::string_view tag);
 		static void BeforeZoneLoad(const Game::XZoneInfo* zones, unsigned int count);
+		static void BeginZoneFree(int freedFlags);
+		static void EndZoneFree();
 	};
 }

@@ -64,7 +64,16 @@ namespace Components::Menu
 	static void LoadAssets(Game::XZoneInfo* zones, unsigned int count, int sync)
 	{
 		Backdrop::BeforeZoneLoad(zones, count);
+
+		// A load that frees zones frees their sounds' data with them; the
+		// backdrop must not keep any of it playing across that.
+		int freed = 0;
+		for (unsigned int i = 0; zones && i < count; ++i) freed |= zones[i].freeFlags;
+		const bool frees = freed != 0;
+
+		if (frees) Backdrop::BeginZoneFree(freed);
 		originalLoad(zones, count, sync);
+		if (frees) Backdrop::EndZoneFree();
 	}
 
 	bool ObserveZoneLoads()

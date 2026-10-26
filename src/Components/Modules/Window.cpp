@@ -252,6 +252,14 @@ namespace Components
 		return isDragActive;
 	}
 
+	// A window with a title bar is moved by its title bar alone, the way
+	// every other window is. Only a borderless one, which has nothing else
+	// to hold, moves from anywhere while it is loading.
+	static bool HasTitleBar(HWND window)
+	{
+		return (GetWindowLongPtrA(window, GWL_STYLE) & WS_CAPTION) == WS_CAPTION;
+	}
+
 	static bool IsFrontendMovable()
 	{
 		const auto* mode = *Game::r_displayMode;
@@ -323,7 +331,7 @@ namespace Components
 			return MA_ACTIVATE;
 		}
 
-		if (Msg == WM_NCHITTEST && IsLoadingScreenMovable())
+		if (Msg == WM_NCHITTEST && IsLoadingScreenMovable() && !HasTitleBar(hWnd))
 		{
 			const auto hit = DefWindowProcA(hWnd, Msg, wParam, lParam);
 
@@ -337,7 +345,7 @@ namespace Components
 
 		const bool isCaptionPress = Msg == WM_NCLBUTTONDOWN && wParam == HTCAPTION;
 
-		if ((Msg == WM_LBUTTONDOWN && IsLoadingScreenMovable()) || (isCaptionPress && IsFrontendMovable()))
+		if ((Msg == WM_LBUTTONDOWN && IsLoadingScreenMovable() && !HasTitleBar(hWnd)) || (isCaptionPress && IsFrontendMovable()))
 		{
 			BeginWindowDrag(hWnd);
 			return 0;

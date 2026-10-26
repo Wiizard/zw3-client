@@ -150,7 +150,7 @@ namespace Components::Menu::Engine
 	{
 		std::ostringstream text;
 	public:
-		~LogLine() { Logger::Print("{}\n", text.str()); }
+		~LogLine();
 		template <typename T> LogLine& operator<<(const T& value) { text << value; return *this; }
 	};
 }

@@ -245,6 +245,21 @@ for(i = 0; i < fires.size; i++) { playfx(level.firefx, fires[i].origin); }
 			"the prepared backdrop and menu appear together without a startup overlay");
 		Require(loading_overlay_for(true, true) == loading_overlay::map_signal,
 			"later lobby map changes still use the red waveform");
+		// The splash logo intersects the ring: even dark, translucent strokes must never erase it.
+		constexpr std::uint32_t whiteBits = 0x18129165u;
+		const auto glowBits = spinner_glow_bits(whiteBits);
+		Require((glowBits & 0x7FFu) == 0x125u, "spinner rings add source-alpha light over existing UI");
+		Require((glowBits & 0x10000000u) == 0, "spinner glow preserves the splash composition alpha");
+		Require((glowBits & ~0x100007FFu) == (whiteBits & ~0x100007FFu),
+			"spinner material keeps unrelated UI render state");
+		for (const float destination : {0.0f, 0.25f, 0.9f, 1.0f})
+			for (const float source : {0.0f, 0.06f, 0.55f, 1.0f})
+				for (const float alpha : {0.0f, 0.18f, 0.4f, 1.0f})
+				{
+					const auto dstFactor = ((glowBits >> 4) & 0xFu) == 2 ? 1.0f : 1.0f - alpha;
+					Require(source * alpha + destination * dstFactor >= destination,
+						"a dark or transparent spinner stroke darkened the existing splash UI");
+				}
 		startup_barrier startup;
 		Require(!startup.ready(), "frontend starts behind the startup barrier");
 		startup.observe(false); startup.observe(true);

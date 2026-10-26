@@ -12,6 +12,7 @@
 #include "../ModelSurfs.hpp"
 #include "../Scheduler.hpp"
 #include "../ServerCommands.hpp"
+#include "../Remix/FixedFunction.hpp"
 
 namespace Components::GSC
 {
@@ -1478,6 +1479,7 @@ namespace Components::GSC
 	static void R_AddDObjToScene_Hook(const Game::DObj* obj, const Game::cpose_t* pose, unsigned int entnum, unsigned int renderFxFlags, float* lightingOrigin, float materialTime)
 	{
 		ApplyDObjModelOverride(const_cast<Game::DObj*>(obj), entnum);
+		Remix::RecordModelSubmission(obj, pose, entnum, renderFxFlags);
 		addDObjToScene(obj, pose, entnum, renderFxFlags, lightingOrigin, materialTime);
 	}
 

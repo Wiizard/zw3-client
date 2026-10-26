@@ -1773,14 +1773,29 @@ namespace Components::Remix
 		}
 
 		const int tag = static_cast<int>(TextureTag::Ui);
+		std::string stockOpinions;
 		// The explicit MarkUiPhase draw ends our 3D scene. Texture matches must not end it sooner.
 		uiTextureBoundary.Update(!IsFrontendRendering(), saved[tag], pushed[tag], withdrawn[tag],
-			[api](const std::string& opinions)
+			[api, &stockOpinions](std::uint64_t hash, bool include)
 			{
-				const bool success = api->SetConfigVariable("rtx.uiTextures", opinions.c_str()) == REMIXAPI_ERROR_CODE_SUCCESS;
-				if (success) Device::NoteFrameEvent("texture UI triggers synchronized with the explicit scene boundary");
-				return success;
+				char text[24];
+				std::snprintf(text, sizeof(text), "0x%016llX", static_cast<unsigned long long>(hash));
+				const auto mutate = include ? api->AddTextureHash : api->RemoveTextureHash;
+				if (mutate)
+				{
+					return mutate("rtx.uiTextures", text) == REMIXAPI_ERROR_CODE_SUCCESS;
+				}
+				// Stock Remix has no hash-mutation API or layered hash opinions.
+				if (!stockOpinions.empty()) stockOpinions += ", ";
+				if (!include) stockOpinions += "-";
+				stockOpinions += text;
+				return true;
 			});
+		if (!stockOpinions.empty()
+			&& api->SetConfigVariable("rtx.uiTextures", stockOpinions.c_str()) != REMIXAPI_ERROR_CODE_SUCCESS)
+		{
+			uiTextureBoundary.Invalidate();
+		}
 	}
 
 	void SetSharedDecalTags(bool isEnabled)
@@ -1823,15 +1838,19 @@ namespace Components::Remix
 		const remixapi_Interface* api = TryGetApi(device);
 		const int option = static_cast<int>(tag);
 
-		if (!api || !withdrawn[option].insert(hash).second)
+		if (!api || withdrawn[option].contains(hash))
 		{
 			return;
 		}
 
 		char text[24];
-		std::snprintf(text, sizeof(text), "-0x%016llX", static_cast<unsigned long long>(hash));
-		api->SetConfigVariable(tagOptions[option], text);
+		std::snprintf(text, sizeof(text), "0x%016llX", static_cast<unsigned long long>(hash));
+		const std::string negative = std::string("-") + text;
+		const auto result = api->RemoveTextureHash ? api->RemoveTextureHash(tagOptions[option], text)
+			: api->SetConfigVariable(tagOptions[option], negative.c_str());
+		if (result != REMIXAPI_ERROR_CODE_SUCCESS) return;
 
+		withdrawn[option].insert(hash);
 		pushed[option].erase(hash);
 		withdrawnLog.push_back({ option, hash, "generated" });
 		stats.tagged[option] = static_cast<int>(pushed[option].size());
@@ -1850,14 +1869,18 @@ namespace Components::Remix
 		const remixapi_Interface* api = TryGetApi(device);
 		const int option = static_cast<int>(tag);
 
-		if (!api || !pushed[option].insert(hash).second)
+		if (!api || pushed[option].contains(hash))
 		{
 			return;
 		}
 
 		char text[24];
 		std::snprintf(text, sizeof(text), "0x%016llX", static_cast<unsigned long long>(hash));
-		api->SetConfigVariable(tagOptions[option], text);
+		const auto result = api->AddTextureHash ? api->AddTextureHash(tagOptions[option], text)
+			: api->SetConfigVariable(tagOptions[option], text);
+		if (result != REMIXAPI_ERROR_CODE_SUCCESS) return;
+		pushed[option].insert(hash);
+		withdrawn[option].erase(hash);
 
 		stats.tagged[option] = static_cast<int>(pushed[option].size());
 	}

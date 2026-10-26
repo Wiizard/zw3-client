@@ -7,44 +7,32 @@
 #include <variant>
 
 #include "Components/Modules/Logger.hpp"
+#include "Utils/RetainedLog.hpp"
 
 namespace Components::Remix
 {
-	// zw3's Remix lines also go to zw3_remix_log.txt next to the game, started fresh each run, so a session can be
-	// read back without the in-game console (which does not keep them). Capped so it can't grow without end.
-	static void WriteLogFile(const char* level, const std::string& text)
+	// Keep eight previous sessions so restarting after a silent failure preserves its last loading step.
+	void WriteDiagnosticLog(const char* level, const std::string& text)
 	{
 		static constexpr std::streamoff maximumLogBytes = 8 * 1024 * 1024;
 		static std::mutex logMutex;
-		static std::ofstream logFile;
-		static bool isOpened = false;
 
 		const std::lock_guard lock(logMutex);
-
-		if (!isOpened)
-		{
-			isOpened = true;
-			logFile.open(Core::ModuleDirectory() + L"zw3_remix_log.txt", std::ios::trunc);
-		}
-
-		if (!logFile || logFile.tellp() > maximumLogBytes)
-		{
-			return;
-		}
+		static Utils::RetainedLog logFile(Core::ModuleDirectory() + L"zw3_remix_log.txt", maximumLogBytes);
 
 		SYSTEMTIME time{};
 		GetLocalTime(&time);
-		char stamp[16];
-		std::snprintf(stamp, sizeof(stamp), "%02u:%02u:%02u.%03u", time.wHour, time.wMinute, time.wSecond,
-			time.wMilliseconds);
-		logFile << stamp << " " << level << text << "\n";
-		logFile.flush();
+		char stamp[80];
+		std::snprintf(stamp, sizeof(stamp), "%04u-%02u-%02u %02u:%02u:%02u.%03u [pid %lu thread %lu] ",
+			time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond,
+			time.wMilliseconds, GetCurrentProcessId(), GetCurrentThreadId());
+		logFile.Write(std::string(stamp) + level + text + "\n");
 	}
 
 	LogLine::~LogLine()
 	{
 		const std::string text = this->stream.str();
-		WriteLogFile(this->level == Level::Warning ? "warning: " : this->level == Level::Error ? "error: " : "", text);
+		WriteDiagnosticLog(this->level == Level::Warning ? "warning: " : this->level == Level::Error ? "error: " : "", text);
 
 		switch (this->level)
 		{

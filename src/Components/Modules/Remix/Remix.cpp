@@ -12,6 +12,8 @@
 #include "StartupSettings.hpp"
 #include "TextureTags.hpp"
 
+#include <fstream>
+
 #include "Components/Modules/Command.hpp"
 #include "Components/Modules/Dedicated.hpp"
 #include "Components/Modules/Events.hpp"
@@ -26,6 +28,39 @@
 namespace Components::Remix
 {
 	Dvar::Var Remix::r_rtxRemix;
+
+	static void WriteClientModelSurvey()
+	{
+		if (!Game::CL_IsCgameInitialized(0)) return;
+		std::ofstream file(Core::ModuleDirectory() + L"zw3_remix_client_models.tsv");
+		if (!file) return;
+		// Read client objects on the command thread before the renderer can omit a model's draw lists.
+		file << "entity\ttype\tflags\torigin\tmodel\tbones\tsurfaces\tlods\tloaded lod\tbad\tmaterials\n";
+		for (int handle = 0; handle < 2048; ++handle)
+		{
+			const auto* entity = Game::CG_GetEntity(0, handle);
+			if (!entity->nextValid) continue;
+			const auto* object = Game::Com_GetClientDObj(handle, 0);
+			if (!object || !object->models) continue;
+			for (unsigned int index = 0; index < object->numModels; ++index)
+			{
+				const auto* model = object->models[index];
+				if (!model) continue;
+				file << handle << '\t' << entity->nextState.eType << '\t' << entity->nextState.lerp.eFlags << '\t'
+					<< entity->pose.origin[0] << ' ' << entity->pose.origin[1] << ' ' << entity->pose.origin[2] << '\t'
+					<< (model->name ? model->name : "?") << '\t' << static_cast<int>(model->numBones) << '\t'
+					<< static_cast<int>(model->numsurfs) << '\t' << static_cast<int>(model->numLods) << '\t'
+					<< static_cast<int>(model->maxLoadedLod) << '\t' << model->bad << '\t';
+				for (unsigned int surface = 0; model->materialHandles && surface < model->numsurfs; ++surface)
+				{
+					const auto* material = model->materialHandles[surface];
+					if (surface) file << "; ";
+					if (material && material->info.name) file << material->info.name;
+				}
+				file << '\n';
+			}
+		}
+	}
 
 	using VkFunction = void(*)();
 	using VkGetProcAddr = VkFunction(*)(void* owner, const char* name);
@@ -232,6 +267,7 @@ namespace Components::Remix
 		}
 
 		const auto create = reinterpret_cast<Direct3DCreate9_t>(GetProcAddress(runtime, "Direct3DCreate9"));
+		Log() << "startup: Remix runtime loaded; resolving Direct3D";
 
 		if (create && !TryHookPresentCount(runtime))
 		{
@@ -245,6 +281,7 @@ namespace Components::Remix
 			return nullptr;
 		}
 
+		Log() << "startup: creating Remix Direct3D interface";
 		IDirect3D9* const direct3D = create(sdkVersion);
 
 		if (!direct3D)
@@ -255,6 +292,7 @@ namespace Components::Remix
 		}
 
 		Core::SetRuntime(runtime);
+		Log() << "startup: Remix Direct3D interface ready";
 
 		return Device::WrapDirect3D(direct3D, OnDeviceCreated, OnDeviceReset);
 	}
@@ -415,6 +453,8 @@ namespace Components::Remix
 		{
 			if (Core::IsRemixMode())
 			{
+				WriteClientModelSurvey();
+				WriteModelRenderHistory();
 				RequestSceneDump();
 			}
 

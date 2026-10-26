@@ -13,6 +13,9 @@ namespace Components
 
 		static constexpr std::size_t ENTITY_LIMIT = 2048;
 
+		// The native server sends up to 1024 entities; the stock client only exposes the first 768 to cgame.
+		static constexpr std::size_t SNAPSHOT_ENTITY_LIMIT = 1024;
+
 		ClientSlots();
 
 		static std::size_t SentClientCount();

@@ -21,6 +21,15 @@ namespace Components::Menu::BackdropData
 		return changing_map ? loading_overlay::map_signal : loading_overlay::none;
 	}
 
+	inline std::uint32_t spinner_glow_bits(std::uint32_t base)
+	{
+		// Add light without darkening existing UI or replacing its composition alpha.
+		constexpr std::uint32_t rgb_blend_mask = 0x7FFu;
+		constexpr std::uint32_t write_alpha = 0x10000000u;
+		constexpr std::uint32_t src_alpha_add_one = 0x125u;
+		return (base & ~(rgb_blend_mask | write_alpha)) | src_alpha_add_one;
+	}
+
 	inline constexpr int signal_layer_count = 3;
 	inline constexpr int signal_texture_width = 4096;
 	inline constexpr int signal_texture_height = 256;

@@ -191,13 +191,16 @@ namespace Components
 
 	constexpr std::uint32_t stockParseClientCount = 18 * packetBackup;
 	constexpr std::uint32_t parseClientCount = ClientSlots::CLIENT_LIMIT * packetBackup * 2;
-	constexpr std::size_t snapshotClientsOffset = 0x33130;
-	constexpr std::uint32_t stockCommandSequenceOffset = static_cast<std::uint32_t>(snapshotClientsOffset + 18 * snapshotClientSize);
+	constexpr std::size_t stockSnapshotClientsOffset = 0x33130;
+	constexpr std::size_t snapshotClientsOffset = stockSnapshotClientsOffset
+		+ (ClientSlots::SNAPSHOT_ENTITY_LIMIT - 768) * snapshotEntitySize;
+	constexpr std::uint32_t stockCommandSequenceOffset = static_cast<std::uint32_t>(stockSnapshotClientsOffset + 18 * snapshotClientSize);
 	constexpr std::uint32_t commandSequenceOffset = static_cast<std::uint32_t>(snapshotClientsOffset + ClientSlots::CLIENT_LIMIT * snapshotClientSize);
 	constexpr std::size_t stockSnapshotSize = stockCommandSequenceOffset + 4;
 	constexpr std::size_t snapshotSize = commandSequenceOffset + 4;
 
 	static_assert(stockSnapshotSize == 0x339EC);
+	static_assert(snapshotClientsOffset == 0x43130);
 
 	constexpr std::size_t stockSkeletonMemorySize = 0x40000;
 	constexpr std::size_t skeletonMemorySize = 0x400000;
@@ -884,6 +887,15 @@ namespace Components
 		{ 0x1400F4ABD, 1, 18, ClientSlots::CLIENT_LIMIT },
 		{ 0x1400F48F7, 2, stockCommandSequenceOffset, commandSequenceOffset },
 		{ 0x1400E9A7C, 3, stockCommandSequenceOffset, commandSequenceOffset },
+
+		// Keep cgame's two relocated snapshots, their client records and command tail beyond the enlarged entity array.
+		{ 0x1400F4925, 1, 768, ClientSlots::SNAPSHOT_ENTITY_LIMIT },
+		{ 0x1400F494F, 1, 768, ClientSlots::SNAPSHOT_ENTITY_LIMIT },
+		{ 0x1400E9AB3, 3, stockSnapshotClientsOffset, snapshotClientsOffset },
+		{ 0x1400EA16D, 3, stockSnapshotClientsOffset, snapshotClientsOffset },
+		{ 0x1400EA924, 3, stockSnapshotClientsOffset, snapshotClientsOffset },
+		{ 0x1400EA967, 3, stockSnapshotClientsOffset, snapshotClientsOffset },
+		{ 0x1400F4AD8, 3, stockSnapshotClientsOffset, snapshotClientsOffset },
 
 		{ 0x1400CCDCD, 2, static_cast<std::uint32_t>(stockCompassActorCount * 0x3C), static_cast<std::uint32_t>(compassActorCount * 0x3C) },
 		{ 0x1400B42BA, 2, static_cast<std::uint32_t>(stockCompassActorCount * 20), static_cast<std::uint32_t>(compassActorCount * 20) },
@@ -3953,6 +3965,9 @@ namespace Components
 		{
 			return;
 		}
+
+		Logger::Print("clientslots: client snapshots retain up to {} entities, including the native server's full entity list\n",
+			SNAPSHOT_ENTITY_LIMIT);
 
 		ServerCommands::OnCommand(scoreboardMore, []([[maybe_unused]] const Command::Params* params)
 		{

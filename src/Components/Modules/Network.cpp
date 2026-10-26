@@ -1,12 +1,16 @@
 #include "STDInclude.hpp"
 #include "Utils/ServerQuery.hpp"
+#include "Utils/ReliableCommandQueue.hpp"
 
 #include "Network.hpp"
+#include "ClientSlots.hpp"
 #include "Logger.hpp"
 #include "Command.hpp"
 #include "Dedicated.hpp"
 #include "Dvar.hpp"
 #include "Events.hpp"
+#include "Scheduler.hpp"
+#include "Remix/Core.hpp"
 #include "Weapon.hpp"
 
 namespace Components
@@ -93,7 +97,7 @@ namespace Components
 
 	constexpr std::ptrdiff_t snapshotNumEntities = 0x3128;
 	constexpr std::ptrdiff_t snapshotEntities = 0x3130;
-	constexpr int maxSnapshotEntities = 768;
+	constexpr int maxSnapshotEntities = static_cast<int>(ClientSlots::SNAPSHOT_ENTITY_LIMIT);
 	constexpr std::size_t entityStateSize = 256;
 	constexpr std::ptrdiff_t entityStateType = 4;
 	constexpr std::ptrdiff_t entityStateItemIndex = 144;
@@ -1468,6 +1472,75 @@ namespace Components
 	constexpr std::uintptr_t SV_AddServerCommandCalls[] = { 0x140236557, 0x14023D216, 0x14023D23D };
 	constexpr std::uintptr_t SV_AddServerCommand = 0x14023BAB0;
 
+	struct LocalCommandQueue
+	{
+		std::recursive_mutex mutex;
+		Utils::ReliableCommandQueue commands;
+		int connectedAt = -1;
+	};
+	static LocalCommandQueue localCommandQueues[Game::MAX_CLIENTS];
+	using AddServerCommand = void(*)(Game::client_s*, int, const char*);
+
+	static unsigned PendingServerCommands(const Game::client_s* client)
+	{
+		// Verified in this executable's SV_AddServerCommand, before its overflow check.
+		const auto* bytes = reinterpret_cast<const unsigned char*>(client);
+		const auto sequence = *reinterpret_cast<const unsigned*>(bytes + 0x20E70);
+		const auto acknowledged = *reinterpret_cast<const unsigned*>(bytes + 0x20E74);
+		return sequence - acknowledged;
+	}
+
+	static bool QueueLocalServerCommand(Game::client_s* client, int type, const char* text, AddServerCommand send)
+	{
+		if (!client || !text || !*text || client->bIsTestClient ||
+			client->header.netchan.remoteAddress.type != Game::NA_LOOPBACK) return false;
+		const auto index = client - Game::svs_clients;
+		if (index < 0 || index >= Game::MAX_CLIENTS) return false;
+		auto& queue = localCommandQueues[index];
+		const std::lock_guard lock(queue.mutex);
+		if (queue.connectedAt != client->lastConnectTime || client->header.state < Game::CS_CONNECTED)
+		{
+			queue.commands.Clear();
+			queue.connectedAt = client->lastConnectTime;
+		}
+		if (client->header.state < Game::CS_CONNECTED) return false;
+		const bool wasEmpty = queue.commands.Empty();
+		const bool accepted = queue.commands.Submit(type, text,
+			[client] { return PendingServerCommands(client); },
+			[client, send](int kind, const char* command) { send(client, kind, command); });
+		if (wasEmpty && !queue.commands.Empty())
+			Remix::WriteDiagnosticLog("", "network: buffering local reliable commands while the client is busy loading");
+		if (!accepted)
+		{
+			// Fail explicitly rather than silently dropping reliable commands when the bounded backlog is exhausted.
+			queue.commands.Clear();
+			Remix::WriteDiagnosticLog("error: ", "network: local reliable command backlog exhausted");
+			reinterpret_cast<void(*)(Game::client_s*, const char*)>(Utils::Hook::Rebase(0x1402374C0))(
+				client, "EXE_SERVERCOMMANDOVERFLOW");
+		}
+		return true;
+	}
+
+	static void FlushLocalServerCommands(AddServerCommand send)
+	{
+		for (std::size_t i = 0; i < Game::MAX_CLIENTS; ++i)
+		{
+			auto& queue = localCommandQueues[i];
+			const std::lock_guard lock(queue.mutex);
+			if (queue.commands.Empty()) continue;
+			auto* client = &Game::svs_clients[i];
+			if (client->header.state < Game::CS_CONNECTED || queue.connectedAt != client->lastConnectTime)
+			{
+				queue.commands.Clear();
+				continue;
+			}
+			queue.commands.Drain([client] { return PendingServerCommands(client); },
+				[client, send](int kind, const char* command) { send(client, kind, command); });
+			if (queue.commands.Empty())
+				Remix::WriteDiagnosticLog("", "network: local reliable command backlog delivered");
+		}
+	}
+
 	constexpr std::uintptr_t SV_ExecuteClientCommand_TokenizeCall = 0x1402370A5;
 	constexpr std::uintptr_t SV_Cmd_TokenizeString = 0x1401E8370;
 	constexpr std::uintptr_t SV_ExecuteClientCommand_FloodExemptCall = 0x140237042;
@@ -1671,6 +1744,7 @@ namespace Components
 	void Network::SV_AddServerCommand_Hook(Game::client_s* client, int type, const char* text)
 	{
 		const auto addServerCommand = reinterpret_cast<void(*)(Game::client_s*, int, const char*)>(addServerCommandHooks[0].GetOriginal());
+		if (QueueLocalServerCommand(client, type, text, addServerCommand)) return;
 
 		if (!text || !*text || !IsX86Client(client))
 		{
@@ -1830,6 +1904,17 @@ namespace Components
 		{
 			hook.Quick();
 		}
+
+		const auto nativeAdd = reinterpret_cast<AddServerCommand>(addServerCommandHooks[0].GetOriginal());
+		Scheduler::Loop([nativeAdd] { FlushLocalServerCommands(nativeAdd); }, Scheduler::Pipeline::SERVER);
+		Events::OnClientDisconnect([](int clientNum)
+		{
+			if (clientNum < 0 || clientNum >= Game::MAX_CLIENTS) return;
+			auto& queue = localCommandQueues[clientNum];
+			const std::lock_guard lock(queue.mutex);
+			queue.commands.Clear();
+			queue.connectedAt = -1;
+		});
 	}
 
 	void Network::TrackClientBuilds()

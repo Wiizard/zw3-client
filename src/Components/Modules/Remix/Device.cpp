@@ -4,7 +4,9 @@
 #include "Core.hpp"
 #include "Engine.hpp"
 #include "QueryPoll.hpp"
+#include "RenderFrameLock.hpp"
 #include "TextureTags.hpp"
+#include "Api.hpp"
 
 #include <atomic>
 #include <fstream>
@@ -98,7 +100,7 @@ namespace Components::Remix::Device
 	static BufferLock_t originalIndexLock = nullptr;
 	static BufferUnlock_t originalIndexUnlock = nullptr;
 
-	static std::atomic<DWORD> renderFrameOwner = 0;
+	static RenderFrameLock renderFrameLock;
 
 	static DeviceCallback createdCallback = nullptr;
 	static DeviceCallback resetCallback = nullptr;
@@ -284,88 +286,42 @@ namespace Components::Remix::Device
 		return originalUnlockRect(self, level);
 	}
 
-	static void AcquireRenderFrame(DWORD thread)
-	{
-		DWORD expected = 0;
-
-		while (!renderFrameOwner.compare_exchange_weak(expected, thread))
-		{
-			if (expected == thread)
-			{
-				return;
-			}
-
-			expected = 0;
-			SwitchToThread();
-		}
-	}
-
-	static bool TryAcquireRenderFrameFor(DWORD thread, ULONGLONG milliseconds)
-	{
-		const ULONGLONG deadline = GetTickCount64() + milliseconds;
-		DWORD expected = 0;
-
-		while (!renderFrameOwner.compare_exchange_weak(expected, thread))
-		{
-			if (GetTickCount64() >= deadline)
-			{
-				return false;
-			}
-
-			expected = 0;
-			SwitchToThread();
-		}
-
-		return true;
-	}
-
 	void EnterRenderFrame()
 	{
-		AcquireRenderFrame(GetCurrentThreadId());
+		renderFrameLock.lock();
 	}
 
 	void LeaveRenderFrame()
 	{
-		renderFrameOwner.store(0);
+		renderFrameLock.unlock();
 	}
 
 	static HRESULT STDMETHODCALLTYPE QueryGetDataHook(IDirect3DQuery9* self, void* data, DWORD size, DWORD flags)
 	{
-		const DWORD thread = GetCurrentThreadId();
-
-		return PollQuery(flags, renderFrameOwner.load() == thread, [&](const DWORD pollFlags)
+		return PollQuery(flags, renderFrameLock.OwnsCurrentThread(), [&](const DWORD pollFlags)
 		{
 			return originalQueryGetData(self, data, size, pollFlags);
-		}, [thread]
-		{
-			constexpr ULONGLONG maxPollWaitMs = 100;
-			return TryAcquireRenderFrameFor(thread, maxPollWaitMs);
 		}, []
 		{
-			renderFrameOwner.store(0);
+			return renderFrameLock.TryLockFor(std::chrono::milliseconds(100));
+		}, []
+		{
+			renderFrameLock.unlock();
 		});
 	}
 
 	template <typename Call>
 	static HRESULT GuardedBufferCall(Call call)
 	{
-		const DWORD thread = GetCurrentThreadId();
-
-		if (renderFrameOwner.load() == thread || !Engine::IsRendererThreaded())
+		if (!Engine::IsRendererThreaded())
 		{
 			return call();
 		}
 
-		constexpr ULONGLONG maxBufferWaitMs = 50;
-		const bool isGuarded = TryAcquireRenderFrameFor(thread, maxBufferWaitMs);
-		const HRESULT result = call();
-
-		if (isGuarded)
-		{
-			renderFrameOwner.store(0);
-		}
-
-		return result;
+		// Lock/Unlock cannot be skipped or issued concurrently after a timeout:
+		// native callers still need the returned buffer pointer and lock state.
+		const std::lock_guard lock(renderFrameLock);
+		return call();
 	}
 
 	static HRESULT STDMETHODCALLTYPE VertexLockHook(void* self, UINT offset, UINT size, void** data, DWORD flags)
@@ -502,7 +458,42 @@ namespace Components::Remix::Device
 		capturedOrthoDraws = 0;
 	}
 
-	static void CountCapturedDraw(IDirect3DDevice9* self)
+	static std::uint64_t CaptureRuntimeTextureHash(IDirect3DBaseTexture9* texture)
+	{
+		const remixapi_Interface* api = GetReadyApi();
+		std::uint64_t hash = 0;
+		if (texture && texture->GetType() == D3DRTYPE_TEXTURE && api && api->dxvk_GetTextureHash)
+		{
+			api->dxvk_GetTextureHash(static_cast<IDirect3DTexture9*>(texture), &hash);
+		}
+		return hash;
+	}
+
+	static bool CaptureRuntimeDrawStatus(IDirect3DDevice9* device, int& injected, int& queries)
+	{
+		// Diagnostic for the installed Remix Plus build only; verify its device/member layout before reading it.
+		static const unsigned char memberInstruction[] = { 0x49, 0x8D, 0x86, 0xF0, 0xE7, 0x02, 0x00 };
+		if (!originalDrawIndexedPrimitive || std::memcmp(reinterpret_cast<const unsigned char*>(originalDrawIndexedPrimitive)
+			+ 0xFE, memberInstruction, sizeof(memberInstruction)) != 0)
+		{
+			return false;
+		}
+		__try
+		{
+			const auto rtx = reinterpret_cast<std::uintptr_t>(device) + 0x2E7F0;
+			if (*reinterpret_cast<IDirect3DDevice9* const*>(rtx + 0x7E05D8) != device) return false;
+			injected = *reinterpret_cast<const unsigned char*>(rtx + 0x7E063D);
+			queries = *reinterpret_cast<const int*>(rtx + 0x7E0644);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	static void CountCapturedDraw(IDirect3DDevice9* self, const char* kind, UINT primitives, UINT vertices,
+		const void* caller)
 	{
 		if (!IsCapturing())
 		{
@@ -517,6 +508,30 @@ namespace Components::Remix::Device
 		self->GetTransform(D3DTS_PROJECTION, &projection);
 		DWORD depthWrite = TRUE;
 		self->GetRenderState(D3DRS_ZWRITEENABLE, &depthWrite);
+		IDirect3DBaseTexture9* texture0 = nullptr;
+		self->GetTexture(0, &texture0);
+		std::uint64_t textureHash = 0;
+		std::uint64_t runtimeHash = 0;
+		if (texture0)
+		{
+			TryGetTextureHash(texture0, textureHash);
+			runtimeHash = CaptureRuntimeTextureHash(texture0);
+			texture0->Release();
+		}
+		DWORD fvf = 0;
+		self->GetFVF(&fvf);
+		const auto address = reinterpret_cast<std::uintptr_t>(caller);
+		int runtimeInjected = -1;
+		int runtimeQueries = -1;
+		CaptureRuntimeDrawStatus(self, runtimeInjected, runtimeQueries);
+		char draw[320];
+		std::snprintf(draw, sizeof(draw), "draw %s: %u primitives, %u vertices, %s+0x%llX, texture 0x%016llX GPU 0x%016llX, VS %d PS %d FVF 0x%lX projection44 %.3f zwrite %lu RTinjected %d queries %d",
+			kind, primitives, vertices, IsGameCaller(caller) ? "game" : "zw3", static_cast<unsigned long long>(
+				address - (IsGameCaller(caller) ? gameImageBegin : reinterpret_cast<std::uintptr_t>(GetModuleHandleW(L"zw3.dll")))),
+			static_cast<unsigned long long>(textureHash), static_cast<unsigned long long>(runtimeHash),
+			vertexShader != nullptr, pixelShader != nullptr, fvf,
+			projection._44, depthWrite, runtimeInjected, runtimeQueries);
+		PushCapturedEvent(draw);
 
 		// State-block application can restore a projection without calling our SetTransform hook.
 		if (!vertexShader && projection._44 == 1.0f && depthWrite == FALSE)
@@ -559,7 +574,17 @@ namespace Components::Remix::Device
 			}
 
 			TryGetTextureHash(texture, hash);
+			const std::uint64_t gpuHash = CaptureRuntimeTextureHash(texture);
 			texture->Release();
+
+			if (gpuHash && gpuHash != hash)
+			{
+				char text[192];
+				std::snprintf(text, sizeof(text), "runtime texture stage %lu: cached 0x%016llX GPU 0x%016llX, tags %s",
+					stage, static_cast<unsigned long long>(hash), static_cast<unsigned long long>(gpuHash),
+					DescribeTextureTags(gpuHash).c_str());
+				PushCapturedEvent(text);
+			}
 
 			if (hash && DescribeTextureTags(hash).find("rtx.uiTextures") != std::string::npos)
 			{
@@ -635,28 +660,28 @@ namespace Components::Remix::Device
 
 	static HRESULT STDMETHODCALLTYPE DrawPrimitiveHook(IDirect3DDevice9* self, D3DPRIMITIVETYPE type, UINT start, UINT count)
 	{
-		CountCapturedDraw(self);
+		CountCapturedDraw(self, "primitive", count, 0, _ReturnAddress());
 		return originalDrawPrimitive(self, type, start, count);
 	}
 
 	static HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveHook(IDirect3DDevice9* self, D3DPRIMITIVETYPE type,
 		INT baseVertex, UINT minIndex, UINT vertices, UINT startIndex, UINT count)
 	{
-		CountCapturedDraw(self);
+		CountCapturedDraw(self, "indexed", count, vertices, _ReturnAddress());
 		return originalDrawIndexedPrimitive(self, type, baseVertex, minIndex, vertices, startIndex, count);
 	}
 
 	static HRESULT STDMETHODCALLTYPE DrawPrimitiveUpHook(IDirect3DDevice9* self, D3DPRIMITIVETYPE type, UINT count,
 		const void* data, UINT stride)
 	{
-		CountCapturedDraw(self);
+		CountCapturedDraw(self, "primitive UP", count, 0, _ReturnAddress());
 		return originalDrawPrimitiveUp(self, type, count, data, stride);
 	}
 
 	static HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveUpHook(IDirect3DDevice9* self, D3DPRIMITIVETYPE type,
 		UINT minIndex, UINT vertices, UINT count, const void* indices, D3DFORMAT format, const void* data, UINT stride)
 	{
-		CountCapturedDraw(self);
+		CountCapturedDraw(self, "indexed UP", count, vertices, _ReturnAddress());
 		return originalDrawIndexedPrimitiveUp(self, type, minIndex, vertices, count, indices, format, data, stride);
 	}
 
@@ -832,12 +857,14 @@ namespace Components::Remix::Device
 
 	static HRESULT STDMETHODCALLTYPE CreateDeviceHook(IDirect3D9* self, UINT adapter, D3DDEVTYPE deviceType, HWND focusWindow, DWORD behaviorFlags, D3DPRESENT_PARAMETERS* presentationParameters, IDirect3DDevice9** returnedDevice)
 	{
+		Log() << "startup: creating Direct3D device, behavior flags " << behaviorFlags;
 		const HRESULT result = originalCreateDevice(self, adapter, deviceType, focusWindow, behaviorFlags, presentationParameters, returnedDevice);
 
 		if (SUCCEEDED(result) && returnedDevice && *returnedDevice)
 		{
 			AttachDevice(*returnedDevice);
 		}
+		Log() << "startup: Direct3D device initialization returned " << std::hex << result;
 
 		return result;
 	}

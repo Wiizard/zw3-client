@@ -1,8 +1,6 @@
 #pragma once
 
-#include <cstdio>
 #include <cstdint>
-#include <string>
 #include <unordered_set>
 
 namespace Components::Remix
@@ -31,22 +29,15 @@ namespace Components::Remix
 			Hashes known = saved;
 			known.insert(active.begin(), active.end());
 			known.insert(withdrawn.begin(), withdrawn.end());
-			std::string opinions;
 
 			for (const std::uint64_t hash : known)
 			{
 				const bool desired = active.contains(hash) || (saved.contains(hash) && !withdrawn.contains(hash));
-				char text[32];
-				// Negative opinions also mask tags inherited from a lower-priority runtime config layer.
-				std::snprintf(text, sizeof(text), "%s0x%016llX", suppress || !desired ? "-" : "",
-					static_cast<unsigned long long>(hash));
-				if (!opinions.empty()) opinions += ", ";
-				opinions += text;
-			}
-
-			if (!opinions.empty() && !write(opinions))
-			{
-				return;
+				// Mutate each opinion explicitly: parsing a negative config entry can retain a positive one.
+				if (!write(hash, !suppress && desired))
+				{
+					return;
+				}
 			}
 
 			previousSaved = saved;

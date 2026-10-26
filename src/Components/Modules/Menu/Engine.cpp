@@ -5,9 +5,17 @@
 #include "../FastFiles.hpp"
 #include "../Maps.hpp"
 #include "Engine.hpp"
+#include "../Remix/Core.hpp"
 
 namespace Components::Menu::Engine
 {
+	LogLine::~LogLine()
+	{
+		const std::string message = text.str();
+		Remix::WriteDiagnosticLog("", message);
+		Logger::Print("{}\n", message);
+	}
+
 	void Initialize()
 	{
 		cm = Bind<Game::clipMap_t*>(0x141BD3180);

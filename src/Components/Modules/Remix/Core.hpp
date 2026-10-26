@@ -2,6 +2,8 @@
 
 namespace Components::Remix
 {
+	void WriteDiagnosticLog(const char* level, const std::string& text);
+
 	class LogLine
 	{
 	public:

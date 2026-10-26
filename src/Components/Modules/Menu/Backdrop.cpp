@@ -7,8 +7,6 @@
 #include "../Scheduler.hpp"
 #include "../Command.hpp"
 #include "../Maps.hpp"
-#include "../Party.hpp"
-#include "../UIScript.hpp"
 #include "../Dvar.hpp"
 #include "../Materials.hpp"
 #include "../FileSystem.hpp"
@@ -30,6 +28,7 @@
 
 
 #include <windows.h>
+#include <intrin.h> // _ReturnAddress ()
 
 #include <cstdlib>      // calloc(), free()
 #include <cstring>      // memset()
@@ -484,16 +483,11 @@ namespace Components
         int wanted_since {0};
 
         backdrop_transition transition;
+        bool main_menu_transition {true}; // Only the main menu loads its background without an overlay.
         bool quitting {false};  // The game is on its way out (see Backdrop::BeginShutdown ()).
         bool startup_presented {false};
         int startup_since {-1};
         string prefetched_map;  // The lobby map last read ahead.
-
-        // The private lobby's ready countdown (see ready_toggle ()).
-        //
-        bool ready {false};
-        int ready_deadline {0};
-        string ready_map;
 
         // What the log has already been told, so that per-frame conditions
         // are said once when they start rather than every frame.
@@ -529,6 +523,8 @@ namespace Components
       Material* spinner_icon = nullptr; // skullicon_old, at the spinner's middle (see draw_spinner ()).
       Material* spinner_light = nullptr; // The same image, added, to light it up.
       vector<Game::GfxStateBits> spinner_light_blend;
+      Material* spinner_lines = nullptr; // Own additive state; the shared white UI material stays unchanged.
+      vector<Game::GfxStateBits> spinner_lines_blend;
       vector<Game::GfxStateBits> teleport_blend;
       atomic_bool teleport_needs_load {true};
 
@@ -699,9 +695,33 @@ namespace Components
         if (teleport_veil != nullptr) Materials::Delete (teleport_veil, true);
         if (spinner_light != nullptr) Materials::Delete (spinner_light, false); // Shares the icon's image.
         if (spinner_icon != nullptr) Materials::Delete (spinner_icon, true);
+        if (spinner_lines != nullptr) Materials::Delete (spinner_lines, false); // Borrows the engine's white image.
         teleport_arc = teleport_veil = spinner_icon = spinner_light = nullptr;
+        spinner_lines = nullptr;
         teleport_blend.clear ();
         spinner_light_blend.clear ();
+        spinner_lines_blend.clear ();
+
+        const auto additive = [] (Material* material, vector<Game::GfxStateBits>& states)
+        {
+          if (material == nullptr || material->stateBitsTable == nullptr || material->stateBitsCount == 0)
+            return false;
+          states.assign (material->stateBitsTable, material->stateBitsTable + material->stateBitsCount);
+          for (Game::GfxStateBits& bits: states)
+            bits.loadBits[0] = spinner_glow_bits (bits.loadBits[0]);
+          material->stateBitsTable = states.data ();
+          return true;
+        };
+
+        // Ring quads must add their glow over the splash logo rather than alpha-blend dark red over it.
+        const auto* white = static_cast<const Material*> (Game::DB_FindXAssetHeader (Game::ASSET_TYPE_MATERIAL, "white"));
+        if (white != nullptr && white->textureTable != nullptr && white->textureCount > 0)
+          spinner_lines = Materials::Create ("zw3_menu_spinner_lines", white->textureTable[0].u.image);
+        if (spinner_lines != nullptr && !additive (spinner_lines, spinner_lines_blend))
+        {
+          Materials::Delete (spinner_lines, false);
+          spinner_lines = nullptr;
+        }
 
         // The spinner's skull: decoded and shrunk here (see load_icon ()),
         // or, failing that, the image as the game would load it. Our own
@@ -726,15 +746,7 @@ namespace Components
           else
           {
             spinner_light = Materials::Create ("zw3_menu_spinner_light", image);
-            if (spinner_light != nullptr && spinner_light->stateBitsTable != nullptr && spinner_light->stateBitsCount > 0)
-            {
-              spinner_light_blend.assign (spinner_light->stateBitsTable,
-                                          spinner_light->stateBitsTable + spinner_light->stateBitsCount);
-              for (Game::GfxStateBits& bits: spinner_light_blend)
-                bits.loadBits[0] = (bits.loadBits[0] & ~0x7FFu) | 0x125u; // SRCALPHA + ONE, ADD.
-              spinner_light->stateBitsTable = spinner_light_blend.data ();
-            }
-            else if (spinner_light != nullptr)
+            if (spinner_light != nullptr && !additive (spinner_light, spinner_light_blend))
             {
               Materials::Delete (spinner_light, false);
               spinner_light = nullptr;
@@ -920,6 +932,25 @@ namespace Components
         }
 
         return false;
+      }
+
+      // The most blur any open menu asks for (its blurWorld).
+      //
+      float
+      open_menu_blur ()
+      {
+        if (Game::uiContext == nullptr) return 0.0f;
+        const UiContext& c (*Game::uiContext);
+
+        const int n (min (c.openMenuCount,
+                          static_cast<int> (size (c.menuStack))));
+
+        float r (0.0f);
+        for (int i (0); i < n; ++i)
+          if (const menuDef_t* m = c.menuStack[i])
+            r = max (r, m->blurRadius);
+
+        return r;
       }
 
       void
@@ -1853,126 +1884,6 @@ namespace Components
         Maps::PrefetchMapAssets (m);
       }
 
-      // The private lobby's ready countdown, in the style of Black Ops II:
-      // the host readies up, a countdown runs, and the match starts when it
-      // ends. Behind it the backdrop loads the match's map (see show ()),
-      // so when the countdown ends the level load finds the map in memory
-      // already and the match comes up at once. Pressing the button again
-      // during the countdown cancels it.
-      //
-      // zw3_ready_countdown tells the menu what to show: 0 when idle, the
-      // seconds left while counting, -1 while waiting for the map to finish
-      // loading after the count reached zero.
-      //
-      constexpr int ready_msec (6000);
-      constexpr int ready_wait_msec (12000); // At most, for the map, after.
-
-      void
-      ready_set (int value)
-      {
-        Dvar::Var countdown ("zw3_ready_countdown");
-
-        if (countdown.IsValid () && countdown.Get<int> () != value)
-          countdown.Set (value);
-      }
-
-      void
-      ready_cancel (string_view why)
-      {
-        if (!s.ready)
-          return;
-
-        LogLine{} << "backdrop: ready countdown cancelled: " << why;
-        s.ready = false;
-        s.ready_map.clear ();
-        ready_set (0);
-      }
-
-      void
-      ready_toggle ()
-      {
-        if (s.ready)
-        {
-          ready_cancel ("the host cancelled it");
-          return;
-        }
-
-        if (!Party::IsHostingParty ())
-          return;
-
-        const char* m (Dvar_GetString ("ui_mapname"));
-
-        s.ready = true;
-        s.ready_deadline = Sys_Milliseconds () + ready_msec;
-        s.ready_map = m != nullptr ? m : "";
-        ready_set (ready_msec / 1000);
-
-        if (!s.ready_map.empty ())
-          prefetch_map (installed_map (s.ready_map));
-
-        LogLine{} << "backdrop: ready countdown started for "
-                  << (s.ready_map.empty () ? string ("?") : s.ready_map);
-      }
-
-      void
-      ready_tick ()
-      {
-        if (!s.ready)
-          return;
-
-        if (!menu_open ("menu_xboxlive_privatelobby"))
-        {
-          ready_cancel ("the lobby closed");
-          return;
-        }
-
-        if (!Party::IsHostingParty ())
-        {
-          ready_cancel ("no longer the host");
-          return;
-        }
-
-        const char* selected (Dvar_GetString ("ui_mapname"));
-        if (selected == nullptr || I_stricmp (selected, s.ready_map.c_str ()) != 0)
-        {
-          ready_cancel ("the selected map changed");
-          return;
-        }
-
-        const int now (Sys_Milliseconds ());
-        const int left (s.ready_deadline - now);
-
-        if (left > 0)
-        {
-          ready_set ((left + 999) / 1000);
-          return;
-        }
-
-        // Counted down: go once the match's map is in, or it can't be, or
-        // it has had long enough.
-        //
-        const bool in (s.current == phase::ready && I_stricmp (s.map.c_str (), installed_map (s.ready_map).c_str ()) == 0);
-        const bool hopeless (s.ready_map.empty () || s.current == phase::failed || !Backdrop::IsEnabled () ||
-                             ranges::find (s.rejected, s.ready_map) != s.rejected.end ());
-
-        if (!in && !hopeless && -left < ready_wait_msec)
-        {
-          ready_set (-1);
-          return;
-        }
-
-        LogLine{} << "backdrop: ready countdown over, starting "
-                  << s.ready_map << (in ? " (in memory)" : " (not preloaded)");
-
-        s.ready = false;
-        s.ready_map.clear ();
-        ready_set (0);
-
-        Party::PreparePrivateMatchStart ();
-        Command::Execute ("selectStringTableEntryInDvar mp/didyouknow.csv 0 didyouknow", false);
-        Command::Execute ("xpartygo", false);
-      }
-
       // The maps the backdrop shows when no lobby has chosen one: the
       // classic zombies maps. In a lobby it shows the lobby's map.
       //
@@ -1997,7 +1908,9 @@ namespace Components
         // loading screen when it is up (see finish ()) rather than the
         // screen dropping away at once.
         if (!s.transition.active ())
+        {
           s.transition.hold (Sys_Milliseconds ());
+        }
 
         s.random_pick = sel.kind == selection_kind::random || s.chosen_for.starts_with ("random");
         const string held (exchange (s.held, {}));
@@ -2523,7 +2436,13 @@ namespace Components
 
         // A popup that blurs the world in a match blurs the backdrop too.
         //
-        r.blurRadius = CL_GetMenuBlurRadius (0);
+        // But only as much as an open menu asks for: the UI's blur output
+        // (UiContext::blurRadiusOut) is only ever raised by the menus that
+        // blur, and after a vid_restart (which an audio device change also
+        // causes) it can be left at a stale value with no such menu open,
+        // which blurred the backdrop for good.
+        //
+        r.blurRadius = min (CL_GetMenuBlurRadius (0), open_menu_blur ());
 
         // Reveal the scene by bringing it into focus over its first second
         // or so, rather than popping it in over the still image.
@@ -2788,6 +2707,7 @@ namespace Components
         // Only a private lobby or a confirmed matchmaking map can override
         // the session's random backdrop. Preserve directed figures on that map.
         const backdrop_request request (requested_backdrop ());
+        s.main_menu_transition = !request.follows_lobby;
         if (!request.follows_lobby)
           dir.reset ();
         else if (!dir || dir->map != request.choice.stage->map)
@@ -2932,7 +2852,10 @@ namespace Components
 
               // Put a full transport frame on screen before releasing the
               // old world. Keep animating it until the next scene is ready.
-              if (!s.transition.closing ()) s.transition.close (now);
+              if (!s.transition.closing ())
+              {
+                s.transition.close (now);
+              }
 
               if (!s.transition.covered (now))
               {
@@ -2987,7 +2910,7 @@ namespace Components
       // loaded for it.
       //
       void
-      draw_spinner (int w, int h, int elapsed, float cover, Material* white)
+      draw_spinner (int w, int h, int elapsed, float cover, Material* lines)
       {
         using quad_fn = void (*) (const float (*)[2], const float*, Material*);
         const auto quad4 (Engine::Bind<quad_fn> (0x14001CCE0));
@@ -2998,11 +2921,11 @@ namespace Components
         {
           const float dx (bx - ax), dy (by - ay);
           const float len (sqrt (dx * dx + dy * dy));
-          if (len < 0.001f || a <= 0.0f) return;
+          if (lines == nullptr || len < 0.001f || a <= 0.0f) return;
           const float nx (-dy / len * th * 0.5f), ny (dx / len * th * 0.5f);
           const float v[4][2] {{ax - nx, ay - ny}, {bx - nx, by - ny}, {bx + nx, by + ny}, {ax + nx, ay + ny}};
           const float c[4] {r, g, b, clamp (a * cover, 0.0f, 1.0f)};
-          quad4 (v, c, white);
+          quad4 (v, c, lines);
         };
 
         constexpr float tau (6.28318530718f);
@@ -3124,6 +3047,12 @@ namespace Components
         const int now (Sys_Milliseconds ());
         if (!front_end ()) lift_curtain ();
         const bool startup (Backdrop::IsStartupLoading ());
+        // Hide the overlay when returning to the main menu, but retain it for lobby map loads.
+        if (s.main_menu_transition)
+        {
+          if (s.transition.finished (now)) lift_curtain ();
+          return;
+        }
         const float cover (startup ? 1.0f : s.transition.amount (now));
         if (cover <= 0.0f)
         {
@@ -3160,7 +3089,7 @@ namespace Components
           draw (white, fallback);
         }
 
-        draw_spinner (w, h, now - s.transition.started_at (s.startup_since), cover, white);
+        draw_spinner (w, h, now - s.transition.started_at (s.startup_since), cover, spinner_lines);
         if (s.transition.finished (now)) lift_curtain ();
       }
 
@@ -3441,6 +3370,9 @@ namespace Components
         if (front_end () && (s.transition.active () || Backdrop::IsStartupLoading ()))
         {
           if (Game::Sys_IsMainThread ()) draw_transport ();
+          // The normal title background remains visible until its first map scene is drawn.
+          if (!s.shown && s.main_menu_transition)
+            clear_screen (which, color, depth, total);
           return;
         }
 
@@ -3629,7 +3561,21 @@ namespace Components
         // A track started from the front end's own zones (see
         // capture_resident_music ()) is the exception: a backdrop map change
         // frees only level zones, which it doesn't live in, so it plays on.
-        if (channel >= 40 && channel < 52 && Backdrop::PreserveMenuMusic ())
+        //
+        // And never for the stops that tear the channel down rather than
+        // just silence it: the sound driver shutting down (a sound restart,
+        // as when the audio device changes or the video restarts) releases
+        // XAudio2 and every voice after stopping the streams, so a stream
+        // left playing there keeps a pointer to a destroyed voice, and the
+        // next stop of that channel crashes on it (0x1402C2859). Starting a
+        // new stream on the channel, or reusing it for another sound, stops
+        // it first for the same reason.
+        const auto caller (reinterpret_cast<uintptr_t> (_ReturnAddress ()));
+        const bool teardown (caller == Utils::Hook::Rebase (0x1402C23A9) || // driver shutdown
+                             caller == Utils::Hook::Rebase (0x1402C267A) || // stream start
+                             caller == Utils::Hook::Rebase (0x14024739C));  // channel reuse
+
+        if (!teardown && channel >= 40 && channel < 52 && Backdrop::PreserveMenuMusic ())
         {
           const auto* alias (stream_alias (channel));
           const int wanted (menu_music.load ());
@@ -3758,7 +3704,6 @@ namespace Components
       s.quitting = true;
       s.held.clear ();
       s.held_direction.reset ();
-      s.ready = false;
       LogLine{} << "backdrop: the game is quitting";
     }
 
@@ -3820,6 +3765,9 @@ namespace Components
     bool
     Backdrop::Hides (const Material* material)
     {
+      if (!s.shown && s.main_menu_transition)
+        return false;
+
       if ((!s.shown && !s.transition.active () && !IsStartupLoading ()) ||
           material == nullptr || material->info.name == nullptr)
         return false;
@@ -3931,8 +3879,6 @@ namespace Components
         backdrop_dvar ();
         shown_map_dvar ();
         dvars_registered = true;
-        Dvar::Register ("zw3_ready_countdown", 0, -1, 60, 0u,
-                        "The private lobby's ready countdown: 0 idle, seconds left, or -1 loading the map");
 
         // startup_tick loads the chosen map; avoid reading every other map
         // into the file cache while that load is in progress.
@@ -3950,8 +3896,6 @@ namespace Components
                        static_cast<int> (Game::CL_GetLocalClientConnectionState (0)), Actors::IsReady ());
         if (!s.failure.empty ()) Logger::Print ("menu backdrop: {}\n", s.failure);
       });
-      UIScript::Add ("ZW3_ReadyToggle", [] (const UIScript::Token&) { ready_toggle (); });
-      Scheduler::Loop ([] { ready_tick (); }, Scheduler::Pipeline::MAIN);
       Scheduler::Loop ([] { if (!headless ()) lock_backdrop_dvars (); }, Scheduler::Pipeline::MAIN);
       renderer_started = reinterpret_cast<const volatile int*> (Utils::Hook::Rebase (0x140C5CEA8));
       ui_started = reinterpret_cast<const volatile int*> (Utils::Hook::Rebase (0x140C5CEB0));

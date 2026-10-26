@@ -10,8 +10,10 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <deque>
 #include <fstream>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -340,6 +342,79 @@ namespace Components::Remix
 	static int dumpIndex = 0;
 	static std::vector<DumpRow> dumpRows;
 	static unsigned groupDraws = 0;
+
+	static std::mutex modelHistoryMutex;
+	static std::deque<std::string> modelHistory;
+	static constexpr std::size_t maxModelHistoryEntries = 8192;
+
+	static bool IsCharacterDiagnosticName(const char* name)
+	{
+		return name && (std::strstr(name, "zombie") || std::strstr(name, "zom_")
+			|| std::strstr(name, "mtl_c_") || std::strstr(name, "scient") || std::strstr(name, "nurse"));
+	}
+
+	static void AppendModelHistory(const std::string& entry)
+	{
+		const std::lock_guard lock(modelHistoryMutex);
+		modelHistory.push_back(std::to_string(GetTickCount64()) + "\t" + entry);
+		if (modelHistory.size() > maxModelHistoryEntries) modelHistory.pop_front();
+	}
+
+	void RecordModelSubmission(const void* object, const void* pose, unsigned int entity, unsigned int flags)
+	{
+		if (!Core::IsRemixMode() || !object || !pose) return;
+		const auto* dobj = static_cast<const Game::DObj*>(object);
+		const auto* placement = static_cast<const Game::cpose_t*>(pose);
+		for (unsigned int index = 0; dobj->models && index < dobj->numModels; ++index)
+		{
+			const auto* model = dobj->models[index];
+			if (!model || !IsCharacterDiagnosticName(model->name)) continue;
+			std::ostringstream line;
+			line << "submit\t" << entity << '\t' << model->name << "\tflags " << flags << "\torigin "
+				<< placement->origin[0] << ' ' << placement->origin[1] << ' ' << placement->origin[2]
+				<< "\tradius " << dobj->radius;
+			AppendModelHistory(line.str());
+		}
+	}
+
+	void WriteModelRenderHistory()
+	{
+		std::ofstream file(Core::ModuleDirectory() + L"zw3_remix_model_history.tsv");
+		const std::lock_guard lock(modelHistoryMutex);
+		for (const auto& entry : modelHistory) file << entry << '\n';
+	}
+
+	class ModelGroupTrace
+	{
+		std::string material;
+		const char* kind;
+		int technique = 0;
+		int pass = 0;
+		unsigned beforeDraws;
+		unsigned long long beforeCached;
+	public:
+		ModelGroupTrace(void* context, const char* groupKind) : kind(groupKind), beforeDraws(groupDraws),
+			beforeCached(stats.cachedSkinnedSurfaces)
+		{
+			if (IsFrontendRendering()) return;
+			const auto args = reinterpret_cast<std::uintptr_t>(context);
+			const auto state = ReadAt<std::uintptr_t>(args + Iw4::drawListArgsState);
+			const auto currentMaterial = ReadAt<std::uintptr_t>(state + Iw4::stateMaterial);
+			const auto* name = currentMaterial ? ReadAt<const char*>(currentMaterial) : nullptr;
+			if (!IsCharacterDiagnosticName(name)) return;
+			material = name;
+			technique = ReadAt<int>(ReadAt<std::uintptr_t>(args + Iw4::drawListArgsInfo));
+			pass = ReadAt<int>(state + Iw4::statePassIndex);
+		}
+		~ModelGroupTrace()
+		{
+			if (material.empty()) return;
+			std::ostringstream line;
+			line << kind << '\t' << sceneNumber << '\t' << material << "\ttechnique " << technique << "\tpass " << pass
+				<< "\tdraws " << groupDraws - beforeDraws << "\tcached skips " << stats.cachedSkinnedSurfaces - beforeCached;
+			AppendModelHistory(line.str());
+		}
+	};
 
 	static const D3DMATRIX identity = {
 		1.0f, 0.0f, 0.0f, 0.0f,
@@ -6612,8 +6687,10 @@ namespace Components::Remix
 
 	static void __fastcall TessRigidDetour(void* context, void** iterator)
 	{
+		const ModelGroupTrace trace(context, "rigid");
 		if (IsDynamicLightList(context))
 		{
+			RecordEngineGroup(context, "skipped-entity-rigid-light");
 			++stats.dynamicLightLists;
 			SkipBrushModelGroup(iterator);
 			return;
@@ -6629,6 +6706,7 @@ namespace Components::Remix
 
 		if (ReadAt<int>(state + Iw4::statePassIndex) != 0)
 		{
+			RecordEngineGroup(context, "skipped-entity-rigid-pass");
 			SkipBrushModelGroup(iterator);
 			return;
 		}
@@ -6639,8 +6717,10 @@ namespace Components::Remix
 
 	static void __fastcall TessRigidSkinnedDetour(void* context, void** iterator)
 	{
+		const ModelGroupTrace trace(context, "rigid-skinned");
 		if (IsDynamicLightList(context))
 		{
+			RecordEngineGroup(context, "skipped-entity-rigidskinned-light");
 			++stats.dynamicLightLists;
 			SkipBrushModelGroup(iterator);
 			return;
@@ -6656,6 +6736,7 @@ namespace Components::Remix
 
 		if (ReadAt<int>(state + Iw4::statePassIndex) != 0)
 		{
+			RecordEngineGroup(context, "skipped-entity-rigidskinned-pass");
 			SkipBrushModelGroup(iterator);
 			return;
 		}
@@ -6666,8 +6747,10 @@ namespace Components::Remix
 
 	static void __fastcall TessSkinnedDetour(void* context, void** iterator)
 	{
+		const ModelGroupTrace trace(context, "skinned");
 		if (IsDynamicLightList(context))
 		{
+			RecordEngineGroup(context, "skipped-entity-skinned-light");
 			++stats.dynamicLightLists;
 			SkipBrushModelGroup(iterator);
 			return;
@@ -6683,6 +6766,7 @@ namespace Components::Remix
 
 		if (ReadAt<int>(state + Iw4::statePassIndex) != 0)
 		{
+			RecordEngineGroup(context, "skipped-entity-skinned-pass");
 			SkipBrushModelGroup(iterator);
 			return;
 		}
@@ -7265,6 +7349,7 @@ namespace Components::Remix
 		sceneDevice = device;
 		viewSurfaces = 0;
 		++sceneNumber;
+		if (!IsFrontendRendering()) AppendModelHistory("frame\t" + std::to_string(sceneNumber));
 		ApplyEngineDrawDistance();
 		didBuildCamoThisView = false;
 

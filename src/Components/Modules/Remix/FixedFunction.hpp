@@ -75,6 +75,10 @@ namespace Components::Remix
 
 	void RequestSceneDump();
 
+	void RecordModelSubmission(const void* object, const void* pose, unsigned int entity, unsigned int flags);
+
+	void WriteModelRenderHistory();
+
 	void WriteMapMaterialReport();
 
 	IDirect3DTexture9* TryGetIgnoredColorMapTwin(IDirect3DDevice9* device, std::uintptr_t material);

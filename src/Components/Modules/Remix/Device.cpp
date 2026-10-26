@@ -4,6 +4,7 @@
 #include "Core.hpp"
 #include "Engine.hpp"
 #include "QueryPoll.hpp"
+#include "TextureTags.hpp"
 
 #include <atomic>
 #include <fstream>
@@ -510,6 +511,71 @@ namespace Components::Remix::Device
 
 		IDirect3DVertexShader9* vertexShader = nullptr;
 		self->GetVertexShader(&vertexShader);
+		IDirect3DPixelShader9* pixelShader = nullptr;
+		self->GetPixelShader(&pixelShader);
+		D3DMATRIX projection{};
+		self->GetTransform(D3DTS_PROJECTION, &projection);
+		DWORD depthWrite = TRUE;
+		self->GetRenderState(D3DRS_ZWRITEENABLE, &depthWrite);
+
+		// State-block application can restore a projection without calling our SetTransform hook.
+		if (!vertexShader && projection._44 == 1.0f && depthWrite == FALSE)
+		{
+			PushCapturedEvent("possible UI boundary: actual fixed-function orthographic draw");
+		}
+
+		IDirect3DVertexDeclaration9* declaration = nullptr;
+		self->GetVertexDeclaration(&declaration);
+
+		if (declaration)
+		{
+			D3DVERTEXELEMENT9 elements[MAXD3DDECLLENGTH + 1]{};
+			UINT count = MAXD3DDECLLENGTH + 1;
+
+			if (SUCCEEDED(declaration->GetDeclaration(elements, &count)))
+			{
+				for (UINT i = 0; i < count; ++i)
+				{
+					if (elements[i].Usage == D3DDECLUSAGE_POSITIONT)
+					{
+						PushCapturedEvent("possible UI boundary: pretransformed POSITIONT draw");
+						break;
+					}
+				}
+			}
+
+			declaration->Release();
+		}
+
+		for (DWORD stage = 0; stage < 16; ++stage)
+		{
+			IDirect3DBaseTexture9* texture = nullptr;
+			self->GetTexture(stage, &texture);
+			std::uint64_t hash = 0;
+
+			if (!texture)
+			{
+				continue;
+			}
+
+			TryGetTextureHash(texture, hash);
+			texture->Release();
+
+			if (hash && DescribeTextureTags(hash).find("rtx.uiTextures") != std::string::npos)
+			{
+				DWORD operation = D3DTOP_DISABLE;
+				self->GetTextureStageState(stage < 8 ? stage : 7, D3DTSS_COLOROP, &operation);
+				char text[192];
+				std::snprintf(text, sizeof(text), "possible UI boundary: stage %lu hash 0x%016llX, VS %d PS %d colour op %lu",
+					stage, static_cast<unsigned long long>(hash), vertexShader != nullptr, pixelShader != nullptr, operation);
+				PushCapturedEvent(text);
+			}
+		}
+
+		if (pixelShader)
+		{
+			pixelShader->Release();
+		}
 
 		const std::lock_guard lock(captureMutex);
 		++capturedDraws;

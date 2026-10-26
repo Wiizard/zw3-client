@@ -3,18 +3,14 @@
 #include "Branding.hpp"
 #include "Dedicated.hpp"
 #include "Dvar.hpp"
-#include "Events.hpp"
 #include "Logger.hpp"
 #include "Scheduler.hpp"
-
-#include <version.hpp>
 
 namespace Components
 {
 	Game::dvar_t* Branding::cg_drawVersion = nullptr;
 	Game::dvar_t* Branding::cg_drawVersionX = nullptr;
 	Game::dvar_t* Branding::cg_drawVersionY = nullptr;
-	Game::dvar_t* Branding::testing = nullptr;
 
 #if defined(DEBUG)
 	constexpr const char* buildType = "Call of Duty: Zombie Warfare 3 (Debug)";
@@ -129,49 +125,6 @@ namespace Components
 		return "ZW3-client (built " __DATE__ " " __TIME__ ")";
 	}
 
-	// The build line while testing: branch, then the build number, compile date and time as the original
-	// buildnumber.cpp formats them. The number is REVISION (git rev-list --count HEAD) and the branch GIT_BRANCH, both
-	// refreshed by scriptsuildinfo.ps1 before every build.
-	const char* Branding::GetTestingBuildNumber()
-	{
-		return Utils::String::VA("lil suislide ZW3 2.0.13 %s (%d %s %s)", GIT_BRANCH, REVISION, __DATE__, __TIME__);
-	}
-
-	// Bottom left in game while "testing 1" is set, under the same guard as the version text: drawing from the renderer
-	// loop before the UI and its fonts exist (start-up, loading) crashed the game. Menus show it through the game's own
-	// build number draw (UI_DrawBuildNumber_Hk).
-	void Branding::DrawTestingBuildNumber()
-	{
-		if (!testing || !testing->current.enabled)
-		{
-			return;
-		}
-
-		if (!Utils::Hook::Get<int>(fullScreenUiFlag) || Utils::Hook::Get<int>(clsState) != connectionActive)
-		{
-			return;
-		}
-
-		constexpr float fontScale = 0.25f;
-		constexpr float offsetX = 10.0f;
-		constexpr float offsetY = 10.0f;
-		constexpr int alignLeft = 1;
-		constexpr int maxChars = std::numeric_limits<int>::max();
-		constexpr float shadowColor[4] = { 0.0f, 0.0f, 0.0f, 0.8f };
-		constexpr float color[4] = { 1.0f, 0.85f, 0.3f, 0.9f };
-
-		const char* const text = GetTestingBuildNumber();
-		const auto* const placement = reinterpret_cast<const float*>(Utils::Hook::Rebase(scrPlaceFullUnsafe));
-
-		auto* const font = reinterpret_cast<Game::Font_s*(*)(const float*, int, float)>(Utils::Hook::Rebase(UI_GetFontHandle))(placement, 0, 0.583f);
-		const int height = reinterpret_cast<int(*)(Game::Font_s*, float)>(Utils::Hook::Rebase(UI_TextHeight))(font, fontScale);
-		const auto drawText = reinterpret_cast<UI_DrawText_t>(Utils::Hook::Rebase(UI_DrawText));
-		const float y = (0.0f - static_cast<float>(height)) - offsetY;
-
-		drawText(placement, text, maxChars, font, offsetX + 1.0f, y + 1.0f, alignLeft, alignBottom, fontScale, shadowColor, 0);
-		drawText(placement, text, maxChars, font, offsetX, y, alignLeft, alignBottom, fontScale, color, 0);
-	}
-
 	const char* Branding::GetVersionString()
 	{
 		const auto* const platform = reinterpret_cast<const char*>(Utils::Hook::Rebase(platformString));
@@ -202,21 +155,7 @@ namespace Components
 
 		const auto drawText = reinterpret_cast<UI_DrawText_t>(buildNumberDrawHook.GetOriginal());
 
-		if (!testing || !testing->current.enabled)
-		{
-			drawText(placement, buildNumberText, maxChars, font, x, y, horzAlign, vertAlign, scale, buildLocColor, style);
-			return;
-		}
-
-		// The game caps this text at 64 characters and starts it 60 units in from the right edge; the testing line is
-		// longer, so it is drawn uncapped and right-aligned by its own width.
-		constexpr float rightMargin = 10.0f;
-		const char* const testingText = GetTestingBuildNumber();
-		const int width = reinterpret_cast<int(*)(const char*, int, Game::Font_s*, float)>(Utils::Hook::Rebase(UI_TextWidth))(
-			testingText, 0, font, scale);
-
-		drawText(placement, testingText, std::numeric_limits<int>::max(), font, -static_cast<float>(width) - rightMargin, y,
-			horzAlign, vertAlign, scale, buildLocColor, style);
+		drawText(placement, buildNumberText, maxChars, font, x, y, horzAlign, vertAlign, scale, buildLocColor, style);
 	}
 
 	void Branding::RegisterBrandingDvars()
@@ -234,13 +173,6 @@ namespace Components
 
 	Branding::Branding()
 	{
-		Events::OnDvarInit([]
-		{
-			testing = Dvar::Register("testing", false, Game::DVAR_ARCHIVE, "Show the build number and compile time on screen").Get();
-		});
-
-		Scheduler::Loop(DrawTestingBuildNumber, Scheduler::Pipeline::RENDERER);
-
 		const bool isExpected = Utils::Hook::IsLeaIntact(Sys_CreateConsoleWindow_TitleLea)
 			&& Utils::Hook::MatchesBytes(getBuildNumber, getBuildNumberEntry, sizeof(getBuildNumberEntry))
 			&& Utils::Hook::MatchesBytes(Com_Init_Dvar_SetStringCall, setStringCall, sizeof(setStringCall))

@@ -259,6 +259,10 @@ namespace Components::Remix
 		int cameraRegion;
 		char vertexColour[96];
 		bool isDecalTagged;
+		DWORD isDepthTested;
+		DWORD isDepthWritten;
+		DWORD depthFunction;
+		DWORD colourWriteMask;
 	};
 
 	struct ReticleShape
@@ -4471,6 +4475,15 @@ namespace Components::Remix
 		std::snprintf(destination, capacity, "%s", source);
 	}
 
+	static void CaptureDumpDeviceState(IDirect3DDevice9* device, DumpRow& row)
+	{
+		device->GetRenderState(D3DRS_ZENABLE, &row.isDepthTested);
+		device->GetRenderState(D3DRS_ZWRITEENABLE, &row.isDepthWritten);
+		device->GetRenderState(D3DRS_ZFUNC, &row.depthFunction);
+		device->GetRenderState(D3DRS_COLORWRITEENABLE, &row.colourWriteMask);
+
+	}
+
 	static DumpRow CaptureDumpRow(IDirect3DDevice9* device, std::uintptr_t material, const char* kind)
 	{
 		DumpRow row{};
@@ -4528,6 +4541,7 @@ namespace Components::Remix
 		device->GetRenderState(D3DRS_ALPHAREF, &row.alphaReference);
 		device->GetRenderState(D3DRS_ALPHAFUNC, &row.alphaFunction);
 		device->GetRenderState(D3DRS_CULLMODE, &row.cullMode);
+		CaptureDumpDeviceState(device, row);
 
 		return row;
 	}
@@ -4933,7 +4947,7 @@ namespace Components::Remix
 			return;
 		}
 
-		file << "kind\tdraws\tmaterial\ttechset\timage\thash\tblend\tsrc\tdst\talphatest\tref\tfunc\tcull\tminz\tmaxz\tzw3\toffset\tsortkey\tregion\tdecal\tvertex argb low/avg/high\n";
+		file << "kind\tdraws\tmaterial\ttechset\timage\thash\tblend\tsrc\tdst\talphatest\tref\tfunc\tcull\tminz\tmaxz\tzw3\toffset\tsortkey\tregion\tdecal\tvertex argb low/avg/high\tztest\tzwrite\tzfunc\tcolourwrite\n";
 
 		for (const DumpRow& row : dumpRows)
 		{
@@ -4945,7 +4959,8 @@ namespace Components::Remix
 				 << row.destinationBlend << "\t" << row.isAlphaTested << "\t" << row.alphaReference << "\t"
 				 << row.alphaFunction << "\t" << row.cullMode << "\t" << row.minZ << "\t" << row.maxZ << "\t" << row.action
 				 << "\t" << row.polygonOffset << "\t" << row.sortKey << "\t" << row.cameraRegion << "\t"
-				 << row.isDecalTagged << "\t" << row.vertexColour << "\n";
+				 << row.isDecalTagged << "\t" << row.vertexColour << "\t" << row.isDepthTested << "\t"
+				 << row.isDepthWritten << "\t" << row.depthFunction << "\t" << row.colourWriteMask << "\n";
 		}
 
 		WriteAreaProbe(file);
@@ -5729,6 +5744,11 @@ namespace Components::Remix
 			device->SetRenderState(D3DRS_TEXTUREFACTOR, neonColour);
 		}
 
+		if (isDumping)
+		{
+			CaptureDumpDeviceState(device, dumpRow);
+		}
+
 		drawGroup(device, context, iterator);
 		isAlienGroup = false;
 
@@ -6210,7 +6230,6 @@ namespace Components::Remix
 		std::uint32_t indexCount, std::uint16_t argOffset, std::int16_t argCount);
 	static FxDrawElement originalDrawElement = nullptr;
 	static std::mutex scriptEffectMutex;
-	static std::unordered_map<std::uintptr_t, ScriptEffectKind> scriptEffectDefs;
 	static EffectSurfaces scriptSurfaces;
 
 	static constexpr std::uintptr_t fxSystemPendingIndices = 352;
@@ -6219,17 +6238,9 @@ namespace Components::Remix
 
 	static ScriptEffectKind GetScriptEffectKind(std::uintptr_t definition)
 	{
-		const auto found = scriptEffectDefs.find(definition);
-
-		if (found != scriptEffectDefs.end())
-		{
-			return found->second;
-		}
-
+		// Zones reuse asset addresses after unloading. Classify the current name, never a previous occupant.
 		const char* name = definition ? ReadAt<const char*>(definition) : nullptr;
-		const auto kind = name ? ClassifyScriptEffectName(name) : ScriptEffectKind::None;
-		scriptEffectDefs[definition] = kind;
-		return kind;
+		return name ? ClassifyScriptEffectName(name) : ScriptEffectKind::None;
 	}
 
 	static void ClosePendingCodeSurf(std::uintptr_t system, std::uintptr_t codeSurfs)
@@ -6259,17 +6270,7 @@ namespace Components::Remix
 
 	static float EyeOffsetDistance(std::uintptr_t material)
 	{
-		static std::mutex mutex;
-		static std::unordered_map<std::uintptr_t, float> known;
-		std::lock_guard lock(mutex);
-
-		const auto found = known.find(material);
-
-		if (found != known.end())
-		{
-			return found->second;
-		}
-
+		// A reloaded eye material can occupy an address previously used by an ordinary particle.
 		const char* name = material ? ReadAt<const char*>(material) : nullptr;
 		const auto techniqueSet = material ? ReadAt<std::uintptr_t>(material + Iw4::materialTechniqueSet) : 0;
 		const char* techniqueSetName = techniqueSet ? ReadAt<const char*>(techniqueSet) : nullptr;
@@ -6279,13 +6280,16 @@ namespace Components::Remix
 		{
 			distance = 10.0f;
 
-			if (const char* eye = std::strstr(name, "_eye"); eye && eye[4] >= '0' && eye[4] <= '9')
+			for (const char* eye = std::strstr(name, "_eye"); eye; eye = std::strstr(eye + 4, "_eye"))
 			{
-				distance = static_cast<float>(std::atoi(eye + 4));
+				if (eye[4] >= '0' && eye[4] <= '9')
+				{
+					distance = static_cast<float>(std::atoi(eye + 4));
+					break;
+				}
 			}
 		}
 
-		known[material] = distance;
 		return distance;
 	}
 

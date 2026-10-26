@@ -16,6 +16,7 @@
 #include "Core.hpp"
 #include "Device.hpp"
 #include "Api.hpp"
+#include "TextureTags.hpp"
 
 namespace Components::Remix
 {
@@ -142,6 +143,10 @@ namespace Components::Remix
 	static void Write(const remixapi_Interface* api, const std::string& name, const std::string& value)
 	{
 		api->SetConfigVariable(name.c_str(), value.c_str());
+		if (name == "rtx.uiTextures")
+		{
+			InvalidateUiTextureBoundary();
+		}
 		Device::NoteFrameEvent("remix option " + name);
 
 		OptionState& state = options[name];

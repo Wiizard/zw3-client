@@ -19,6 +19,7 @@ namespace
 	std::wstring fixtureDirectory;
 	std::vector<std::string> raytracingWrites;
 	remixapi_Interface api{};
+	unsigned uiBoundaryInvalidations = 0;
 
 	remixapi_ErrorCode REMIXAPI_PTR CaptureOption(const char* key, const char* value)
 	{
@@ -39,6 +40,7 @@ namespace Components::Remix
 	LogLine& LogLine::operator<<(const std::wstring&) { return *this; }
 	LogLine& LogLine::operator<<(const wchar_t*) { return *this; }
 	const remixapi_Interface* TryGetApi(IDirect3DDevice9*) { return &api; }
+	void InvalidateUiTextureBoundary() { ++uiBoundaryInvalidations; }
 	namespace Core { std::wstring ModuleDirectory() { return fixtureDirectory; } }
 	namespace Device { void NoteFrameEvent(const std::string&) {} }
 }
@@ -93,6 +95,10 @@ int main(int argc, char** argv)
 		ClearLayer(mapLayer, 0.0f);
 		UpdateOptions(device);
 		RequireMode("True");
+		const unsigned invalidations = uiBoundaryInvalidations;
+		SendOption(&api, "rtx.uiTextures", "0x1234");
+		if (uiBoundaryInvalidations != invalidations + 1)
+			throw std::runtime_error("A live UI texture option did not invalidate the scene boundary mask");
 		std::cout << "Frontend rendering: repeated lobby/map transitions, config " << baseline
 			<< ", map overrides, live settings and option resets passed\n";
 		return 0;

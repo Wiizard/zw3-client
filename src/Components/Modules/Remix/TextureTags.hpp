@@ -42,6 +42,10 @@ namespace Components::Remix
 
 	void ResetTextureTags();
 
+	void UpdateUiTextureBoundary(IDirect3DDevice9* device);
+
+	void InvalidateUiTextureBoundary();
+
 	TextureTagStats GetTextureTagStats();
 
 	bool IsDecalTexture(std::uint64_t hash);

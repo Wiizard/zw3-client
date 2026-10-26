@@ -943,6 +943,8 @@ namespace Components::Remix
 			UpdateOptions(device);
 		}
 
+		UpdateUiTextureBoundary(device);
+
 		EndProfileFrame();
 		LogPerformance();
 		LogEngineLimits();

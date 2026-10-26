@@ -238,14 +238,7 @@ namespace Components::Remix
 
 	static bool IsEyeOffsetLampFlare(std::uintptr_t material)
 	{
-		static std::unordered_map<std::uintptr_t, bool> known;
-		const auto found = known.find(material);
-
-		if (found != known.end())
-		{
-			return found->second;
-		}
-
+		// A material address reused by zombie eyes must not retain an old lamp-flare classification.
 		const char* name = ReadAt<const char*>(material);
 		const auto techniqueSet = ReadAt<std::uintptr_t>(material + Iw4::materialTechniqueSet);
 		const char* techniqueSetName = techniqueSet ? ReadAt<const char*>(techniqueSet) : nullptr;
@@ -263,7 +256,6 @@ namespace Components::Remix
 			isFlare = isLampGlow && !isWanted;
 		}
 
-		known[material] = isFlare;
 		return isFlare;
 	}
 

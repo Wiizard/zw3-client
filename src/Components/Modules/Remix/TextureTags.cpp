@@ -24,6 +24,8 @@
 #include "PbrMaterials.hpp"
 #include "Read.hpp"
 #include "Scene.hpp"
+#include "SkyMaterialPolicy.hpp"
+#include "UiTextureBoundary.hpp"
 
 namespace Components::Remix
 {
@@ -126,6 +128,7 @@ namespace Components::Remix
 	static std::vector<WithdrawnTag> withdrawnLog;
 	static std::unordered_set<std::uint64_t> sharedLayerTextures;
 	static bool hasReadSaved = false;
+	static UiTextureBoundary uiTextureBoundary;
 	static bool isSharedDecalTagged = true;
 	static TextureTagStats stats;
 	static std::uintptr_t settledWorld = 0;
@@ -756,20 +759,7 @@ namespace Components::Remix
 			return { static_cast<int>(TextureTag::Ignore), false };
 		}
 
-		const bool isSkyTechniqueSet = techniqueSet == "sky" || EndsWith(techniqueSet, "_sky");
-
-		// Sort 2 is the sky sort. Converted maps (backlot) draw their sky as an unlit skydome model, mc/ not wc/, which
-		// Remix would otherwise trace as a closed sphere shading the whole map. The name has to say sky too: the
-		// heartbeat sensor's screen (mc/mtl_motion_tracker_screen, mc_unlit_replace_lin_ua) is also sort 2.
-		const bool isSkydomeModel = sortKey == 2 && Contains(techniqueSet, "unlit")
-			&& ContainsAny(name, { "sky", "dome", "pano" });
-
-		if (isSkyTechniqueSet || (sortKey == 2 && name.substr(0, 3) == "wc/") || isSkydomeModel)
-		{
-			return { static_cast<int>(TextureTag::Sky), false };
-		}
-
-		if (name.substr(0, 13) == "wc/bg_facades" && Contains(techniqueSet, "unlit"))
+		if (IsSkyTextureMaterial(name, techniqueSet, sortKey))
 		{
 			return { static_cast<int>(TextureTag::Sky), false };
 		}
@@ -1757,6 +1747,7 @@ namespace Components::Remix
 
 	void ResetTextureTags()
 	{
+		uiTextureBoundary.Invalidate();
 		settledWorld = 0;
 		taggedWorld = 0;
 		settledFrames = 0;
@@ -1765,6 +1756,31 @@ namespace Components::Remix
 	TextureTagStats GetTextureTagStats()
 	{
 		return stats;
+	}
+
+	void InvalidateUiTextureBoundary()
+	{
+		uiTextureBoundary.Invalidate();
+	}
+
+	void UpdateUiTextureBoundary(IDirect3DDevice9* device)
+	{
+		const remixapi_Interface* api = TryGetApi(device);
+
+		if (!api || !hasReadSaved)
+		{
+			return;
+		}
+
+		const int tag = static_cast<int>(TextureTag::Ui);
+		// The explicit MarkUiPhase draw ends our 3D scene. Texture matches must not end it sooner.
+		uiTextureBoundary.Update(!IsFrontendRendering(), saved[tag], pushed[tag], withdrawn[tag],
+			[api](const std::string& opinions)
+			{
+				const bool success = api->SetConfigVariable("rtx.uiTextures", opinions.c_str()) == REMIXAPI_ERROR_CODE_SUCCESS;
+				if (success) Device::NoteFrameEvent("texture UI triggers synchronized with the explicit scene boundary");
+				return success;
+			});
 	}
 
 	void SetSharedDecalTags(bool isEnabled)

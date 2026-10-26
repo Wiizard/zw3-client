@@ -59,6 +59,9 @@ namespace Components::Menu
 		Backdrop();
 		static bool IsEnabled();
 		static bool IsShown();
+		static bool IsStartupLoading();
+		static void BeginShutdown();
+		static bool PreserveMenuMusic();
 		static bool Hides(const Game::Material* material);
 		static void Direct(BackdropDirection direction);
 		static void AddZone(std::string name);
@@ -66,5 +69,7 @@ namespace Components::Menu
 		static std::optional<BackdropFigure> FindFigure(std::string_view name);
 		static std::optional<Position> FindTag(const BackdropFigure& figure, std::string_view tag);
 		static void BeforeZoneLoad(const Game::XZoneInfo* zones, unsigned int count);
+		static void BeginZoneFree(int freedFlags);
+		static void EndZoneFree();
 	};
 }

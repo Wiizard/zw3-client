@@ -1398,7 +1398,8 @@ namespace Components
 
 	void FastFiles::MarkMainMenuReady()
 	{
-		if (!isInitialLoadPending.load(std::memory_order_acquire) || !Ready())
+		if (!isInitialLoadPending.load(std::memory_order_acquire) || !Ready()
+			|| Menu::Backdrop::IsStartupLoading())
 		{
 			return;
 		}

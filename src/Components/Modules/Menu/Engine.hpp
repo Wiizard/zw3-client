@@ -47,6 +47,22 @@ namespace Components::Menu::Engine
 		float nearStart, nearEnd, farStart, farEnd, nearBlur, farBlur;
 	};
 
+	struct Film
+	{
+		bool enabled;
+		float brightness, contrast, desaturation, desaturationDark;
+		bool invert;
+		float tintDark[3], tintMedium[3], tintLight[3];
+	};
+	static_assert(sizeof(Film) == 60);
+
+	struct Glow
+	{
+		bool enabled;
+		float bloomCutoff, bloomDesaturation, bloomIntensity, radius;
+	};
+	static_assert(sizeof(Glow) == 20);
+
 	struct refdef_t
 	{
 		unsigned int x, y, width, height;
@@ -55,16 +71,20 @@ namespace Components::Menu::Engine
 		int time;
 		float blurRadius;
 		DepthOfField dof;
-		std::byte vision[80];
+		Film film;
+		Glow glow;
 		struct { float diffuseScale, specularScale; } charPrimaryLightScale;
-		std::byte sunAndFilm[112];
+		std::byte waterSheetingFx[112];
 		GfxLight primaryLights[248];
 		std::byte scissorAndFlags[24];
 		int localClientNum;
 	};
 	static_assert(offsetof(refdef_t, blurRadius) == 92);
 	static_assert(offsetof(refdef_t, dof) == 96);
+	static_assert(offsetof(refdef_t, film) == 128);
+	static_assert(offsetof(refdef_t, glow) == 188);
 	static_assert(offsetof(refdef_t, charPrimaryLightScale) == 208);
+	static_assert(offsetof(refdef_t, waterSheetingFx) == 216);
 	static_assert(offsetof(refdef_t, primaryLights) == 328);
 	static_assert(offsetof(refdef_t, localClientNum) == 18208);
 	static_assert(sizeof(refdef_t) == 18216);

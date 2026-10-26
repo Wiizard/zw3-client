@@ -10,6 +10,7 @@ namespace Components::Menu
 	public:
 		Actors();
 		static bool IsReady();
+		static bool IsPrepared();
 		// Whether the crew stands together posing for the camera (the
 		// default) rather than fighting off a horde.
 		static void SetLineup(bool enabled, float room = 1.0f);

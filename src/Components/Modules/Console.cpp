@@ -7,6 +7,7 @@
 #include "Events.hpp"
 #include "Flags.hpp"
 #include "Logger.hpp"
+#include "Menu/Backdrop.hpp"
 #include "Scheduler.hpp"
 #include "TextRenderer.hpp"
 #include "Window.hpp"
@@ -2699,6 +2700,7 @@ namespace Components
 
 		Command::Add("quit", []
 		{
+			Menu::Backdrop::BeginShutdown();
 			reinterpret_cast<void(*)()>(Utils::Hook::Rebase(0x1401F5BB0))();
 		});
 

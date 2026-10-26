@@ -1,46 +1,122 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
 
 namespace Components::Menu::BackdropData
 {
-	struct transport_arc
+	inline float smooth_pulse(float t)
 	{
-		float vertices[4][2];
-		float alpha;
+		t = std::clamp(t, 0.0f, 1.0f);
+		return t * t * (3.0f - 2.0f * t);
+	}
+
+	enum class loading_overlay { none, startup_black, map_signal };
+
+	inline loading_overlay loading_overlay_for(bool startup_complete, bool changing_map)
+	{
+		if (!startup_complete) return loading_overlay::startup_black;
+		return changing_map ? loading_overlay::map_signal : loading_overlay::none;
+	}
+
+	inline constexpr int signal_layer_count = 3;
+	inline constexpr int signal_texture_width = 4096;
+	inline constexpr int signal_texture_height = 256;
+
+	struct signal_profile
+	{
+		float centre, companion, energy;
+	};
+	inline float signal_noise(float u, unsigned int period, std::uint32_t seed)
+	{
+		const float position = (u - std::floor(u)) * period;
+		const auto index = static_cast<unsigned int>(position);
+		const auto sample = [period, seed](unsigned int i)
+		{
+			std::uint32_t value = (i % period) * 374761393u + seed * 668265263u;
+			value = (value ^ (value >> 13)) * 1274126177u;
+			value ^= value >> 16;
+			return static_cast<float>(value & 65535u) / 32767.5f - 1.0f;
+		};
+		const float t = smooth_pulse(position - index);
+		return sample(index) * (1 - t) + sample(index + 1) * t;
+	}
+
+	// Periodic profiles let a high-resolution trace scroll without rebuilding
+	// hundreds of UI quads. Its endpoints and derivatives meet at the seam.
+	inline signal_profile signal_at(float u, int layer)
+	{
+		constexpr float tau = 6.28318530718f;
+		const auto seed = static_cast<std::uint32_t>(layer + 1);
+		const float packet = std::pow(0.5f + 0.5f * std::sin(tau * u * 3 + layer * 1.73f), 3.0f);
+		const float envelope = (0.045f + 0.955f * packet)
+			* (0.65f + 0.35f * (signal_noise(u, 19, seed + 13) * 0.5f + 0.5f));
+		// Irregular, densely sampled audio transients separated by quiet runs.
+		// A restrained centre beam and finer afterimages replace rolling sine ribbons.
+		const float carrier = 0.60f * signal_noise(u, 127, seed)
+			+ 0.28f * signal_noise(u, 331, seed + 5)
+			+ 0.12f * signal_noise(u, 887, seed + 11);
+		return {0.90f * envelope * carrier,
+			0.52f * envelope * signal_noise(u, 197, seed + 31),
+			0.45f + 0.55f * packet};
+	}
+
+	struct signal_strip
+	{
+		float x, y, width, height, s0, s1, alpha;
+		int layer;
 	};
 
-	// Isolated Kino electric arcs along an ellipse, rather than a repeated
-	// fullscreen texture. Keep the original 4:1 aspect ratio and never enlarge
-	// the 512x128 source. Motion and intensity are continuous at any frame rate.
+	// At most two cropped quads per layer, with no wrapped-UV sampler required.
+	// The menu's shared command buffer sees at most six draws plus its veil,
+	// independent of resolution or the number of filaments in the texture.
 	template <typename Draw>
-	void transport_arcs(int width, int height, int elapsed, Draw draw)
+	void signal_strips(int width, int height, int elapsed, Draw draw)
 	{
 		if (width <= 0 || height <= 0) return;
-		constexpr float tau = 6.28318530718f;
-		const float time = std::max(0, elapsed) * 0.001f;
-		const float length = std::min({440.0f, width * 0.28f, height * 0.42f});
-		for (int i = 0; i < 9; ++i)
+		const double time = std::max(0, elapsed) * 0.001;
+		constexpr double speeds[] = {0.065, -0.037, 0.091};
+		constexpr float strengths[] = {0.95f, 0.32f, 0.18f};
+		for (int layer = 0; layer < signal_layer_count; ++layer)
 		{
-			const float phase = i * 2.39996323f;
-			const float angle = tau * i / 9 + 0.035f * std::sin(time * 0.7f + phase);
-			const float x = width * (0.5f + 0.32f * std::cos(angle));
-			const float y = height * (0.5f + 0.30f * std::sin(angle));
-			const float tangent = angle + tau * 0.25f + 0.16f * std::sin(time + phase);
-			const float dx = std::cos(tangent) * length * 0.5f;
-			const float dy = std::sin(tangent) * length * 0.5f;
-			const float nx = -std::sin(tangent) * length * 0.125f;
-			const float ny = std::cos(tangent) * length * 0.125f;
-			const float pulse = 0.5f + 0.5f * std::sin(time * 3.1f + phase);
-			draw(transport_arc{{{x - dx - nx, y - dy - ny}, {x + dx - nx, y + dy - ny},
-				{x + dx + nx, y + dy + ny}, {x - dx + nx, y - dy + ny}},
-				0.28f + 0.5f * pulse * pulse});
+			const double travel = time * speeds[layer] + layer * 0.213;
+			const float offset = static_cast<float>(travel - std::floor(travel));
+			const float phase = static_cast<float>(time * 2.4 + layer * 1.7);
+			const float band = height * (0.125f + 0.020f * std::sin(phase));
+			const float top = height * 0.5f - band * 0.5f;
+			const float alpha = strengths[layer] * (0.86f + 0.14f * std::sin(phase));
+			const float first = width * (1 - offset);
+			if (first > 0.001f) draw(signal_strip{0, top, first, band, offset, 1, alpha, layer});
+			if (width - first > 0.001f) draw(signal_strip{first, top, width - first, band, 0, offset, alpha, layer});
 		}
 	}
 
+	class startup_barrier
+	{
+	public:
+		void observe(bool complete)
+		{
+			if (!complete) reset();
+			else complete_frames_ = std::min(complete_frames_ + 1, 2);
+		}
+		bool pending() const { return !released_ && complete_frames_ == 2; }
+		bool begin_frame()
+		{
+			if (!pending()) return false;
+			released_ = true;
+			return true;
+		}
+		bool ready() const { return released_; }
+		void reset() { complete_frames_ = 0; released_ = false; }
+	private:
+		int complete_frames_ = 0;
+		bool released_ = false;
+	};
+
 	// The cover survives unloading a world. Only a ready scene starts its reveal.
-	class teleport_transition
+	class backdrop_transition
 	{
 	public:
 		static constexpr int close_msec = 450;

@@ -496,6 +496,9 @@
     <ClCompile Include="..\src\Components\Modules\Menu\Engine.cpp">
       <ObjectFileName>$(IntDir)\MenuEngine.obj</ObjectFileName>
     </ClCompile>
+    <ClCompile Include="..\src\Components\Modules\Menu\WorldEffects.cpp">
+      <ObjectFileName>$(IntDir)\MenuWorldEffects.obj</ObjectFileName>
+    </ClCompile>
     <ClCompile Include="..\src\Components\Modules\Menu\Hooks.cpp">
       <ObjectFileName>$(IntDir)\MenuHooks.obj</ObjectFileName>
     </ClCompile>

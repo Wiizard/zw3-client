@@ -60,6 +60,8 @@ namespace Components::Menu
 		static bool IsEnabled();
 		static bool IsShown();
 		static bool IsStartupLoading();
+		static void BeginShutdown();
+		static bool PreserveMenuMusic();
 		static bool Hides(const Game::Material* material);
 		static void Direct(BackdropDirection direction);
 		static void AddZone(std::string name);

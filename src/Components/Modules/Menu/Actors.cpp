@@ -792,6 +792,7 @@ namespace Components::Menu
 	}
 
 	bool Actors::IsReady() { return ready; }
+	bool Actors::IsPrepared() { return prepared; }
 
 	std::optional<std::array<float, 3>> Actors::CrewCenter()
 	{

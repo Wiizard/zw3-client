@@ -14,4 +14,5 @@ namespace Components::Menu
 	bool InstallHooks(std::span<const HookRequest> requests);
 	void RemoveHooks();
 	bool ObserveZoneLoads();
+	bool ObserveStreamStops(void(*replacement)(int), void(**original)(int));
 }

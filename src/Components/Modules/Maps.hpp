@@ -21,7 +21,8 @@ namespace Components
 			~UserMapContainer()
 			{
 				this->FreeIwd();
-				this->Clear();
+				// Destruction also runs after engine teardown. The string cleans
+				// itself up; refreshing UI arenas here would read freed rawfiles.
 			}
 
 			unsigned int GetHash();

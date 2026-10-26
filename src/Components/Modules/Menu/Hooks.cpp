@@ -104,4 +104,43 @@ namespace Components::Menu
 		FlushInstructionCache(GetCurrentProcess(), code, sizeof(replacement));
 		return true;
 	}
+
+	bool ObserveStreamStops(void(*replacement)(int), void(**original)(int))
+	{
+		// Two stack saves, push rdi and sub rsp,40h. All 15 bytes are
+		// position independent; this catches indirect sound-stop dispatch too.
+		constexpr std::uintptr_t entry = 0x1402C27E0;
+		constexpr std::uint8_t expected[] = {0x48,0x89,0x5C,0x24,0x18,0x48,0x89,0x74,0x24,0x20,0x57,0x48,0x83,0xEC,0x40};
+		if (!Utils::Hook::MatchesBytes(entry, expected, sizeof(expected))) return false;
+		constexpr std::uint8_t jump[] = {0xFF,0x25,0,0,0,0};
+		auto* trampoline = static_cast<std::uint8_t*>(Utils::Hook::AllocateDataNear(entry, sizeof(expected) + 14));
+		if (!trampoline) return false;
+		std::memcpy(trampoline, expected, sizeof(expected));
+		std::memcpy(trampoline + sizeof(expected), jump, sizeof(jump));
+		const auto next = Utils::Hook::Rebase(entry) + sizeof(expected);
+		std::memcpy(trampoline + sizeof(expected) + 6, &next, sizeof(next));
+		DWORD protection;
+		if (!VirtualProtect(trampoline, sizeof(expected) + 14, PAGE_EXECUTE_READ, &protection))
+		{
+			VirtualFree(trampoline, 0, MEM_RELEASE);
+			return false;
+		}
+		std::uint8_t patched[sizeof(expected)];
+		std::fill(std::begin(patched), std::end(patched), 0x90);
+		std::memcpy(patched, jump, sizeof(jump));
+		const auto target = reinterpret_cast<std::uintptr_t>(replacement);
+		std::memcpy(patched + 6, &target, sizeof(target));
+		auto* code = reinterpret_cast<void*>(Utils::Hook::Rebase(entry));
+		if (!VirtualProtect(code, sizeof(patched), PAGE_EXECUTE_READWRITE, &protection))
+		{
+			VirtualFree(trampoline, 0, MEM_RELEASE);
+			return false;
+		}
+		*original = reinterpret_cast<void(*)(int)>(trampoline);
+		std::memcpy(code, patched, sizeof(patched));
+		VirtualProtect(code, sizeof(patched), protection, &protection);
+		FlushInstructionCache(GetCurrentProcess(), trampoline, sizeof(expected) + 14);
+		FlushInstructionCache(GetCurrentProcess(), code, sizeof(patched));
+		return true;
+	}
 }

@@ -5,6 +5,7 @@
 #include "Turntable.hpp"
 #include "Transition.hpp"
 #include "Selection.hpp"
+#include "EnvironmentData.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -25,6 +26,34 @@ int main()
 	using namespace Components::Menu::BackdropData;
 	try
 	{
+		const string authored = environment_source(R"(
+// level._effect["fake"] = loadfx("missing");
+level._effect["steam"] = loadfx("env/steam");
+playfx(level._effect["steam"], (1, 2, 3), anglestoforward((270, 45, 0)), anglestoup((270, 45, 0)));
+ent = createOneshotEffect("steam"); ent.v["origin"] = (4, 5, 6); ent.v["angles"] = (0, 90, 0); ent.v["delay"] = -15;
+)");
+		effect_names fxNames;
+		const string entityFx = environment_source(R"(
+level.firefx = loadfx("fire/barrel");
+fires = getEntArray("barrel_fireFX_origin", "targetname");
+for(i = 0; i < fires.size; i++) { playfx(level.firefx, fires[i].origin); }
+)");
+		effect_names entityNames;
+		read_effect_names(entityFx, entityNames);
+		const auto entityPlacements = read_entity_effects(entityFx,
+			R"({"targetname" "barrel_fireFX_origin" "origin" "1 2 3"}{"targetname" "other" "origin" "4 5 6"}{"targetname" "barrel_fireFX_origin" "origin" "7 8 9"})", entityNames);
+		Require(entityPlacements.size() == 2 && Near(entityPlacements[1].origin[0], 7), "older entity-based map FX resolve only matching BSP targets");
+		const auto repeated = read_placed_effects(R"(ent = createLoopEffect("fire"); ent.v["origin"] = (1,2,3); ent.v["angles"] = (0,0,0); ent.v["delay"] = 0.5;)", {{"fire", "fire/barrel"}});
+		Require(repeated.size() == 1 && Near(repeated[0].repeat, 0.5f) && repeated[0].delay == 0, "CreateFX repeating effects preserve their cadence without an initial delay");
+		read_effect_names(authored, fxNames);
+		const auto fx = read_placed_effects(authored, fxNames);
+		Require(fxNames.size() == 1 && fx.size() == 2, "converted and native map FX placements share their authored definitions");
+		Require(fx[0].name == "env/steam" && Near(fx[0].angles[0], 270) && Near(fx[1].origin[2], 6) && Near(fx[1].delay, -15), "FX origins, orientation and warmup survive parsing");
+		Require(!environment_vector("nan, 1, 2") && !environment_vector("1, 2, 3, 4"), "invalid effect placements are rejected");
+		Require(read_vision_name("VisionSetNaked(\"mp_rust\", 0);", "fallback") == "mp_rust", "the map script selects its gameplay vision");
+		Require(read_vision_name("VisionSetNaked(\"../bad\", 0);", "fallback") == "fallback", "vision references cannot escape the asset directory");
+		const auto visionFields = read_vision_fields("r_filmContrast \"1.0176\"\n527 \"1 0.8 0.7\"");
+		Require(visionFields.size() == 2 && visionFields.at("527") == "1 0.8 0.7", "named and legacy map vision settings are supported");
 		Require(parse_selection(" \tOFF\r").kind == selection_kind::off, "off setting");
 		Require(parse_selection(" RANDOM ").kind == selection_kind::random, "random setting");
 		Require(parse_selection("MP_RUST").stage == find_stage("mp_rust"), "map normalization");
@@ -155,9 +184,9 @@ int main()
 		one.reset();
 		Require(std::abs(one.advance(1)) < 0.01f, "turntable resets to its initial facing");
 
-		teleport_transition transit;
+		backdrop_transition transit;
 		Require(!transit.active() && Near(transit.amount(1000), 0) && transit.started_at(40) == 40,
-			"no transport over the ordinary menu; startup supplies its own animation clock");
+			"no transport over the ordinary menu");
 		transit.close(1000);
 		Require(Near(transit.amount(1000), 0) && Near(transit.amount(1225), 0.5f), "departure covers the old world gradually");
 		Require(!transit.covered(1449) && !transit.covered(1569), "old world stays until a fully covered frame has been presented");
@@ -181,21 +210,67 @@ int main()
 		Require(transit.active() && Near(transit.amount(0), 1) && Near(transit.amount(30000), 1),
 			"loading without an old scene starts fully covered, including at clock zero");
 		for (const auto [width, height] : {std::pair{640, 480}, {1920, 1080}, {3440, 1440}, {3840, 2160}})
-		{
-			int count = 0;
-			transport_arcs(width, height, 900, [&] (const transport_arc& arc)
+			for (int elapsed : {0, 1, 900, 3599, 3600, 100000, 1000000})
 			{
-				++count;
-				for (const auto& point : arc.vertices)
-					Require(point[0] >= 0 && point[1] >= 0 && point[0] <= width && point[1] <= height,
-						"electric arcs stay in the backdrop viewport on every display");
-				const float length = std::hypot(arc.vertices[1][0] - arc.vertices[0][0], arc.vertices[1][1] - arc.vertices[0][1]);
-				const float thickness = std::hypot(arc.vertices[2][0] - arc.vertices[1][0], arc.vertices[2][1] - arc.vertices[1][1]);
-				Require(length <= 512 && Near(length / thickness, 4), "original Kino texture keeps its aspect ratio and is never enlarged");
-				Require(arc.alpha > 0 && arc.alpha < 1, "teleport light intensity stays bounded");
-			});
-			Require(count > 0, "the loading veil always has visible electricity");
+				std::array<float, signal_layer_count> coverage{};
+				int count = 0;
+				signal_strips(width, height, elapsed, [&] (const signal_strip& strip)
+				{
+					++count;
+					Require(strip.x >= 0 && strip.x + strip.width <= width + 0.001f && strip.width > 0,
+						"signal strips crop cleanly at viewport edges");
+					Require(strip.s0 >= 0 && strip.s1 <= 1 && strip.s1 > strip.s0, "signal does not depend on wrapped texture sampling");
+					Require(strip.y > height * 0.4f && strip.y + strip.height < height * 0.6f, "signal stays in a restrained horizontal band");
+					Require(strip.alpha > 0 && strip.alpha <= 1, "signal intensity stays bounded");
+					coverage[strip.layer] += strip.width;
+				});
+				Require(count <= 6, "waveform leaves the shared command buffer for frontend buttons and text, even at 4K");
+				for (float covered : coverage) Require(Near(covered, static_cast<float>(width)), "scrolling signal has no gap or overlap");
+			}
+		for (int layer = 0; layer < signal_layer_count; ++layer)
+		{
+			const auto start = signal_at(0, layer), end = signal_at(1, layer);
+			Require(Near(start.centre, end.centre) && Near(start.companion, end.companion) && Near(start.energy, end.energy),
+				"signal texture endpoints meet without a visible scrolling seam");
 		}
+		int empty = 0;
+		signal_strips(0, 1080, 0, [&] (const signal_strip&) { ++empty; });
+		signal_strips(1920, 0, 0, [&] (const signal_strip&) { ++empty; });
+		Require(empty == 0, "a minimized viewport emits no signal geometry");
+		Require(loading_overlay_for(false, false) == loading_overlay::startup_black,
+			"boot stays black until the backdrop is ready without a splash or waveform");
+		Require(loading_overlay_for(false, true) == loading_overlay::startup_black,
+			"even a pending map transition cannot display the waveform before the first menu");
+		Require(loading_overlay_for(true, false) == loading_overlay::none,
+			"the prepared backdrop and menu appear together without a startup overlay");
+		Require(loading_overlay_for(true, true) == loading_overlay::map_signal,
+			"later lobby map changes still use the red waveform");
+		startup_barrier startup;
+		Require(!startup.ready(), "frontend starts behind the startup barrier");
+		startup.observe(false); startup.observe(true);
+		Require(!startup.ready(), "a first render submission alone cannot reveal the frontend");
+		startup.observe(false); startup.observe(true);
+		Require(!startup.ready(), "a lost world or unfinished character resets startup readiness");
+		startup.observe(true);
+		Require(startup.pending() && !startup.ready(), "the outer UI pass stays hidden on a frame that already queued its loading cover");
+		Require(startup.begin_frame() && startup.ready(), "the next frame reveals the completed backdrop and frontend together");
+		Require(!startup.begin_frame(), "startup is released once, independently of later lobby transitions");
+		startup.reset();
+		Require(!startup.ready() && !startup.pending(), "vid_restart invalidates a previously visible scene");
+		startup.observe(true);
+		Require(!startup.begin_frame(), "a restarted renderer must finish preparing a new scene before exposing its menus");
+		startup.observe(true);
+		Require(startup.begin_frame() && startup.ready(), "a restarted renderer reveals its rebuilt scene and menus together");
+		float quiet = 1, burst = 0;
+		for (int i = 0; i <= 4096; ++i)
+		{
+			const auto profile = signal_at(static_cast<float>(i) / 4096, 0);
+			quiet = std::min(quiet, profile.energy);
+			burst = std::max(burst, std::abs(profile.centre));
+			Require(std::isfinite(profile.centre) && std::abs(profile.centre) < 1 && std::abs(profile.companion) < 1,
+				"audio transients stay inside their texture without clipping");
+		}
+		Require(quiet < 0.5f && burst > 0.3f, "the waveform has distinct quiet runs and sharp transients");
 		std::cout << "Menu backdrop tests passed\n";
 		return 0;
 	}

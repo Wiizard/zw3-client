@@ -30,6 +30,7 @@
 
 
 #include <windows.h>
+#include <intrin.h> // _ReturnAddress ()
 
 #include <cstdlib>      // calloc(), free()
 #include <cstring>      // memset()
@@ -920,6 +921,25 @@ namespace Components
         }
 
         return false;
+      }
+
+      // The most blur any open menu asks for (its blurWorld).
+      //
+      float
+      open_menu_blur ()
+      {
+        if (Game::uiContext == nullptr) return 0.0f;
+        const UiContext& c (*Game::uiContext);
+
+        const int n (min (c.openMenuCount,
+                          static_cast<int> (size (c.menuStack))));
+
+        float r (0.0f);
+        for (int i (0); i < n; ++i)
+          if (const menuDef_t* m = c.menuStack[i])
+            r = max (r, m->blurRadius);
+
+        return r;
       }
 
       void
@@ -2523,7 +2543,13 @@ namespace Components
 
         // A popup that blurs the world in a match blurs the backdrop too.
         //
-        r.blurRadius = CL_GetMenuBlurRadius (0);
+        // But only as much as an open menu asks for: the UI's blur output
+        // (UiContext::blurRadiusOut) is only ever raised by the menus that
+        // blur, and after a vid_restart (which an audio device change also
+        // causes) it can be left at a stale value with no such menu open,
+        // which blurred the backdrop for good.
+        //
+        r.blurRadius = min (CL_GetMenuBlurRadius (0), open_menu_blur ());
 
         // Reveal the scene by bringing it into focus over its first second
         // or so, rather than popping it in over the still image.
@@ -3629,7 +3655,21 @@ namespace Components
         // A track started from the front end's own zones (see
         // capture_resident_music ()) is the exception: a backdrop map change
         // frees only level zones, which it doesn't live in, so it plays on.
-        if (channel >= 40 && channel < 52 && Backdrop::PreserveMenuMusic ())
+        //
+        // And never for the stops that tear the channel down rather than
+        // just silence it: the sound driver shutting down (a sound restart,
+        // as when the audio device changes or the video restarts) releases
+        // XAudio2 and every voice after stopping the streams, so a stream
+        // left playing there keeps a pointer to a destroyed voice, and the
+        // next stop of that channel crashes on it (0x1402C2859). Starting a
+        // new stream on the channel, or reusing it for another sound, stops
+        // it first for the same reason.
+        const auto caller (reinterpret_cast<uintptr_t> (_ReturnAddress ()));
+        const bool teardown (caller == Utils::Hook::Rebase (0x1402C23A9) || // driver shutdown
+                             caller == Utils::Hook::Rebase (0x1402C267A) || // stream start
+                             caller == Utils::Hook::Rebase (0x14024739C));  // channel reuse
+
+        if (!teardown && channel >= 40 && channel < 52 && Backdrop::PreserveMenuMusic ())
         {
           const auto* alias (stream_alias (channel));
           const int wanted (menu_music.load ());

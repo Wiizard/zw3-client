@@ -798,10 +798,60 @@ namespace Components
 
 	static Utils::Hook sndRestartHook;
 
+	constexpr std::uintptr_t Dvar_ForEach = 0x140285100;
+
+	// A latched renderer dvar with a change waiting for a restart: what the
+	// options pages' Apply leaves behind when it changes a video setting
+	// before running snd_restart. Only r_ dvars count: server dvars such as
+	// g_gametype are latched too and often pending in the front end.
+	static void FindPendingVideoLatch(Game::dvar_t* dvar, void* data)
+	{
+		auto& pending = *static_cast<bool*>(data);
+
+		if (pending || !dvar || !dvar->name || !(dvar->flags & Game::DVAR_LATCH) || _strnicmp(dvar->name, "r_", 2))
+		{
+			return;
+		}
+
+		switch (dvar->type)
+		{
+		case Game::DVAR_TYPE_STRING:
+			pending = dvar->current.string && dvar->latched.string && std::strcmp(dvar->current.string, dvar->latched.string) != 0;
+			break;
+		case Game::DVAR_TYPE_BOOL:
+			pending = dvar->current.enabled != dvar->latched.enabled;
+			break;
+		case Game::DVAR_TYPE_FLOAT:
+			pending = dvar->current.value != dvar->latched.value;
+			break;
+		case Game::DVAR_TYPE_FLOAT_2:
+		case Game::DVAR_TYPE_FLOAT_3:
+		case Game::DVAR_TYPE_FLOAT_4:
+		case Game::DVAR_TYPE_FLOAT_3_COLOR:
+			pending = std::memcmp(dvar->current.vector, dvar->latched.vector, sizeof(float) * 4) != 0;
+			break;
+		default:
+			pending = dvar->current.integer != dvar->latched.integer;
+			break;
+		}
+	}
+
+	// snd_restart restarts the video as well only when the options pages'
+	// Apply has video settings waiting for it. The engine also runs
+	// snd_restart by itself whenever Windows changes the audio output
+	// device, and that must stay a sound restart, as it is in iw4x: a full
+	// vid_restart there reloads the whole front end for nothing.
 	static void CL_Snd_Restart_f_Hk()
 	{
+		bool pendingVideo = false;
+		reinterpret_cast<void(*)(void(*)(Game::dvar_t*, void*), void*)>(Utils::Hook::Rebase(Dvar_ForEach))(FindPendingVideoLatch, &pendingVideo);
+
 		reinterpret_cast<void(*)()>(Utils::Hook::Rebase(CL_Snd_Restart_f))();
-		reinterpret_cast<void(*)()>(Utils::Hook::Rebase(CL_Vid_Restart_f))();
+
+		if (pendingVideo)
+		{
+			reinterpret_cast<void(*)()>(Utils::Hook::Rebase(CL_Vid_Restart_f))();
+		}
 	}
 
 	static const Utils::Hook::LeaSite addImageToListLeas[] =

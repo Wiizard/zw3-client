@@ -28,6 +28,18 @@ int main()
 		Require(!Utils::ShouldHandleManagedDisconnect(false, false, false),
 			"An idle client must not be treated as an assigned connection");
 
+		for (const auto state : { "RESETTING", "POST_MATCH", "FINISHED", "IDLE" })
+			Require(Utils::IsCompletedMatchmakingState(state), "Authoritative completion must permit a lobby return");
+		for (const auto state : { "SEARCHING", "MAP_VOTE", "SERVER_STARTING", "CONNECTING", "IN_MATCH", "FAILED", "ERROR", "" })
+			Require(!Utils::IsCompletedMatchmakingState(state), "An active, unavailable or failed match is not a completed lobby return");
+		for (const auto state : { "RESETTING", "POST_MATCH", "FINISHED" })
+			Require(Utils::IsConfirmedAssignedMatchEnd("mat_a", "mat_a", state, true), "A confirmed assigned end survives native reset errors");
+		Require(!Utils::IsConfirmedAssignedMatchEnd("mat_a", "mat_b", "FINISHED", true), "Another match cannot suppress an error");
+		Require(!Utils::IsConfirmedAssignedMatchEnd("", "", "FINISHED", true), "Missing assignments cannot suppress errors");
+		Require(!Utils::IsConfirmedAssignedMatchEnd("mat_a", "mat_a", "IDLE", true), "Generic idle is not completion proof");
+		Require(!Utils::IsConfirmedAssignedMatchEnd("mat_a", "mat_a", "FAILED", true), "Server failure is not a successful end");
+		Require(!Utils::IsConfirmedAssignedMatchEnd("mat_a", "mat_a", "FINISHED", false), "Unconfirmed completion cannot suppress errors");
+
 		// Exercise the same predicate at receipt and at queued-worker execution:
 		// both engine callbacks may arrive before the first return worker finishes.
 		const bool firstQueued = Utils::ShouldHandleManagedDisconnect(true, true, true);

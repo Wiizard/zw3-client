@@ -25,7 +25,8 @@ namespace Components
 
 		static std::string GetMachineEntropy();
 
-		static bool SetManagedConnectTicket(const Network::Address& target, const std::string& ticket, const std::string& matchId, const std::string& sessionId);
+		static bool SetManagedConnectTicket(const Network::Address& target, const std::string& ticket, const std::string& matchId, const std::string& sessionId,
+			std::chrono::steady_clock::time_point expires = {});
 		static void ClearManagedConnectTicket();
 
 		static int PrivateClientCount();

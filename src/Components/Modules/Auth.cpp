@@ -17,6 +17,7 @@
 #include "Scheduler.hpp"
 #include "Toast.hpp"
 #include "UIScript.hpp"
+#include "ZWNet.hpp"
 
 #include "Steam/Proxy.hpp"
 
@@ -386,6 +387,7 @@ namespace Components
 		std::string matchId;
 		std::string sessionId;
 		std::chrono::steady_clock::time_point expires{};
+		bool refreshPending = false;
 	};
 
 	struct ManagedAdmissionConfig
@@ -408,7 +410,6 @@ namespace Components
 		std::chrono::steady_clock::time_point expires;
 	};
 
-	constexpr auto managedTicketLifetime = 120s;
 	constexpr auto recentAdmissionLifetime = 5s;
 	constexpr std::size_t recentAdmissionLimit = 64;
 	constexpr DWORD admissionTimeoutMs = 1500;
@@ -603,7 +604,8 @@ namespace Components
 		}
 	}
 
-	bool Auth::SetManagedConnectTicket(const Network::Address& target, const std::string& ticket, const std::string& matchId, const std::string& sessionId)
+	bool Auth::SetManagedConnectTicket(const Network::Address& target, const std::string& ticket, const std::string& matchId, const std::string& sessionId,
+		const std::chrono::steady_clock::time_point expires)
 	{
 		const bool isTicketValid = IsOpaqueAdmissionValue(ticket, 128)
 			&& IsOpaqueAdmissionValue(matchId, 128)
@@ -621,7 +623,10 @@ namespace Components
 		managedConnectTicket.ticket = ticket;
 		managedConnectTicket.matchId = matchId;
 		managedConnectTicket.sessionId = sessionId;
-		managedConnectTicket.expires = std::chrono::steady_clock::now() + managedTicketLifetime;
+		// Initial descriptors authorize preparation. Renew after the native map
+		// load, when the engine is actually ready to send its connect packet.
+		managedConnectTicket.expires = expires;
+		managedConnectTicket.refreshPending = false;
 
 		return true;
 	}
@@ -636,6 +641,7 @@ namespace Components
 		managedConnectTicket.matchId.clear();
 		managedConnectTicket.sessionId.clear();
 		managedConnectTicket.expires = {};
+		managedConnectTicket.refreshPending = false;
 	}
 
 	bool Auth::SendConnectDataStub(Game::netsrc_t source, const Game::netadr_t* target, const void* data, int length)
@@ -722,21 +728,37 @@ namespace Components
 		connectData.set_signature(Utils::Cryptography::ECC::SignMessage(guidKey, challenge));
 		connectData.set_infostring(connectString);
 
+		bool needsRefresh = false;
+		bool waitsForRefresh = false;
+		bool hasManagedTicket = false;
 		{
 			std::lock_guard _(managedConnectTicket.mutex);
 
 			const Network::Address ticketTarget{managedConnectTicket.endpoint};
-			const bool isTicketForTarget = ticketTarget.IsValid()
-				&& ticketTarget == address
-				&& std::chrono::steady_clock::now() < managedConnectTicket.expires;
+			const bool isTicketForTarget = ticketTarget.IsValid() && ticketTarget == address;
 
 			if (isTicketForTarget)
 			{
-				connectData.set_connect_ticket(managedConnectTicket.ticket);
-				connectData.set_match_id(managedConnectTicket.matchId);
-				connectData.set_session_id(managedConnectTicket.sessionId);
+				if (std::chrono::steady_clock::now() >= managedConnectTicket.expires)
+				{
+					needsRefresh = !managedConnectTicket.refreshPending;
+					managedConnectTicket.refreshPending = true;
+					waitsForRefresh = true;
+				}
+				else
+				{
+					connectData.set_connect_ticket(managedConnectTicket.ticket);
+					connectData.set_match_id(managedConnectTicket.matchId);
+					connectData.set_session_id(managedConnectTicket.sessionId);
+					hasManagedTicket = true;
+				}
 			}
 		}
+		if (needsRefresh) ZWNet::RefreshManagedConnectTicket(address);
+		// The normal engine resend obtains a current challenge after this async
+		// request. Never block here or send an unauthenticated managed packet.
+		if (waitsForRefresh) return true;
+		if (Dvar::Var("zwnet_managed_session").Get<bool>() && !hasManagedTicket) return false;
 
 		Network::SendCommand(source, address, "connect", connectData.SerializeAsString());
 

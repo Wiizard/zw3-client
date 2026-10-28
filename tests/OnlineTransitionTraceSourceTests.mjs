@@ -33,8 +33,8 @@ test('UI transition sources are fixed labels recorded before state invalidation'
 
 test('disconnect and cgame traces preserve the pre-transition snapshot and existing callback order', () => {
   const disconnected = source.slice(source.indexOf('Events::OnCLDisconnected('), source.indexOf('Events::OnCGameInit('));
-  assert.ok(disconnected.indexOf('TraceOnlineTransition(wasConnected') < disconnected.indexOf('isInGame = false'));
-  assert.ok(disconnected.indexOf('isServerJoinTransition.exchange(false)') < disconnected.indexOf('HandleServerDisconnect(isTerminal, wasMatchmaking, nativeError)'));
+  assert.ok(disconnected.indexOf('TraceOnlineTransition(wasConnected') < disconnected.indexOf('isInGame.exchange(false)'));
+  assert.ok(disconnected.indexOf('isServerJoinTransition.exchange(false)') < disconnected.indexOf('HandleServerDisconnect(isTerminal, wasMatchmaking, nativeError, wasInGame)'));
   const initialized = source.slice(source.indexOf('Events::OnCGameInit('), source.indexOf('Scheduler::OnGameInitialized(', source.indexOf('Events::OnCGameInit(')));
   assert.ok(initialized.indexOf('TraceOnlineTransition("cgame_init_begin")') < initialized.indexOf('CancelRelayHandshake()'));
   assert.ok(initialized.indexOf('isInGame = hasMatch') < initialized.indexOf('TraceOnlineTransition("cgame_init_assigned")'));

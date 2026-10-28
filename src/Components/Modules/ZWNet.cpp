@@ -440,6 +440,7 @@ namespace Components
 	// Main-thread UI stopwatch; the search-active DVAR remains a boolean.
 	static Utils::MatchmakingSearchTimer searchTimer;
 	static std::atomic_uint64_t joinTransitionGeneration = 0;
+	static std::atomic_bool isCompletedMatchReturnPending = false;
 
 	// Keep transition diagnostics useful without recording session identifiers,
 	// command arguments, endpoints, or any server-provided free-form text.
@@ -1933,6 +1934,8 @@ namespace Components
 			{ "DIRECT_CONNECTION", "DIRECT CONNECTION" },
 			{ "RELAY_CONNECTION", "RELAY CONNECTION" },
 			{ "IN_MATCH", "IN MATCH" },
+			{ "POST_MATCH", "RETURNING TO LOBBY" },
+			{ "RESETTING", "RETURNING TO LOBBY" },
 		};
 
 		const auto text = texts.find(state);
@@ -2385,7 +2388,7 @@ namespace Components
 				return;
 			}
 
-			if (state == "ERROR")
+			if (state == "ERROR" || state == "POST_MATCH" || state == "RESETTING")
 			{
 				Dvar::Var("zwnet_start_phase").Set("");
 				Dvar::Var("zwnet_start_seconds").Set(0);
@@ -4620,7 +4623,41 @@ namespace Components
 
 	void ZWNet::CancelMatchmaking()
 	{
-		CloseOnlineSession(false, false);
+		auto generation = joinTransitionGeneration.load();
+		// X/ESC is an explicit departure, not an interrupted connection.
+		// Keep the existing party and its leader while releasing this assignment.
+		std::string matchId;
+		{
+			std::lock_guard _(stateMutex);
+			matchId = currentMatchId;
+		}
+		const auto result = Request("POST", "/zwnet/matchmaking/disconnect",
+			{ { "match_id", matchId }, { "terminal", true }, { "preserve_party", true } });
+		if (!isActive || generation != joinTransitionGeneration) return;
+		if (!result || result->contains("error"))
+		{
+			SetState("ERROR", "ZWNET_REQUEST_FAILED");
+			return;
+		}
+		ResetManagedRoute();
+		generation = joinTransitionGeneration.load();
+		ResetMatchLobbySoundSnapshot();
+		isSearching = false;
+		isInGame = false;
+		isEndpointJoinInFlight = false;
+		isServerJoinTransition = false;
+		{
+			std::lock_guard _(stateMutex);
+			currentProposalId.clear();
+			currentMatchId.clear();
+		}
+		Scheduler::Once([generation]
+		{
+			if (!isActive || generation != joinTransitionGeneration) return;
+			ClearMatchDvars();
+			Dvar::Var("zwnet_managed_session").Set(false);
+			Dvar::Var("zwnet_match_id").Set("");
+		}, Scheduler::Pipeline::MAIN);
 
 		if (!isActive)
 		{
@@ -4633,6 +4670,7 @@ namespace Components
 		{
 			party = Request("POST", "/zwnet/parties/create", { { "visibility", PartyVisibilityName(desiredPartyPrivacy.load()) } });
 		}
+		if (generation != joinTransitionGeneration) return;
 
 		if (!party || !party->is_object() || party->contains("error"))
 		{
@@ -4641,6 +4679,7 @@ namespace Components
 		}
 
 		party = ApplyPartyVisibility(std::move(*party));
+		if (generation != joinTransitionGeneration) return;
 
 		if (!party)
 		{
@@ -4649,6 +4688,7 @@ namespace Components
 		}
 
 		*party = PublishLocalRank(std::move(*party));
+		if (generation != joinTransitionGeneration) return;
 		UpdateLobbyDvars(*party);
 		SetState("IN_PARTY");
 		RefreshPlaylistCatalog(true);
@@ -4741,47 +4781,39 @@ namespace Components
 		}, Scheduler::Pipeline::MAIN);
 	}
 
-	bool ZWNet::ReturnToMatchmakingLobby()
+	bool ZWNet::ReturnToMatchmakingLobby(const bool requireAssignedCompletion)
 	{
-		bool isCompleted = false;
-
-		for (auto attempt = 0; attempt < 7; ++attempt)
+		auto generation = joinTransitionGeneration.load();
+		std::string expectedMatch;
 		{
-			const auto status = Request("GET", "/zwnet/matchmaking/status");
-
-			if (!status || !status->is_object() || status->contains("error"))
-			{
-				return false;
-			}
-
-			const auto state = JsonString(*status, "state");
-			isCompleted = state == "RESETTING" || state == "POST_MATCH" || state == "FINISHED" || state == "IDLE";
-
-			if (isCompleted)
-			{
-				break;
-			}
-
-			if (attempt < 6)
-			{
-				std::this_thread::sleep_for(1s);
-			}
+			std::lock_guard _(stateMutex);
+			expectedMatch = currentMatchId;
 		}
-
-		if (!isCompleted)
+		if (requireAssignedCompletion && !IsOpaqueMatchId(expectedMatch)) return false;
+		const auto status = Request("GET", "/zwnet/matchmaking/status" +
+			(requireAssignedCompletion ? "?match_id=" + expectedMatch : std::string{}));
+		if (!isActive || generation != joinTransitionGeneration || !status || !status->is_object()
+			|| status->contains("error") || !Utils::IsCompletedMatchmakingState(JsonString(*status, "state")))
 		{
 			return false;
 		}
+		if (requireAssignedCompletion && !Utils::IsConfirmedAssignedMatchEnd(expectedMatch, JsonString(*status, "match_id"),
+			JsonString(*status, "state"), status->value("completed", false))) return false;
 
 		auto party = Request("GET", "/zwnet/parties/current");
 
-		if (!party || !party->is_object() || party->contains("error") || JsonString(*party, "id").empty())
+		if (generation != joinTransitionGeneration || !party || !party->is_object()
+			|| party->contains("error") || JsonString(*party, "id").empty())
 		{
 			return false;
 		}
 
 		*party = PublishLocalRank(std::move(*party));
+		if (generation != joinTransitionGeneration) return false;
 
+		ResetManagedRoute();
+		generation = joinTransitionGeneration.load();
+		isCompletedMatchReturnPending = false;
 		isSearching = false;
 		isInGame = false;
 		isEndpointJoinInFlight = false;
@@ -4799,16 +4831,35 @@ namespace Components
 		RefreshPlaylistCatalog(true);
 		UpdatePresence();
 
-		Scheduler::Once([]
+		Scheduler::Schedule([generation, frontendInitialized = false]() mutable
 		{
-			if (!isActive)
+			if (!isActive || generation != joinTransitionGeneration)
 			{
-				return;
+				return true;
 			}
+
+			// Native disconnect rebuilds the frontend. An early one-shot open
+			// is overwritten by that initialization, especially on a slow VPS.
+			if (Game::CL_IsCgameInitialized(0) || Game::CL_GetLocalClientConnectionState(0) != Game::CA_DISCONNECTED
+				|| !Game::uiContext) return false;
+			auto* const lobby = Game::Menus_FindByName(Game::uiContext, "zwnet_matchmaking");
+			if (!lobby) return false;
+			bool frontendVisible = Game::Menu_IsVisible(Game::uiContext, lobby);
+			for (const char* menuName : { "main_text", "pregame_loaderror" })
+			{
+				if (auto* const menu = Game::Menus_FindByName(Game::uiContext, menuName))
+					frontendVisible = frontendVisible || Game::Menu_IsVisible(Game::uiContext, menu);
+			}
+			frontendInitialized = frontendInitialized || frontendVisible;
+			if (!frontendInitialized) return false;
 
 			ClearMatchDvars();
 			Dvar::Var("zwnet_match_id").Set("");
 			Dvar::Var("zwnet_managed_session").Set(false);
+			Dvar::Var("com_errorMessage").Set("");
+			Dvar::Var("com_errorTitle").Set("");
+			Game::Dvar_SetFromStringByName("partyend_reason", "");
+			Game::Menus_CloseAll(Game::uiContext);
 
 			for (const char* menuName : { "class", "team_marinesopfor" })
 			{
@@ -4821,7 +4872,10 @@ namespace Components
 			}
 
 			Game::Menus_OpenByName(Game::uiContext, "zwnet_matchmaking");
-		}, Scheduler::Pipeline::MAIN, 500ms);
+			const bool visible = Game::Menu_IsVisible(Game::uiContext, lobby);
+			if (visible) Logger::Print("ZWNET completed match: preserved lobby visible after frontend initialization\n");
+			return visible;
+		}, Scheduler::Pipeline::MAIN, 100ms);
 
 		return true;
 	}
@@ -4916,8 +4970,25 @@ namespace Components
 		}, Scheduler::Pipeline::MAIN, 50ms);
 	}
 
-	void ZWNet::HandleServerDisconnect(const bool isTerminal, const bool wasMatchmaking, Events::NativeDisconnectError nativeError)
+	void ZWNet::HandleServerDisconnect(const bool isTerminal, const bool wasMatchmaking, Events::NativeDisconnectError nativeError, const bool wasInGame)
 	{
+		// A managed reset can reach the native disconnect before its last client
+		// DVAR. Only a played, exactly assigned, backend-confirmed end may clear
+		// that error; ordinary join failures retain the original error handling.
+		if (wasMatchmaking && !isTerminal && wasInGame && nativeError.hasNativeError && ReturnToMatchmakingLobby(true))
+		{
+			Logger::Print("ZWNET completed match: confirmed server reset returned to preserved lobby\n");
+			return;
+		}
+		if (wasMatchmaking && !isTerminal && isCompletedMatchReturnPending)
+		{
+			// The server's end notification can precede its next agent heartbeat.
+			// Poll the existing status flow until completion; never reconnect this match.
+			isSearching = true;
+			SetState("POST_MATCH");
+			ReturnToMatchmakingLobby();
+			return;
+		}
 		if (wasMatchmaking && !isTerminal && !nativeError.hasNativeError && ReturnToMatchmakingLobby())
 		{
 			Logger::Print("ZWNET completed match: returned to the preserved party lobby\n");
@@ -5082,6 +5153,59 @@ namespace Components
 			Party::Connect(target, false, false, true);
 		};
 		if (!LobbyScene::DeferLaunch(connect)) connect();
+	}
+
+	void ZWNet::RefreshManagedConnectTicket(const Network::Address& target)
+	{
+		const auto generation = joinTransitionGeneration.load();
+		std::string matchId, playerId, sessionId, instanceId, serverIdentity;
+		bool isRelay;
+		{
+			std::lock_guard _(routeAttempt.mutex);
+			if (target != routeAttempt.assignedTarget || routeAttempt.matchId.empty()) return;
+			matchId = routeAttempt.matchId;
+			playerId = routeAttempt.playerId;
+			sessionId = routeAttempt.sessionId;
+			instanceId = routeAttempt.instanceId;
+			serverIdentity = routeAttempt.serverIdentity;
+			isRelay = routeAttempt.isRouteRelay;
+		}
+		EnqueueAsync([generation, target, matchId, playerId, sessionId, instanceId, serverIdentity, isRelay]
+		{
+			const auto stillCurrent = [generation, matchId, playerId]
+			{
+				if (!isActive || generation != joinTransitionGeneration) return false;
+				std::lock_guard _(stateMutex);
+				return currentMatchId == matchId && currentPlayerId == playerId;
+			};
+			if (!stillCurrent()) return;
+			const auto requestedAt = std::chrono::steady_clock::now();
+			const auto descriptor = Request("GET", "/zwnet/connect/" + matchId + (isRelay ? "?relay=1" : ""));
+			if (!stillCurrent()) return;
+			Scheduler::Once([stillCurrent, target, matchId, sessionId, instanceId, serverIdentity, isRelay, requestedAt, descriptor]
+			{
+				if (!stillCurrent()) return;
+				const auto ttl = descriptor && descriptor->is_object() ? JsonIntegerOr(*descriptor, "ticket_ttl_seconds", 0) : 0;
+				const auto expires = requestedAt + std::chrono::seconds(ttl);
+				const bool valid = descriptor && !descriptor->contains("error") && ttl > 0 && ttl <= 300
+					&& expires > std::chrono::steady_clock::now() + 2s
+					&& JsonString(*descriptor, "match_id") == matchId
+					&& JsonString(*descriptor, "session_id") == sessionId
+					&& JsonString(*descriptor, "instance_id") == instanceId
+					&& JsonString(*descriptor, "server_identity") == serverIdentity
+					&& JsonString(*descriptor, "route_type") == (isRelay ? "RELAY" : "DIRECT")
+					&& Network::Address(JsonString(*descriptor, isRelay ? "relay_endpoint" : "direct_endpoint")) == target;
+				if (!valid || !Auth::SetManagedConnectTicket(target, JsonString(*descriptor, "connect_ticket"), matchId, sessionId, expires))
+				{
+					Auth::ClearManagedConnectTicket();
+					SetState("ERROR", "ZWNET_ROUTE_UNAVAILABLE");
+					Command::Execute("disconnect", true);
+					Party::ConnectError("Match authorization is no longer available. Please try Find Match again.");
+					return;
+				}
+				if (Flags::HasFlag("log")) Logger::Print("join trace: refreshed admission for native connect\n");
+			}, Scheduler::Pipeline::MAIN);
+		});
 	}
 
 	void ZWNet::ConnectMatch(const std::string& matchId, const bool isRelay, const bool isReconnect,
@@ -5780,6 +5904,7 @@ namespace Components
 		// Invalidate on the input thread, not behind a pending HTTP/hash task.
 		++joinTransitionGeneration;
 		++playlistSelectorGeneration;
+		isCompletedMatchReturnPending = false;
 		isSearching = false;
 		CancelJoinInProgressPreview();
 		CancelRelayHandshake();
@@ -6019,6 +6144,11 @@ namespace Components
 	{
 		if (!isActive || !isSearching)
 		{
+			return;
+		}
+		if (isCompletedMatchReturnPending)
+		{
+			ReturnToMatchmakingLobby();
 			return;
 		}
 		const auto transitionGeneration = joinTransitionGeneration.load();
@@ -6628,6 +6758,16 @@ namespace Components
 			ActivateQuickPlay();
 		});
 
+		// V11 packages also dispatch playlist rows through this console action.
+		// Reuse the UI path so permissions, cancellation and duplicate guards agree.
+		Command::Add("zwnet_select_playlist", [](const Command::Params* params)
+		{
+			if (params->Size() != 2) return;
+			const std::string_view slot = params->Get(1);
+			if (slot.size() != 1 || slot.front() < '0' || slot.front() > '9') return;
+			ActivatePlaylistSlot(slot.front() - '0');
+		});
+
 		Command::Add("zwnet_manual_join", [](const Command::Params* params)
 		{
 			if (params->Size() != 2 || !IsOpaqueMatchId(params->Get(1)))
@@ -6833,6 +6973,11 @@ namespace Components
 			Command::Execute("zwnet_register", false);
 		});
 
+		UIScript::Add("ZWNET_OpenStatsProfile", [](const UIScript::Token&)
+		{
+			Command::Execute("openLink \"https://stats.zw3.eu/profile\"", false);
+		});
+
 		UIScript::Add("ZWNetCopyGuid", [](const UIScript::Token&)
 		{
 			if (!TryCopyPublicGuidToClipboard())
@@ -6967,7 +7112,7 @@ namespace Components
 			TraceOnlineTransition(wasConnected ? "native_disconnected_connected" : "native_disconnected_unconnected");
 			const auto nativeError = Events::CurrentNativeDisconnectError();
 			const auto disconnectGeneration = joinTransitionGeneration.load();
-			isInGame = false;
+			const bool wasInGame = isInGame.exchange(false);
 			Dvar::Var("zwnet_match_return").Set(false);
 
 			if (isServerJoinTransition.exchange(false) && !nativeError.hasNativeError)
@@ -6992,9 +7137,9 @@ namespace Components
 
 			if (wasMatchmaking)
 			{
-				EnqueueAsync([isTerminal, wasMatchmaking, nativeError, disconnectGeneration, wasConnected]
+				EnqueueAsync([isTerminal, wasMatchmaking, nativeError, disconnectGeneration, wasConnected, wasInGame]
 				{
-					if (nativeError.hasNativeError && joinTransitionGeneration != disconnectGeneration) return;
+					if (joinTransitionGeneration != disconnectGeneration) return;
 					bool hasCurrentMatch = false;
 					{
 						std::lock_guard _(stateMutex);
@@ -7003,7 +7148,7 @@ namespace Components
 					// Recheck at execution as both native callbacks can arrive before
 					// the first worker has confirmed completion and cleared its match.
 					if (!Utils::ShouldHandleManagedDisconnect(hasCurrentMatch, wasMatchmaking, wasConnected)) return;
-					HandleServerDisconnect(isTerminal, wasMatchmaking, nativeError);
+					HandleServerDisconnect(isTerminal, wasMatchmaking, nativeError, wasInGame);
 				});
 			}
 			else if (isPrivateMatchClient)
@@ -7150,7 +7295,9 @@ namespace Components
 				return;
 			}
 
-			Logger::Print("ZWNET match complete: leaving finished server before reset\n");
+			isCompletedMatchReturnPending = true;
+			SetState("POST_MATCH");
+			Logger::Print("ZWNET match complete: waiting for authoritative lobby return\n");
 			Command::Execute("disconnect", false);
 		}, Scheduler::Pipeline::MAIN, 100ms);
 

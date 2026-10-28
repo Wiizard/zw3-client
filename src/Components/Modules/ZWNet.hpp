@@ -2,6 +2,7 @@
 
 #include "UIScript.hpp"
 #include "Events.hpp"
+#include "Network.hpp"
 
 namespace Components
 {
@@ -17,6 +18,7 @@ namespace Components
 		static bool BeginEndpointJoin(const std::string& endpoint);
 		static bool BeginManagedReconnect(const std::string& endpoint);
 		static bool TryRelayAfterDirectTimeout(const std::string& endpoint);
+		static void RefreshManagedConnectTicket(const Network::Address& target);
 		static bool TryGetSharedLobbyRank(const std::string& guid, int& level, int& prestige);
 
 		static std::string SessionPath();
@@ -54,8 +56,8 @@ namespace Components
 		static void CancelSearch();
 		static void CancelMatchmaking();
 		static void CloseOnlineSession(bool isShuttingDown, bool isTerminal);
-		static void HandleServerDisconnect(bool isTerminal, bool wasMatchmaking, Events::NativeDisconnectError nativeError);
-		static bool ReturnToMatchmakingLobby();
+		static void HandleServerDisconnect(bool isTerminal, bool wasMatchmaking, Events::NativeDisconnectError nativeError, bool wasInGame);
+		static bool ReturnToMatchmakingLobby(bool requireAssignedCompletion = false);
 		static void ScheduleReturnToIdleMenu(Events::NativeDisconnectError nativeError = {});
 		static void ReturnToIdleMenu(const Events::NativeDisconnectError& nativeError);
 		static void UpdatePresence();

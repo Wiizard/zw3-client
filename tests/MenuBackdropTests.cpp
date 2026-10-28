@@ -105,18 +105,29 @@ for(i = 0; i < fires.size; i++) { playfx(level.firefx, fires[i].origin); }
 		selector.remember_default("mp_zombie_diner");
 		const auto home = find_stage("mp_zombie_theater");
 		Require(selector.choose({}).choice.stage == home, "a chosen default remains stable throughout the session");
+		Require(selector.choose({false, false, false, "", "mp_rust", ""}).choice.stage == home,
+			"a saved private map does not replace the startup default before visiting the lobby");
+		backdrop_selector onlineOnly = selector;
+		Require(onlineOnly.choose({false, true, false, "MATCH_FOUND", "", "mp_rust"}).follows_lobby,
+			"matchmaking can select a map before the first private lobby visit");
+		Require(onlineOnly.choose({}).choice.stage == home, "matchmaking alone does not replace the startup default");
 		lobby_selection lobby{true, false, false, "", "mp_rust", ""};
 		Require(selector.choose(lobby).follows_lobby && selector.choose(lobby).choice.stage == find_stage("mp_rust"), "private lobby follows its selected map");
+		Require(!selector.choose({}).follows_lobby && selector.choose({}).choice.stage == find_stage("mp_rust"),
+			"returning from the first private lobby keeps its map without an active lobby");
 		lobby.private_map = "MP_OILRIG";
 		Require(selector.choose(lobby).choice.stage == find_stage("mp_oilrig"), "changing a private selection follows the new custom map");
-		Require(selector.choose({}).choice.stage == home, "leaving a private lobby restores the session default");
+		const auto privateMap = find_stage("mp_oilrig");
+		Require(selector.choose({}).choice.stage == privateMap, "leaving a private lobby keeps its latest selection");
+		Require(selector.choose({false, false, false, "", "mp_rust", ""}).choice.stage == privateMap,
+			"hidden lobby dvar changes cannot replace the remembered private map");
 		lobby = {false, true, false, "SEARCHING", "mp_rust", "mp_oilrig"};
-		Require(!selector.choose(lobby).follows_lobby && selector.choose(lobby).choice.stage == home, "searching ignores stale map dvars");
+		Require(!selector.choose(lobby).follows_lobby && selector.choose(lobby).choice.stage == privateMap, "searching ignores stale map dvars");
 		lobby.matchmaking_state = "MAP_VOTE";
-		Require(selector.choose(lobby).choice.stage == home, "vote candidates do not change the backdrop before a winner is chosen");
+		Require(selector.choose(lobby).choice.stage == privateMap, "vote candidates do not change the backdrop before a winner is chosen");
 		lobby.matchmaking_state = "WAITING_FOR_READY";
 		lobby.voting = true;
-		Require(selector.choose(lobby).choice.stage == home, "an active vote cannot expose a stale winner");
+		Require(selector.choose(lobby).choice.stage == privateMap, "an active vote cannot expose a stale winner");
 		lobby.voting = false;
 		for (const auto state : {"MATCH_FOUND", "READY_CHECK", "WAITING_FOR_READY", "RESERVING_SERVER", "SERVER_STARTING", "COUNTDOWN", "JOIN_PREVIEW", "CONNECTING"})
 		{
@@ -126,15 +137,15 @@ for(i = 0; i < fires.size; i++) { playfx(level.firefx, fires[i].origin); }
 		lobby.match_map = "mp_zombie_pentagon";
 		Require(selector.choose(lobby).choice.stage == find_stage("mp_zombie_pentagon"), "the next matchmaking result replaces the previous map");
 		lobby.matchmaking = false;
-		Require(selector.choose(lobby).choice.stage == home, "main menu ignores the previous matchmaking winner");
+		Require(selector.choose(lobby).choice.stage == privateMap, "main menu keeps the private selection instead of the previous matchmaking winner");
 		lobby.matchmaking = true;
 		for (const auto state : {"IDLE", "IN_PARTY", "ONLINE", "ERROR", "OFFLINE"})
 		{
 			lobby.matchmaking_state = state;
-			Require(selector.choose(lobby).choice.stage == home, "cancelling or leaving matchmaking restores the default");
+			Require(selector.choose(lobby).choice.stage == privateMap, "cancelling or leaving matchmaking keeps the private selection");
 		}
 		lobby = {true, false, false, "", "../../map", ""};
-		Require(selector.choose(lobby).choice.stage == home, "unsafe lobby map names fall back to the default");
+		Require(selector.choose(lobby).choice.stage == privateMap, "unsafe lobby map names do not replace the last valid private selection");
 		selector.reject("mp_oilrig");
 		Require(selector.choose({}).choice.stage == home, "rejecting a lobby map does not reroll the default");
 		selector.reject("mp_zombie_theater");

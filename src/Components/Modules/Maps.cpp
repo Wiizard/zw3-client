@@ -1158,6 +1158,15 @@ namespace Components
 			AssetHandler::OnLoad(type, LoadAssetRestrict);
 		}
 
+		UIScript::Add("RefreshMapDisplayName", [](const UIScript::Token&)
+		{
+			const auto mapName = Dvar::Var("ui_mapname").Get<std::string>();
+
+			// Rebuild arena names after loadArenas before resolving the selected map.
+			ForceRefreshArenas();
+			SynchronizeMapDvars(mapName);
+		});
+
 		GSC::Script::AddFunction("GetMapList", GSCr_GetMapList);
 		GSC::Script::AddFunction("GetMapArenaInfo", GSCr_GetMapArenaInfo);
 

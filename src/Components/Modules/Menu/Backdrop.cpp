@@ -2704,8 +2704,8 @@ namespace Components
 
         backdrop_dvar (); // Always on; registered for menus that read it.
 
-        // Only a private lobby or a confirmed matchmaking map can override
-        // the session's random backdrop. Preserve directed figures on that map.
+        // A private selection stays the main menu's backdrop after its lobby
+        // closes. Preserve directed figures while a lobby controls the map.
         const backdrop_request request (requested_backdrop ());
         s.main_menu_transition = !request.follows_lobby;
         if (!request.follows_lobby)
@@ -2713,7 +2713,7 @@ namespace Components
         else if (!dir || dir->map != request.choice.stage->map)
           dir = BackdropDirection {request.choice.stage->map, nullopt, nullopt};
 
-        // A rejected lobby map falls back to the session's default.
+        // A rejected lobby map falls back to the selector's available map.
         //
         if (dir && ranges::find (s.rejected, dir->map) != s.rejected.end ())
           dir.reset ();
@@ -2749,8 +2749,7 @@ namespace Components
           value = sel.stage != nullptr ? "random " + string (sel.stage->map) : "random";
         }
 
-        // Read the requested map ahead during the selection debounce, including
-        // the return to the default map when a lobby closes.
+        // Read a newly selected map ahead during the selection debounce.
         if (sel.stage != nullptr && sel.stage->map != s.map && sel.stage->map != s.prefetched_map)
         {
           prefetch_map (sel.stage->map);
@@ -3396,10 +3395,8 @@ namespace Components
       stop_sounds_fn stop_stream (nullptr);
       std::atomic<int> menu_music (0);
 
-      // Zone frees in progress (see Backdrop::BeginZoneFree ()), and
-      // whether the one in progress frees only level zones.
+      // Zone frees in progress (see Backdrop::BeginZoneFree ()).
       std::atomic<int> zone_frees (0);
-      std::atomic<bool> level_only_free (false);
 
       int
       music_kind (const char* name)
@@ -3414,10 +3411,10 @@ namespace Components
       // define them, as opposed to a backdrop map's copy of the same alias,
       // which overrides them while the map is loaded and goes with it.
       //
-      // The music is always started from these, so the track that plays
-      // lives in memory a backdrop map change never frees, and it can keep
-      // playing straight through the change instead of being stopped and
-      // started over. They are looked up only while no level zone is
+      // The music is started from these to avoid a map-owned alias. All
+      // voices still stop at zone release, because alias ownership does
+      // not establish ownership of queued PCM buffers. These aliases are
+      // looked up only while no level zone is
       // loaded (nothing can override them then), and forgotten whenever a
       // zone other than a level's is freed (the front end's own may be).
       //
@@ -3479,13 +3476,6 @@ namespace Components
           a.store (nullptr);
       }
 
-      bool
-      resident (const Game::snd_alias_t* alias, int kind)
-      {
-        return alias != nullptr && kind > 0 && kind < 3 &&
-               alias == resident_music[kind].load ();
-      }
-
       void
       track_level_zones (int allocated, int freed)
       {
@@ -3516,9 +3506,33 @@ namespace Components
         return *reinterpret_cast<const Game::snd_alias_t* const*> (info + 0x68);
       }
 
+      void
+      forget_stopped_aliases ()
+      {
+        // Native channel teardown (0x140247780) clears only the primary
+        // alias. SND_Save/RestoreAliases still visits the secondary alias
+        // of all 52 channels, even when their driver voice has already gone.
+        // A completed map sound must not be restored after its zone unloads.
+        const auto section (static_cast<Game::CriticalSection> (0x29));
+        Game::Sys_EnterCriticalSection (section);
+        const auto* driver_voices (reinterpret_cast<void* const*> (Utils::Hook::Rebase (0x148BCEA68)));
+        const auto channels (Utils::Hook::Rebase (0x14651C808));
+        for (size_t channel (0); channel != 52; ++channel)
+        {
+          if (driver_voices[channel] != nullptr) continue;
+          // Two alias pointers followed by their two saved variant offsets.
+          std::memset (reinterpret_cast<void*> (channels + channel * 0xA8 + 0x68), 0, 0x18);
+        }
+        Game::Sys_LeaveCriticalSection (section);
+      }
+
       int
       play_menu_loop (int local_client, const char* name, int system)
       {
+        // Remote loading-screen updates can paint menus during DB unload.
+        // Do not restart a voice after teardown has stopped its sample reader.
+        if (zone_frees.load () != 0) return -1;
+
         const int kind (music_kind (name));
         if (kind != 0 && Backdrop::PreserveMenuMusic ())
         {
@@ -3558,9 +3572,9 @@ namespace Components
         // menu asks for it again afterwards (see play_menu_loop ()), and it
         // starts over from what is still loaded.
         //
-        // A track started from the front end's own zones (see
-        // capture_resident_music ()) is the exception: a backdrop map change
-        // frees only level zones, which it doesn't live in, so it plays on.
+        // Even a resident alias does not prove that the driver's queued
+        // sample buffers belong to a resident zone. Stop every stream at
+        // this boundary; menu painting restarts the track after DB returns.
         //
         // And never for the stops that tear the channel down rather than
         // just silence it: the sound driver shutting down (a sound restart,
@@ -3580,7 +3594,7 @@ namespace Components
           const auto* alias (stream_alias (channel));
           const int wanted (menu_music.load ());
           if (wanted != 0 && alias != nullptr && music_kind (alias->aliasName) == wanted &&
-              (zone_frees.load () == 0 || (level_only_free.load () && resident (alias, wanted))))
+              zone_frees.load () == 0)
             return;
         }
         stop_stream (channel);
@@ -3591,7 +3605,7 @@ namespace Components
       {
         static bool kept (false);
 
-        if (front_end () && Backdrop::IsEnabled ())
+        if (zone_frees.load () == 0 && front_end () && Backdrop::IsEnabled ())
         {
           if (!kept)
           {
@@ -3713,17 +3727,10 @@ namespace Components
     // until the free is done.
     //
     //
-    // Except a track started from the front end's own zones, when only
-    // level zones go: that is a backdrop map change, and the track is
-    // nowhere in what it frees, so the music carries on through it.
-    //
-    void Backdrop::BeginZoneFree (int freed)
+    void Backdrop::BeginZoneFree (int)
     {
       if (zone_frees.fetch_add (1) != 0 || stop_stream == nullptr || !Game::Sys_IsMainThread ())
         return;
-
-      const bool level_only ((freed & ~zone_flag_level) == 0 && PreserveMenuMusic ());
-      level_only_free.store (level_only);
 
       for (int channel (40); channel < 52; ++channel)
       {
@@ -3731,20 +3738,23 @@ namespace Components
         if (alias == nullptr) continue;
         const int kind (music_kind (alias->aliasName));
         if (kind == 0) continue;
-        const bool keep (level_only && resident (alias, kind));
-        LogLine{} << "backdrop: " << (keep ? "keeping" : "stopping") << " the menu music '"
+        LogLine{} << "backdrop: stopping the menu music '"
                   << alias->aliasName << "' (stream " << channel << ") through a zone free";
-        if (!keep)
-          stop_stream (channel);
+        stop_stream (channel);
       }
+
+      // FX can leave loaded sample voices alive after their emitters stop.
+      // Native cleanup stops and destroys those voices before DB frees their
+      // sample buffers. This includes menu streams, regardless of which
+      // zone owns their aliases.
+      Engine::Bind<stop_sounds_fn> (0x14024A2E0) (0);
+      forget_stopped_aliases ();
     }
 
     void Backdrop::EndZoneFree ()
     {
       if (zone_frees.fetch_sub (1) == 1)
       {
-        level_only_free.store (false);
-
         // With the level gone nothing overrides the front end's tracks,
         // so this is when they can be looked up if they weren't already.
         if (PreserveMenuMusic ())

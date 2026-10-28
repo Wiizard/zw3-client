@@ -5,6 +5,7 @@
 #include "Device.hpp"
 #include "Engine.hpp"
 #include "FixedFunction.hpp"
+#include "GpuCompatibility.hpp"
 #include "Lights.hpp"
 #include "Menu.hpp"
 #include "PbrMaterials.hpp"
@@ -368,6 +369,17 @@ namespace Components::Remix
 		if (restarting || !r_rtxRemix.IsValid() || r_rtxRemix.Get<bool>() == enabled)
 		{
 			return;
+		}
+
+		if (enabled)
+		{
+			const auto compatibility = CheckRemixGpuCompatibility();
+			if (!compatibility.supported)
+			{
+				Logger::Warning("remix: enabling blocked; no supported NVIDIA RTX GPU was detected (enumeration failed: {})\n", compatibility.detectionFailed);
+				MessageBoxW(Window::GetWindow(), compatibility.ErrorMessage().c_str(), L"RTX Remix - Unsupported Graphics Hardware", MB_OK | MB_ICONERROR);
+				return;
+			}
 		}
 
 		std::wstring executable(32768, L'\0');

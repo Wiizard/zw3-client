@@ -29,11 +29,14 @@ namespace Components::Menu::BackdropData
 	class backdrop_selector
 	{
 	public:
-		backdrop_request choose(const lobby_selection& lobby) const
+		backdrop_request choose(const lobby_selection& lobby)
 		{
 			const stage* selected = nullptr;
 			if (lobby.private_lobby)
+			{
 				selected = find_stage(lobby.private_map);
+				if (selected) private_map_ = selected->map;
+			}
 			else if (lobby.matchmaking && !lobby.voting)
 			{
 				constexpr array<string_view, 13> picked_states{
@@ -45,6 +48,9 @@ namespace Components::Menu::BackdropData
 					selected = find_stage(lobby.match_map);
 			}
 			if (selected) return {{selection_kind::map, selected}, true};
+			// Keep the last private selection throughout this session, even
+			// after its lobby closes or a match returns to the main menu.
+			if (!private_map_.empty()) return {{selection_kind::map, find_stage(private_map_)}, false};
 			if (!default_map_.empty()) return {{selection_kind::map, find_stage(default_map_)}, false};
 			return {{selection_kind::random}, false};
 		}
@@ -57,10 +63,12 @@ namespace Components::Menu::BackdropData
 
 		void reject(string_view map)
 		{
+			if (private_map_ == map) private_map_.clear();
 			if (default_map_ == map) default_map_.clear();
 		}
 
 	private:
+		string private_map_;
 		string default_map_;
 	};
 }

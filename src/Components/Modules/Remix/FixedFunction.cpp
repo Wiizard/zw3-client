@@ -37,6 +37,7 @@
 #include "Scene.hpp"
 #include "Sky.hpp"
 #include "TextureTags.hpp"
+#include "WaterMaterialPolicy.hpp"
 
 namespace Components::Remix
 {
@@ -5306,6 +5307,16 @@ namespace Components::Remix
 		return static_cast<std::uint8_t>(std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
 	}
 
+	static bool IsScrollingWater(std::uintptr_t material)
+	{
+		const auto techniqueSet = ReadAt<std::uintptr_t>(material + Iw4::materialTechniqueSet);
+		const auto image = FindColorMapImage(material);
+		const char* techniqueName = techniqueSet ? ReadAt<const char*>(techniqueSet) : nullptr;
+		const char* imageName = image ? ReadAt<const char*>(image + Iw4::gfxImageName) : nullptr;
+		return IsScrollingWaterMaterial(MaterialName(material), techniqueName ? techniqueName : "",
+			imageName ? imageName : "", ReadAt<std::uint8_t>(material + Iw4::materialCameraRegion));
+	}
+
 	static IDirect3DTexture9* TryGetWaterColorMap(IDirect3DDevice9* device, std::uintptr_t material)
 	{
 		const auto found = waterTextures.find(material);
@@ -5712,6 +5723,7 @@ namespace Components::Remix
 		{
 			waterColorMap = TryGetWaterColorMap(device, material);
 		}
+		const bool isWaterSurface = waterColorMap || IsScrollingWater(material);
 
 		if (reticleColorMap)
 		{
@@ -5732,7 +5744,7 @@ namespace Components::Remix
 
 			IDirect3DTexture9* layerTwin = nullptr;
 
-			if (isBlending || isCutoutDecal)
+			if ((isBlending || isCutoutDecal) && !isWaterSurface)
 			{
 				layerTwin = TryGetLayerTwin(device, material, colorMap);
 			}
@@ -5783,6 +5795,18 @@ namespace Components::Remix
 			}
 
 			device->SetTexture(0, colorMap);
+		}
+
+		if (isWaterSurface)
+		{
+			// Remix's water material supplies transmission. Legacy terrain-blend alpha must not cut holes in it.
+			device->GetRenderState(D3DRS_TEXTUREFACTOR, &textureFactor);
+			device->SetRenderState(D3DRS_TEXTUREFACTOR, 0xFFFFFFFF);
+			device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+			device->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+			device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+			device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TFACTOR);
+			CopyName(dumpRow.action, sizeof(dumpRow.action), "water: full surface, PBR transmission");
 		}
 
 		D3DMATRIX scrollTransform = identity;
@@ -5869,10 +5893,15 @@ namespace Components::Remix
 			device->SetRenderState(D3DRS_SRCBLEND, sourceBlend);
 		}
 
-		if (isFloatingLayer)
+		if (isFloatingLayer || isWaterSurface)
 		{
 			device->SetRenderState(D3DRS_ALPHABLENDENABLE, isBlending);
 			device->SetRenderState(D3DRS_ALPHATESTENABLE, isAlphaTested);
+		}
+
+		if (isWaterSurface)
+		{
+			device->SetRenderState(D3DRS_TEXTUREFACTOR, textureFactor);
 		}
 
 		if (isCutoutDecal)

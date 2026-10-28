@@ -25,6 +25,7 @@
 #include "Read.hpp"
 #include "Scene.hpp"
 #include "SkyMaterialPolicy.hpp"
+#include "WaterMaterialPolicy.hpp"
 #include "UiTextureBoundary.hpp"
 
 namespace Components::Remix
@@ -38,7 +39,6 @@ namespace Components::Remix
 	static constexpr int alphaBlend = 0x165;
 	static constexpr int lastLayerSortKey = 18;
 	static constexpr unsigned passInterval = 300;
-	static constexpr unsigned firstPassDelay = 2;
 	static constexpr unsigned earlyPassInterval = 30;
 	static constexpr unsigned earlyPassFrames = 900;
 	static constexpr const wchar_t* tagFileName = L"zw3_remix_textures.conf";
@@ -769,7 +769,7 @@ namespace Components::Remix
 			return { static_cast<int>(TextureTag::Water), false, false, false, true };
 		}
 
-		if (region == 1 && Contains(techniqueSet, "_ua") && Contains(name, "water") && !Contains(name, "foam"))
+		if (IsScrollingWaterMaterial(name, techniqueSet, StripComma(facts.imageName), region))
 		{
 			return { static_cast<int>(TextureTag::Water), false, false, false, true };
 		}
@@ -1396,23 +1396,22 @@ namespace Components::Remix
 
 		const std::uintptr_t mapIdentity = GetMapIdentity();
 
-		if (!mapIdentity || mapIdentity != settledWorld)
+		if (!mapIdentity)
 		{
 			settledWorld = mapIdentity;
 			settledFrames = 0;
 			return;
 		}
 
+		if (mapIdentity != settledWorld)
+		{
+			settledWorld = mapIdentity;
+			settledFrames = 0;
+		}
+
 		++settledFrames;
 
-		if (taggedWorld != mapIdentity)
-		{
-			if (settledFrames < firstPassDelay)
-			{
-				return;
-			}
-		}
-		else
+		if (taggedWorld == mapIdentity)
 		{
 			unsigned interval = passInterval;
 

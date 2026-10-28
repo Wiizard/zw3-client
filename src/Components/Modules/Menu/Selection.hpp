@@ -7,7 +7,7 @@ namespace Components::Menu::BackdropData
 {
 	inline constexpr array<string_view, 5> default_backdrop_maps{
 		"mp_zombie_theater", "mp_zombie_pentagon", "mp_factory_sh",
-		"mp_cod5_prototype", "mp_zombie_diner"
+		"mp_zombie_nuked", "mp_zombie_diner"
 	};
 
 	struct lobby_selection

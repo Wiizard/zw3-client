@@ -48,10 +48,16 @@ namespace Components::Menu::WorldEffects
             // FX_PlayOrientedEffect call used by CG's createfx reader.
             const unsigned char init[] {0x48,0x89,0x5c,0x24,0x08};
             const unsigned char play[] {0x48,0x83,0xec,0x58};
+            const unsigned char update[] {0x48,0x8B,0xC4,0x57,0x48,0x81,0xEC,0xA0,0,0,0};
             return Utils::Hook::MatchesBytes(0x140157D30, init, sizeof(init)) &&
                    Utils::Hook::MatchesBytes(0x14015AC60, play, sizeof(play)) &&
                    Utils::Hook::BranchesTo(0x1400B839D, 0x14015DC20, false) &&
-                   Utils::Hook::BranchesTo(0x1400B8B7D, 0x14015D910, false);
+                   Utils::Hook::BranchesTo(0x1400B8B7D, 0x14015D910, false) &&
+                   Utils::Hook::BranchesTo(0x1400469F5, 0x14015C1C0, false) &&
+                   Utils::Hook::BranchesTo(0x140046A19, 0x14015DC60, false) &&
+                   Utils::Hook::BranchesTo(0x140046A02, 0x14013C3C0, false) &&
+                   Utils::Hook::BranchesTo(0x140046A95, 0x14013D040, false) &&
+                   Utils::Hook::MatchesBytes(0x14015E7D0, update, sizeof(update));
         }
     }
 
@@ -203,7 +209,27 @@ namespace Components::Menu::WorldEffects
         Bind<void(*)(int, const Engine::refdef_t*, const Game::RefdefView*, float, bool)>(0x14015D910)(0, &view, &view.view, farPlane, false);
         Bind<void(*)(int)>(0x14015FD50)(0);
         Bind<void(*)(int)>(0x14013AE70)(0);
+        // Worker 8 also updates cgame/viewmodel state and crashes without a
+        // player snapshot. Drain simulation, then run only its FX operations
+        // against our initialized system and camera, on the scene thread.
         Game::R_WaitWorkerCmds();
+        Bind<void(*)(void*, int, bool)>(0x14015E7D0)(command.system, command.localClient, false);
+        Bind<void(*)(int)>(0x14015C1C0)(0);
+        Bind<void(*)(void*)>(0x14015DC60)(&command);
+        // The FX-only vertex pass consumes the sorted particles. Supply
+        // its own full command, rather than the shorter simulation command.
+        struct vertex_command
+        {
+            void* system;
+            void* buffers[4];
+            int localClient;
+            float viewOrigin[3];
+            float viewAxis[3][3];
+        } vertices {};
+        static_assert(offsetof(vertex_command, viewAxis) == 0x38);
+        static_assert(sizeof(vertex_command) == 0x60);
+        Bind<void(*)(void*, void*)>(0x14013C3C0)(&command, &vertices);
+        Bind<void(*)(void*)>(0x14013D040)(&vertices);
         // Map FX use positional audio even though no player client is active.
         Bind<void(*)(int, int, const float*, const void*, const float*)>(0x140249760)(
             0, 0, view.view.org, view.view.axis, view.viewOffset);

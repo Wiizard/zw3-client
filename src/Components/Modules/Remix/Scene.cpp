@@ -1,6 +1,7 @@
 #include "STDInclude.hpp"
 
 #include "Scene.hpp"
+#include "SceneWarmup.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -51,6 +52,8 @@ namespace Components::Remix
 	static TessDrawList originalParticleCloudTess = nullptr;
 	static bool isWeatherEnabled = true;
 	static bool isOffscreenWorldEnabled = true;
+	static SceneWarmup sceneWarmup;
+	static void PrepareFrame(IDirect3DDevice9* device);
 
 	static bool hasAttempted = false;
 	static bool isInstalled = false;
@@ -204,6 +207,7 @@ namespace Components::Remix
 		if (isScene)
 		{
 			EndSceneView();
+			sceneWarmup.ObserveScene(GetMapIdentity(), GetTickCount64());
 		}
 	}
 
@@ -734,6 +738,7 @@ namespace Components::Remix
 
 		isInstalled = true;
 		stats.isHookInstalled = true;
+		Device::OnBeginScene(&PrepareFrame);
 
 		Log() << "remix: handing the scene camera to Remix at the start of RB_StandardDrawCommands";
 
@@ -863,18 +868,17 @@ namespace Components::Remix
 		return isOffscreenWorldEnabled;
 	}
 
-	void OnPresent(IDirect3DDevice9* device)
+	static void PrepareFrame(IDirect3DDevice9* device)
 	{
 		if (!Core::IsRemixMode())
 		{
 			return;
 		}
 
-		Device::AdvanceFrameCapture();
-
 		sceneDevice = device;
 		stats.hasDevice = device != nullptr;
 		SetFrontendRendering(!Game::CL_IsCgameInitialized(0));
+		if (IsFrontendRendering()) sceneWarmup.Reset();
 
 		static bool hasAppliedConfig = false;
 
@@ -906,8 +910,6 @@ namespace Components::Remix
 				Core::LoadConfigForMap(mapName);
 				ApplyConfig(Core::GetConfig());
 			}
-
-			UpdateAutoLook();
 		}
 
 		{
@@ -936,6 +938,7 @@ namespace Components::Remix
 
 		UpdateMapFog(device);
 		UpdateSkyBrightness(device);
+		UpdateAutoLook();
 		UpdateLook(device);
 
 		{
@@ -944,7 +947,17 @@ namespace Components::Remix
 		}
 
 		UpdateUiTextureBoundary(device);
+	}
 
+	float GetSceneStartupOpacity()
+	{
+		return sceneWarmup.Opacity(GetTickCount64());
+	}
+
+	void OnPresent(IDirect3DDevice9*)
+	{
+		if (!Core::IsRemixMode()) return;
+		Device::AdvanceFrameCapture();
 		EndProfileFrame();
 		LogPerformance();
 		LogEngineLimits();
@@ -1135,6 +1148,7 @@ namespace Components::Remix
 
 	void OnDeviceLost()
 	{
+		sceneWarmup.Reset();
 		ResetTextureTags();
 		ForgetSkyMaterial();
 		ReleaseWeather();

@@ -191,8 +191,8 @@ namespace Components::Remix::Core
 		float remixMirrorMetal = 0.0f;
 		float remixEffectGlow = 0.2f;
 		float remixShadowLift = 0.0f;
-		float remixEyeGlowBrightness = 1.0f;
-		float remixEyeGlowSize = 1.0f;
+		float remixEyeGlowBrightness = 3.31f;
+		float remixEyeGlowSize = 1.49f;
 		bool remixMapZones = true;
 		bool remixSteadyTransparency = true;
 		float remixOutdoorEv = 0.0f;

@@ -160,6 +160,8 @@ namespace Components::Remix
 			waitedFrames = 0;
 			isDecided = false;
 			traits = {};
+			// Sun and sky statistics still belong to the previous scene until this world has rendered once.
+			return;
 		}
 
 		if (!world || isDecided)

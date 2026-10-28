@@ -544,6 +544,46 @@ namespace Components
 		return mapName.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") == std::string::npos;
 	}
 
+	static std::string FindArenaDisplayName(const std::string& contents, const std::string& mapName)
+	{
+		const char* cursor = contents.data();
+		std::string entryMap;
+		std::string entryName;
+
+		// String_Parse is a menu-script reader: it stops at line breaks.
+		// Arena catalogs span lines and need the general-purpose parser.
+		while (cursor && *cursor)
+		{
+			const char* before = cursor;
+			const char* parsed = Game::Com_Parse(&cursor);
+			if (!parsed || cursor == before) break;
+			const std::string token = parsed;
+			if (token.empty()) continue;
+
+			if (token == "{")
+			{
+				entryMap.clear();
+				entryName.clear();
+				continue;
+			}
+
+			if (token == "}")
+			{
+				if (!_stricmp(entryMap.data(), mapName.data())) return entryName;
+				continue;
+			}
+
+			const std::string key = token;
+			before = cursor;
+			parsed = Game::Com_Parse(&cursor);
+			if (!parsed || cursor == before) break;
+			if (key == "map") entryMap = parsed;
+			else if (key == "longname") entryName = parsed;
+		}
+
+		return {};
+	}
+
 	void Maps::SynchronizeMapDvars(const std::string& rawMapName)
 	{
 		if (!IsPlainMapId(rawMapName) || rawMapName == "none" || rawMapName == "None")
@@ -552,29 +592,22 @@ namespace Components
 		}
 
 		const std::string normalizedMap = Utils::MapPreview::Normalize(rawMapName);
-		const char* const localizedName = Localization::LocalizeMapName(normalizedMap.data());
-		std::string displayName = normalizedMap;
-
-		if (localizedName[0])
+		// Loaded arenas can belong to the previous usermap or the menu backdrop.
+		// Resolve the selected map against the full catalog before consulting them.
+		std::string displayName = FindArenaDisplayName(FileSystem::File("mp/basemaps.arena").GetBuffer(), normalizedMap);
+		if (displayName.empty())
 		{
-			displayName = localizedName;
+			displayName = FindArenaDisplayName(Utils::IO::ReadFile(GetArenaPath(normalizedMap)), normalizedMap);
 		}
-
-		if (displayName == normalizedMap)
-		{
-			const char* const rawLocalizedName = Localization::LocalizeMapName(rawMapName.data());
-
-			if (rawLocalizedName[0])
-			{
-				displayName = rawLocalizedName;
-			}
-		}
+		if (displayName.empty()) displayName = Localization::LocalizeMapName(normalizedMap.data());
+		if (displayName.empty()) displayName = rawMapName;
+		displayName = Localization::Get(displayName.data());
 
 		Dvar::Var("ui_mapname").Set(rawMapName);
 		Dvar::Var("party_mapname").Set(displayName);
 		Dvar::Var("zw3_leaderboard_map").Set(rawMapName);
 		Dvar::Var("zw3_leaderboard_mapname_display").Set(displayName);
-		Dvar::Var("uiDisplayMapName").Set(displayName);
+		Game::Dvar_SetFromStringByName("uiDisplayMapName", displayName.data());
 	}
 
 	void Maps::PrepareUsermap(const char* mapname, bool updateSelection, bool showLoadscreen)

@@ -83,6 +83,9 @@ namespace Components::Remix
 
 	void OnPresent(IDirect3DDevice9* device);
 
+	// The scene keeps rendering while exposure and asynchronous material replacements settle behind this cover.
+	float GetSceneStartupOpacity();
+
 	void OnPostEffectsBegin();
 
 	void MarkUiPhase(IDirect3DDevice9* device);

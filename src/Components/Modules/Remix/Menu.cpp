@@ -2844,6 +2844,13 @@ namespace Components::Remix::Menu
 		ImGui_ImplWin32_NewFrame();
 		ImGui::NewFrame();
 
+		const float startupOpacity = GetSceneStartupOpacity();
+		if (startupOpacity > 0.0f)
+		{
+			ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), ImGui::GetIO().DisplaySize,
+				IM_COL32(0, 0, 0, static_cast<int>(startupOpacity * 255.0f)));
+		}
+
 		if (ImGui::IsKeyPressed(ImGuiKey_Insert, false))
 		{
 			inputState.overlayOpen = !inputState.overlayOpen;

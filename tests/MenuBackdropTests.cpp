@@ -98,7 +98,7 @@ for(i = 0; i < fires.size; i++) { playfx(level.firefx, fires[i].origin); }
 			Require(defaultPool[i] != nullptr && &pick_stage(defaultPool, i) == defaultPool[i], "every default map can be picked");
 			for (std::size_t j = 0; j < i; ++j) Require(defaultPool[j] != defaultPool[i], "default pool has no duplicates");
 		}
-		for (const auto map : {"mp_zombie_theater", "mp_zombie_pentagon", "mp_factory_sh", "mp_cod5_prototype", "mp_zombie_diner"})
+		for (const auto map : {"mp_zombie_theater", "mp_zombie_pentagon", "mp_factory_sh", "mp_zombie_nuked", "mp_zombie_diner"})
 			Require(std::find(default_backdrop_maps.begin(), default_backdrop_maps.end(), map) != default_backdrop_maps.end(), "requested classic maps are in the pool");
 		selector.remember_default("mp_zombie_theater");
 		selector.remember_default("mp_oilrig");

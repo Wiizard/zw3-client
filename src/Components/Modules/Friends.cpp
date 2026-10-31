@@ -1,4 +1,5 @@
 #include "STDInclude.hpp"
+#include "Utils/StutterDiagnostics.hpp"
 
 #include <wincrypt.h>
 
@@ -179,6 +180,7 @@ namespace Components
 
 	static std::pair<int, int> ReadLocalZombieRank()
 	{
+		const Utils::StutterDiagnostics::Scope sample("rank_file_read", 1);
 		const auto guid = std::format("{:016x}", Auth::GetKeyHash());
 		const auto rankPath = std::filesystem::path("zw3") / "core" / "scriptdata" / ("rank_" + guid);
 

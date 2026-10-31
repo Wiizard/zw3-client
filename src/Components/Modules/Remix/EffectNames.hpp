@@ -24,6 +24,13 @@ namespace Components::Remix
 
 	inline ScriptEffectKind ClassifyScriptEffectName(const std::string_view name)
 	{
+		// This oriented sprite lies on the floor. Soft-particle intersection fading
+		// erases the poison pool precisely where it touches that floor.
+		if (name == "zw3/poison_lake")
+		{
+			return ScriptEffectKind::Ground;
+		}
+
 		if (IsEyeEffectName(name))
 		{
 			return ScriptEffectKind::Eye;

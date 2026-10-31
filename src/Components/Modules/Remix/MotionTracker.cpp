@@ -283,21 +283,25 @@ namespace Components::Remix
 		if (sceneDevice && kind != ScriptEffectKind::None)
 		{
 			const bool isEye = kind == ScriptEffectKind::Eye;
-			twin = isEye ? TryGetEyeColorMapTwin(sceneDevice, material) : TryGetParticleColorMapTwin(sceneDevice, material);
+			const bool isSoftParticle = UsesSoftParticleFade(kind);
+			twin = isSoftParticle ? TryGetParticleColorMapTwin(sceneDevice, material)
+				: TryGetNonParticleColorMapTwin(sceneDevice, material);
+			const char* label = isEye ? "zombie eye" : kind == ScriptEffectKind::Ground ? "ground effect" : "zw3 script effect";
 			std::uint64_t twinHash = 0;
 
 			if (twin && Device::TryGetTextureHash(twin, twinHash))
 			{
 				static char twinAction[96];
-				std::snprintf(twinAction, sizeof(twinAction), isEye
-					? "zombie eye, no soft-particle fade copy 0x%016llX"
-					: "zw3 script effect, particle copy 0x%016llX",
+				std::snprintf(twinAction, sizeof(twinAction), "%s, %s copy 0x%016llX", label,
+					isSoftParticle ? "particle" : "no soft-particle fade",
 					static_cast<unsigned long long>(twinHash));
 				action = twinAction;
 			}
 			else
 			{
-				action = isEye ? "zombie eye, no soft-particle fade copy FAILED" : "zw3 script effect, particle copy FAILED";
+				action = isEye ? "zombie eye, no soft-particle fade copy FAILED"
+					: kind == ScriptEffectKind::Ground ? "ground effect, no soft-particle fade copy FAILED"
+					: "zw3 script effect, particle copy FAILED";
 			}
 		}
 		else if (sceneDevice && isHidingLampFlares && IsEyeOffsetLampFlare(material))

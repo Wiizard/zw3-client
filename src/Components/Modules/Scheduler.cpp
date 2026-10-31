@@ -1,6 +1,14 @@
 #include "STDInclude.hpp"
 
 #include "Scheduler.hpp"
+#include "Command.hpp"
+#include "Dvar.hpp"
+#include "Logger.hpp"
+#include "Utils/StutterDiagnostics.hpp"
+
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
 
 namespace Components
 {
@@ -21,6 +29,61 @@ namespace Components
 	constexpr std::uintptr_t G_Glass_UpdateCall = 0x14019EFD4;
 	constexpr std::uintptr_t ScrPlace_EndFrameCall = 0x140101D31;
 	constexpr std::uintptr_t Sys_SetBlockSystemHotkeysCall = 0x1402A58C1;
+
+	static const char* PipelineName(Scheduler::Pipeline type)
+	{
+		switch (type)
+		{
+		case Scheduler::Pipeline::ASYNC: return "async_task";
+		case Scheduler::Pipeline::RENDERER: return "render_task";
+		case Scheduler::Pipeline::SERVER: return "server_task";
+		case Scheduler::Pipeline::CLIENT: return "client_task";
+		case Scheduler::Pipeline::MAIN: return "main_task";
+		default: return "shutdown_task";
+		}
+	}
+
+	static void SaveStutterDiagnostics()
+	{
+		auto capture = Utils::StutterDiagnostics::recorder.Stop();
+		std::stable_sort(capture.entries.begin(), capture.entries.end(), [](const auto& left, const auto& right)
+		{
+			return left.started < right.started;
+		});
+		wchar_t executable[32768]{};
+		const auto length = GetModuleFileNameW(nullptr, executable, static_cast<DWORD>(std::size(executable)));
+		if (!length || length >= std::size(executable))
+		{
+			Logger::Error("stutterdiag: could not resolve game directory\n");
+			return;
+		}
+		const auto name = std::format("zw3_stutter_{}_{}.tsv", GetCurrentProcessId(), GetTickCount64());
+		const auto path = std::filesystem::path(executable).parent_path() / name;
+		std::ofstream file(path, std::ios::binary);
+		file << "# DLL build " << __DATE__ << ' ' << __TIME__ << "\n"
+			<< "# map " << Dvar::Var("mapname").Get<std::string>()
+			<< "; r_rtxRemix " << Dvar::Var("r_rtxRemix").Get<bool>() << "\n"
+			<< "# Slow callbacks >=4 ms, rank file reads >=1 ms, native engine frames >=25 ms. Nested timings overlap.\n"
+			<< "# Old entries overwritten: " << capture.overwritten << "\n"
+			<< "time_ms\tduration_ms\tthread\tcategory\tsource\tline\n" << std::fixed << std::setprecision(3);
+		for (const auto& entry : capture.entries)
+		{
+			std::string_view source = entry.source.file_name();
+			const auto slash = source.find_last_of("/\\");
+			if (slash != std::string_view::npos) source.remove_prefix(slash + 1);
+			file << static_cast<double>(entry.started - capture.started) / 1000000.0 << '\t'
+				<< static_cast<double>(entry.duration) / 1000000.0 << '\t' << entry.thread << '\t'
+				<< entry.category << '\t' << source << '\t' << entry.source.line() << '\n';
+		}
+		file.close();
+		if (!file)
+		{
+			Logger::Error("stutterdiag: could not write {}\n", name);
+			return;
+		}
+		Logger::Print("stutterdiag: saved {} slow operations to {} ({} older entries overwritten)\n",
+			capture.entries.size(), name, capture.overwritten);
+	}
 
 	void Scheduler::TaskPipeline::Add(Task&& task)
 	{
@@ -45,8 +108,9 @@ namespace Components
 		});
 	}
 
-	void Scheduler::TaskPipeline::Execute()
+	void Scheduler::TaskPipeline::Execute(Pipeline type)
 	{
+		const bool isProfiling = Utils::StutterDiagnostics::recorder.Token() != 0;
 		this->callbacks.Access([&](TaskList& tasks)
 		{
 			// A callback can pump the engine and enter this pipeline again.
@@ -76,7 +140,15 @@ namespace Components
 
 				task->lastCall = now;
 
-				if (task->handler() == conditionEnd)
+				bool result;
+				if (isProfiling)
+				{
+					const Utils::StutterDiagnostics::Scope sample(PipelineName(type), 4, task->source);
+					result = task->handler();
+				}
+				else result = task->handler();
+
+				if (result == conditionEnd)
 				{
 					task = tasks.erase(task);
 					continue;
@@ -89,70 +161,77 @@ namespace Components
 
 	void Scheduler::Execute(Pipeline type)
 	{
-		pipelines[static_cast<int>(type)].Execute();
+		pipelines[static_cast<int>(type)].Execute(type);
 	}
 
 	void Scheduler::Schedule(const std::function<bool()>& callback, Pipeline type,
-		std::chrono::milliseconds delay)
+		std::chrono::milliseconds delay, std::source_location source)
 	{
 		Task task;
 		task.handler = callback;
 		task.interval = delay;
 		task.lastCall = std::chrono::steady_clock::now();
+		task.source = source;
 
 		pipelines[static_cast<int>(type)].Add(std::move(task));
 	}
 
 	void Scheduler::Loop(const std::function<void()>& callback, Pipeline type,
-		std::chrono::milliseconds delay)
+		std::chrono::milliseconds delay, std::source_location source)
 	{
 		Schedule([callback]
 		{
 			callback();
 			return conditionContinue;
-		}, type, delay);
+		}, type, delay, source);
 	}
 
 	void Scheduler::Once(const std::function<void()>& callback, Pipeline type,
-		std::chrono::milliseconds delay)
+		std::chrono::milliseconds delay, std::source_location source)
 	{
 		Schedule([callback]
 		{
 			callback();
 			return conditionEnd;
-		}, type, delay);
+		}, type, delay, source);
 	}
 
 	void Scheduler::OnGameInitialized(const std::function<void()>& callback, Pipeline type,
-		std::chrono::milliseconds delay)
+		std::chrono::milliseconds delay, std::source_location source)
 	{
 		Schedule([=]
 		{
 			if (Game::Sys_IsDatabaseReady2())
 			{
-				Once(callback, type, delay);
+				Once(callback, type, delay, source);
 				return conditionEnd;
 			}
 
 			return conditionContinue;
-		}, Pipeline::MAIN);
+		}, Pipeline::MAIN, 0ms, source);
 	}
 
-	void Scheduler::OnShutdown(const std::function<void()>& callback)
+	void Scheduler::OnShutdown(const std::function<void()>& callback, std::source_location source)
 	{
-		Once(callback, Pipeline::QUIT);
+		Once(callback, Pipeline::QUIT, 0ms, source);
 	}
 
 	void Scheduler::MainFrame_Hook()
 	{
-		reinterpret_cast<void(*)()>(mainFrameHook.GetOriginal())();
+		{
+			const Utils::StutterDiagnostics::Scope sample("engine_frame", 25);
+			reinterpret_cast<void(*)()>(mainFrameHook.GetOriginal())();
+		}
 
 		Execute(Pipeline::MAIN);
 	}
 
 	void Scheduler::CL_Frame_Hook(int localClientNum)
 	{
-		reinterpret_cast<void(*)(int)>(clientFrameHook.GetOriginal())(localClientNum);
+		{
+			const Utils::StutterDiagnostics::Scope sample("client_frame", 25);
+			reinterpret_cast<void(*)(int)>(clientFrameHook.GetOriginal())(localClientNum);
+		}
 
 		Execute(Pipeline::CLIENT);
 	}
@@ -188,6 +267,18 @@ namespace Components
 
 	Scheduler::Scheduler()
 	{
+		Command::Add("stutterdiag", [](const Command::Params* params)
+		{
+			if (params->Size() == 2 && std::strcmp(params->Get(1), "start") == 0)
+			{
+				Utils::StutterDiagnostics::recorder.Start(Utils::StutterDiagnostics::Now());
+				Logger::Print("stutterdiag: capturing slow operations in memory; use stutterdiag stop after a drop\n");
+			}
+			else if (params->Size() == 2 && std::strcmp(params->Get(1), "stop") == 0
+				&& Utils::StutterDiagnostics::recorder.Token()) SaveStutterDiagnostics();
+			else Logger::Print("Usage: stutterdiag start | stutterdiag stop\n");
+		});
+
 		mainFrameHook.Initialize(MainFrameCall, MainFrame_Hook, HOOK_CALL)->Install()->Quick();
 		clientFrameHook.Initialize(CL_FrameCall, CL_Frame_Hook, HOOK_CALL)->Install()->Quick();
 		serverFrameHook.Initialize(G_Glass_UpdateCall, G_Glass_Update_Hook, HOOK_CALL)->Install()->Quick();

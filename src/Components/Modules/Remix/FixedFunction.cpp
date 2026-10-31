@@ -322,7 +322,7 @@ namespace Components::Remix
 	static std::unordered_map<std::uint64_t, IDirect3DTexture9*> layerTwins;
 	static std::unordered_map<std::uint64_t, IDirect3DTexture9*> ignoredTwins;
 	static std::unordered_map<std::uint64_t, IDirect3DTexture9*> particleTwins;
-	static std::unordered_map<std::uint64_t, IDirect3DTexture9*> eyeTwins;
+	static std::unordered_map<std::uint64_t, IDirect3DTexture9*> nonParticleTwins;
 	static std::unordered_map<std::uintptr_t, bool> fakeLightVolumes;
 
 	static std::unordered_map<std::uintptr_t, IDirect3DTexture9*> camoTextures;
@@ -3580,7 +3580,7 @@ namespace Components::Remix
 	static constexpr unsigned char ignoredTwinMark = 0x01;
 	static constexpr unsigned char layerTwinMark = 0x02;
 	static constexpr unsigned char particleTwinMark = 0x08;
-	static constexpr unsigned char eyeTwinMark = 0x10;
+	static constexpr unsigned char nonParticleTwinMark = 0x10;
 
 	static IDirect3DTexture9* TryBuildBodyTwin(IDirect3DDevice9* device, IDirect3DTexture9* source, std::uint64_t& hash,
 		unsigned char mark = bodyTwinMark)
@@ -5455,7 +5455,7 @@ namespace Components::Remix
 
 		particleTwins.clear();
 
-		for (auto& entry : eyeTwins)
+		for (auto& entry : nonParticleTwins)
 		{
 			if (entry.second)
 			{
@@ -5463,7 +5463,7 @@ namespace Components::Remix
 			}
 		}
 
-		eyeTwins.clear();
+		nonParticleTwins.clear();
 
 		for (auto& entry : overlayTwins)
 		{
@@ -7291,6 +7291,10 @@ namespace Components::Remix
 
 		completeSceneState->Capture();
 
+		// Post-effects can leave a depth-only pass active. Remix rejects draws without all RGB channels enabled,
+		// so those completed walls would be absent from reflections and from the view through glass.
+		device->SetRenderState(D3DRS_COLORWRITEENABLE,
+			D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);
 		device->SetVertexShader(nullptr);
 		device->SetPixelShader(nullptr);
 		device->SetFVF(worldVertexFormat);
@@ -7700,7 +7704,7 @@ namespace Components::Remix
 		return TryGetTaggedTwin(device, TryGetColorMap(material), particleTwins, TextureTag::Particle, particleTwinMark);
 	}
 
-	IDirect3DTexture9* TryGetEyeColorMapTwin(IDirect3DDevice9* device, std::uintptr_t material)
+	IDirect3DTexture9* TryGetNonParticleColorMapTwin(IDirect3DDevice9* device, std::uintptr_t material)
 	{
 		IDirect3DTexture9* colorMap = TryGetColorMap(material);
 		std::uint64_t colourHash = 0;
@@ -7710,16 +7714,16 @@ namespace Components::Remix
 			return nullptr;
 		}
 
-		const auto [entry, inserted] = eyeTwins.try_emplace(colourHash, nullptr);
+		const auto [entry, inserted] = nonParticleTwins.try_emplace(colourHash, nullptr);
 
 		if (inserted)
 		{
 			std::uint64_t twinHash = 0;
-			entry->second = TryBuildBodyTwin(device, colorMap, twinHash, eyeTwinMark);
+			entry->second = TryBuildBodyTwin(device, colorMap, twinHash, nonParticleTwinMark);
 
 			if (entry->second)
 			{
-				// Soft particles fade against the zombie's face. Keep eye textures separate from ash/fog,
+				// Soft particles fade against faces and floors. Keep eyes and ground FX separate from ash/fog,
 				// preserving their additive colour, alpha and normal geometry occlusion without that fade.
 				WithdrawGeneratedTag(device, twinHash, TextureTag::Particle);
 				WithdrawGeneratedTag(device, twinHash, TextureTag::Ignore);

@@ -10,7 +10,13 @@ namespace Components::Remix
 		None,
 		Particle,
 		Eye,
+		Ground,
 	};
+
+	inline bool UsesSoftParticleFade(ScriptEffectKind kind)
+	{
+		return kind == ScriptEffectKind::Particle;
+	}
 
 	// Access is synchronized by the caller along with the effect-definition cache.
 	class EffectSurfaces

@@ -85,7 +85,7 @@ namespace Components::Remix
 
 	IDirect3DTexture9* TryGetParticleColorMapTwin(IDirect3DDevice9* device, std::uintptr_t material);
 
-	IDirect3DTexture9* TryGetEyeColorMapTwin(IDirect3DDevice9* device, std::uintptr_t material);
+	IDirect3DTexture9* TryGetNonParticleColorMapTwin(IDirect3DDevice9* device, std::uintptr_t material);
 
 	ScriptEffectKind GetScriptEffectSurfaceKind(const void* indices);
 

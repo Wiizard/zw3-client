@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "Components/Modules/Logger.hpp"
+#include "Game/Engine/ScopedCriticalSection.hpp"
 
 #define XXH_INLINE_ALL
 #include <xxhash.h>
@@ -28,6 +29,7 @@ namespace Components::Remix::Device
 	constexpr std::size_t textureReleaseSlot = 2;
 	constexpr std::size_t textureLockRectSlot = 19;
 	constexpr std::size_t textureUnlockRectSlot = 20;
+	constexpr std::size_t queryIssueSlot = 6;
 	constexpr std::size_t queryGetDataSlot = 7;
 	constexpr std::size_t deviceSetRenderTargetSlot = 37;
 	constexpr std::size_t deviceSetTransformSlot = 44;
@@ -73,6 +75,8 @@ namespace Components::Remix::Device
 	static Release_t originalTextureRelease = nullptr;
 	static LockRect_t originalLockRect = nullptr;
 	static UnlockRect_t originalUnlockRect = nullptr;
+	using QueryIssue_t = HRESULT(STDMETHODCALLTYPE*)(IDirect3DQuery9* self, DWORD flags);
+	static QueryIssue_t originalQueryIssue = nullptr;
 	static QueryGetData_t originalQueryGetData = nullptr;
 	static SetRenderTarget_t originalSetRenderTarget = nullptr;
 	static SetTransform_t originalSetTransform = nullptr;
@@ -296,14 +300,29 @@ namespace Components::Remix::Device
 		renderFrameLock.unlock();
 	}
 
+	static HRESULT STDMETHODCALLTYPE QueryIssueHook(IDirect3DQuery9* self, DWORD flags)
+	{
+		// Native texture streaming holds critical section 0x19 across uploads.
+		// Use its lock here; making the uploader wait for a full render frame
+		// would invert the engine's streaming/render lock order.
+		const Game::Engine::ScopedCriticalSection uploadLock(static_cast<Game::CriticalSection>(0x19),
+			Game::Engine::SCOPED_CRITSECT_NORMAL);
+		return originalQueryIssue(self, flags);
+	}
+
 	static HRESULT STDMETHODCALLTYPE QueryGetDataHook(IDirect3DQuery9* self, void* data, DWORD size, DWORD flags)
 	{
 		return PollQuery(flags, renderFrameLock.OwnsCurrentThread(), [&](const DWORD pollFlags)
 		{
+			// Remix's GetData may emit/flush commands without locking its device.
+			const Game::Engine::ScopedCriticalSection uploadLock(static_cast<Game::CriticalSection>(0x19),
+				Game::Engine::SCOPED_CRITSECT_NORMAL);
 			return originalQueryGetData(self, data, size, pollFlags);
-		}, []
+		}, [flags]
 		{
-			return renderFrameLock.TryLockFor(std::chrono::milliseconds(100));
+			// Read-only engine polls must stay non-blocking while a frame is active.
+			const auto timeout = std::chrono::milliseconds((flags & D3DGETDATA_FLUSH) ? 100 : 0);
+			return renderFrameLock.TryLockFor(timeout);
 		}, []
 		{
 			renderFrameLock.unlock();
@@ -396,6 +415,12 @@ namespace Components::Remix::Device
 		}
 
 		const auto getData = SwapSlot<QueryGetData_t>(probe, queryGetDataSlot, reinterpret_cast<void*>(&QueryGetDataHook));
+		const auto issue = SwapSlot<QueryIssue_t>(probe, queryIssueSlot, reinterpret_cast<void*>(&QueryIssueHook));
+
+		if (issue)
+		{
+			originalQueryIssue = issue;
+		}
 
 		if (getData)
 		{
@@ -407,7 +432,7 @@ namespace Components::Remix::Device
 
 	bool IsQueryPollGuarded()
 	{
-		return originalQueryGetData && originalVertexLock && originalVertexUnlock && originalIndexLock
+		return originalQueryGetData && originalQueryIssue && originalVertexLock && originalVertexUnlock && originalIndexLock
 			&& originalIndexUnlock;
 	}
 

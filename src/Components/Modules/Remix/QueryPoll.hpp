@@ -8,21 +8,20 @@ namespace Components::Remix::Device
 	HRESULT PollQuery(const DWORD flags, const bool ownsRenderFrame,
 		const Poll& poll, const Acquire& acquire, const Release& release)
 	{
-		// GPU sync polls deliberately omit FLUSH while the backend is drawing.
-		// A pending result must not turn a read-only poll into a device submission.
-		if (ownsRenderFrame || (flags & D3DGETDATA_FLUSH) == 0)
+		if (ownsRenderFrame)
 		{
 			return poll(flags);
 		}
 
-		const HRESULT result = poll(flags & ~static_cast<DWORD>(D3DGETDATA_FLUSH));
-		if (result != S_FALSE || !acquire())
+		// Even GetData(0) may implicitly issue a new query in Remix. Serialize the
+		// entire call, not just its FLUSH retry, against rendering and uploads.
+		if (!acquire())
 		{
-			return result;
+			return S_FALSE;
 		}
 
-		const HRESULT flushed = poll(flags | D3DGETDATA_FLUSH);
+		const HRESULT result = poll(flags);
 		release();
-		return flushed;
+		return result;
 	}
 }

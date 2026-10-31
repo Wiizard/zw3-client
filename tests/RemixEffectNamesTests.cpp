@@ -9,6 +9,13 @@ int main()
 	try
 	{
 		using namespace Components::Remix;
+		if (ClassifyScriptEffectName("zw3/poison_lake") != ScriptEffectKind::Ground
+			|| UsesSoftParticleFade(ClassifyScriptEffectName("zw3/poison_lake")))
+			throw std::runtime_error("The poison pool must not fade against its supporting floor");
+		if (!UsesSoftParticleFade(ScriptEffectKind::Particle) || UsesSoftParticleFade(ScriptEffectKind::Eye))
+			throw std::runtime_error("Ground FX protection changed smoke or zombie-eye rendering");
+		if (ClassifyScriptEffectName("zw3/poison_lake_smoke") != ScriptEffectKind::Particle)
+			throw std::runtime_error("Only the exact poison pool FX should bypass soft-particle fading");
 		for (const std::string_view name : {
 			"smc_t6/zm_prison/fx/c85ed9d7224fff72062bb1d6bdb279fc",
 			"zw3/redeye", "zw3/blueeye", "zw3/purpleeye", "zw3/greeneye", "zw3/orangeeye",
@@ -33,11 +40,14 @@ int main()
 		const int eyeIndices = 0;
 		const int ashIndices = 0;
 		const int unrelatedIndices = 0;
+		const int groundIndices = 0;
 		surfaces.BeginFrame();
 		surfaces.Add(&eyeIndices, ScriptEffectKind::Eye);
 		surfaces.Add(&ashIndices, ScriptEffectKind::Particle);
+		surfaces.Add(&groundIndices, ScriptEffectKind::Ground);
 		if (surfaces.Get(&eyeIndices) != ScriptEffectKind::Eye
 			|| surfaces.Get(&ashIndices) != ScriptEffectKind::Particle
+			|| surfaces.Get(&groundIndices) != ScriptEffectKind::Ground
 			|| surfaces.Get(&unrelatedIndices) != ScriptEffectKind::None)
 			throw std::runtime_error("Eye, particle and ordinary surfaces must remain distinct even with shared textures");
 
@@ -52,7 +62,7 @@ int main()
 		if (surfaces.Get(&ashIndices) != ScriptEffectKind::None)
 			throw std::runtime_error("An expired surface retained its effect classification");
 
-		std::cout << "Remix effects: separate eye sprites, ash/snow particles, filtering and frame-buffer reuse passed\n";
+		std::cout << "Remix effects: poison pool without intersection fading, eyes, ash/snow and frame-buffer reuse passed\n";
 		return 0;
 	}
 	catch (const std::exception& error)

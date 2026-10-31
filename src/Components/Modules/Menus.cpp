@@ -20,6 +20,7 @@
 #include "Renderer.hpp"
 
 #include "Utils/MenuPreprocessor.hpp"
+#include "Utils/StutterDiagnostics.hpp"
 
 namespace Components
 {
@@ -697,6 +698,13 @@ namespace Components
 
 	static void UpdateNewsCarousel()
 	{
+		// The frontend news panel is not drawn during a match. Its material and dvar updates must not run there.
+		if (Game::CL_IsCgameInitialized(0))
+		{
+			lastNewsUpdate = 0;
+			return;
+		}
+		const Utils::StutterDiagnostics::Scope sample("news_carousel_update");
 		if (newsItems.empty())
 		{
 			return;
@@ -4476,6 +4484,7 @@ namespace Components
 
 	void Menus::UpdateLoadingProgress(const bool isMainThread)
 	{
+		const Utils::StutterDiagnostics::Scope sample("loading_screen_update");
 		const std::unique_lock lock(loadingMutex, std::try_to_lock);
 
 		if (!lock.owns_lock())
@@ -4512,13 +4521,27 @@ namespace Components
 		const std::string currentMapName = mapname.Get<std::string>();
 		const bool isLoading = connState >= Game::CA_CONNECTING && connState < Game::CA_ACTIVE;
 
-		if (isMainThread && (isLoading || lastConnState >= Game::CA_CONNECTING))
+		if (isMainThread && (isLoading || wasLoading))
 		{
 			ForceOnlyCustomConnectMenu();
 		}
 
 		Game::menuDef_t* const connectMenu = Game::Menus_FindByName(Game::uiContext, "connect");
 		const bool isConnectMenuVisible = connectMenu && Game::Menu_IsVisible(Game::uiContext, connectMenu);
+
+		if (connState >= Game::CA_ACTIVE && !isConnectMenuVisible)
+		{
+			// Complete the transition once; active play must not repeatedly rewrite loading dvars or the MOTD.
+			if (zw3_ui_loading_progress.Get<float>() != 0.0f) zw3_ui_loading_progress.Set(0.0f);
+			if (zw3_ui_loading_visible.Get<bool>()) zw3_ui_loading_visible.Set(false);
+			isSessionActive = false;
+			loadingStartTime = 0;
+			lastConnState = connState;
+			lastMapName = currentMapName;
+			wasLoading = false;
+			wasConnectMenuVisible = false;
+			return;
+		}
 
 		const bool didConnectMenuOpen = !wasConnectMenuVisible && isConnectMenuVisible;
 		const bool didStartLoading = !wasLoading && isLoading;
@@ -4631,7 +4654,7 @@ namespace Components
 			zw3_ui_loading_visible.Set(false);
 		}
 
-		if (connState >= Game::CA_CONNECTING)
+		if (isLoading || isConnectMenuVisible)
 		{
 			const std::string motd = Party::GetMotd();
 			const bool isTargetConnected = Party::Target() == Network::Address(Game::clc_serverAddress);

@@ -47,6 +47,9 @@ int main()
 			"a zombie-eye FX reusing an old definition address must regain eye protection");
 		strcpy_s(name, "maps/mp_maps/fx_mp_ash_falling_large");
 		Require(GetScriptEffectKind(definitionAddress) == ScriptEffectKind::Particle, "ash reusing an eye address must stay a particle");
+		strcpy_s(name, "zw3/poison_lake");
+		Require(GetScriptEffectKind(definitionAddress) == ScriptEffectKind::Ground,
+			"a poison pool reusing an ash definition must regain floor-intersection protection");
 
 		const char* technique = "effect_blend";
 		TestMaterial material{ name, &technique };

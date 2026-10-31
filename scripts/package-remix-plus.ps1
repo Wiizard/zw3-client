@@ -91,7 +91,7 @@ Install
 
 Needs an NVIDIA RTX GPU and a current NVIDIA driver.
 The first time each map loads, zw3 builds its PBR textures in rtx-remix\mods\zw3_pbr, which takes a while.
-INSERT opens zw3's Remix menu. zw3_remix_log.txt in the game folder is the log to send with bug reports.
+INSERT opens zw3's Remix menu. zw3/logs/zw3_remix_log.txt in the game folder is the log to send with bug reports.
 "@
 Set-Content -LiteralPath (Join-Path $staging "README_RTX.txt") -Value $readme -Encoding utf8
 

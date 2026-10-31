@@ -2,6 +2,7 @@
 
 #include "Core.hpp"
 
+#include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <variant>
@@ -11,6 +12,14 @@
 
 namespace Components::Remix
 {
+	static std::filesystem::path DiagnosticLogPath()
+	{
+		const auto directory = std::filesystem::path(Core::ModuleDirectory()) / L"zw3" / L"logs";
+		std::error_code error;
+		std::filesystem::create_directories(directory, error);
+		return directory / L"zw3_remix_log.txt";
+	}
+
 	// Keep eight previous sessions so restarting after a silent failure preserves its last loading step.
 	void WriteDiagnosticLog(const char* level, const std::string& text)
 	{
@@ -18,7 +27,7 @@ namespace Components::Remix
 		static std::mutex logMutex;
 
 		const std::lock_guard lock(logMutex);
-		static Utils::RetainedLog logFile(Core::ModuleDirectory() + L"zw3_remix_log.txt", maximumLogBytes);
+		static Utils::RetainedLog logFile(DiagnosticLogPath(), maximumLogBytes);
 
 		SYSTEMTIME time{};
 		GetLocalTime(&time);

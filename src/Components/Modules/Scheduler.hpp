@@ -1,5 +1,7 @@
 #pragma once
 
+#include <source_location>
+
 namespace Components
 {
 	class Scheduler : public Component
@@ -19,14 +21,19 @@ namespace Components
 		Scheduler();
 
 		static void Schedule(const std::function<bool()>& callback, Pipeline type,
-			std::chrono::milliseconds delay = std::chrono::milliseconds(0));
+			std::chrono::milliseconds delay = std::chrono::milliseconds(0),
+			std::source_location source = std::source_location::current());
 		static void Loop(const std::function<void()>& callback, Pipeline type,
-			std::chrono::milliseconds delay = std::chrono::milliseconds(0));
+			std::chrono::milliseconds delay = std::chrono::milliseconds(0),
+			std::source_location source = std::source_location::current());
 		static void Once(const std::function<void()>& callback, Pipeline type,
-			std::chrono::milliseconds delay = std::chrono::milliseconds(0));
+			std::chrono::milliseconds delay = std::chrono::milliseconds(0),
+			std::source_location source = std::source_location::current());
 		static void OnGameInitialized(const std::function<void()>& callback, Pipeline type,
-			std::chrono::milliseconds delay = std::chrono::milliseconds(0));
-		static void OnShutdown(const std::function<void()>& callback);
+			std::chrono::milliseconds delay = std::chrono::milliseconds(0),
+			std::source_location source = std::source_location::current());
+		static void OnShutdown(const std::function<void()>& callback,
+			std::source_location source = std::source_location::current());
 
 	private:
 		struct Task
@@ -34,6 +41,7 @@ namespace Components
 			std::function<bool()> handler{};
 			std::chrono::milliseconds interval{};
 			std::chrono::steady_clock::time_point lastCall{};
+			std::source_location source;
 		};
 
 		using TaskList = std::vector<Task>;
@@ -42,7 +50,7 @@ namespace Components
 		{
 		public:
 			void Add(Task&& task);
-			void Execute();
+			void Execute(Pipeline type);
 
 		private:
 			Utils::Concurrency::Container<TaskList> newCallbacks;

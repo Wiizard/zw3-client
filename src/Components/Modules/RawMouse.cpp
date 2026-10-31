@@ -9,7 +9,10 @@
 #include "Logger.hpp"
 #include "Window.hpp"
 #include "Remix/Remix.hpp"
+#include "Remix/Core.hpp"
+#include "Scheduler.hpp"
 #include "Utils/LegacyMouseButtons.hpp"
+#include "Utils/MouseStartupDiagnostics.hpp"
 
 namespace Components
 {
@@ -26,6 +29,31 @@ namespace Components
 	constexpr std::uintptr_t IN_RecenterMouse_Engine = 0x1402A2E70;
 
 	static Utils::Hook hooks[std::size(IN_FrameCalls) + 2];
+	static Utils::MouseStartupDiagnostics startupDiagnostics;
+
+	static void SaveMouseStartupDiagnostics(const bool asynchronous)
+	{
+		if (!startupDiagnostics.IsActive()) return;
+		const auto samples = startupDiagnostics.Stop();
+		const auto save = [samples]
+		{
+			// Write once after capture, never on the high-frequency mouse-message path.
+			std::ostringstream text;
+			text << "mouse startup: one-second samples; state bits raw=1 focus=2 ui=4 loading=8 engineActive=16\n"
+				<< "second frames rawMessages maxFrameGapMs maxMessageAgeMs registrations failures warps states\n";
+			for (std::size_t i = 0; i < samples.size(); ++i)
+			{
+				const auto& sample = samples[i];
+				if (!sample.frames && !sample.rawMessages && !sample.registrations && !sample.warps) continue;
+				text << i << ' ' << sample.frames << ' ' << sample.rawMessages << ' ' << sample.maximumFrameGapMs
+					<< ' ' << sample.maximumMessageAgeMs << ' ' << sample.registrations << ' ' << sample.registrationFailures
+					<< ' ' << sample.warps << ' ' << sample.states << '\n';
+			}
+			Remix::WriteDiagnosticLog("", text.str());
+		};
+		if (asynchronous) Scheduler::Once(save, Scheduler::Pipeline::ASYNC);
+		else save();
+	}
 
 	static bool CanSynchronizeUiMousePosition()
 	{
@@ -118,6 +146,7 @@ namespace Components
 
 		if (isClamped)
 		{
+			if (startupDiagnostics.IsActive()) startupDiagnostics.Warp(GetTickCount64());
 			SetCursorPos(point.x, point.y);
 		}
 	}
@@ -227,6 +256,12 @@ namespace Components
 		if (!GetRawInput(lParam, raw, size))
 		{
 			return DefWindowProcA(Window::GetWindow(), WM_INPUT, wParam, lParam);
+		}
+		if (startupDiagnostics.IsActive())
+		{
+			// DWORD subtraction also handles the Windows message clock wrapping.
+			const DWORD age = GetTickCount() - static_cast<DWORD>(GetMessageTime());
+			startupDiagnostics.RawMessage(GetTickCount64(), age);
 		}
 
 		const bool isAbsolute = (raw.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) != 0u;
@@ -429,10 +464,12 @@ namespace Components
 		}
 
 		const bool isRegistered = RegisterRawInputDevices(rid, ARRAYSIZE(rid), sizeof(rid[0])) == TRUE;
+		const DWORD registrationError = isRegistered ? ERROR_SUCCESS : GetLastError();
+		if (startupDiagnostics.IsActive()) startupDiagnostics.Registration(GetTickCount64(), isRegistered);
 
 		if (!isRegistered)
 		{
-			Logger::Warning("RawInputDevices: failed: {}\n", GetLastError());
+			Logger::Warning("RawInputDevices: failed: {}\n", registrationError);
 		}
 		else
 		{
@@ -466,6 +503,7 @@ namespace Components
 
 	void RawMouse::IN_Init()
 	{
+		startupDiagnostics.Start(GetTickCount64());
 		reinterpret_cast<void(*)()>(Utils::Hook::Rebase(IN_Init_Engine))();
 		IN_RawMouse_Init();
 		ResetMouseRawEvents();
@@ -475,6 +513,18 @@ namespace Components
 
 	void RawMouse::IN_Frame()
 	{
+		if (startupDiagnostics.IsActive())
+		{
+			using Diagnostics = Utils::MouseStartupDiagnostics;
+			const auto now = GetTickCount64();
+			const unsigned int state = (inRawInput ? Diagnostics::rawInput : 0u)
+				| (Window::HasFocus() ? Diagnostics::focused : 0u)
+				| (Game::Key_IsCatcherActive(0, Game::KEYCATCH_UI) ? Diagnostics::ui : 0u)
+				| (Window::IsLoadingScreenMovable() ? Diagnostics::loading : 0u)
+				| (Game::s_wmv->mouseActive ? Diagnostics::engineMouseActive : 0u);
+			startupDiagnostics.Frame(now, state);
+			if (startupDiagnostics.IsFinished(now)) SaveMouseStartupDiagnostics(true);
+		}
 		if (Window::IsLoadingScreenMovable() || Window::IsDragging())
 		{
 			SuspendMouseInput();
@@ -528,6 +578,7 @@ namespace Components
 			return FALSE;
 		}
 
+		if (startupDiagnostics.IsActive()) startupDiagnostics.Warp(GetTickCount64());
 		return reinterpret_cast<BOOL(*)()>(Utils::Hook::Rebase(IN_RecenterMouse_Engine))();
 	}
 
@@ -584,6 +635,7 @@ namespace Components
 
 				const int cx = (rect.right + rect.left) / 2;
 				const int cy = (rect.top + rect.bottom) / 2;
+				if (startupDiagnostics.IsActive()) startupDiagnostics.Warp(GetTickCount64());
 				SetCursorPos(cx, cy);
 
 				previous.x = cx;
@@ -695,5 +747,6 @@ namespace Components
 
 		Window::OnWndMessage(WM_INPUT, OnRawInput);
 		Window::OnCreate(IN_RawMouse_Init);
+		Scheduler::OnShutdown([] { SaveMouseStartupDiagnostics(false); });
 	}
 }

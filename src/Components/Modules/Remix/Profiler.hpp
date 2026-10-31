@@ -50,7 +50,7 @@ namespace Components::Remix
 
 	std::vector<SectionTiming> GetProfile();
 
-	// Every 10 seconds a line in zw3_remix_log.txt: frame time (average, worst 1%, worst), zw3's own sections and the
+	// Every 10 seconds a line in zw3/logs/zw3_remix_log.txt: frame time (average, worst 1%, worst), zw3's own sections and the
 	// per-frame load zw3 hands Remix, so a slow map can be read back after the session.
 	void LogPerformance();
 }

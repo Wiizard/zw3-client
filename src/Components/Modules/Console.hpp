@@ -76,7 +76,9 @@ namespace Components
 		static void HistoryUp();
 		static void HistoryDown();
 		static void ExecuteInput();
-		static void ExecuteSegment(char* segment);
+		static char* TrimSegment(char* segment);
+		static bool IsRunnable(const char* segment);
+		static void DumpToFile(const std::string& name);
 
 		static void AddMatch(const char* name);
 		static void CollectMatches(const char* prefix);

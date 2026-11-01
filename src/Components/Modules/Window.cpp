@@ -3,6 +3,7 @@
 #include <hidusage.h>
 
 #include "Window.hpp"
+#include "Console.hpp"
 #include "Events.hpp"
 #include "FastFiles.hpp"
 #include "LobbyScene.hpp"
@@ -414,6 +415,12 @@ namespace Components
 			return;
 		}
 
+		// console draws cursor on top
+		if (Console::IsOpen())
+		{
+			return;
+		}
+
 		if (ui_nativeCursor.Get<bool>())
 		{
 			cursorVisible = TRUE;
@@ -422,6 +429,32 @@ namespace Components
 		{
 			Game::UI_DrawHandlePic(scrPlace, x, y, w, h, horzAlign, vertAlign, color, material);
 		}
+	}
+
+	void Window::DrawOverlayCursor(float x, float y, float screenHeight)
+	{
+		if (LobbyScene::IsTransitionActive())
+		{
+			return;
+		}
+
+		if (ui_nativeCursor.Get<bool>())
+		{
+			cursorVisible = TRUE;
+			return;
+		}
+
+		auto* const material = Game::Material_RegisterHandle("ui_cursor", 7);
+
+		if (!material)
+		{
+			return;
+		}
+
+		// 32x32 virtual units centred on the pointer
+		const float size = 32.0f * screenHeight / 480.0f;
+		const float white[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+		Game::CL_DrawStretchPicPhysical(x - size * 0.5f, y - size * 0.5f, size, size, 0.0f, 0.0f, 1.0f, 1.0f, white, material);
 	}
 
 	int WINAPI Window::ShowCursorHook(BOOL show)

@@ -27,6 +27,7 @@ namespace Components
 		static bool IsLoadingScreenMovable();
 		static void ApplyDisplayModeDvars();
 		static bool IsDragging();
+		static void DrawOverlayCursor(float x, float y, float screenHeight);
 
 		static void PumpLoadingEvents();
 

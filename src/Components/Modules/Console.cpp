@@ -1577,6 +1577,8 @@ namespace Components
 		scrollOffset = 0;
 
 		// Split on ';' outside quotes so "a 1; b 2" runs as two commands, like the stock console
+		char* segments[inputCapacity];
+		int segmentCount = 0;
 		char* segment = command;
 		bool inQuotes = false;
 
@@ -1595,7 +1597,12 @@ namespace Components
 
 			const bool isEnd = *cursor == '\0';
 			*cursor = '\0';
-			ExecuteSegment(segment);
+
+			if (char* const trimmed = TrimSegment(segment))
+			{
+				segments[segmentCount] = trimmed;
+				++segmentCount;
+			}
 
 			if (isEnd)
 			{
@@ -1604,20 +1611,67 @@ namespace Components
 
 			segment = cursor + 1;
 		}
+
+		if (inQuotes)
+		{
+			Print("unclosed quote, add a closing \" to run the line\n");
+			return;
+		}
+
+		if (segmentCount == 1)
+		{
+			if (IsRunnable(segments[0]))
+			{
+				Game::Cmd_ExecuteSingleCommand(0, 0, segments[0]);
+			}
+
+			return;
+		}
+
+		// chained command buffer
+		std::string chain;
+
+		for (int i = 0; i < segmentCount; ++i)
+		{
+			if (!IsRunnable(segments[i]))
+			{
+				continue;
+			}
+
+			if (!chain.empty())
+			{
+				chain.push_back(';');
+			}
+
+			chain.append(segments[i]);
+		}
+
+		if (chain.empty())
+		{
+			return;
+		}
+
+		chain.push_back('\n');
+		Game::Cbuf_AddText(0, chain.data());
 	}
 
-	void Console::ExecuteSegment(char* segment)
+	char* Console::TrimSegment(char* segment)
 	{
-		while (*segment == ' ' || *segment == '\t')
+		while (*segment == ' ' || *segment == '\t' || *segment == '/' || *segment == '\\')
 		{
 			++segment;
 		}
 
 		if (*segment == '\0')
 		{
-			return;
+			return nullptr;
 		}
 
+		return segment;
+	}
+
+	bool Console::IsRunnable(const char* segment)
+	{
 		char firstToken[64];
 		std::snprintf(firstToken, sizeof(firstToken), "%.*s",
 			static_cast<int>(std::strcspn(segment, " 	")), segment);
@@ -1626,10 +1680,59 @@ namespace Components
 			&& Game::CL_GetLocalClientConnectionState(0) < Game::CA_CONNECTED)
 		{
 			Print(Utils::String::VA("unknown command or dvar: %s\n", firstToken));
+			return false;
+		}
+
+		return true;
+	}
+
+	void Console::DumpToFile(const std::string& name)
+	{
+		std::string fileName = name;
+
+		if (fileName.empty())
+		{
+			const std::time_t now = std::time(nullptr);
+			std::tm local{};
+			localtime_s(&local, &now);
+
+			char stamp[32];
+			std::strftime(stamp, sizeof(stamp), "console_%Y-%m-%d_%H-%M-%S", &local);
+			fileName = stamp;
+		}
+
+		if (fileName.find_first_of("/\\:") != std::string::npos || fileName.find("..") != std::string::npos)
+		{
+			Print("dumpconsole: give a plain file name, it is written to the game directory\n");
 			return;
 		}
 
-		Game::Cmd_ExecuteSingleCommand(0, 0, segment);
+		if (fileName.find('.') == std::string::npos)
+		{
+			fileName.append(".txt");
+		}
+
+		std::string text;
+
+		AcquireSRWLockShared(&lineBufferLock);
+
+		const int oldest = (writeHead - lineBufferCount + maxLines) % maxLines;
+
+		for (int i = 0; i < lineBufferCount; ++i)
+		{
+			text.append(TextRenderer::StripColors(lineBuffer[(oldest + i) % maxLines]));
+			text.push_back('\n');
+		}
+
+		ReleaseSRWLockShared(&lineBufferLock);
+
+		if (!Utils::IO::WriteFile(fileName, text))
+		{
+			Print(Utils::String::VA("dumpconsole: could not write %s\n", fileName.data()));
+			return;
+		}
+
+		Print(Utils::String::VA("dumped the console to %s\n", fileName.data()));
 	}
 
 	void Console::SetOpen(bool open)
@@ -2018,6 +2121,13 @@ namespace Components
 		DrawInputHints(hintX, hintY, inputY);
 
 		TextRenderer::DrawConsoleAutocomplete(std::string_view(inputBuffer, static_cast<std::size_t>(inputCursor)), ConsoleFont(), hintX, hintY);
+
+		//  pointer stays above the console
+		if (hasMouse)
+		{
+			const int screenHeight = *reinterpret_cast<const int*>(Utils::Hook::Rebase(cls_vidHeight));
+			Window::DrawOverlayCursor(mouseX, mouseY, static_cast<float>(screenHeight));
+		}
 	}
 
 	void Console::DrawInputHints(float hintX, float hintY, float inputY)
@@ -2733,6 +2843,11 @@ namespace Components
 		Command::Add("clear", []
 		{
 			ClearScrollback();
+		});
+
+		Command::Add("dumpconsole", [](const Command::Params* params)
+		{
+			DumpToFile(params->Size() > 1 ? params->Join(1) : std::string());
 		});
 
 		Command::Add("echo", [](const Command::Params* params)

@@ -168,6 +168,8 @@ namespace Controller::Engine
 
 	static constexpr std::uintptr_t Item_Bind_HandleKey_Key_SetBindingCalls[] = { 0x14025ED06, 0x14025ED14, 0x14025ED31 };
 	static constexpr std::uintptr_t Key_SetBinding = 0x1400EF980;
+	static constexpr std::uintptr_t Key_ExecBinding_CheckNotifyCall = 0x1400F5F21;
+	static constexpr std::uintptr_t CL_CheckNotify = 0x1400F8760;
 
 	static constexpr std::uintptr_t UI_RefreshViewport_Dvar_GetBoolCall = 0x140270DE6;
 	static constexpr std::uintptr_t Dvar_GetBool = 0x1402851A0;
@@ -563,6 +565,7 @@ namespace Controller::Engine
 	static bool TryInstallInput()
 	{
 		bool isExpected = Utils::Hook::BranchesTo(UI_RefreshViewport_Dvar_GetBoolCall, Dvar_GetBool, false)
+			&& Utils::Hook::BranchesTo(Key_ExecBinding_CheckNotifyCall, CL_CheckNotify, false)
 			&& Utils::Hook::BranchesTo(Key_GetCommandAssignment_Jump, Key_GetCommandAssignmentInternal, true)
 			&& Utils::Hook::BranchesTo(GetKeyBindingLocalizedString_CL_GetKeyBindingCall, CL_GetKeyBinding, false)
 			&& Utils::Hook::BranchesTo(Key_IsCommandBoundCall, Key_IsCommandBound, false)

@@ -50,9 +50,11 @@ namespace Controller::Engine
 	static constexpr MenuKey menuKeys[] =
 	{
 		{ EngineKey::ButtonA, Game::K_ENTER },
-		{ EngineKey::ButtonStart, Game::K_ENTER },
+		{ EngineKey::ButtonStart, Game::K_ESCAPE },
 		{ EngineKey::ButtonB, Game::K_ESCAPE },
 		{ EngineKey::ButtonBack, Game::K_ESCAPE },
+		{ EngineKey::ButtonLShoulder, Game::K_PGUP },
+		{ EngineKey::ButtonRShoulder, Game::K_PGDN },
 		{ EngineKey::DpadUp, Game::K_UPARROW },
 		{ EngineKey::ApadUp, Game::K_UPARROW },
 		{ EngineKey::RStickUp, Game::K_UPARROW },
@@ -82,7 +84,7 @@ namespace Controller::Engine
 
 	static bool IsScrollKey(EngineKey key) noexcept
 	{
-		return IsDpad(key) || IsStickKey(key);
+		return IsDpad(key) || IsStickKey(key) || key == EngineKey::ButtonLShoulder || key == EngineKey::ButtonRShoulder;
 	}
 
 	static bool RepeatsWhileHeld(Button button) noexcept
@@ -93,6 +95,8 @@ namespace Controller::Engine
 		case Button::DpadDown:
 		case Button::DpadLeft:
 		case Button::DpadRight:
+		case Button::L1:
+		case Button::R1:
 		case Button::L2:
 		case Button::R2:
 			return true;
@@ -213,6 +217,7 @@ namespace Controller::Engine
 
 	bool KeyDispatcher::DefersRelease(EngineKey key) const noexcept
 	{
+		if (Game::Key_IsCatcherActive(localClient, Game::KEYCATCH_UI | Game::KEYCATCH_CONSOLE)) return false;
 		if (this->ReleaseDelay() == 0 && Read(this->dvars.releaseGrace, 75) <= 0)
 		{
 			return false;
@@ -296,7 +301,16 @@ namespace Controller::Engine
 			this->SetInUse(true);
 		}
 
-		const float axes[axisCount] = { right.x, right.y, left.x, left.y };
+		float axes[axisCount] = { right.x, right.y, left.x, left.y };
+		if (Game::Key_IsCatcherActive(localClient, Game::KEYCATCH_UI))
+		{
+			// A diagonal should select one direction, not skip two controls.
+			for (std::size_t i = 0; i < axisCount; i += 2)
+			{
+				if (std::abs(axes[i]) > std::abs(axes[i + 1])) axes[i + 1] = 0.0f;
+				else axes[i] = 0.0f;
+			}
+		}
 
 		const Mapping::AxisThreshold threshold{ Read(this->dvars.stickPressed, 0.4f), Read(this->dvars.stickPressedHysteresis, 0.1f) };
 
@@ -319,7 +333,11 @@ namespace Controller::Engine
 
 	void KeyDispatcher::Tick()
 	{
-		this->DispatchButtons(this->buttons, static_cast<unsigned int>(Game::Sys_Milliseconds()));
+		const auto time = static_cast<unsigned int>(Game::Sys_Milliseconds());
+		// XInput suppresses unchanged packets. Held sticks must still repeat.
+		this->wasDeflected = this->isDeflected;
+		this->DispatchApad(time);
+		this->DispatchButtons(this->buttons, time);
 	}
 
 	void KeyDispatcher::DispatchApad(unsigned int time)
@@ -343,6 +361,11 @@ namespace Controller::Engine
 			const bool wasPositive = this->wasDeflected[i][1];
 			const bool wasNegative = this->wasDeflected[i][0];
 
+			// Release the old direction even when a stick crosses the center
+			// between two samples without ever reporting a neutral packet.
+			if (wasPositive && !isPositiveNow) this->Emit(positiveKey, KeyEvent::Released, time);
+			if (wasNegative && !isNegativeNow) this->Emit(negativeKey, KeyEvent::Released, time);
+
 			if (isPositiveNow)
 			{
 				KeyEvent event = KeyEvent::Pressed;
@@ -364,14 +387,6 @@ namespace Controller::Engine
 				}
 
 				this->Emit(negativeKey, event, time);
-			}
-			else if (wasPositive)
-			{
-				this->Emit(positiveKey, KeyEvent::Released, time);
-			}
-			else if (wasNegative)
-			{
-				this->Emit(negativeKey, KeyEvent::Released, time);
 			}
 		}
 	}
@@ -456,12 +471,7 @@ namespace Controller::Engine
 
 	void KeyDispatcher::EmitButton(EngineKey key, KeyEvent event, unsigned int time)
 	{
-		this->SetInUse(true);
-
-		if (Game::Key_IsCatcherActive(localClient, Game::KEYCATCH_UI))
-		{
-			this->ResetScroll(key, event == KeyEvent::Pressed, time);
-		}
+		if (event == KeyEvent::Pressed) this->SetInUse(true);
 
 		this->Emit(key, event, time);
 	}
@@ -528,6 +538,8 @@ namespace Controller::Engine
 
 		if (isDown)
 		{
+			if (Game::Key_IsCatcherActive(localClient, Game::KEYCATCH_CONSOLE)) return;
+
 			if (Game::Key_IsCatcherActive(localClient, Game::KEYCATCH_UI))
 			{
 				this->MenuKeyEvent(key, true);
@@ -536,6 +548,13 @@ namespace Controller::Engine
 
 			if (binding != 0)
 			{
+				static const int stanceBinding = Game::Key_GetBindingForCmd("+stance");
+				if (event == KeyEvent::Pressed && binding == stanceBinding)
+				{
+					// ZW3's slide script listens for togglecrouch. Send that
+					// notification without executing a second stance change.
+					NotifyStancePress(localClient);
+				}
 				Components::Command::ExecBinding(localClient, binding, keyNum);
 			}
 
@@ -547,7 +566,7 @@ namespace Controller::Engine
 			Components::Command::ExecBinding(localClient, binding + 1, keyNum);
 		}
 
-		if (Game::Key_IsCatcherActive(localClient, Game::KEYCATCH_UI))
+		if (Game::Key_IsCatcherActive(localClient, Game::KEYCATCH_UI) || this->menuKeyRoutes[Mapping::KeyIndex(key)] != 0)
 		{
 			this->MenuKeyEvent(key, false);
 		}
@@ -561,53 +580,33 @@ namespace Controller::Engine
 			const int delayRest = Read(this->dvars.menuScrollDelayRest, 210);
 			const int delayLeast = Read(this->dvars.menuScrollDelayMin, 50);
 			const int accelTime = Read(this->dvars.menuScrollAccelTime, 1500);
+			const auto index = Mapping::KeyIndex(key);
 
 			if (repeats == 1)
 			{
-				this->nextScroll = time + static_cast<unsigned int>(delayFirst);
+				this->nextScroll[index] = time + static_cast<unsigned int>(delayFirst);
+				this->scrollHoldStart[index] = time;
 				return false;
 			}
 
-			if (time > this->nextScroll)
+			if (static_cast<std::int32_t>(time - this->nextScroll[index]) >= 0)
 			{
 				int delay = delayRest;
 
 				if (IsDpad(key) && accelTime > 0 && delayRest > delayLeast)
 				{
-					const auto elapsed = static_cast<int>(time - this->scrollHoldStart);
+					const auto elapsed = static_cast<int>(time - this->scrollHoldStart[index]);
 					const int heldTime = std::min(elapsed, accelTime);
 
 					delay = delayRest - (delayRest - delayLeast) * heldTime / accelTime;
 				}
 
-				this->nextScroll = time + static_cast<unsigned int>(delay);
+				this->nextScroll[index] = time + static_cast<unsigned int>(delay);
 				return false;
 			}
 		}
 
 		return repeats > 1;
-	}
-
-	void KeyDispatcher::ResetScroll(EngineKey key, bool isDown, unsigned int time)
-	{
-		if (!isDown)
-		{
-			this->scrollHoldKey.reset();
-			return;
-		}
-
-		if (!IsScrollKey(key))
-		{
-			return;
-		}
-
-		if (IsDpad(key) && this->scrollHoldKey != key)
-		{
-			this->scrollHoldStart = time;
-			this->scrollHoldKey = key;
-		}
-
-		this->nextScroll = time + static_cast<unsigned int>(Read(this->dvars.menuScrollDelayFirst, 420));
 	}
 
 	void KeyDispatcher::MenuKeyEvent(EngineKey key, bool isDown)
@@ -619,9 +618,44 @@ namespace Controller::Engine
 			down = 1;
 		}
 
+		const auto index = Mapping::KeyIndex(key);
+		if (!isDown)
+		{
+			if (this->menuKeyRoutes[index] != 0) Game::UI_KeyEvent(localClient, this->menuKeyRoutes[index], 0);
+			this->menuKeyRoutes[index] = 0;
+			return;
+		}
 		if (*Game::g_waitingForKey != 0)
 		{
+			this->menuKeyRoutes[index] = static_cast<int>(key);
 			Game::UI_KeyEvent(localClient, static_cast<int>(key), down);
+			return;
+		}
+
+		Game::menuDef_t* menu = nullptr;
+		if (Game::uiContext)
+		{
+			const int count = std::clamp(Game::uiContext->openMenuCount, 0, static_cast<int>(std::size(Game::uiContext->menuStack)));
+			for (int i = count - 1; i >= 0; --i)
+			{
+				auto* candidate = Game::uiContext->menuStack[i];
+				if (candidate && (candidate->window.dynamicFlags[0] & Game::WINDOW_DYNAMIC_VISIBLE)) { menu = candidate; break; }
+			}
+		}
+		const auto hasHandler = [key](const Game::ItemKeyHandler* handler)
+		{
+			for (; handler; handler = handler->next)
+			{
+				if (handler->key == static_cast<int>(key)) return true;
+			}
+			return false;
+		};
+		const int focused = menu ? menu->cursorItem[0] : -1;
+		if (menu && (hasHandler(menu->onKey) || (focused >= 0 && focused < menu->itemCount
+			&& menu->items[focused] && hasHandler(menu->items[focused]->onKey))))
+		{
+			this->menuKeyRoutes[index] = static_cast<int>(key);
+			Game::UI_KeyEvent(localClient, static_cast<int>(key), 1);
 			return;
 		}
 
@@ -629,7 +663,13 @@ namespace Controller::Engine
 		{
 			if (menuKey.controller == key)
 			{
-				Game::UI_KeyEvent(localClient, menuKey.keyboard, down);
+				int routed = menuKey.keyboard;
+				if (key == EngineKey::ButtonStart && menu && menu->window.name && std::strcmp(menu->window.name, "main_text") == 0)
+				{
+					routed = Game::K_ENTER;
+				}
+				this->menuKeyRoutes[index] = routed;
+				Game::UI_KeyEvent(localClient, routed, down);
 				return;
 			}
 		}
@@ -680,6 +720,8 @@ namespace Controller::Engine
 		this->releasedAt = {};
 		this->isDeflected = {};
 		this->wasDeflected = {};
-		this->scrollHoldKey.reset();
+		this->nextScroll = {};
+		this->scrollHoldStart = {};
+		this->menuKeyRoutes = {};
 	}
 }

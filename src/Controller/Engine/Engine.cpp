@@ -16,6 +16,7 @@ namespace Controller::Engine
 	static constexpr std::uintptr_t cg_selectedLocation = 0x1404ED238;
 
 	static constexpr std::size_t sprintButtonUpRequiredOffset = 0x1B8;
+	static constexpr std::uintptr_t CL_CheckNotify = 0x1400F8760;
 
 	static const Game::playerState_s& SnapPlayerState() noexcept
 	{
@@ -65,6 +66,17 @@ namespace Controller::Engine
 	float ClientFrameTime() noexcept
 	{
 		return static_cast<float>(Utils::Hook::Get<int>(cls_frametime)) * 0.001f;
+	}
+
+	void NotifyStancePress(int client)
+	{
+		const int crouch = Game::Key_GetBindingForCmd("togglecrouch");
+		if (crouch != 0)
+		{
+			// The engine handles active-session checks and protocol translation.
+			// Only notify: +stance still owns crouch/prone and its release.
+			reinterpret_cast<void(*)(int, int)>(Utils::Hook::Rebase(CL_CheckNotify))(client, crouch);
+		}
 	}
 
 	bool IsSprintButtonUpRequired(int client) noexcept

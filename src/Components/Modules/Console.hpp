@@ -76,6 +76,7 @@ namespace Components
 		static void HistoryUp();
 		static void HistoryDown();
 		static void ExecuteInput();
+		static void ExecuteSegment(char* segment);
 
 		static void AddMatch(const char* name);
 		static void CollectMatches(const char* prefix);

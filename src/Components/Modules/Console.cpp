@@ -1576,9 +1576,51 @@ namespace Components
 		historyBrowse = -1;
 		scrollOffset = 0;
 
+		// Split on ';' outside quotes so "a 1; b 2" runs as two commands, like the stock console
+		char* segment = command;
+		bool inQuotes = false;
+
+		for (char* cursor = command;; ++cursor)
+		{
+			if (*cursor == '"')
+			{
+				inQuotes = !inQuotes;
+				continue;
+			}
+
+			if (*cursor != '\0' && (*cursor != ';' || inQuotes))
+			{
+				continue;
+			}
+
+			const bool isEnd = *cursor == '\0';
+			*cursor = '\0';
+			ExecuteSegment(segment);
+
+			if (isEnd)
+			{
+				break;
+			}
+
+			segment = cursor + 1;
+		}
+	}
+
+	void Console::ExecuteSegment(char* segment)
+	{
+		while (*segment == ' ' || *segment == '\t')
+		{
+			++segment;
+		}
+
+		if (*segment == '\0')
+		{
+			return;
+		}
+
 		char firstToken[64];
 		std::snprintf(firstToken, sizeof(firstToken), "%.*s",
-			static_cast<int>(std::strcspn(command, " 	")), command);
+			static_cast<int>(std::strcspn(segment, " 	")), segment);
 
 		if (*firstToken && !FindCommand(firstToken) && !FindDvar(firstToken)
 			&& Game::CL_GetLocalClientConnectionState(0) < Game::CA_CONNECTED)
@@ -1587,7 +1629,7 @@ namespace Components
 			return;
 		}
 
-		Game::Cmd_ExecuteSingleCommand(0, 0, command);
+		Game::Cmd_ExecuteSingleCommand(0, 0, segment);
 	}
 
 	void Console::SetOpen(bool open)

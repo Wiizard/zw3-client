@@ -449,7 +449,8 @@ namespace Components::Remix::Iw4
 	inline constexpr std::uintptr_t fogSunEnabled = 0x18;
 	inline constexpr std::uintptr_t fogSunBeginFade = 0x2C;
 	inline constexpr std::uintptr_t fogSunEndFade = 0x30;
-	inline constexpr std::uintptr_t backEndBModelSurfaces = 0x42980;
+	// Updated only after the native frame-arena budget group commits successfully.
+	inline std::intptr_t backEndBModelSurfaces = 0x42980;
 	inline constexpr std::uintptr_t bmodelSurfacePlacement = 0x00;
 	inline constexpr std::uintptr_t bmodelSurfaceSurface = 0x08;
 	inline constexpr std::uintptr_t gfxPlacementOrigin = 0x10;

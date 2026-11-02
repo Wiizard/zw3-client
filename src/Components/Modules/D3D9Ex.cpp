@@ -11,6 +11,7 @@
 #include "Remix/Remix.hpp"
 
 #include <Utils/StagedTextureUpload.hpp>
+#include <Utils/TextureUploadLock.hpp>
 
 namespace Components
 {
@@ -56,6 +57,7 @@ namespace Components
 	struct ImageUploadScope;
 
 	static thread_local ImageUploadScope* currentUpload = nullptr;
+	static thread_local Utils::TextureUploadLock imageTextureLock;
 
 	struct ImageUploadScope
 	{
@@ -94,6 +96,51 @@ namespace Components
 			}
 		}
 	};
+
+	static void CheckImageUpload(HRESULT result, const char* operation)
+	{
+		if (SUCCEEDED(result)) return;
+		const char* name = currentUpload && currentUpload->image ? currentUpload->image->name : "<unknown>";
+		Game::Com_Error(Game::ERR_FATAL, "Could not %s image '%s' (HRESULT %08X).", operation, name,
+			static_cast<unsigned int>(result));
+	}
+
+	static HRESULT WINAPI LockImageTexture(IDirect3DTexture9* texture, UINT level, D3DLOCKED_RECT* locked,
+		const RECT* rect, DWORD flags)
+	{
+		const HRESULT result = imageTextureLock.Lock(texture, level, locked, rect, flags);
+		CheckImageUpload(result, "lock");
+		if (SUCCEEDED(result) && imageTextureLock.UsesStaging())
+		{
+			Logger::Print("image upload: using a CPU staging texture for mip {} after direct LockRect failed\n", level);
+		}
+		return result;
+	}
+
+	static HRESULT WINAPI UnlockImageTexture(IDirect3DTexture9* texture, UINT level)
+	{
+		const HRESULT result = imageTextureLock.Unlock(texture, level);
+		CheckImageUpload(result, "upload");
+		return result;
+	}
+
+	static void HookImageTextureLocks()
+	{
+		constexpr std::uintptr_t lockSite = 0x14006AB83;
+		constexpr std::uintptr_t unlockSite = 0x14006ABB9;
+		const std::uint8_t lockBytes[] = { 0x41, 0xFF, 0x92, 0x98, 0x00, 0x00, 0x00 };
+		const std::uint8_t unlockBytes[] = { 0xFF, 0x90, 0xA0, 0x00, 0x00, 0x00 };
+		if (!Utils::Hook::MatchesBytes(lockSite, lockBytes, sizeof(lockBytes))
+			|| !Utils::Hook::MatchesBytes(unlockSite, unlockBytes, sizeof(unlockBytes)))
+		{
+			Logger::Error("image upload: native texture lock calls do not match; fallback not installed\n");
+			return;
+		}
+		Utils::Hook::Nop(lockSite, sizeof(lockBytes));
+		Utils::Hook(lockSite, LockImageTexture, HOOK_CALL).Install()->Quick();
+		Utils::Hook::Nop(unlockSite, sizeof(unlockBytes));
+		Utils::Hook(unlockSite, UnlockImageTexture, HOOK_CALL).Install()->Quick();
+	}
 
 	Dvar::Var D3D9Ex::r_useD3D9Ex;
 
@@ -1041,6 +1088,7 @@ namespace Components
 		});
 
 		HookImageLoads();
+		HookImageTextureLocks();
 
 		Scheduler::Loop([]
 		{

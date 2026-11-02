@@ -2,6 +2,9 @@
 
 #include "AssetHandler.hpp"
 #include "Dvar.hpp"
+#include "Dedicated.hpp"
+#include "RendererBudgets.hpp"
+#include "Remix/Iw4.hpp"
 #include "Events.hpp"
 #include "FastFiles.hpp"
 #include "Flags.hpp"
@@ -2253,6 +2256,18 @@ namespace Components
 		}
 
 		RaiseStaticModelStream();
+
+		if (!Dedicated::IsEnabled() && !ZoneBuilder::IsEnabled())
+		{
+			const bool raised = RendererBudgets::RaiseStaticLightingAndSceneSurfaces();
+			if (raised)
+			{
+				Remix::Iw4::backEndBModelSurfaces = RendererBudgets::sceneSurfaceOffset;
+			}
+			Logger::Print("renderer budgets: lighting minimum {}, scene surface bytes {}, applied {}\n",
+				RenderBudgetPolicy::minimumStaticLighting, RenderBudgetPolicy::sceneSurfaceBytes, raised);
+		}
+
 
 		Game::ReallocateAssetPool(Game::ASSET_TYPE_LOADED_SOUND, 8192);
 		Game::ReallocateAssetPool(Game::ASSET_TYPE_SOUND, 64000);

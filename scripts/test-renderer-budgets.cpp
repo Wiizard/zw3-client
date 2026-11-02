@@ -66,7 +66,7 @@ static std::atomic_uint warnings[60];
 static std::atomic_uint workerFallbacks;
 static bool expectPatchOverflow = false;
 static std::uint8_t* patchEndCanary = nullptr;
-static std::vector<std::uint32_t> atlas(256 * 1024 * 4, 0);
+static std::vector<std::uint32_t> atlas(256 * 2048 * 4, 0);
 static unsigned atlasLocks = 0, atlasUnlocks = 0;
 
 static void Fatal(int, const char* text)
@@ -82,7 +82,7 @@ static long LockAtlas(void*, unsigned, void* box, void*, unsigned)
 	++atlasLocks;
 	auto* bytes = static_cast<std::uint8_t*>(box);
 	*reinterpret_cast<unsigned*>(bytes) = 256 * 4;
-	*reinterpret_cast<unsigned*>(bytes + 4) = 256 * 1024 * 4;
+	*reinterpret_cast<unsigned*>(bytes + 4) = 256 * 2048 * 4;
 	*reinterpret_cast<void**>(bytes + 8) = atlas.data();
 	return 0;
 }
@@ -165,14 +165,14 @@ int main(int argc, char** argv)
 		At<std::uint8_t>(site) ^= 1;
 		std::vector<std::uint8_t> beforeMismatch(code.size());
 		std::memcpy(beforeMismatch.data(), reinterpret_cast<void*>(Utils::Hook::image + 0x1000), code.size());
-		assert(!RendererBudgets::RaiseStaticLighting());
+		assert(!RendererBudgets::RaiseStaticLightingAndSceneSurfaces());
 		assert(std::memcmp(beforeMismatch.data(), reinterpret_cast<void*>(Utils::Hook::image + 0x1000), code.size()) == 0);
 		assert(RendererBudgets::lightingPatchCapacity == 4096);
 		At<std::uint8_t>(site) ^= 1;
 	}
-	lightingApplied = RendererBudgets::RaiseStaticLighting();
+	lightingApplied = RendererBudgets::RaiseStaticLightingAndSceneSurfaces();
 	assert(lightingApplied && RendererBudgets::RaiseWorkerQueues());
-	assert(!RendererBudgets::RaiseStaticLighting());
+	assert(!RendererBudgets::RaiseStaticLightingAndSceneSurfaces());
 	assert(!RendererBudgets::RaiseWorkerQueues());
 
 	// Run the actual initializer and allocator, including 16-bit handle ownership.
@@ -314,11 +314,11 @@ int main(int argc, char** argv)
 		assert(atlasLocks == frame + 1 && atlasUnlocks == frame + 1);
 		for (unsigned handle = 0; handle < largestCapacity; ++handle)
 		{
-			const unsigned last = handle + ((lightingPatchEntries - 1 - handle) / largestCapacity) * largestCapacity;
-			const unsigned expected = last < lightingPatchEntries / 2 ? color : 0xff102030;
+			const unsigned last = handle < lightingPatchEntries ? handle + ((lightingPatchEntries - 1 - handle) / largestCapacity) * largestCapacity : lightingPatchEntries;
+			const unsigned expected = last == lightingPatchEntries ? 0 : last < lightingPatchEntries / 2 ? color : 0xff102030;
 			for (unsigned z = 0; z < 4; ++z) for (unsigned y = 0; y < 4; ++y) for (unsigned x = 0; x < 4; ++x)
 			{
-				assert(atlas[z * 256 * 1024 + (handle / 64 * 4 + y) * 256 + handle % 64 * 4 + x] == expected);
+				assert(atlas[z * 256 * 2048 + (handle / 64 * 4 + y) * 256 + handle % 64 * 4 + x] == expected);
 			}
 		}
 		resetPatches(frontEnd);

@@ -6,6 +6,8 @@
 #include "Logger.hpp"
 #include "RawMouse.hpp"
 #include "Scheduler.hpp"
+#include "RendererDepthBias.hpp"
+#include "RendererArchitecture.hpp"
 
 extern "C"
 {
@@ -297,6 +299,30 @@ namespace Components
 		{
 			Logger::Error("renderer: the dynamic buffers do not read as expected, the skinned cache and index buffers stay stock\n");
 		}
+
+		if (!RendererDepthBias::Install())
+		{
+			Logger::Error("renderer: decal depth-bias calls differ; precise BO3 decal offsets not installed\n");
+		}
+
+		// Apply the same general cull policy as the converter to existing BO3
+		// exports. The completed backend frame owns these loaded world arrays.
+		static std::atomic_bool refreshArchitecture{true};
+		Events::OnCGameInit([] { refreshArchitecture.store(true); });
+		Events::OnCLDisconnected([](bool) { refreshArchitecture.store(true); });
+		OnBackendFrame([](IDirect3DDevice9*)
+		{
+			static Game::GfxWorld* previousWorld = nullptr;
+			static Game::GfxStaticModelDrawInst* previousDraws = nullptr;
+			auto* world = Utils::Hook::Get<Game::GfxWorld*>(RendererDepthBias::worldAddress);
+			auto* draws = world ? world->dpvs.smodelDrawInsts : nullptr;
+			const bool refresh = refreshArchitecture.exchange(false);
+			if (!refresh && world == previousWorld && draws == previousDraws) return;
+			previousWorld = world;
+			previousDraws = draws;
+			const auto result = RendererArchitecture::Raise(world, RendererDepthBias::IsConvertedWorld());
+			if (result.changed) Logger::Print("renderer: preserved BO3 static-object draw distance for {} instances ({} clusters)\n", result.changed, result.clusters);
+		});
 
 		const bool isExpected = Utils::Hook::MatchesBytes(RB_EndFrame_SwapBuffers, swapChainIndexLoad, sizeof(swapChainIndexLoad))
 			&& Utils::Hook::BranchesTo(R_RecoverLostDevice_BeginCall, DB_BeginRecoverLostDevice, false)

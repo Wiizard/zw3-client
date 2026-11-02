@@ -2572,12 +2572,14 @@ namespace Components::Remix::Menu
 
 	static void DrawSettingsButtons(Core::Config& config)
 	{
-		if (ImGui::Button("Save"))
+		if (ImGui::Button(Core::HasMapConfig() ? "Save map settings" : "Save global defaults"))
 		{
 			Core::SaveConfig(settingsMessage);
 		}
 
-		ImGui::SetItemTooltip("Writes these settings into zw3_remix\\remix.ini so they apply at the next launch.");
+		ImGui::SetItemTooltip(Core::HasMapConfig()
+			? "Saves a complete profile for this map, including exposure. It is restored after restarting the game."
+			: "Saves the global defaults. Use Save for this map to keep a separate, complete map profile.");
 
 		ImGui::SameLine();
 
@@ -2585,7 +2587,8 @@ namespace Components::Remix::Menu
 		{
 			Core::ReloadConfig();
 			ApplyConfig(Core::GetConfig());
-			settingsMessage = "Reloaded the settings from zw3_remix\\remix.ini";
+			settingsMessage = Core::HasMapConfig() ? "Reloaded the saved settings for " + Core::GetActiveMap()
+				: "Reloaded the global settings from zw3_remix\\remix.ini";
 		}
 
 		ImGui::SetItemTooltip("Throws away menu changes since the last save.");
@@ -2647,8 +2650,8 @@ namespace Components::Remix::Menu
 				Core::SaveMapConfig(settingsMessage);
 			}
 
-			ImGui::SetItemTooltip("Keeps what differs from the global settings for this map only. It loads every time"
-								  " this map does, on top of the global settings.");
+			ImGui::SetItemTooltip("Saves every current setting for this map, including values equal to the global defaults."
+				" The complete profile is restored each time the map loads, including after restarting the game.");
 			ImGui::TextDisabled("Global settings on %s (Save writes zw3_remix\\remix.ini)", mapName.c_str());
 		}
 

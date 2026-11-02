@@ -12,9 +12,13 @@ namespace Components::RenderBudgetPolicy
 	constexpr std::size_t modelIds = modelBits + handleEntries / 8;
 	constexpr std::size_t frameStamps = modelIds + handleEntries * sizeof(std::uint16_t);
 	constexpr std::size_t cacheBytes = frameStamps + handleEntries * sizeof(std::uint32_t);
-	constexpr std::uint32_t minimumStaticLighting = 8192;
+	constexpr std::uint32_t minimumStaticLighting = 16384;
 	// Keep native front/back buffer spacing; each relocated list fits one stride.
 	constexpr std::size_t backEndDataStride = 0x13D700;
+	// A ushort token addresses four-byte units; leave one unit below wrap.
+	constexpr std::uint32_t sceneSurfaceBytes = 0x3FFFC;
+	static_assert(sceneSurfaceBytes / 4 <= UINT16_MAX);
+	static_assert(sceneSurfaceBytes <= backEndDataStride);
 	constexpr std::size_t lightingPatchStride = 52;
 	constexpr std::uint32_t lightingPatchEntries = 24576;
 	constexpr std::size_t lightingPatchStorageBytes = 2 * backEndDataStride;
@@ -33,7 +37,7 @@ namespace Components::RenderBudgetPolicy
 	static_assert(modelBits == 0x20000 && modelIds == 0x22000 && frameStamps == 0x42000);
 	static_assert(cacheBytes == 0x82000);
 	static_assert(lightingPatchEntries * lightingPatchStride <= backEndDataStride);
-	static_assert(lightingPatchEntries >= 16384); // Full tested GPU atlas, including dynamic slots.
+	static_assert(lightingPatchEntries >= 16384); // Per-frame updates are bounded independently of cached atlas entries.
 	static_assert(worker9Bytes / 24 == 4096 && worker11Bytes / 32 == 4096);
 	static_assert(worker9Bytes % 24 == 0 && worker11Bytes % 32 == 0);
 }

@@ -671,22 +671,19 @@ namespace Components::Remix::Core
 		for (const Setting& setting : settingsTable)
 		{
 			const std::string value = FormatSetting(config, setting.member);
-
-			if (value != FormatSetting(globalConfig, setting.member))
-			{
-				lines.push_back(std::string(setting.key) + " = " + value);
-			}
+			// A saved map owns the whole look, including values currently equal to
+			// global defaults. Otherwise later global edits change saved maps too.
+			lines.push_back(std::string(setting.key) + " = " + value);
 		}
 
-		CreateDirectoryW((ModuleDirectory() + L"zw3_remix\\maps").c_str(), nullptr);
+		std::error_code directoryError;
+		std::filesystem::create_directories(std::filesystem::path(ModuleDirectory()) / L"zw3_remix" / L"maps",
+			directoryError);
 		const std::wstring path = MapIniPath(activeMap);
-
-		if (lines.empty())
+		if (directoryError)
 		{
-			DeleteFileW(path.c_str());
-			hasMapConfig = false;
-			savedConfig = config;
-			message = activeMap + " matches the global settings, no map file needed";
+			message = "Could not create zw3_remix\\maps";
+			LogError() << "remix: " << message << ": " << directoryError.message();
 			return;
 		}
 
@@ -698,11 +695,18 @@ namespace Components::Remix::Core
 			return;
 		}
 
-		file << "; settings for " << activeMap << " that differ from zw3_remix\\remix.ini\n";
+		file << "; complete settings for " << activeMap << "; independent of global defaults\n";
 
 		for (const std::string& line : lines)
 		{
 			file << line << "\n";
+		}
+		file.close();
+		if (!file)
+		{
+			message = "Could not finish writing zw3_remix\\maps\\" + activeMap + ".ini";
+			LogError() << "remix: " << message;
+			return;
 		}
 
 		hasMapConfig = true;

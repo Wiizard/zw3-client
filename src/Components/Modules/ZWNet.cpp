@@ -440,6 +440,7 @@ namespace Components
 	// Main-thread UI stopwatch; the search-active DVAR remains a boolean.
 	static Utils::MatchmakingSearchTimer searchTimer;
 	static std::atomic_uint64_t joinTransitionGeneration = 0;
+	static std::atomic_uint64_t lobbySnapshotGeneration = 0;
 	static std::atomic_bool isCompletedMatchReturnPending = false;
 
 	// Keep transition diagnostics useful without recording session identifiers,
@@ -2387,6 +2388,10 @@ namespace Components
 			{
 				return;
 			}
+			{
+				std::lock_guard _(stateMutex);
+				if (presenceUiState != state) return;
+			}
 
 			if (state == "ERROR" || state == "POST_MATCH" || state == "RESETTING")
 			{
@@ -2674,6 +2679,7 @@ namespace Components
 
 	void ZWNet::AbandonOnlineSession()
 	{
+		++lobbySnapshotGeneration;
 		CancelPendingJoinPreparation();
 		ResetMatchLobbySoundSnapshot();
 
@@ -3758,6 +3764,7 @@ namespace Components
 		{
 			return;
 		}
+		const auto snapshotGeneration = ++lobbySnapshotGeneration;
 
 		const auto sharedRanks = CacheSharedLobbyRanks(party);
 		const auto partyId = JsonString(party, "id");
@@ -3825,9 +3832,9 @@ namespace Components
 
 		const auto stateText = (state == "IDLE" || state == "CONFIGURING") ? "IN LOBBY" : FriendlyStateText(state);
 
-		Scheduler::Once([partyId, leaderId, state, stateText, owner, members, playerId, sharedRanks, visibility]
+		Scheduler::Once([partyId, leaderId, state, stateText, owner, members, playerId, sharedRanks, visibility, snapshotGeneration]
 		{
-			if (!isActive)
+			if (!isActive || lobbySnapshotGeneration != snapshotGeneration)
 			{
 				return;
 			}
@@ -3931,19 +3938,12 @@ namespace Components
 				currentMatchId.clear();
 				currentProposalId.clear();
 			}
-			Scheduler::Once([]
-			{
-				if (isActive)
-				{
-					ClearMatchDvars();
-					Dvar::Var("zwnet_match_id").Set("");
-					Dvar::Var("zwnet_managed_session").Set(false);
-				}
-			}, Scheduler::Pipeline::MAIN);
 		}
 
 		isSearching = isMatchmaking;
 		UpdateLobbyDvars(resumedParty);
+		const auto partyId = JsonString(resumedParty, "id");
+		const auto transitionGeneration = joinTransitionGeneration.load();
 
 		if (isMatchmaking)
 		{
@@ -3954,11 +3954,21 @@ namespace Components
 			SetState("IN_PARTY");
 		}
 
-		Scheduler::Once([]
+		Scheduler::Once([partyId, transitionGeneration, isMatchmaking]
 		{
-			if (!isActive)
+			if (!isActive || isClosingOnlineSession || isInGame || joinTransitionGeneration != transitionGeneration)
 			{
 				return;
+			}
+			{
+				std::lock_guard _(stateMutex);
+				if (currentPartyId != partyId) return;
+			}
+			if (!isMatchmaking && !isSearching && !isPlaylistSelectionStarting && !isPlaylistSearchStarting)
+			{
+				ClearMatchDvars();
+				Dvar::Var("zwnet_match_id").Set("");
+				Dvar::Var("zwnet_managed_session").Set(false);
 			}
 
 			// Managed idle parties use the same backend roster as their leader.
@@ -4187,6 +4197,7 @@ namespace Components
 		}
 
 		std::string partyId;
+		const auto transitionGeneration = joinTransitionGeneration.load();
 
 		{
 			std::lock_guard _(stateMutex);
@@ -4199,23 +4210,32 @@ namespace Components
 		}
 
 		auto party = Request("GET", "/zwnet/parties/current");
+		const auto isCurrent = [partyId, transitionGeneration]
+		{
+			if (!isActive || isSearching || isInGame || isServerJoinTransition || isClosingOnlineSession
+				|| isPlaylistSearchStarting || isPlaylistSelectionStarting || joinTransitionGeneration != transitionGeneration) return false;
+			std::lock_guard _(stateMutex);
+			return currentPartyId == partyId;
+		};
+		if (!isCurrent()) return;
 
 		if (party && party->is_null())
 		{
 			// Recover only a confirmed missing idle pre-lobby, through the same
 			// serialized path used by Online entry. Never create on a failed poll.
-			EnqueueAsync([partyId]
+			EnqueueAsync([partyId, isCurrent]
 			{
 				{
 					std::lock_guard _(stateMutex);
 					if (currentPartyId != partyId || presenceUiState != "IN_PARTY") return;
 				}
-				if (!isActive || isSearching || isInGame || isServerJoinTransition || isClosingOnlineSession
-					|| isPlaylistSearchStarting || isPlaylistSelectionStarting) return;
+				if (!isCurrent()) return;
 				auto recovered = CurrentOrNewParty();
+				if (!isCurrent()) return;
 				if (recovered && recovered->is_object() && !recovered->contains("error"))
 				{
 					*recovered = PublishLocalRank(std::move(*recovered));
+					if (!isCurrent()) return;
 					UpdateLobbyDvars(*recovered);
 					UpdatePresence();
 				}
@@ -4225,13 +4245,16 @@ namespace Components
 
 		if (party && party->is_object() && !party->contains("error"))
 		{
+			if (JsonString(*party, "id") != partyId) return;
 			*party = PublishLocalRank(std::move(*party));
+			if (!isCurrent()) return;
 			UpdateLobbyDvars(*party);
 		}
 	}
 
 	void ZWNet::LeaveParty()
 	{
+		++lobbySnapshotGeneration;
 		CancelJoinInProgressPreview();
 
 		const auto result = Request("POST", "/zwnet/parties/leave");
@@ -4761,6 +4784,7 @@ namespace Components
 
 		isPlaylistSelectionStarting = false;
 		ResetManagedRoute();
+		++lobbySnapshotGeneration;
 
 		ScopeExit closingGuard([]
 		{

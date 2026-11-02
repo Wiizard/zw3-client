@@ -457,6 +457,11 @@ namespace Components
 
 	static void* FindMaterial(const char* name)
 	{
+		if (auto* const material = Materials::GetRuntimeMaterial(name))
+		{
+			return material;
+		}
+
 		auto* const entry = reinterpret_cast<std::uint8_t*(*)(unsigned int, const char*)>(
 			Utils::Hook::Rebase(DB_FindXAssetEntry))(assetTypeMaterial, name);
 

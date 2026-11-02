@@ -3823,13 +3823,17 @@ namespace Components
 
 		SchedulePlaylistCatalogPublish();
 
-		const auto stateText = FriendlyStateText(state);
+		const auto stateText = (state == "IDLE" || state == "CONFIGURING") ? "IN LOBBY" : FriendlyStateText(state);
 
 		Scheduler::Once([partyId, leaderId, state, stateText, owner, members, playerId, sharedRanks, visibility]
 		{
 			if (!isActive)
 			{
 				return;
+			}
+			{
+				std::lock_guard _(stateMutex);
+				if (currentPartyId != partyId || currentPlayerId != playerId) return;
 			}
 
 			Dvar::Var("zwnet_lobby_active").Set(true);
@@ -3917,6 +3921,27 @@ namespace Components
 		const auto partyState = JsonString(resumedParty, "state", "IDLE");
 		const bool isMatchmaking = IsActiveMatchmakingState(partyState);
 
+		if (!isMatchmaking)
+		{
+			ResetManagedRoute();
+			isServerJoinTransition = false;
+			isCompletedMatchReturnPending = false;
+			{
+				std::lock_guard _(stateMutex);
+				currentMatchId.clear();
+				currentProposalId.clear();
+			}
+			Scheduler::Once([]
+			{
+				if (isActive)
+				{
+					ClearMatchDvars();
+					Dvar::Var("zwnet_match_id").Set("");
+					Dvar::Var("zwnet_managed_session").Set(false);
+				}
+			}, Scheduler::Pipeline::MAIN);
+		}
+
 		isSearching = isMatchmaking;
 		UpdateLobbyDvars(resumedParty);
 
@@ -3929,21 +3954,18 @@ namespace Components
 			SetState("IN_PARTY");
 		}
 
-		Scheduler::Once([isMatchmaking]
+		Scheduler::Once([]
 		{
 			if (!isActive)
 			{
 				return;
 			}
 
-			if (isMatchmaking)
-			{
-				Command::Execute("openmenu zwnet_matchmaking", false);
-			}
-			else
-			{
-				Command::Execute("openmenu zwnet_party_lobby", false);
-			}
+			// Managed idle parties use the same backend roster as their leader.
+			// The native private lobby reads engine-party feeders and ui_mapname;
+			// opening it also runs private map configuration on an invited client.
+			Command::Execute("closemenu zwnet_party_lobby", false);
+			Command::Execute("openmenu zwnet_matchmaking", false);
 		}, Scheduler::Pipeline::MAIN);
 
 		if (isMatchmaking)

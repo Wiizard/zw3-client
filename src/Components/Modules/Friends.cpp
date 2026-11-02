@@ -117,25 +117,35 @@ namespace Components
 		friendsList.insert(friendsList.end(), offlineList.begin(), offlineList.end());
 	}
 
-	static std::string BuildSocialRankText(const int level, const int prestige)
+	static std::string SocialIconText(const std::string& iconName, const std::string& value, const char size = 0x34)
 	{
-		std::string iconName = "skullicon";
-
-		if (prestige < 8)
-		{
-			iconName = std::format("prestige_{}", prestige + 1);
-		}
-
 		std::string text;
 		text.push_back('^');
-		text.push_back(2);
-		text.push_back(0x22);
-		text.push_back(0x22);
+		text.push_back(1);
+		text.push_back(size);
+		text.push_back(size);
 		text.push_back(static_cast<char>(iconName.size()));
 		text.append(iconName);
 		text.append(" ");
-		text.append(std::to_string(std::clamp(level, 1, 54)));
+		text.append(value);
 		return text;
+	}
+
+	static void LoadSocialSkin()
+	{
+		constexpr const char* files[] = { "panel_left", "panel_right", "tab_neutral", "tab_active", "button", "columns",
+			"friends", "requests", "add", "refresh", "remove", "join", "info", "player", "prestige_unknown", "online", "offline" };
+		bool ready = true;
+		for (const auto* file : files)
+		{
+			const auto name = std::string("zw3_social_") + file;
+			if (Materials::GetRuntimeMaterial(name)) continue;
+			std::string bytes;
+			if (!Utils::IO::ReadFile(std::string("zw3/core/ui_mp/social/") + file + ".png", &bytes)
+				|| bytes.size() > 2 * 1024 * 1024 || !Materials::CreateNewsMaterialFromImageBytes(name, bytes)) ready = false;
+		}
+		Dvar::Var("ui_social_skin_ready").Set(ready);
+		if (!ready) Logger::Print("Friends interface assets are missing or could not be loaded\n");
 	}
 
 	static bool IsPublicGuid(const std::string& value)
@@ -468,6 +478,7 @@ namespace Components
 		{
 			if (!isSocialActive) return;
 			Dvar::Var("ui_social_roster_summary").Set(current ? std::format("{} ONLINE  |  {} TOTAL", online, total) : "FRIENDS UNAVAILABLE");
+			Dvar::Var("ui_social_friend_count").Set(static_cast<int>(total));
 			Dvar::Var("ui_social_selected_joinable").Set(joinable);
 			Dvar::Var("ui_social_selected_join_reason").Set(reason);
 		}, Scheduler::Pipeline::MAIN);
@@ -1087,20 +1098,22 @@ namespace Components
 
 				if (user.isRankKnown)
 				{
-					value = BuildSocialRankText(user.rankLevel, user.rankPrestige);
+					value = std::to_string(user.rankLevel);
 				}
 
 				break;
 			case 1:
-				value = user.displayName;
+				value = SocialIconText("zw3_social_player", user.displayName);
 				break;
 			case 2:
 				value = "UNAVAILABLE";
 
 				if (user.isRankKnown)
 				{
-					value = std::format("PRESTIGE {}", user.rankPrestige);
+					const auto icon = user.rankPrestige < 8 ? std::format("prestige_{}", user.rankPrestige + 1) : "skullicon";
+					value = SocialIconText(icon, std::format("PRESTIGE {}", user.rankPrestige));
 				}
+				else value = SocialIconText("zw3_social_prestige_unknown", value);
 
 				break;
 			case 3:
@@ -1110,6 +1123,7 @@ namespace Components
 				{
 					value += " / JOINABLE";
 				}
+				value = SocialIconText(user.online ? "zw3_social_online" : "zw3_social_offline", value, 0x24);
 
 				break;
 			default:
@@ -2168,6 +2182,17 @@ namespace Components
 			UpdateFriends();
 		});
 
+		UIScript::Add("LoadFriendsSkin", [](const UIScript::Token&)
+		{
+			LoadSocialSkin();
+		});
+		Scheduler::Loop([]
+		{
+			if (!isSocialActive || !Game::uiContext || Materials::GetRuntimeMaterial("zw3_social_panel_left")) return;
+			auto* const menu = Game::Menus_FindByName(Game::uiContext, "popup_friends");
+			if (menu && Game::Menu_IsVisible(Game::uiContext, menu)) LoadSocialSkin();
+		}, Scheduler::Pipeline::MAIN, 1s);
+
 		UIScript::Add("RefreshFriends", [](const UIScript::Token&)
 		{
 			UpdateFriends();
@@ -2737,6 +2762,8 @@ namespace Components
 		{
 			Dvar::Register("ui_social_status_message", "ZW3 social is ready.", Game::DVAR_NONE, "Stable, non-technical status shown by the ZW3 social menu");
 			Dvar::Register("ui_social_invite_busy", false, Game::DVAR_NONE, "Prevents duplicate ZW3 social menu actions");
+			Dvar::Register("ui_social_skin_ready", false, Game::DVAR_NONE, "Friends interface textures have loaded");
+			Dvar::Register("ui_social_friend_count", 0, 0, 512, Game::DVAR_NONE, "Authoritative friend roster size");
 			Dvar::Register("ui_social_roster_summary","LOADING FRIENDS...",Game::DVAR_NONE,"Counts from the current authoritative friend roster");
 			Dvar::Register("ui_social_selected_joinable",false,Game::DVAR_NONE,"Selected friend has a supported current join target");
 			Dvar::Register("ui_social_selected_join_reason","Select a ZW3 friend first.",Game::DVAR_NONE,"Reason for the selected friend's join availability");

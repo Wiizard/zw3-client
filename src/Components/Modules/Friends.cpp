@@ -25,6 +25,7 @@
 #include "UIScript.hpp"
 #include "ZWNet.hpp"
 #include "Utils/OnlineResponse.hpp"
+#include "Utils/SocialPresentation.hpp"
 
 #include "Steam/Proxy.hpp"
 #include "Steam/Interfaces/SteamUser.hpp"
@@ -178,7 +179,7 @@ namespace Components
 		return true;
 	}
 
-	static std::pair<int, int> ReadLocalZombieRank()
+	static std::optional<std::pair<int, int>> ReadLocalZombieRank()
 	{
 		const Utils::StutterDiagnostics::Scope sample("rank_file_read", 1);
 		const auto guid = std::format("{:016x}", Auth::GetKeyHash());
@@ -190,12 +191,13 @@ namespace Components
 
 		if (!Utils::IO::ReadFile(rankPath.string(), &data)
 			|| !TryParseZombieRankValue(data, "level", storedLevel)
-			|| !TryParseZombieRankValue(data, "prestige", prestige))
+			|| !TryParseZombieRankValue(data, "prestige", prestige)
+			|| storedLevel < 0 || storedLevel > 53 || !Utils::ValidSocialRank(storedLevel + 1, prestige))
 		{
-			return { 1, 0 };
+			return std::nullopt;
 		}
 
-		return { std::clamp(storedLevel, 0, 53) + 1, std::max(prestige, 0) };
+		return std::pair{ storedLevel + 1, prestige };
 	}
 
 	constexpr auto socialApiBase = "https://backend.zw3.eu";
@@ -214,6 +216,7 @@ namespace Components
 		std::string status;
 		std::string zwnetPartyId;
 		bool isJoinable = false;
+		bool online = false;
 		bool isRankKnown = false;
 		int rankLevel = 0;
 		int rankPrestige = 0;
@@ -241,6 +244,7 @@ namespace Components
 	static std::atomic_bool isSocialBusy = false;
 	static std::atomic_bool isSocialRefreshBusy = false;
 	static std::atomic_bool isPartyInvitePollBusy = false;
+	static std::atomic_bool isSocialRosterCurrent = false;
 
 	static std::mutex socialMutex;
 	static std::mutex socialErrorMutex;
@@ -385,7 +389,7 @@ namespace Components
 			return false;
 		}
 
-		if (parsedLevel < 1 || parsedLevel > 54 || parsedPrestige < 0 || parsedPrestige > 20)
+		if (!Utils::ValidSocialRank(parsedLevel, parsedPrestige))
 		{
 			return false;
 		}
@@ -429,52 +433,44 @@ namespace Components
 
 	static std::string SocialStatusText(std::string status)
 	{
-		std::ranges::transform(status, status.begin(), [](const unsigned char character)
-		{
-			return static_cast<char>(std::toupper(character));
-		});
+		return Utils::SocialActivityText(std::move(status));
+	}
+	static bool IsZwnetPartyId(const std::string& value);
 
-		if (status == "IN_PARTY" || status == "IN_LOBBY" || status == "MATCH_FOUND" || status == "READY_CHECK" || status == "WAITING_FOR_READY")
+	static void PublishSocialRosterState()
+	{
+		unsigned int total = 0;
+		unsigned int online = 0;
+		bool joinable = false;
+		std::string reason = "Select a ZW3 friend first.";
 		{
-			return "IN LOBBY";
+			std::lock_guard _(socialMutex);
+			total = static_cast<unsigned int>(socialFriends.size());
+			for (const auto& user : socialFriends)
+			{
+				if (user.online) ++online;
+			}
+			if (currentSocialFriend < socialFriends.size())
+			{
+				const auto& user = socialFriends[currentSocialFriend];
+				joinable = user.online && user.isJoinable && IsZwnetPartyId(user.zwnetPartyId);
+				reason = joinable ? "Join this friend's current ZW3 party." : user.online
+					? "This friend's session is not currently joinable." : "This friend is offline.";
+			}
 		}
-
-		if (status == "MAP_VOTE" || status == "VOTING")
+		const bool current = isSocialRosterCurrent;
+		if (!current)
 		{
-			return "VOTING";
+			joinable = false;
+			reason = "Friend status is temporarily unavailable. Refresh and try again.";
 		}
-
-		if (status == "RESERVING_SERVER" || status == "STARTING_SERVER" || status == "SERVER_STARTING" || status == "STARTING")
+		Scheduler::Once([total, online, joinable, reason, current]
 		{
-			return "STARTING";
-		}
-
-		if (status == "CONNECTING" || status == "JOINING" || status == "JOIN_PREVIEW")
-		{
-			return "JOINING";
-		}
-
-		if (status == "IN_MATCH" || status == "IN_GAME" || status == "IN_PUBLIC_MATCH" || status == "IN_ZOMBIES")
-		{
-			return "IN GAME";
-		}
-
-		if (status == "SEARCHING")
-		{
-			return "SEARCHING";
-		}
-
-		if (status == "MAIN_MENU" || status == "IDLE" || status == "ONLINE")
-		{
-			return "ONLINE";
-		}
-
-		if (status.empty())
-		{
-			return "OFFLINE";
-		}
-
-		return status;
+			if (!isSocialActive) return;
+			Dvar::Var("ui_social_roster_summary").Set(current ? std::format("{} ONLINE  |  {} TOTAL", online, total) : "FRIENDS UNAVAILABLE");
+			Dvar::Var("ui_social_selected_joinable").Set(joinable);
+			Dvar::Var("ui_social_selected_join_reason").Set(reason);
+		}, Scheduler::Pipeline::MAIN);
 	}
 
 	static void SetLastSocialError(std::string error)
@@ -789,6 +785,7 @@ namespace Components
 
 			if (!isJoinable || !IsZwnetPartyId(zwnetPartyId))
 			{
+				isJoinable = false;
 				zwnetPartyId.clear();
 			}
 
@@ -802,6 +799,13 @@ namespace Components
 			}
 
 			status = SocialStatusText(std::move(status));
+			const bool online = SocialJsonBool(row, "online", Utils::SocialActivityOnline(status)) && Utils::SocialActivityOnline(status);
+			if (!online)
+			{
+				status = "OFFLINE";
+				isJoinable = false;
+				zwnetPartyId.clear();
+			}
 
 			auto displayName = SafeSocialText(SocialJsonString(row, "display_name"), 48);
 
@@ -817,11 +821,13 @@ namespace Components
 
 			int rankLevel = 0;
 			int rankPrestige = 0;
-			bool isRankKnown = TryReadSocialRank(row, rankLevel, rankPrestige);
+			// The current shared lobby has a newer live rank than an older
+			// approved-match snapshot returned by Stats.
+			bool isRankKnown = ZWNet::TryGetSharedLobbyRank(id, rankLevel, rankPrestige);
 
 			if (!isRankKnown)
 			{
-				isRankKnown = ZWNet::TryGetSharedLobbyRank(id, rankLevel, rankPrestige);
+				isRankKnown = TryReadSocialRank(row, rankLevel, rankPrestige);
 			}
 
 			if (!isRankKnown)
@@ -837,6 +843,7 @@ namespace Components
 			user.status = SafeSocialText(status, 32);
 			user.zwnetPartyId = SafeSocialText(zwnetPartyId, 80);
 			user.isJoinable = isJoinable;
+			user.online = online;
 			user.isRankKnown = isRankKnown;
 
 			if (isRankKnown)
@@ -848,23 +855,29 @@ namespace Components
 			updated.emplace_back(std::move(user));
 		}
 
-		std::lock_guard _(socialMutex);
-		socialFriends = std::move(updated);
+		{
+			std::lock_guard _(socialMutex);
+			const auto selectedId = currentSocialFriend < socialFriends.size() ? socialFriends[currentSocialFriend].id : std::string{};
+			socialFriends = std::move(updated);
 
-		for (const auto& user : socialFriends)
-		{
-			pendingOutgoingFriends.erase(user.id);
-			pendingOutgoingFriends.erase(user.guid);
-		}
+			for (const auto& user : socialFriends)
+			{
+				pendingOutgoingFriends.erase(user.id);
+				pendingOutgoingFriends.erase(user.guid);
+			}
 
-		if (socialFriends.empty())
-		{
-			currentSocialFriend = 0;
+			if (socialFriends.empty())
+			{
+				currentSocialFriend = 0;
+			}
+			else
+			{
+				const auto selected = std::ranges::find_if(socialFriends, [&selectedId](const SocialFriend& user) { return user.id == selectedId; });
+				currentSocialFriend = selected == socialFriends.end() ? 0 : static_cast<unsigned int>(std::distance(socialFriends.begin(), selected));
+			}
 		}
-		else
-		{
-			currentSocialFriend = std::min(currentSocialFriend, static_cast<unsigned int>(socialFriends.size() - 1));
-		}
+		isSocialRosterCurrent = true;
+		PublishSocialRosterState();
 
 		return true;
 	}
@@ -994,7 +1007,23 @@ namespace Components
 	static bool TryRefreshSocialFriends()
 	{
 		const auto response = SocialApiRequest("GET", "/social/friends");
-		return response && TryReplaceSocialFriends(*response);
+		const bool success = response && TryReplaceSocialFriends(*response);
+		if (!success)
+		{
+			isSocialRosterCurrent = false;
+			{
+				std::lock_guard _(socialMutex);
+				for (auto& user : socialFriends)
+				{
+					user.status = "UNAVAILABLE";
+					user.online = false;
+					user.isJoinable = false;
+					user.zwnetPartyId.clear();
+				}
+			}
+			PublishSocialRosterState();
+		}
+		return success;
 	}
 
 	static bool TryRefreshIncomingRequests()
@@ -1093,12 +1122,15 @@ namespace Components
 
 	static void SelectSocialFriend(const unsigned int index)
 	{
-		std::lock_guard _(socialMutex);
-
-		if (index < socialFriends.size())
 		{
-			currentSocialFriend = index;
+			std::lock_guard _(socialMutex);
+
+			if (index < socialFriends.size())
+			{
+				currentSocialFriend = index;
+			}
 		}
+		PublishSocialRosterState();
 	}
 
 	static unsigned int GetIncomingRequestCount()
@@ -1379,8 +1411,9 @@ namespace Components
 		isPartyInvitePollBusy = false;
 	}
 
-	static std::string JoinFriendParty(const std::string& playerId)
+	static std::string JoinFriendParty(const std::string& playerId, bool* joined = nullptr)
 	{
+		if (joined) *joined = false;
 		const auto response = SocialApiRequest("POST", "/zwnet/parties/join-friend", { { "player_id", playerId } }, true);
 
 		if (!response || !response->is_object() || response->contains("error"))
@@ -1389,6 +1422,7 @@ namespace Components
 		}
 
 		ZWNet::ResumeParty(*response);
+		if (joined) *joined = true;
 		return "Friend's party joined.";
 	}
 
@@ -1449,11 +1483,17 @@ namespace Components
 			entry->prestige = std::atoi(prestige.data());
 		}
 
-		if (!zombieRankLevel.empty())
+		const auto zombieRank = Utils::ParseSocialRank(zombieRankLevel, zombieRankPrestige);
+		entry->isZombieRankKnown = zombieRank.has_value();
+		if (zombieRank)
 		{
-			entry->isZombieRankKnown = true;
-			entry->zombieRankLevel = std::clamp(std::atoi(zombieRankLevel.data()), 1, 54);
-			entry->zombieRankPrestige = std::max(std::atoi(zombieRankPrestige.data()), 0);
+			entry->zombieRankLevel = zombieRank->first;
+			entry->zombieRankPrestige = zombieRank->second;
+		}
+		else
+		{
+			entry->zombieRankLevel = 0;
+			entry->zombieRankPrestige = 0;
 		}
 
 		const std::string server = GetPresence(user, "iw4x_server");
@@ -1626,17 +1666,26 @@ namespace Components
 		}
 
 		static std::optional<std::pair<int, int>> lastRank;
+		static bool hasPublishedRankState = false;
 		const auto rank = ReadLocalZombieRank();
 
-		if (lastRank && *lastRank == rank)
+		if (hasPublishedRankState && lastRank == rank)
 		{
 			return;
 		}
 
 		lastRank = rank;
+		hasPublishedRankState = true;
+		if (!rank)
+		{
+			ClearPresence("zw3_zombie_rank_level");
+			ClearPresence("zw3_zombie_rank_prestige");
+			UpdateState();
+			return;
+		}
 
-		SetPresence("zw3_zombie_rank_level", std::to_string(rank.first));
-		SetPresence("zw3_zombie_rank_prestige", std::to_string(rank.second));
+		SetPresence("zw3_zombie_rank_level", std::to_string(rank->first));
+		SetPresence("zw3_zombie_rank_prestige", std::to_string(rank->second));
 		UpdateState();
 	}
 
@@ -2356,7 +2405,9 @@ namespace Components
 
 			RunSocialTask("Joining friend's ZW3 party...", [user]() -> std::string
 			{
-				const auto result = JoinFriendParty(user->id);
+				bool joined = false;
+				const auto result = JoinFriendParty(user->id, &joined);
+				if (!joined) return result;
 
 				Scheduler::Once([]
 				{
@@ -2686,6 +2737,9 @@ namespace Components
 		{
 			Dvar::Register("ui_social_status_message", "ZW3 social is ready.", Game::DVAR_NONE, "Stable, non-technical status shown by the ZW3 social menu");
 			Dvar::Register("ui_social_invite_busy", false, Game::DVAR_NONE, "Prevents duplicate ZW3 social menu actions");
+			Dvar::Register("ui_social_roster_summary","LOADING FRIENDS...",Game::DVAR_NONE,"Counts from the current authoritative friend roster");
+			Dvar::Register("ui_social_selected_joinable",false,Game::DVAR_NONE,"Selected friend has a supported current join target");
+			Dvar::Register("ui_social_selected_join_reason","Select a ZW3 friend first.",Game::DVAR_NONE,"Reason for the selected friend's join availability");
 			Dvar::Register("ui_social_friend_guid", "", Game::DVAR_NONE, "Public ZW3 GUID entered for a friend request");
 			Dvar::Register("ui_social_own_guid", "", Game::DVAR_ROM, "Local public ZW3 GUID shown in the social menu");
 			Dvar::Register("ui_social_game_invite_message", "", Game::DVAR_NONE, "The ZW3 party invitation being shown");

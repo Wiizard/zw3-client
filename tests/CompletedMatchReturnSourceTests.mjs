@@ -55,11 +55,11 @@ test('completed lobby return waits for rebuilt frontend menus instead of racing 
 
 test('the private runtime script publishes the real server end before notifying clients',{skip:!process.env.ZW3_GAME_ROOT},()=>{
   const script=readFileSync(process.env.ZW3_GAME_ROOT+'/zw3/core/maps/mp/gametypes/_gamelogic.gsc','utf8');
-  const notify=script.indexOf('setClientDvar( "zwnet_match_return", "1" )');
+  const notify=/setClientDvar\(\s*"zwnet_match_return"\s*,\s*"1"\s*\)/.exec(script)?.index ?? -1;
   assert.ok(notify>0);
   const begin=script.lastIndexOf('if ( getDvar( "zwnet_match_id" ) != "" )',notify);
   const branch=script.slice(begin,notify);
-  assert.match(branch,/setDvar\( "zwnet_match_ended", "1" \)/);
+  assert.match(branch,/setDvar\(\s*"zwnet_match_ended"\s*,\s*"1"\s*\)/);
   assert.match(branch,/ZWNET_MATCH_COMPLETE/);
   assert.doesNotMatch(branch,/\bwait\s*\(/);
 });

@@ -2609,7 +2609,8 @@ namespace Components
 	{
 		auto party = Request("GET", "/zwnet/parties/current");
 
-		if (!party || party->is_null())
+		// A service failure is not proof that the existing party disappeared.
+		if (party && party->is_null())
 		{
 			party = Request("POST", "/zwnet/parties/create", { { "visibility", PartyVisibilityName(desiredPartyPrivacy.load()) } });
 		}
@@ -3066,6 +3067,13 @@ namespace Components
 				partySize > 0 ? static_cast<std::size_t>(partySize) : 0);
 			if (!selected)
 			{
+				Logger::Print("ZWNET Quick Play rejected: party size {}, cached party size {}, catalog entries {}\n",
+					partySize, cachedPartyMemberCount.load(), candidates.size());
+				for (const auto& candidate : candidates)
+				{
+					Logger::Print("ZWNET playlist {}: audience {}, availability {}, capacity {}, content verified {}\n",
+						candidate.id, candidate.audience, candidate.availability, candidate.maxPlayers, candidate.hasVerifiedContent);
+				}
 				SetPlaylistActionError("No compatible public playlist for your party. Refresh or choose a playlist.");
 				return;
 			}
@@ -4151,7 +4159,7 @@ namespace Components
 
 	void ZWNet::RefreshActiveParty()
 	{
-		if (!isActive || isSearching || isClosingOnlineSession)
+		if (!isActive || isSearching || isInGame || isServerJoinTransition || isClosingOnlineSession)
 		{
 			return;
 		}
@@ -4169,6 +4177,29 @@ namespace Components
 		}
 
 		auto party = Request("GET", "/zwnet/parties/current");
+
+		if (party && party->is_null())
+		{
+			// Recover only a confirmed missing idle pre-lobby, through the same
+			// serialized path used by Online entry. Never create on a failed poll.
+			EnqueueAsync([partyId]
+			{
+				{
+					std::lock_guard _(stateMutex);
+					if (currentPartyId != partyId || presenceUiState != "IN_PARTY") return;
+				}
+				if (!isActive || isSearching || isInGame || isServerJoinTransition || isClosingOnlineSession
+					|| isPlaylistSearchStarting || isPlaylistSelectionStarting) return;
+				auto recovered = CurrentOrNewParty();
+				if (recovered && recovered->is_object() && !recovered->contains("error"))
+				{
+					*recovered = PublishLocalRank(std::move(*recovered));
+					UpdateLobbyDvars(*recovered);
+					UpdatePresence();
+				}
+			});
+			return;
+		}
 
 		if (party && party->is_object() && !party->contains("error"))
 		{
@@ -5675,10 +5706,16 @@ namespace Components
 
 		{
 			std::lock_guard _(stateMutex);
-			hasMatch = !currentMatchId.empty();
+			// An old match identity can survive an IDLE/FINISHED status until
+			// cleanup. It must not freeze a previously unavailable catalog.
+			hasMatch = !currentMatchId.empty() && (IsActiveMatchmakingState(presenceUiState)
+				|| presenceUiState == "JOIN_PREVIEW" || presenceUiState == "COUNTDOWN"
+				|| presenceUiState == "DIRECT_CONNECTION" || presenceUiState == "RELAY_CONNECTION"
+				|| presenceUiState == "POST_MATCH" || presenceUiState == "RESETTING");
 		}
 
-		const bool isPinned = isPlaylistSearchStarting || isPlaylistSelectionStarting || isSearching || isInGame || hasMatch;
+		const bool isPinned = isPlaylistSearchStarting || isPlaylistSelectionStarting || isSearching || isInGame
+			|| isServerJoinTransition || isCompletedMatchReturnPending || hasMatch;
 
 		std::lock_guard _(playlistCatalog.mutex);
 

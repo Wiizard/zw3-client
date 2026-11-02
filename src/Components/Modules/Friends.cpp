@@ -1103,7 +1103,7 @@ namespace Components
 
 				break;
 			case 1:
-				value = SocialIconText("zw3_social_player", user.displayName);
+				value = user.displayName;
 				break;
 			case 2:
 				value = "UNAVAILABLE";

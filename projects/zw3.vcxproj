@@ -1135,6 +1135,9 @@
   </ImportGroup>
   <ItemGroup>
     <ClInclude Include="..\src\Components\Modules\Menu\Actors.hpp" />
+    <ClInclude Include="..\src\Components\Modules\UiScaling.hpp" />
+    <ClInclude Include="..\src\Utils\UiScaling.hpp" />
+    <ClCompile Include="..\src\Components\Modules\UiScaling.cpp" />
     <ClCompile Include="..\src\Components\Modules\Menu\Actors.cpp">
       <ObjectFileName>$(IntDir)\MenuActors.obj</ObjectFileName>
     </ClCompile>

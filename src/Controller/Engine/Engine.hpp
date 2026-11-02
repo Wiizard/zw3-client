@@ -19,6 +19,7 @@ namespace Controller::Engine
 	float ClientFrameTime() noexcept;
 
 	bool IsSprintButtonUpRequired(int client) noexcept;
+	void NotifyStancePress(int client);
 
 	struct LocationSelection
 	{

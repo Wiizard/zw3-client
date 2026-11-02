@@ -99,6 +99,7 @@
 #include "Modules/TextRenderer.hpp"
 #include "Modules/Threading.hpp"
 #include "Modules/UIFeeder.hpp"
+#include "Modules/UiScaling.hpp"
 #include "Modules/UIScript.hpp"
 #include "Modules/Updater.hpp"
 #include "Modules/Vote.hpp"
@@ -209,6 +210,7 @@ namespace Components
 		Register(new DamageFeedback());
 		Register(new Lean());
 		Register(new HudParallax());
+		Register(new UiScaling());
 		Register(new Materials());
 		Register(new NetworkDebug());
 		Register(new PlayerMovement());

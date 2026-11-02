@@ -52,7 +52,6 @@ namespace Controller::Engine
 		void DispatchButtons(const ButtonSet& current, unsigned int time);
 
 		bool ShouldIgnoreRepeat(Mapping::EngineKey key, int repeats, unsigned int time);
-		void ResetScroll(Mapping::EngineKey key, bool isDown, unsigned int time);
 
 		void MenuKeyEvent(Mapping::EngineKey key, bool isDown);
 		bool TryScoreboardKeyEvent(Mapping::EngineKey key);
@@ -78,8 +77,8 @@ namespace Controller::Engine
 		std::array<std::array<bool, 2>, axisCount> isDeflected{};
 		std::array<std::array<bool, 2>, axisCount> wasDeflected{};
 
-		unsigned int nextScroll = 0;
-		unsigned int scrollHoldStart = 0;
-		std::optional<Mapping::EngineKey> scrollHoldKey;
+		std::array<unsigned int, Mapping::engineKeyCount> nextScroll{};
+		std::array<unsigned int, Mapping::engineKeyCount> scrollHoldStart{};
+		std::array<int, Mapping::engineKeyCount> menuKeyRoutes{};
 	};
 }

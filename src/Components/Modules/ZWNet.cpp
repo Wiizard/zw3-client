@@ -6409,31 +6409,6 @@ namespace Components
 		const auto startPhase = JsonString(*status, "start_phase");
 		const auto startSeconds = status->value("start_seconds", joinCountdown);
 
-		// Older services still expose readiness states. Entering matchmaking is
-		// the player's consent to start; satisfy that protocol without a UI gate.
-		if ((state == "READY_CHECK" || state == "WAITING_FOR_READY") && isPartyValid)
-		{
-			std::string playerId;
-			{
-				std::lock_guard _(stateMutex);
-				playerId = currentPlayerId;
-			}
-			const auto* roster = &*party;
-			if (status->contains("lobby") && status->at("lobby").is_object()) roster = &status->at("lobby");
-			if (roster->contains("members") && roster->at("members").is_array())
-			{
-				for (const auto& member : roster->at("members"))
-				{
-					if (JsonString(member, "player_id") == playerId && !IsPartyMemberReady(member))
-					{
-						Request("POST", "/zwnet/parties/" + JsonString(*party, "id") + "/ready");
-						break;
-					}
-				}
-			}
-			if (!isSearching || isInGame || joinTransitionGeneration != transitionGeneration) return;
-		}
-
 		if (state == "ERROR" || state == "FAILED")
 		{
 			isSearching = false;

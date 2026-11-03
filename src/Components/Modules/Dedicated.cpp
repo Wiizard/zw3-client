@@ -15,6 +15,7 @@
 #include "ServerCommands.hpp"
 #include "ZoneBuilder.hpp"
 #include "Utils/ManagedServerPort.hpp"
+#include "Utils/DedicatedTimeBudget.hpp"
 
 #include "Steam/Proxy.hpp"
 
@@ -37,6 +38,8 @@ namespace Components
 	extern "C"
 	{
 		void Com_ClampMsec_Stub();
+		void Dedicated_FrameMsec_Stub();
+		std::uintptr_t Dedicated_FrameMsec_Resume = 0;
 
 		std::uintptr_t Com_Frame_SvRunningSlot = 0;
 
@@ -118,16 +121,43 @@ namespace Components
 	constexpr std::uintptr_t TimeWrap_Com_ErrorCall = 0x14023C1E4;
 	constexpr std::uintptr_t Com_Error = 0x1401F38F0;
 
+	// Dedicated simulation consumes elapsed time once, not the client frame
+	// smoother's rotating accumulated durations. Keep the native clamp and
+	// the subsequent slow-motion/fixedtime/timescale processing intact.
+	constexpr std::uintptr_t Com_Frame_ModifyMsecCall = 0x1401F4468;
+	constexpr std::uintptr_t CL_ModifyMsec = 0x1400F5B30;
+	constexpr std::uintptr_t Com_Frame_SlowMotion = 0x1401F4603;
+	constexpr std::uintptr_t Com_Frame_ServerFrameCall = 0x1401F4756;
+	constexpr std::uintptr_t SV_Frame = 0x14023C500;
+	constexpr std::uintptr_t sv_mainTime = 0x1464FDF0C;
+	constexpr std::uintptr_t sv_timeResidual = 0x1464FDF04;
 	constexpr std::uintptr_t Com_Frame_ClampMsecSite = 0x1401F4432;
 	constexpr std::uintptr_t com_sv_running = 0x141BD9A90;
 
 	static const std::uint8_t clampMsecSite[] = { 0x48, 0x8B, 0x05, 0x57, 0x56, 0x9E, 0x01 };
+	static const std::uint8_t slowMotionSite[] = { 0x80, 0x3D, 0xD6, 0x54, 0x9E, 0x01, 0x00 };
 
 	static Utils::Hook initHook;
 	static Utils::Hook postInitHook;
 	static Utils::Hook timeWrapHook;
 	static Utils::Hook clampMsecHook;
+	static Utils::Hook frameMsecHook;
+	static Utils::Hook serverBudgetHook;
 	static Utils::Hook netPortHook;
+
+	static void ServerFrame(int msec)
+	{
+		const auto* running = *reinterpret_cast<Game::dvar_t**>(Utils::Hook::Rebase(com_sv_running));
+		if (running && running->current.enabled)
+		{
+			// Main-thread-owned scheduling fields. The worker only consumes the
+			// target; retain its native event/VM ownership and timeout handling.
+			auto& target = *reinterpret_cast<int*>(Utils::Hook::Rebase(sv_mainTime));
+			auto& residual = *reinterpret_cast<int*>(Utils::Hook::Rebase(sv_timeResidual));
+			Utils::DedicatedTimeBudget::Reconcile(*Game::svs_time, target, residual);
+		}
+		reinterpret_cast<void(*)(int)>(Utils::Hook::Rebase(SV_Frame))(msec);
+	}
 
 	static Game::dvar_t* RegisterDedicatedNetPort(const char* name, int value, int minimum, int maximum,
 		unsigned int flags, const char* description)
@@ -268,7 +298,10 @@ namespace Components
 			&& Utils::Hook::BranchesTo(NET_Config_RegisterPortCall, Dvar_RegisterInt, HOOK_CALL)
 			&& Utils::Hook::BranchesTo(Com_StartHunkUsers_Com_EventLoopCall, Com_EventLoop, HOOK_CALL)
 			&& Utils::Hook::BranchesTo(TimeWrap_Com_ErrorCall, Com_Error, HOOK_CALL)
-			&& Utils::Hook::MatchesBytes(Com_Frame_ClampMsecSite, clampMsecSite, sizeof(clampMsecSite));
+			&& Utils::Hook::MatchesBytes(Com_Frame_ClampMsecSite, clampMsecSite, sizeof(clampMsecSite))
+			&& Utils::Hook::MatchesBytes(Com_Frame_SlowMotion, slowMotionSite, sizeof(slowMotionSite))
+			&& Utils::Hook::BranchesTo(Com_Frame_ModifyMsecCall, CL_ModifyMsec, HOOK_CALL)
+			&& Utils::Hook::BranchesTo(Com_Frame_ServerFrameCall, SV_Frame, HOOK_CALL);
 
 		if (!areCallsIntact)
 		{
@@ -277,11 +310,14 @@ namespace Components
 		}
 
 		Com_Frame_SvRunningSlot = Utils::Hook::Rebase(com_sv_running);
+		Dedicated_FrameMsec_Resume = Utils::Hook::Rebase(Com_Frame_SlowMotion);
 
 		bool isSeated = initHook.Initialize(Com_Init_CL_InitRendererCall, reinterpret_cast<void*>(InitDedicatedServer), HOOK_CALL)->Install()->IsInstalled();
 		isSeated = netPortHook.Initialize(NET_Config_RegisterPortCall, reinterpret_cast<void*>(RegisterDedicatedNetPort), HOOK_CALL)->Install()->IsInstalled() && isSeated;
 		isSeated = postInitHook.Initialize(Com_StartHunkUsers_Com_EventLoopCall, reinterpret_cast<void*>(Com_EventLoop_Hk), HOOK_CALL)->Install()->IsInstalled() && isSeated;
 		isSeated = timeWrapHook.Initialize(TimeWrap_Com_ErrorCall, reinterpret_cast<void*>(TimeWrapStub), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+		isSeated = frameMsecHook.Initialize(Com_Frame_ModifyMsecCall, reinterpret_cast<void*>(Dedicated_FrameMsec_Stub), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+		isSeated = serverBudgetHook.Initialize(Com_Frame_ServerFrameCall, reinterpret_cast<void*>(ServerFrame), HOOK_CALL)->Install()->IsInstalled() && isSeated;
 		isSeated = clampMsecHook.Initialize(Com_Frame_ClampMsecSite, reinterpret_cast<void*>(Com_ClampMsec_Stub), HOOK_CALL)->Install()->IsInstalled() && isSeated;
 
 		if (!isSeated)
@@ -291,6 +327,8 @@ namespace Components
 			postInitHook.Uninstall();
 			timeWrapHook.Uninstall();
 			clampMsecHook.Uninstall();
+			frameMsecHook.Uninstall();
+			serverBudgetHook.Uninstall();
 			Logger::Error("dedicated: could not seat the engine hooks, the server is not started headless\n");
 			return false;
 		}
@@ -300,6 +338,8 @@ namespace Components
 		postInitHook.Quick();
 		timeWrapHook.Quick();
 		clampMsecHook.Quick();
+		frameMsecHook.Quick();
+		serverBudgetHook.Quick();
 		Utils::Hook::Nop(Com_Frame_ClampMsecSite + 5, 2);
 
 		for (const auto& patch : enginePatches)

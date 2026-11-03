@@ -11,6 +11,7 @@ extern "C"
 	std::uintptr_t Com_Frame_SvRunningSlot = 0;
 	void Dedicated_ComClampMsec(int) {}
 	int TestDedicatedFrameMsec(int elapsed);
+	int TestDedicatedSnapshotInterval(int requested, int tickFloor, int expected);
 }
 
 int main()
@@ -20,6 +21,10 @@ int main()
 	// again when the dedicated loop hands them to native timescale processing.
 	for (const int elapsed : {0, 1, 3, 8, 16, 33, 40, 41, 49, 50, 57, 100, 500})
 		assert(TestDedicatedFrameMsec(elapsed) == 0);
+	// Exercise the production userinfo continuation: online players requesting
+	// snaps 30 reach the 20 Hz simulation floor, while slower requests survive.
+	for (const int requested : {0, 33, 49, 50, 100, 200, 1000, std::numeric_limits<int>::max()})
+		assert(TestDedicatedSnapshotInterval(requested, 50, std::max(requested, 50)) == 0);
 
 	// Reproduce timeout-driven worker progress while the main thread stalls.
 	// Reconciliation must conserve elapsed budget, including across repeated
@@ -67,6 +72,6 @@ int main()
 	}
 	assert(count >= 1033 && count <= 1035);
 	assert(count * 1448 <= 25000 * 60 + 1448);
-	std::cout << "13 production MASM timing cases, 8 worker budget cases and 11 snapshot scheduling checks passed; "
+	std::cout << "13 production MASM timing cases, 8 production MASM snapshot intervals, 8 worker budget cases and 11 snapshot scheduling checks passed; "
 		<< count << " snapshots/60s within the native byte budget\n";
 }

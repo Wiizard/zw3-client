@@ -1,5 +1,6 @@
 EXTERN Dedicated_FrameMsec_Stub:PROC
 EXTERN Dedicated_FrameMsec_Resume:QWORD
+EXTERN Dedicated_SnapshotInterval_Stub:PROC
 
 .code
 
@@ -46,5 +47,34 @@ done:
 	pop rbx
 	ret
 TestDedicatedFrameMsec ENDP
+
+TestDedicatedSnapshotInterval PROC FRAME
+	push rsi
+	.pushreg rsi
+	sub rsp, 20h
+	.allocstack 20h
+	.endprolog
+	mov esi, edx
+	mov eax, ecx
+	mov r9d, ecx
+	mov r10, rsp
+	call Dedicated_SnapshotInterval_Stub
+	cmp eax, r9d
+	jne failed
+	cmp esi, edx
+	jne failed
+	cmp rsp, r10
+	jne failed
+	cmp ecx, r8d
+	jne failed
+	xor eax, eax
+	jmp finished
+failed:
+	mov eax, 1
+finished:
+	add rsp, 20h
+	pop rsi
+	ret
+TestDedicatedSnapshotInterval ENDP
 
 END

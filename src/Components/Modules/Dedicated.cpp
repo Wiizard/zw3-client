@@ -39,6 +39,7 @@ namespace Components
 	{
 		void Com_ClampMsec_Stub();
 		void Dedicated_FrameMsec_Stub();
+		void Dedicated_SnapshotInterval_Stub();
 		std::uintptr_t Dedicated_FrameMsec_Resume = 0;
 
 		std::uintptr_t Com_Frame_SvRunningSlot = 0;
@@ -133,9 +134,17 @@ namespace Components
 	constexpr std::uintptr_t sv_timeResidual = 0x1464FDF04;
 	constexpr std::uintptr_t Com_Frame_ClampMsecSite = 0x1401F4432;
 	constexpr std::uintptr_t com_sv_running = 0x141BD9A90;
+	constexpr std::uintptr_t SV_UserinfoChanged_SnapshotFloor = 0x140239989;
+	constexpr std::uintptr_t SV_UserinfoChanged_OnlineSnapshot = 0x1402399CD;
 
 	static const std::uint8_t clampMsecSite[] = { 0x48, 0x8B, 0x05, 0x57, 0x56, 0x9E, 0x01 };
 	static const std::uint8_t slowMotionSite[] = { 0x80, 0x3D, 0xD6, 0x54, 0x9E, 0x01, 0x00 };
+	static const std::uint8_t snapshotFloorSite[] = { 0xBE, 0x32, 0x00, 0x00, 0x00 };
+	static const std::uint8_t onlineSnapshotSite[] =
+	{
+		0xB9, 0x64, 0x00, 0x00, 0x00, 0x48, 0x8B, 0x05, 0x9F, 0xB6, 0xAC, 0x00,
+		0x80, 0x78, 0x10, 0x00, 0x0F, 0x44, 0xCE, 0x89, 0x8D, 0xEC, 0x12, 0x02, 0x00
+	};
 
 	static Utils::Hook initHook;
 	static Utils::Hook postInitHook;
@@ -143,6 +152,7 @@ namespace Components
 	static Utils::Hook clampMsecHook;
 	static Utils::Hook frameMsecHook;
 	static Utils::Hook serverBudgetHook;
+	static Utils::Hook snapshotIntervalHook;
 	static Utils::Hook netPortHook;
 
 	static void ServerFrame(int msec)
@@ -301,7 +311,9 @@ namespace Components
 			&& Utils::Hook::MatchesBytes(Com_Frame_ClampMsecSite, clampMsecSite, sizeof(clampMsecSite))
 			&& Utils::Hook::MatchesBytes(Com_Frame_SlowMotion, slowMotionSite, sizeof(slowMotionSite))
 			&& Utils::Hook::BranchesTo(Com_Frame_ModifyMsecCall, CL_ModifyMsec, HOOK_CALL)
-			&& Utils::Hook::BranchesTo(Com_Frame_ServerFrameCall, SV_Frame, HOOK_CALL);
+			&& Utils::Hook::BranchesTo(Com_Frame_ServerFrameCall, SV_Frame, HOOK_CALL)
+			&& Utils::Hook::MatchesBytes(SV_UserinfoChanged_SnapshotFloor, snapshotFloorSite, sizeof(snapshotFloorSite))
+			&& Utils::Hook::MatchesBytes(SV_UserinfoChanged_OnlineSnapshot, onlineSnapshotSite, sizeof(onlineSnapshotSite));
 
 		if (!areCallsIntact)
 		{
@@ -318,6 +330,7 @@ namespace Components
 		isSeated = timeWrapHook.Initialize(TimeWrap_Com_ErrorCall, reinterpret_cast<void*>(TimeWrapStub), HOOK_CALL)->Install()->IsInstalled() && isSeated;
 		isSeated = frameMsecHook.Initialize(Com_Frame_ModifyMsecCall, reinterpret_cast<void*>(Dedicated_FrameMsec_Stub), HOOK_CALL)->Install()->IsInstalled() && isSeated;
 		isSeated = serverBudgetHook.Initialize(Com_Frame_ServerFrameCall, reinterpret_cast<void*>(ServerFrame), HOOK_CALL)->Install()->IsInstalled() && isSeated;
+		isSeated = snapshotIntervalHook.Initialize(SV_UserinfoChanged_OnlineSnapshot, reinterpret_cast<void*>(Dedicated_SnapshotInterval_Stub), HOOK_CALL)->Install()->IsInstalled() && isSeated;
 		isSeated = clampMsecHook.Initialize(Com_Frame_ClampMsecSite, reinterpret_cast<void*>(Com_ClampMsec_Stub), HOOK_CALL)->Install()->IsInstalled() && isSeated;
 
 		if (!isSeated)
@@ -329,6 +342,7 @@ namespace Components
 			clampMsecHook.Uninstall();
 			frameMsecHook.Uninstall();
 			serverBudgetHook.Uninstall();
+			snapshotIntervalHook.Uninstall();
 			Logger::Error("dedicated: could not seat the engine hooks, the server is not started headless\n");
 			return false;
 		}
@@ -340,6 +354,11 @@ namespace Components
 		clampMsecHook.Quick();
 		frameMsecHook.Quick();
 		serverBudgetHook.Quick();
+		snapshotIntervalHook.Quick();
+		// Retain the parsed client interval with the native 50 ms tick floor.
+		// The onlinegame branch otherwise overwrites every request with 100 ms.
+		// Keep onlinegame itself and the native snapshot byte-rate cap unchanged.
+		Utils::Hook::Nop(SV_UserinfoChanged_OnlineSnapshot + 5, 14);
 		Utils::Hook::Nop(Com_Frame_ClampMsecSite + 5, 2);
 
 		for (const auto& patch : enginePatches)

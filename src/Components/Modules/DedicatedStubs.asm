@@ -31,4 +31,14 @@ Dedicated_FrameMsec_Stub PROC
 	jmp qword ptr [Dedicated_FrameMsec_Resume]
 Dedicated_FrameMsec_Stub ENDP
 
+; EAX contains the validated client snapshot interval; ESI is the native
+; 50 ms simulation tick. Do not overwrite the client's slower request or
+; allow snapshots faster than the simulation. ECX feeds the original store.
+Dedicated_SnapshotInterval_Stub PROC
+	mov ecx, eax
+	cmp ecx, esi
+	cmovl ecx, esi
+	ret
+Dedicated_SnapshotInterval_Stub ENDP
+
 END

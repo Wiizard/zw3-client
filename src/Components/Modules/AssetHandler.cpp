@@ -2266,6 +2266,9 @@ namespace Components
 			}
 			Logger::Print("renderer budgets: lighting minimum {}, scene surface bytes {}, applied {}\n",
 				RenderBudgetPolicy::minimumStaticLighting, RenderBudgetPolicy::sceneSurfaceBytes, raised);
+			const bool commandsRaised = RendererBudgets::RaiseModelCommands();
+			Logger::Print("renderer budgets: model command records {}, applied {}\n",
+				RenderBudgetPolicy::modelCommandSlots, commandsRaised);
 		}
 
 

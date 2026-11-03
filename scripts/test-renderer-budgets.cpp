@@ -543,6 +543,8 @@ int main(int argc, char** argv)
 		const auto count = *reinterpret_cast<const unsigned*>(fixture.data());
 		const auto types = *reinterpret_cast<const unsigned*>(fixture.data() + 4);
 		assert(count <= 65535 && types <= 65535 && fixture.size() == 8 + 256 + count * 125 + types * 4);
+		const unsigned watchedModel = count == 34298 ? 30497 : 56202;
+		assert(watchedModel < count);
 		std::memcpy(reinterpret_cast<void*>(Utils::Hook::image + 0x8cca400), fixture.data() + 8, 256);
 		auto* sourceDraws = fixture.data() + 264;
 		auto* sourceVis = sourceDraws + count * 88;
@@ -603,7 +605,7 @@ int main(int argc, char** argv)
 			if (!n) break;
 			const auto bytes = (n * 2 + 13) & ~3u;
 			assert(n <= 128 && at + bytes <= 0x4000);
-			for (unsigned j = 0; j < n; ++j) stockHasCrane |= *reinterpret_cast<const std::uint16_t*>(record + 10 + j * 2) == 56202;
+			for (unsigned j = 0; j < n; ++j) stockHasCrane |= *reinterpret_cast<const std::uint16_t*>(record + 10 + j * 2) == watchedModel;
 			stockReplaySubmitted += n; at += bytes;
 		}
 		std::cerr << "Stock replay: submitted " << stockReplaySubmitted << ", warning14 " << warnings[14] << ", crane " << stockHasCrane << '\n';
@@ -631,13 +633,16 @@ int main(int argc, char** argv)
 			}
 		}
 		replayExpected = static_cast<unsigned>(std::count_if(visibility.begin(), visibility.end(), [](auto value) { return value != 0; }));
-		assert(replaySubmitted == replayExpected && replayExpected > 3698 && visibility[56202] == 2);
+		assert(replaySubmitted == replayExpected && replayExpected > 3698 && visibility[watchedModel] == 2);
 		assert(stockReplaySubmitted < replaySubmitted);
 		assert(warnings[14] == 0 && warnings[15] == 0);
 		// Use the archived bounds to test eight complete camera frustums at each
 		// reported problem area, then let the actual native distance test decide.
-		for (const auto eye : {std::array<float,3>{857,-5332,152}, {2923,-5110,228}, {2627,-3059,-244}, {1704,-4087,329},
-			{3502,-5117,287}, {2740,-5340,170}, {1853,-2721,-271}, {1500,-5117,287}, {500,-5340,170}})
+		const std::vector<std::array<float, 3>> cameraPositions = count == 34298
+			? std::vector<std::array<float, 3>>{{-1067,2112,1254}, {71,2454,1302}, {-1267,2250,684}, {-1032,2393,667}}
+			: std::vector<std::array<float, 3>>{{857,-5332,152}, {2923,-5110,228}, {2627,-3059,-244}, {1704,-4087,329},
+				{3502,-5117,287}, {2740,-5340,170}, {1853,-2721,-271}, {1500,-5117,287}, {500,-5340,170}};
+		for (const auto eye : cameraPositions)
 		{
 		for (unsigned heading = 0; heading < 8; ++heading)
 		{

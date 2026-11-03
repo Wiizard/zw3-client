@@ -2972,7 +2972,10 @@ namespace Components
 
 		UIScript::Add("SaveQuitToPrivateLobby", [](const UIScript::Token&)
 		{
-			const bool isPrivateMatchHost = IsHostingParty() && Dvar::Var("xblive_privatematch").Get<bool>();
+			// A matchmaking (managed) match is never a private match, even for the
+			// party leader: never recreate the private lobby over the matchmaking one.
+			const bool isPrivateMatchHost = IsHostingParty() && Dvar::Var("xblive_privatematch").Get<bool>()
+				&& !Dvar::Var("zwnet_managed_session").Get<bool>();
 
 			if (!isPrivateMatchHost)
 			{

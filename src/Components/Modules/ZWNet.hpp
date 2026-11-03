@@ -36,7 +36,7 @@ namespace Components
 		static void Register();
 		static void SetState(const std::string& state, const std::string& error = {});
 		static std::optional<nlohmann::json> CurrentOrNewParty();
-		static void StartQuickPlay(const std::string& playlistId, std::int64_t playlistRevision, std::uint64_t selectorGeneration, bool isQuickPlay);
+		static void StartQuickPlay(std::string playlistId, std::int64_t playlistRevision, std::uint64_t selectorGeneration, bool isQuickPlay);
 		static void RefreshPlaylistCatalog(bool isForced = false);
 		static void ClearPlaylistCatalog();
 		static void BeginPlaylistSelection();
@@ -46,6 +46,9 @@ namespace Components
 		static void ActivateQuickPlay();
 		static void ActivatePlaylist(const std::string& playlistId, std::int64_t playlistRevision, bool isQuickPlay);
 		static void ChangePlaylistPage(int direction);
+		static void ToggleQuickPlayFilterSlot(int slot);
+		static void SelectAllQuickPlayFilter();
+		static void ChangeQuickPlayFilterPage(int direction);
 		static void AcknowledgePlaylistNotice();
 		static void PublishPlaylistCatalog();
 		static void SchedulePlaylistCatalogPublish();
@@ -54,7 +57,8 @@ namespace Components
 		static void RefreshPartyVisibility();
 		static void CapturePartyPrivacy();
 		static void CancelSearch();
-		static void CancelMatchmaking();
+		static void CancelMatchmaking(bool openFindMatch = true);
+		static void ScheduleMatchmakingLobby(bool openFindMatch);
 		static void CloseOnlineSession(bool isShuttingDown, bool isTerminal);
 		static void HandleServerDisconnect(bool isTerminal, bool wasMatchmaking, Events::NativeDisconnectError nativeError, bool wasInGame);
 		static bool ReturnToMatchmakingLobby(bool requireAssignedCompletion = false);

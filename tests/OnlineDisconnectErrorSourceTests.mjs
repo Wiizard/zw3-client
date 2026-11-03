@@ -10,7 +10,7 @@ const handling = source.slice(source.indexOf('void ZWNet::HandleServerDisconnect
 
 test('native error snapshot is captured in the callback and copied before asynchronous cleanup', () => {
   assert.ok(disconnected.indexOf('Events::CurrentNativeDisconnectError()') < disconnected.indexOf('isInGame.exchange(false)'));
-  assert.match(disconnected, /EnqueueAsync\(\[isTerminal, wasMatchmaking, nativeError, disconnectGeneration, wasConnected, wasInGame\]/);
+  assert.match(disconnected, /EnqueueAsync\(\[isTerminal, wasMatchmaking, nativeError, disconnectGeneration, wasConnected, wasInGame, returnToLobby\]/);
   assert.match(disconnected, /HandleServerDisconnect\(isTerminal, wasMatchmaking, nativeError, wasInGame\)/);
   assert.match(disconnected, /isServerJoinTransition\.exchange\(false\) && !nativeError\.hasNativeError/);
   assert.doesNotMatch(disconnected, /nativeError\.(message|title)/);

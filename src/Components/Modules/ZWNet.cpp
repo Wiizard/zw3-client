@@ -14,6 +14,7 @@
 #include "LobbyScene.hpp"
 #include "Logger.hpp"
 #include "Maps.hpp"
+#include "Materials.hpp"
 #include "Party.hpp"
 #include "Scheduler.hpp"
 #include "TextRenderer.hpp"
@@ -241,8 +242,7 @@ namespace Components
 	{
 		return state == "IDLE" || state == "IN_PARTY"
 			|| state == "SEARCHING" || state == "MATCH_FOUND"
-			|| state == "MAP_VOTE" || state == "READY_CHECK"
-			|| state == "WAITING_FOR_READY" || state == "RESERVING_SERVER"
+			|| state == "MAP_VOTE" || state == "RESERVING_SERVER"
 			|| state == "STARTING_SERVER" || state == "SERVER_STARTING"
 			|| state == "CONNECTING" || state == "IN_MATCH";
 	}
@@ -456,7 +456,7 @@ namespace Components
 			uiState = presenceUiState;
 		}
 		constexpr std::string_view knownStates[] = { "OFFLINE", "ONLINE", "IDLE", "IN_PARTY", "SEARCH_STARTING", "SEARCHING",
-			"MATCH_FOUND", "MAP_VOTE", "READY_CHECK", "WAITING_FOR_READY", "RESERVING_SERVER", "SERVER_STARTING", "COUNTDOWN",
+			"MATCH_FOUND", "MAP_VOTE", "RESERVING_SERVER", "SERVER_STARTING", "COUNTDOWN",
 			"JOIN_PREVIEW", "DIRECT_CONNECTION", "RELAY_CONNECTION", "CONNECTING", "IN_MATCH", "ERROR" };
 		if (std::ranges::find(knownStates, uiState) == std::end(knownStates)) uiState = "OTHER";
 		const auto nativeState = Game::CL_GetLocalClientConnectionState(0);
@@ -1925,8 +1925,6 @@ namespace Components
 			{ "IN_PARTY", "IN PARTY" },
 			{ "MATCH_FOUND", "MATCH FOUND" },
 			{ "MAP_VOTE", "MAP VOTE" },
-			{ "READY_CHECK", "WAITING FOR READY" },
-			{ "WAITING_FOR_READY", "WAITING FOR READY" },
 			{ "RESERVING_SERVER", "RESERVING SERVER" },
 			{ "STARTING_SERVER", "SERVER STARTING" },
 			{ "SERVER_STARTING", "SERVER STARTING" },
@@ -2037,8 +2035,7 @@ namespace Components
 
 	static bool IsActiveMatchmakingState(const std::string& state)
 	{
-		return state == "SEARCHING" || state == "MATCH_FOUND" || state == "MAP_VOTE"
-			|| state == "READY_CHECK" || state == "WAITING_FOR_READY" || state == "RESERVING_SERVER"
+		return state == "SEARCHING" || state == "MATCH_FOUND" || state == "MAP_VOTE" || state == "RESERVING_SERVER"
 			|| state == "STARTING_SERVER" || state == "SERVER_STARTING" || state == "CONNECTING"
 			|| state == "IN_MATCH";
 	}
@@ -2098,7 +2095,6 @@ namespace Components
 	{
 		Dvar::Var("zwnet_vote_active").Set(false);
 		Dvar::Var("zwnet_vote_selection").Set("");
-		Dvar::Var("zwnet_all_ready").Set(false);
 		Dvar::Var("zwnet_start_phase").Set("");
 		Dvar::Var("zwnet_start_seconds").Set(0);
 		Dvar::Var("zwnet_vote_reveal_time").Set(0);
@@ -2116,7 +2112,6 @@ namespace Components
 		Dvar::Var(prefix + "_name").Set("");
 		Dvar::Var(prefix + "_guid").Set("");
 		Dvar::Var(prefix + "_role").Set("");
-		Dvar::Var(prefix + "_ready").Set(false);
 		Dvar::Var(prefix + "_self").Set(false);
 		Dvar::Var(prefix + "_shared_rank_known").Set(false);
 		Dvar::Var(prefix + "_shared_rank_level").Set(1);
@@ -2706,7 +2701,6 @@ namespace Components
 		Dvar::Var("zwnet_lobby_member_count").Set(0);
 		Dvar::Var("zwnet_lobby_status_text").Set("IDLE");
 		Dvar::Var("zwnet_lobby_can_start").Set(false);
-		Dvar::Var("zwnet_lobby_self_ready").Set(false);
 
 		for (std::size_t i = 0; i < 4; ++i)
 		{
@@ -3340,7 +3334,7 @@ namespace Components
 			return;
 		}
 
-		if (!party || party->is_null())
+		if (party && party->is_null())
 		{
 			party = Request("POST", "/zwnet/parties/create", { { "visibility", PartyVisibilityName(desiredPartyPrivacy.load()) } });
 
@@ -3731,33 +3725,6 @@ namespace Components
 		return party;
 	}
 
-	static bool IsPartyMemberReady(const nlohmann::json& member)
-	{
-		if (!member.is_object())
-		{
-			return false;
-		}
-
-		const auto ready = member.find("ready");
-
-		if (ready == member.end())
-		{
-			return false;
-		}
-
-		if (ready->is_boolean())
-		{
-			return ready->get<bool>();
-		}
-
-		if (ready->is_number_integer())
-		{
-			return ready->get<std::int64_t>() == 1;
-		}
-
-		return false;
-	}
-
 	void ZWNet::UpdateLobbyDvars(const nlohmann::json& party)
 	{
 		if (party.is_null() || !party.is_object())
@@ -3850,9 +3817,6 @@ namespace Components
 			Dvar::Var("zwnet_lobby_member_count").Set(static_cast<int>(members.size()));
 			SetDisplayText("zwnet_lobby_status_text", stateText);
 
-			bool isAllReady = !members.empty();
-			bool isSelfReady = false;
-
 			for (std::size_t i = 0; i < 4; ++i)
 			{
 				const auto prefix = std::format("zwnet_lobby_member_{}", i);
@@ -3865,7 +3829,6 @@ namespace Components
 
 				const auto& member = members[i];
 				const auto memberId = JsonString(member, "player_id");
-				const bool isReady = IsPartyMemberReady(member);
 				const bool isSelf = memberId == playerId;
 
 				Dvar::Var(prefix + "_name").Set(SafeDisplayName(JsonString(member, "display_name")));
@@ -3880,7 +3843,6 @@ namespace Components
 					Dvar::Var(prefix + "_role").Set("MEMBER");
 				}
 
-				Dvar::Var(prefix + "_ready").Set(isReady);
 				Dvar::Var(prefix + "_self").Set(isSelf);
 
 				const auto rank = sharedRanks.find(memberId);
@@ -3898,19 +3860,10 @@ namespace Components
 					Dvar::Var(prefix + "_shared_rank_level").Set(1);
 					Dvar::Var(prefix + "_shared_rank_prestige").Set(0);
 				}
-
-				isAllReady = isAllReady && isReady;
-
-				if (isSelf)
-				{
-					isSelfReady = isReady;
-				}
 			}
 
-			const bool canStart = playerId == leaderId && isAllReady && state != "SEARCHING" && state != "IN_MATCH";
+			const bool canStart = playerId == leaderId && !members.empty() && (state == "IDLE" || state == "CONFIGURING" || state == "ERROR");
 
-			Dvar::Var("zwnet_lobby_self_ready").Set(isSelfReady);
-			Dvar::Var("zwnet_all_ready").Set(isAllReady);
 			Dvar::Var("zwnet_lobby_can_start").Set(canStart);
 		}, Scheduler::Pipeline::MAIN);
 	}
@@ -4280,10 +4233,16 @@ namespace Components
 
 			Dvar::Var("zwnet_lobby_active").Set(false);
 			Dvar::Var("zwnet_vote_active").Set(false);
-			Dvar::Var("zwnet_all_ready").Set(false);
 			Dvar::Var("zwnet_start_phase").Set("");
 			Dvar::Var("zwnet_start_seconds").Set(0);
 		}, Scheduler::Pipeline::MAIN);
+	}
+
+	static std::atomic<std::uint64_t> matchUiSnapshotGeneration{ 0 };
+
+	static bool IsCurrentMatchUi(const std::uint64_t transition, const std::uint64_t snapshot)
+	{
+		return isActive && transition == joinTransitionGeneration && snapshot == matchUiSnapshotGeneration;
 	}
 
 	struct LobbyMemberSnapshot
@@ -4291,14 +4250,14 @@ namespace Components
 		std::string playerId;
 		std::string displayName;
 		std::string role;
-		bool isReady = false;
 		bool isRankKnown = false;
 		int rankLevel = 1;
 		int rankPrestige = 0;
 	};
 
-	void ZWNet::UpdateMatchLobbyDvars(const nlohmann::json& status)
+	void ZWNet::UpdateMatchLobbyDvars(const nlohmann::json& status, const std::uint64_t uiTransition, const std::uint64_t uiSnapshot)
 	{
+		if (!IsCurrentMatchUi(uiTransition, uiSnapshot)) return;
 		if (!status.contains("lobby") || !status.at("lobby").is_object())
 		{
 			return;
@@ -4367,20 +4326,11 @@ namespace Components
 				snapshot.isRankKnown = Friends::TryGetZombieRankByGuid(snapshot.playerId, snapshot.rankLevel, snapshot.rankPrestige);
 			}
 
-			const auto ready = member.find("ready");
 
-			if (ready != member.end() && ready->is_boolean())
-			{
-				snapshot.isReady = ready->get<bool>();
-			}
-			else if (ready != member.end() && ready->is_number_integer())
-			{
-				snapshot.isReady = ready->get<std::int64_t>() != 0;
-			}
 		}
 
 		const auto soundDelta = ObserveMatchLobbyMembers(JsonString(status, "match_id"), memberIds);
-		const auto lobbyState = JsonString(status, "state", "WAITING_FOR_READY");
+		const auto lobbyState = JsonString(status, "state", "MAP_VOTE");
 
 		cachedPartyMemberCount = static_cast<int>(memberCount);
 		isCachedPartyJoinStateSupported = IsPartyJoinStateSupported(lobbyState);
@@ -4395,9 +4345,9 @@ namespace Components
 			playerId = currentPlayerId;
 		}
 
-		Scheduler::Once([members = std::move(members), memberCount, stateText, playerId, sharedRanks, soundDelta]
+		Scheduler::Once([members = std::move(members), memberCount, stateText, playerId, sharedRanks, soundDelta, uiTransition, uiSnapshot]
 		{
-			if (!isActive)
+			if (!IsCurrentMatchUi(uiTransition, uiSnapshot))
 			{
 				return;
 			}
@@ -4405,9 +4355,6 @@ namespace Components
 			Dvar::Var("zwnet_lobby_active").Set(true);
 			Dvar::Var("zwnet_lobby_member_count").Set(static_cast<int>(memberCount));
 			SetDisplayText("zwnet_lobby_status_text", stateText);
-
-			bool isAllReady = memberCount > 0;
-			bool isSelfReady = false;
 
 			for (std::size_t i = 0; i < members.size(); ++i)
 			{
@@ -4426,7 +4373,6 @@ namespace Components
 				Dvar::Var(prefix + "_name").Set(member.displayName);
 				SetDisplayText(prefix + "_guid", member.playerId);
 				SetDisplayText(prefix + "_role", member.role);
-				Dvar::Var(prefix + "_ready").Set(member.isReady);
 				Dvar::Var(prefix + "_self").Set(member.playerId == playerId);
 				Dvar::Var(prefix + "_shared_rank_known").Set(member.isRankKnown || isSharedRankKnown);
 
@@ -4445,17 +4391,8 @@ namespace Components
 					Dvar::Var(prefix + "_shared_rank_level").Set(1);
 					Dvar::Var(prefix + "_shared_rank_prestige").Set(0);
 				}
-
-				isAllReady = isAllReady && member.isReady;
-
-				if (member.playerId == playerId)
-				{
-					isSelfReady = member.isReady;
-				}
 			}
 
-			Dvar::Var("zwnet_lobby_self_ready").Set(isSelfReady);
-			Dvar::Var("zwnet_all_ready").Set(isAllReady);
 			Dvar::Var("zwnet_lobby_can_start").Set(false);
 
 			if (soundDelta.hasLeft)
@@ -4504,7 +4441,7 @@ namespace Components
 		{
 			status = "CONNECTING";
 		}
-		else if (uiState == "READY_CHECK" || uiState == "WAITING_FOR_READY" || uiState == "MATCH_FOUND")
+		else if (uiState == "MATCH_FOUND")
 		{
 			status = "IN_PARTY";
 		}
@@ -4525,63 +4462,6 @@ namespace Components
 		if (!result || result->contains("error"))
 		{
 			Logger::Print("ZWNET presence update failed; matchmaking state preserved\n");
-		}
-	}
-
-	static void ClearReadyPending()
-	{
-		Scheduler::Once([]
-		{
-			if (isActive)
-			{
-				Dvar::Var("zwnet_ready_pending").Set(false);
-			}
-		}, Scheduler::Pipeline::MAIN);
-	}
-
-	void ZWNet::ToggleReady(const bool isReady)
-	{
-		std::string partyId;
-
-		{
-			std::lock_guard _(stateMutex);
-			partyId = currentPartyId;
-		}
-
-		if (partyId.empty())
-		{
-			ClearReadyPending();
-			return;
-		}
-
-		std::string action = "/ready";
-
-		if (isReady)
-		{
-			action = "/unready";
-		}
-
-		const auto result = Request("POST", "/zwnet/parties/" + partyId + action);
-		ClearReadyPending();
-
-		if (!result || result->contains("error"))
-		{
-			return;
-		}
-
-		Scheduler::Once([isReady]
-		{
-			if (isActive)
-			{
-				Dvar::Var("zwnet_lobby_self_ready").Set(!isReady);
-			}
-		}, Scheduler::Pipeline::MAIN);
-
-		UpdateLobbyDvars(*result);
-
-		if (isSearching)
-		{
-			UpdateMatchmaking();
 		}
 	}
 
@@ -4617,19 +4497,28 @@ namespace Components
 
 	void ZWNet::VoteMap(const std::string& choice)
 	{
-		std::string proposalId;
+		const auto uiTransition = joinTransitionGeneration.load();
+		const auto uiSnapshot = matchUiSnapshotGeneration.load();
+		std::string proposalId, matchId;
 
 		{
 			std::lock_guard _(stateMutex);
 			proposalId = currentProposalId;
+			matchId = currentMatchId;
 		}
 
-		if (proposalId.empty())
+		if (proposalId.empty() || !IsCurrentMatchUi(uiTransition, uiSnapshot))
 		{
 			return;
 		}
 
 		const auto result = Request("POST", "/zwnet/matchmaking/map-vote", { { "proposal_id", proposalId }, { "choice", choice } });
+
+		if (!IsCurrentMatchUi(uiTransition, uiSnapshot)) return;
+		{
+			std::lock_guard _(stateMutex);
+			if (currentProposalId != proposalId || currentMatchId != matchId) return;
+		}
 
 		if (!result)
 		{
@@ -4655,14 +4544,6 @@ namespace Components
 			return;
 		}
 
-		Scheduler::Once([choice]
-		{
-			if (isActive)
-			{
-				Dvar::Var("zwnet_vote_selection").Set(choice);
-			}
-		}, Scheduler::Pipeline::MAIN);
-
 		const nlohmann::json* vote = nullptr;
 
 		if (result->contains("map_vote") && result->at("map_vote").is_object())
@@ -4679,14 +4560,7 @@ namespace Components
 			return;
 		}
 
-		std::string matchId;
-
-		{
-			std::lock_guard _(stateMutex);
-			matchId = currentMatchId;
-		}
-
-		UpdateVoteDvars({ { "match_id", matchId }, { "map_vote", *vote } });
+		UpdateVoteDvars({ { "match_id", matchId }, { "map_vote", *vote } }, uiTransition, uiSnapshot);
 	}
 
 	void ZWNet::CancelSearch()
@@ -4884,6 +4758,9 @@ namespace Components
 		{
 			return false;
 		}
+
+		const auto partyState = JsonString(*party, "state");
+		if (partyState != "IDLE" && partyState != "CONFIGURING") return false;
 
 		*party = PublishLocalRank(std::move(*party));
 		if (generation != joinTransitionGeneration) return false;
@@ -5696,29 +5573,23 @@ namespace Components
 
 	static std::string ResolveVoteMapImage(const std::string& mapId, const std::string& serverImage)
 	{
-		if (!mapId.empty())
+		if (mapId.empty()) return {};
+		const std::array<std::string, 3> candidates{
+			Localization::GetMapImageName(mapId.data()), "preview_" + mapId, serverImage
+		};
+		for (const auto& imageName : candidates)
 		{
-			const char* const arenaImage = Localization::GetMapImageName(mapId.data());
-
-			if (arenaImage[0])
+			if (!imageName.starts_with("preview_") || imageName.starts_with("preview_mp_mp_")
+				|| imageName.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != std::string::npos) continue;
+			const auto materialName = "zw3_vote_" + imageName;
+			if (Materials::GetRuntimeMaterial(materialName)) return materialName;
+			if (auto* image = Materials::LoadPreviewImage(imageName))
 			{
-				return arenaImage;
+				if (Materials::Create(materialName, image)) return materialName;
+				Materials::DeleteImage(image);
 			}
 		}
-
-		const bool isServerPreview = serverImage != mapId && serverImage.starts_with("preview_") && !serverImage.starts_with("preview_mp_mp_");
-
-		if (isServerPreview)
-		{
-			return serverImage;
-		}
-
-		if (!mapId.empty())
-		{
-			return "preview_" + mapId;
-		}
-
-		return serverImage;
+		return {};
 	}
 
 	static std::string ResolveVoteMapDisplayName(const std::string& mapId, const std::string& serverName)
@@ -6120,8 +5991,9 @@ namespace Components
 		}, Scheduler::Pipeline::MAIN);
 	}
 
-	void ZWNet::UpdateVoteDvars(const nlohmann::json& status)
+	void ZWNet::UpdateVoteDvars(const nlohmann::json& status, const std::uint64_t uiTransition, const std::uint64_t uiSnapshot)
 	{
+		if (!IsCurrentMatchUi(uiTransition, uiSnapshot)) return;
 		if (!status.contains("map_vote"))
 		{
 			return;
@@ -6135,17 +6007,17 @@ namespace Components
 			return;
 		}
 
-		const auto isAllReady = status.value("all_ready", false);
 
 		{
 			std::lock_guard _(stateMutex);
+			if (!IsCurrentMatchUi(uiTransition, uiSnapshot)) return;
 			currentProposalId = JsonString(vote, "proposal_id");
 			currentMatchId = JsonString(status, "match_id");
 		}
 
-		Scheduler::Once([vote, choices, isAllReady]
+		Scheduler::Once([vote, choices, uiTransition, uiSnapshot]
 		{
-			if (!isActive)
+			if (!IsCurrentMatchUi(uiTransition, uiSnapshot))
 			{
 				return;
 			}
@@ -6158,7 +6030,6 @@ namespace Components
 			}
 
 			Dvar::Var("zwnet_vote_active").Set(true);
-			Dvar::Var("zwnet_all_ready").Set(isAllReady);
 			Dvar::Var("zwnet_start_phase").Set("");
 			Dvar::Var("zwnet_start_seconds").Set(0);
 			SetDisplayText("zwnet_vote_proposal_id", JsonString(vote, "proposal_id"));
@@ -6191,12 +6062,7 @@ namespace Components
 		serverStatus = "NOT ASSIGNED";
 		joinStatus = "WAITING IN LOBBY";
 
-		if (state == "WAITING_FOR_READY")
-		{
-			serverStatus = "START LOCKED";
-			joinStatus = "WAITING FOR ALL PLAYERS";
-		}
-		else if (state == "RESERVING_SERVER")
+		if (state == "RESERVING_SERVER")
 		{
 			serverStatus = "ALLOCATING SERVER";
 			joinStatus = "MAP LOCKED";
@@ -6263,14 +6129,15 @@ namespace Components
 			return;
 		}
 
+		const auto uiSnapshot = ++matchUiSnapshotGeneration;
+
 		if (status->contains("lobby") && status->at("lobby").is_object())
 		{
-			UpdateMatchLobbyDvars(*status);
+			UpdateMatchLobbyDvars(*status, transitionGeneration, uiSnapshot);
 		}
 
 		const auto state = JsonString(*status, "state", "SEARCHING");
 		const auto joinCountdown = status->value("join_countdown_seconds", 0);
-		const auto isAllReady = status->value("all_ready", false);
 		const auto startPhase = JsonString(*status, "start_phase");
 		const auto startSeconds = status->value("start_seconds", joinCountdown);
 
@@ -6297,7 +6164,7 @@ namespace Components
 
 		if (state == "MAP_VOTE")
 		{
-			UpdateVoteDvars(*status);
+			UpdateVoteDvars(*status, transitionGeneration, uiSnapshot);
 		}
 		else
 		{
@@ -6323,9 +6190,9 @@ namespace Components
 			std::string joinStatus;
 			ServerStatusText(state, joinCountdown, serverStatus, joinStatus);
 
-			Scheduler::Once([map, mapName, mapImage, matchId, serverStatus, joinStatus, joinCountdown, isAllReady, startPhase, startSeconds]
+			Scheduler::Once([map, mapName, mapImage, matchId, serverStatus, joinStatus, joinCountdown, startPhase, startSeconds, transitionGeneration, uiSnapshot]
 			{
-				if (!isActive)
+				if (!IsCurrentMatchUi(transitionGeneration, uiSnapshot))
 				{
 					return;
 				}
@@ -6333,7 +6200,6 @@ namespace Components
 				const bool wasVoting = Dvar::Var("zwnet_vote_active").Get<bool>();
 
 				Dvar::Var("zwnet_vote_active").Set(false);
-				Dvar::Var("zwnet_all_ready").Set(isAllReady);
 				SetDisplayText("zwnet_start_phase", startPhase);
 				Dvar::Var("zwnet_start_seconds").Set(startSeconds);
 				SetDisplayText("zwnet_match_id", matchId);
@@ -6508,9 +6374,6 @@ namespace Components
 		Dvar::Register("zwnet_lobby_member_count", 0, 0, 4, Game::DVAR_NONE, "Current party size");
 		Dvar::Register("zwnet_lobby_status_text", "IDLE", Game::DVAR_NONE, "Current party state");
 		Dvar::Register("zwnet_lobby_can_start", false, Game::DVAR_NONE, "Private match can start");
-		Dvar::Register("zwnet_lobby_self_ready", false, Game::DVAR_NONE, "Local party ready state");
-		Dvar::Register("zwnet_ready_pending", false, Game::DVAR_NONE, "A ready-state update is in flight");
-		Dvar::Register("zwnet_all_ready", false, Game::DVAR_NONE, "All active match players are ready");
 		Dvar::Register("zwnet_start_phase", "", Game::DVAR_NONE, "Server start phase");
 		Dvar::Register("zwnet_start_seconds", 0, 0, 300, Game::DVAR_NONE, "Server start phase time remaining");
 		Dvar::Register("zwnet_join_preview_active", false, Game::DVAR_NONE, "Join-in-progress preview is visible");
@@ -6533,7 +6396,6 @@ namespace Components
 			Dvar::Register(memberDvarName(i, "_name"), "", Game::DVAR_NONE, "Party member name");
 			Dvar::Register(memberDvarName(i, "_guid"), "", Game::DVAR_NONE, "Public-lobby member GUID");
 			Dvar::Register(memberDvarName(i, "_role"), "", Game::DVAR_NONE, "Party member role");
-			Dvar::Register(memberDvarName(i, "_ready"), false, Game::DVAR_NONE, "Party member ready state");
 			Dvar::Register(memberDvarName(i, "_self"), false, Game::DVAR_NONE, "Local public-lobby member slot");
 			Dvar::Register(memberDvarName(i, "_shared_rank_known"), false, Game::DVAR_NONE, "Public-lobby member shared rank is available");
 			Dvar::Register(memberDvarName(i, "_shared_rank_level"), 1, 1, 54, Game::DVAR_NONE, "Public-lobby member shared rank level");
@@ -6628,6 +6490,7 @@ namespace Components
 		Localization::Set("ZWNET_PLAYLIST_REFRESH_REQUIRED", "This playlist changed or access ended. Refresh the list and choose again.");
 		Localization::Set("ZWNET_PLAYLIST_SELECTION_FAILED", "The party playlist could not be changed. Refresh and try again.");
 		Localization::Set("ZWNET_ROUTE_UNAVAILABLE", "No direct or relay route is available.");
+		Localization::Set("ZWNET_PREVIEW_UNAVAILABLE", "Preview unavailable");
 		Localization::Set("ZWNET_SERVER_NOT_READY", "The assigned ZW3 server is no longer available.");
 		Localization::Set("ZWNET_DESCRIPTOR_INVALID", "The connection response was invalid.");
 		Localization::Set("ZWNET_CONTENT_CHECK_FAILED", "The assigned map could not be verified. Check your game files and try again.");
@@ -7094,22 +6957,6 @@ namespace Components
 			EnqueueAsync([]
 			{
 				LeaveParty();
-			});
-		});
-
-		UIScript::Add("ZWNET_ToggleReady", [](const UIScript::Token&)
-		{
-			if (Dvar::Var("zwnet_ready_pending").Get<bool>())
-			{
-				return;
-			}
-
-			const auto isReady = Dvar::Var("zwnet_lobby_self_ready").Get<bool>();
-			Dvar::Var("zwnet_ready_pending").Set(true);
-
-			EnqueueAsync([isReady]
-			{
-				ToggleReady(isReady);
 			});
 		});
 

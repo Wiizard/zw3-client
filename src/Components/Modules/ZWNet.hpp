@@ -69,12 +69,11 @@ namespace Components
 		static void EnterLobby(std::string map);
 		static void RefreshLobby();
 		static void LeaveParty();
-		static void ToggleReady(bool isReady);
 		static void StartPrivateMatch(std::string map);
 		static void VoteMap(const std::string& choice);
 		static void UpdateLobbyDvars(const nlohmann::json& party);
-		static void UpdateMatchLobbyDvars(const nlohmann::json& status);
-		static void UpdateVoteDvars(const nlohmann::json& status);
+		static void UpdateMatchLobbyDvars(const nlohmann::json& status, std::uint64_t uiTransition, std::uint64_t uiSnapshot);
+		static void UpdateVoteDvars(const nlohmann::json& status, std::uint64_t uiTransition, std::uint64_t uiSnapshot);
 		static void RefreshActiveParty();
 		static void UpdateMatchmaking();
 		static void RefreshNetworkMetrics();

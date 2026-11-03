@@ -12,7 +12,7 @@ namespace Utils
  inline std::string SocialActivityText(std::string status)
  {
   std::ranges::transform(status,status.begin(),[](unsigned char c){return static_cast<char>(std::toupper(c));});
-  if(status=="IN_PARTY"||status=="IN_LOBBY"||status=="LOBBY"||status=="MATCH_FOUND"||status=="READY_CHECK"||status=="WAITING_FOR_READY")return "IN LOBBY";
+  if(status=="IN_PARTY"||status=="IN_LOBBY"||status=="LOBBY"||status=="MATCH_FOUND")return "IN LOBBY";
   if(status=="MAP_VOTE"||status=="VOTING")return "VOTING";
   if(status=="RESERVING_SERVER"||status=="STARTING_SERVER"||status=="SERVER_STARTING"||status=="STARTING")return "STARTING";
   if(status=="CONNECTING"||status=="JOINING"||status=="JOIN_PREVIEW")return "JOINING";

@@ -53,6 +53,7 @@ namespace Components
 		static void AcknowledgePlaylistNotice();
 		static void PublishPlaylistCatalog();
 		static void SchedulePlaylistCatalogPublish();
+		static std::string ResolvePlaylistImage(const std::string& path);
 		static std::optional<nlohmann::json> PublishPartyContent();
 		static std::optional<nlohmann::json> ApplyPartyVisibility(nlohmann::json party);
 		static void RefreshPartyVisibility();

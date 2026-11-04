@@ -21,6 +21,7 @@
 #include "Utils/ManagedDisconnect.hpp"
 #include "Utils/MatchmakingSearchTimer.hpp"
 #include "Utils/OnlineResponse.hpp"
+#include "Utils/PlaylistImage.hpp"
 #include "Utils/QuickPlay.hpp"
 
 namespace Components
@@ -386,6 +387,7 @@ namespace Components
 		std::string preview;
 		std::string mapId;
 		std::string mapImage;
+		std::string imageUrl;
 		std::string rotationSummary;
 		std::string zombieSettingsSummary;
 		int minPlayers = 1;
@@ -1385,6 +1387,12 @@ namespace Components
 			entry.availability = row.at("availability").get<std::string>();
 			entry.revision = row.at("revision").get<std::int64_t>();
 			entry.playerPopulation.Observe(Utils::ReadOnlineMetric(row, "player_count"), Utils::OnlineMetric::Clock::now());
+			// An invalid optional image must not hide an otherwise valid playlist.
+			if (row.contains("image_url") && row.at("image_url").is_string())
+			{
+				const auto path = row.at("image_url").get<std::string>();
+				if (Utils::PlaylistImageDigest(path)) entry.imageUrl = path;
+			}
 
 			if (row.contains("min_players") && row.at("min_players").is_number_integer())
 			{
@@ -5925,6 +5933,75 @@ namespace Components
 		return mapId;
 	}
 
+	std::string ZWNet::ResolvePlaylistImage(const std::string& path)
+	{
+		const auto digest = Utils::PlaylistImageDigest(path);
+		if (!digest) return {};
+		const auto name = "zwnet_playlist_" + *digest;
+
+		// Accessed on MAIN only, like the menu dvars and runtime materials. Keep
+		// downloads off the render thread and bound decoded texture storage.
+		struct CachedImage
+		{
+			bool pending = false;
+			std::chrono::steady_clock::time_point lastUsed{}, retryAfter{};
+		};
+		static std::unordered_map<std::string, CachedImage> images;
+		const auto now = std::chrono::steady_clock::now();
+		if (!images.contains(path) && images.size() >= 8)
+		{
+			auto oldest = images.end();
+			for (auto it = images.begin(); it != images.end(); ++it)
+				if (!it->second.pending && (oldest == images.end() || it->second.lastUsed < oldest->second.lastUsed)) oldest = it;
+			if (oldest == images.end()) return {};
+			const auto oldDigest = Utils::PlaylistImageDigest(oldest->first);
+			if (auto* material = Materials::GetRuntimeMaterial("zwnet_playlist_" + *oldDigest)) Materials::Delete(material, true);
+			images.erase(oldest);
+		}
+		auto& image = images[path];
+		image.lastUsed = now;
+		if (Materials::GetRuntimeMaterial(name)) return name;
+		if (!isPlaylistSelectorOpen || image.pending || now < image.retryAfter) return {};
+		image.pending = true;
+		image.retryAfter = now + std::chrono::seconds(60);
+		const auto generation = playlistCatalog.generation; // Caller holds catalog mutex.
+		EnqueueAsync([path, name, digest = *digest, generation]
+		{
+			Utils::WebIO request("ZW3 playlist image", std::string(apiBase) + path);
+			request.SetTimeout(3500);
+			request.SetProgressCallback([&request](const std::size_t received, const std::size_t total)
+			{
+				if (received > 2 * 1024 * 1024 || total > 2 * 1024 * 1024) request.CancelDownload();
+			});
+			bool success = false;
+			auto bytes = request.Get(&success);
+			if (!success || !Utils::IsBoundedPlaylistPng(bytes)
+				|| EncodeLowerHex(Utils::Cryptography::SHA256::Compute(bytes)) != digest) bytes.clear();
+			Scheduler::Once([path, name, generation, bytes = std::move(bytes)]
+			{
+				const auto cached = images.find(path);
+				if (cached == images.end()) return;
+				cached->second.pending = false;
+				if (bytes.empty()) return;
+				if (!isActive || isInGame || !isPlaylistSelectorOpen)
+				{
+					cached->second.retryAfter = {};
+					return;
+				}
+				{
+					std::lock_guard _(playlistCatalog.mutex);
+					if (generation != playlistCatalog.generation)
+					{
+						cached->second.retryAfter = {};
+						return;
+					}
+				}
+				if (Materials::CreateNewsMaterialFromImageBytes(name, bytes)) PublishPlaylistCatalog();
+			}, Scheduler::Pipeline::MAIN);
+		});
+		return {};
+	}
+
 	void ZWNet::PublishPlaylistCatalog()
 	{
 		if (!isActive)
@@ -6055,7 +6132,12 @@ namespace Components
 			Dvar::Var("zwnet_catalog_selected_revision").Set(static_cast<int>(active->revision));
 			Dvar::Var("zwnet_catalog_selected_rotation").Set(active->rotationSummary);
 
-			if (active->mapId.empty())
+			const auto customImage = ResolvePlaylistImage(active->imageUrl);
+			if (!customImage.empty())
+			{
+				Dvar::Var("zwnet_catalog_selected_image").Set(customImage);
+			}
+			else if (active->mapId.empty())
 			{
 				Dvar::Var("zwnet_catalog_selected_image").Set("");
 			}

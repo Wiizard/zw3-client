@@ -4,12 +4,6 @@
 
 namespace Utils
 {
-	constexpr bool IsExplicitLobbyDeparture(const bool explicitCommand, const bool wasConnected,
-		const bool hasNativeError, const bool completedReturnPending)
-	{
-		return explicitCommand && wasConnected && !hasNativeError && !completedReturnPending;
-	}
-
 	constexpr bool IsCompletedMatchmakingState(const std::string_view state)
 	{
 		return state == "RESETTING" || state == "POST_MATCH" || state == "FINISHED" || state == "IDLE";

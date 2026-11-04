@@ -9,7 +9,6 @@
 #include "Command.hpp"
 #include "Dedicated.hpp"
 #include "Dvar.hpp"
-#include "Auth.hpp"
 #include "Events.hpp"
 #include "Scheduler.hpp"
 #include "Remix/Core.hpp"
@@ -306,24 +305,6 @@ namespace Components
 		if (joinedServer.IsValid() && joinedServer == current)
 		{
 			return isJoinedServerX86;
-		}
-
-		// Joining a game on this PC records its LAN address, while the engine's
-		// server address may not compare equal to it. Same port on this machine is
-		// the same server: without this, a local x64 host was taken for x86 and
-		// the scoreboard request went out in a form it ignores.
-		if (joinedServer.IsValid() && joinedServer.GetPort() == current.GetPort()
-			&& Auth::IsSameMachineAddress(joinedServer) && Auth::IsSameMachineAddress(current))
-		{
-			return isJoinedServerX86;
-		}
-
-		static Network::Address lastReported;
-		if (!(lastReported == current))
-		{
-			lastReported = current;
-			Logger::Print("network: taking {} for an x86 server (the join recorded {})\n", current.GetString(),
-				joinedServer.IsValid() ? joinedServer.GetString() : std::string("nothing"));
 		}
 
 		return true;

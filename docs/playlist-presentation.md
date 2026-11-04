@@ -1,5 +1,10 @@
 # Find Match playlist presentation
 
+The client core is based on stable `chris` commit `6af219d2`. Wiizard's
+Find Match / Quick Play filter UI and playlist mode display were selectively
+backported from `wiiz-fixes` through `0fc6f042`. Connection, authentication,
+input activation and dedicated timing retain the previous `chris` behavior.
+
 The existing hover/focus details card reads `zwnet_catalog_selected_population`
 and `zwnet_catalog_selected_image`. Both mouse hover and keyboard/controller
 focus use `ZWNET_HighlightPlaylist`; no additional menu or row label is needed.

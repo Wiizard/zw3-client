@@ -55,18 +55,13 @@ namespace Components
 	static bool IsMainMenuOpen()
 	{
 		const auto* const context = Game::uiContext;
-		if (!context) return false;
 		const int openCount = std::min(context->openMenuCount, static_cast<int>(std::size(context->menuStack)));
 
 		for (int i = 0; i < openCount; ++i)
 		{
 			const auto* const menu = context->menuStack[i];
 
-			// intro 0 can replace the title screen with the actual main menu
-			// before the backdrop finishes. Do not wait forever for main_text
-			// to return: loading input remains suspended until this is marked.
-			if (menu && menu->window.name && (Utils::String::Compare(menu->window.name, "main_text")
-				|| Utils::String::Compare(menu->window.name, "pregame_loaderror")))
+			if (menu && menu->window.name && Utils::String::Compare(menu->window.name, "main_text"))
 			{
 				return true;
 			}

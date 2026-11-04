@@ -3,8 +3,6 @@
 #include "Events.hpp"
 #include "Flags.hpp"
 #include "Logger.hpp"
-#include "Party.hpp"
-#include "Dvar.hpp"
 
 #include <intrin.h>
 
@@ -439,14 +437,6 @@ namespace Components
 		const bool wasConnected = uiActive->connectionState >= CA_CONNECTING;
 		const int errorEntered = ReadNativeErrorEntered();
 		NativeDisconnectError nativeError;
-		// These two verified call sites belong to native CL_Disconnect_f, the
-		// console/UI disconnect command. Server errors and join teardown use
-		// different callers, and must retain their existing error handling.
-		const auto returnedTo = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
-		nativeError.isExplicitDisconnect = returnedTo == Utils::Hook::Rebase(0x1400F924C + 5)
-			|| returnedTo == Utils::Hook::Rebase(0x1400F92DB + 5);
-		nativeError.wasPrivateMatchHost = wasConnected && Party::IsHostingParty()
-			&& Dvar::Var("xblive_privatematch").Get<bool>() && !Dvar::Var("zwnet_managed_session").Get<bool>();
 		if (errorEntered == 1)
 		{
 			nativeError.hasNativeError = true;
@@ -472,6 +462,7 @@ namespace Components
 			} traceScope(isTracing);
 			try
 			{
+				const auto returnedTo = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
 				const auto caller = std::ranges::find_if(CL_DisconnectCalls, [returnedTo](const std::uintptr_t site)
 				{
 					return returnedTo == Utils::Hook::Rebase(site) + 5;

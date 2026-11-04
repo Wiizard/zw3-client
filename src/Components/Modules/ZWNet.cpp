@@ -142,7 +142,6 @@ namespace Components
 	static std::atomic_bool isVisibilitySyncPending = false;
 	static std::atomic_bool isEndpointJoinInFlight = false;
 	static std::atomic_bool isTerminalDisconnectRequested = false;
-	static std::atomic_bool isMatchmakingQuitRequested = false;
 	static std::atomic_bool isCachedPartyJoinStateSupported = false;
 	static std::atomic_bool isIdleReturnPending = false;
 	static std::atomic_int desiredPartyPrivacy = 0;
@@ -157,7 +156,6 @@ namespace Components
 	static std::string currentPlayerId;
 	static std::string currentProposalId;
 	static std::string currentMatchId;
-	static std::string pendingFailedMatchRelease;
 	static std::string presenceUiState = "OFFLINE";
 
 	static std::mutex asyncTaskMutex;
@@ -389,6 +387,7 @@ namespace Components
 		std::string mapImage;
 		std::string imageUrl;
 		std::string rotationSummary;
+		std::string zombieMode;
 		std::string zombieSettingsSummary;
 		int minPlayers = 1;
 		int maxPlayers = 4;
@@ -552,29 +551,6 @@ namespace Components
 	static JoinPreviewState joinPreview;
 	static std::atomic_bool isJoinInProgressSoundPending = false;
 	static std::atomic_bool isNetworkMetricsEnabled = false;
-
-	// Round trip to the ZWNet service, measured on the periodic status poll.
-	// The best of the last few samples is shown while searching and sent with
-	// the search as ping_ms (it used to be a fixed 50). 0 means not measured yet.
-	constexpr std::size_t servicePingSampleCount = 5;
-	static std::mutex servicePingMutex;
-	static std::array<int, servicePingSampleCount> servicePingSamples{};
-	static std::size_t servicePingNext = 0;
-	static std::atomic_int servicePingMs = 0;
-
-	static int RecordServicePing(const int sampleMs)
-	{
-		std::lock_guard _(servicePingMutex);
-		servicePingSamples[servicePingNext] = std::clamp(sampleMs, 1, 999);
-		servicePingNext = (servicePingNext + 1) % servicePingSampleCount;
-		int best = 0;
-		for (const auto sample : servicePingSamples)
-		{
-			if (sample > 0 && (best == 0 || sample < best)) best = sample;
-		}
-		servicePingMs = best;
-		return best;
-	}
 	// Main-thread UI stopwatch; the search-active DVAR remains a boolean.
 	static Utils::MatchmakingSearchTimer searchTimer;
 	static std::atomic_uint64_t joinTransitionGeneration = 0;
@@ -1220,7 +1196,7 @@ namespace Components
 		}
 	}
 
-	static bool TryParseZombieSettings(const nlohmann::json& row, std::string& summary)
+	static bool TryParseZombieSettings(const nlohmann::json& row, std::string& mode, std::string& summary)
 	{
 		std::string zombieMode = "NORMAL";
 		bool hasHitmarkers = true;
@@ -1259,6 +1235,7 @@ namespace Components
 			return false;
 		}
 
+		mode = zombieMode;
 		summary = std::format("{} / HITMARKERS {} / COUNTER {} / DAMAGE {} / DAY-NIGHT {} / OMNI {}", zombieMode,
 			OnOffText(hasHitmarkers), OnOffText(hasZombieCounter), OnOffText(hasDamageNumbers),
 			OnOffText(hasDayNightCycle), OnOffText(hasOmnimovement));
@@ -1404,7 +1381,7 @@ namespace Components
 				entry.maxPlayers = row.at("max_players").get<int>();
 			}
 
-			if (!TryParseZombieSettings(row, entry.zombieSettingsSummary))
+			if (!TryParseZombieSettings(row, entry.zombieMode, entry.zombieSettingsSummary))
 			{
 				return false;
 			}
@@ -2100,8 +2077,6 @@ namespace Components
 			{ "ZWNET_SESSION_EXPIRED", "Your ZW3 session expired. Please sign in again." },
 			{ "ZWNET_SEARCH_FAILED", "The selected playlist could not enter matchmaking. Please try again." },
 			{ "ZWNET_CATALOG_UNAVAILABLE", "Playlists are unavailable. Please refresh the list." },
-			{ "ZWNET_NO_PUBLIC_CAPACITY", "No server is available for this playlist right now. Please try again shortly." },
-			{ "ZWNET_QUICKPLAY_FILTER_EMPTY", "None of your Quick Play playlists are available right now. Tick more in the Quick Play filter." },
 			{ "ZWNET_PLAYLIST_REFRESH_REQUIRED", "This playlist changed or access ended. Refresh the list and choose again." },
 			{ "ZWNET_PLAYLIST_SELECTION_FAILED", "The party playlist could not be changed. Refresh and try again." },
 			{ "ZWNET_VERSION_MISMATCH", "Your ZW3 client version does not match the online service." },
@@ -2241,6 +2216,7 @@ namespace Components
 	static void ClearMatchDvars()
 	{
 		Dvar::Var("zwnet_vote_active").Set(false);
+		Dvar::Var("zwnet_vote_zombiemode").Set("");
 		Dvar::Var("zwnet_vote_selection").Set("");
 		Dvar::Var("zwnet_start_phase").Set("");
 		Dvar::Var("zwnet_start_seconds").Set(0);
@@ -2773,18 +2749,6 @@ namespace Components
 			{
 				return;
 			}
-			// A rejected join must be released before party/status can resume it.
-			// Keep this pending on service failure so Play Online retries cleanup.
-			if (!ReleaseFailedMatch())
-			{
-				Events::NativeDisconnectError error;
-				error.hasNativeError = true;
-				error.message = FriendlyErrorText("ZWNET_REQUEST_FAILED");
-				error.title = "Connection error";
-				SetState("ERROR", "ZWNET_REQUEST_FAILED");
-				ScheduleReturnToIdleMenu(std::move(error));
-				return;
-			}
 
 			const auto party = CurrentOrNewParty();
 
@@ -2946,7 +2910,7 @@ namespace Components
 
 	void ZWNet::RefreshPlaylistCatalog(const bool isForced)
 	{
-		if (!isActive || isInGame || isServerJoinTransition || isEndpointJoinInFlight)
+		if (!isActive)
 		{
 			return;
 		}
@@ -3148,13 +3112,8 @@ namespace Components
 
 	void ZWNet::CancelPlaylistSelection()
 	{
-		const bool wasOpen = isPlaylistSelectorOpen.exchange(false);
-		if (wasOpen && (isPlaylistSelectionStarting || isPlaylistSearchStarting))
-		{
-			CancelPendingJoinPreparation();
-			SetState("IN_PARTY");
-		}
-		else if (!isPlaylistSelectionStarting && !isPlaylistSearchStarting) ++playlistSelectorGeneration;
+		isPlaylistSelectorOpen = false;
+		if (!isPlaylistSelectionStarting && !isPlaylistSearchStarting) ++playlistSelectorGeneration;
 
 		SetPlaylistActionError("");
 		PublishPlaylistCatalog();
@@ -3196,7 +3155,7 @@ namespace Components
 		{
 			std::lock_guard _(playlistCatalog.mutex);
 			const auto index = playlistCatalog.page * playlistPageSize + slot;
-			if (!playlistCatalog.isLoaded || index >= playlistCatalog.entries.size())
+			if (!playlistCatalog.isLoaded || playlistCatalog.isStale || index >= playlistCatalog.entries.size())
 			{
 				SetPlaylistActionError("The playlist list is not ready. Refresh and try again.");
 				return;
@@ -3210,8 +3169,46 @@ namespace Components
 	void ZWNet::ActivateQuickPlay()
 	{
 		if (!CanActivatePlaylistSelection()) return;
-		// Resolve Quick Play on the worker after refreshing capacity and the party.
-		ActivatePlaylist({}, 0, true);
+
+		std::string playlistId;
+		std::int64_t playlistRevision = 0;
+		const auto partySize = Dvar::Var("zwnet_lobby_member_count").Get<int>();
+		{
+			std::lock_guard _(playlistCatalog.mutex);
+			if (!playlistCatalog.isLoaded || playlistCatalog.isStale)
+			{
+				SetPlaylistActionError("The playlist list is not ready. Refresh and try again.");
+				return;
+			}
+
+			std::vector<Utils::QuickPlayPlaylist> candidates;
+			candidates.reserve(playlistCatalog.entries.size());
+			for (const auto& entry : playlistCatalog.entries)
+			{
+				const bool hasVerifiedContent = std::ranges::all_of(entry.requiredContent, [&entry](const std::string& contentId)
+				{
+					return std::ranges::find(entry.verifiedContent, contentId) != entry.verifiedContent.end();
+				});
+				candidates.push_back({ entry.id, entry.audience, entry.availability, entry.maxPlayers, hasVerifiedContent, !quickPlayExcluded.contains(entry.id) });
+			}
+			const auto selected = Utils::SelectQuickPlayPlaylist(candidates, playlistCatalog.isLoaded, playlistCatalog.isStale,
+				partySize > 0 ? static_cast<std::size_t>(partySize) : 0);
+			if (!selected)
+			{
+				Logger::Print("ZWNET Quick Play rejected: party size {}, cached party size {}, catalog entries {}\n",
+					partySize, cachedPartyMemberCount.load(), candidates.size());
+				for (const auto& candidate : candidates)
+				{
+					Logger::Print("ZWNET playlist {}: audience {}, availability {}, capacity {}, content verified {}\n",
+						candidate.id, candidate.audience, candidate.availability, candidate.maxPlayers, candidate.hasVerifiedContent);
+				}
+				SetPlaylistActionError("No compatible public playlist for your party. Refresh or choose a playlist.");
+				return;
+			}
+			playlistId = playlistCatalog.entries[*selected].id;
+			playlistRevision = playlistCatalog.entries[*selected].revision;
+		}
+		ActivatePlaylist(playlistId, playlistRevision, true);
 	}
 
 	void ZWNet::ActivatePlaylist(const std::string& playlistId, const std::int64_t playlistRevision, const bool isQuickPlay)
@@ -3219,15 +3216,14 @@ namespace Components
 		if (!CanActivatePlaylistSelection()) return;
 		if (!isPlaylistSelectorOpen.exchange(true)) ++playlistSelectorGeneration;
 
-		std::string playlistName = "Quick Play";
-		if (!isQuickPlay)
+		std::string playlistName;
 		{
 			std::lock_guard _(playlistCatalog.mutex);
 			const auto selected = std::ranges::find_if(playlistCatalog.entries, [&playlistId, playlistRevision](const ClientPlaylist& entry)
 			{
 				return entry.id == playlistId && entry.revision == playlistRevision;
 			});
-			if (!playlistCatalog.isLoaded || selected == playlistCatalog.entries.end())
+			if (!playlistCatalog.isLoaded || playlistCatalog.isStale || selected == playlistCatalog.entries.end())
 			{
 				SetPlaylistActionError("The playlist list is not ready. Refresh and try again.");
 				return;
@@ -3235,8 +3231,12 @@ namespace Components
 
 			const auto& entry = *selected;
 			playlistCatalog.selectedId = entry.id;
-			// Capacity is a snapshot. Recheck it on the worker before rejecting a click.
-			if (entry.availability != "AVAILABLE" && entry.availability != "NO_CAPACITY")
+			if (isQuickPlay && entry.audience != "PUBLIC")
+			{
+				SetPlaylistActionError("Quick Play only searches public playlists. Choose development playlists explicitly.");
+				return;
+			}
+			if (entry.availability != "AVAILABLE")
 			{
 				SetPlaylistActionError(entry.availabilityDetail);
 				return;
@@ -3257,6 +3257,7 @@ namespace Components
 		Dvar::Var("zwnet_search_is_quickplay").Set(isQuickPlay);
 		SetState("SEARCH_STARTING");
 		PublishPlaylistCatalog();
+		Command::Execute("closemenu popup_zwnet_playlists", false);
 
 		EnqueueAsync([playlistId, playlistRevision, generation, isQuickPlay]
 		{
@@ -3427,87 +3428,31 @@ namespace Components
 		return result;
 	}
 
-	void ZWNet::StartQuickPlay(std::string playlistId, std::int64_t playlistRevision, const std::uint64_t selectorGeneration, const bool isQuickPlay)
+	void ZWNet::StartQuickPlay(const std::string& playlistId, const std::int64_t playlistRevision, const std::uint64_t selectorGeneration, const bool isQuickPlay)
 	{
-		ScopeExit selectionGuard([]
-		{
-			isPlaylistSearchStarting = false;
-			isPlaylistSelectionStarting = false;
-			SchedulePlaylistCatalogPublish();
-		});
-		if (!IsCurrentPlaylistActivation(selectorGeneration)) return;
-		RefreshPlaylistCatalog(true);
-		if (!IsCurrentPlaylistActivation(selectorGeneration)) return;
-
-		// Query the real party before choosing a public queue; roster DVARs may
-		// still describe the previous combined matchmaking lobby.
-		auto party = Request("GET", "/zwnet/parties/current");
-		if (!IsCurrentPlaylistActivation(selectorGeneration)) return;
-		if (party && party->is_null())
-		{
-			party = Request("POST", "/zwnet/parties/create", { { "visibility", PartyVisibilityName(desiredPartyPrivacy.load()) } });
-			if (!IsCurrentPlaylistActivation(selectorGeneration)) return;
-		}
-		if (!party || !party->is_object() || party->contains("error"))
-		{
-			SetState("IN_PARTY", "ZWNET_PARTY_FAILED");
-			return;
-		}
-		const auto partySize = party && party->is_object() && party->contains("members") && party->at("members").is_array()
-			? party->at("members").size() : 0;
 		std::vector<std::string> verifiedContent;
 		std::string playlistName;
 		std::string playlistSettings;
-		std::string selectionError = "ZWNET_PLAYLIST_REFRESH_REQUIRED";
-		bool isQuickPlayFilterBlocking = false;
+		std::string playlistMode;
 
 		{
 			std::lock_guard _(playlistCatalog.mutex);
-			const auto& entries = playlistCatalog.hasPending ? playlistCatalog.pendingEntries : playlistCatalog.entries;
-			if (isQuickPlay)
-			{
-				std::vector<Utils::QuickPlayPlaylist> candidates;
-				for (const auto& entry : entries)
-				{
-					const bool hasVerifiedContent = std::ranges::all_of(entry.requiredContent, [&entry](const std::string& contentId)
-					{
-						return std::ranges::find(entry.verifiedContent, contentId) != entry.verifiedContent.end();
-					});
-					candidates.push_back({ entry.id, entry.audience, entry.availability, entry.maxPlayers, hasVerifiedContent,
-						!quickPlayExcluded.contains(entry.id) });
-				}
-				const auto selected = Utils::SelectQuickPlayPlaylist(candidates, playlistCatalog.isLoaded, playlistCatalog.isStale, partySize);
-				if (selected)
-				{
-					playlistId = entries[*selected].id;
-					playlistRevision = entries[*selected].revision;
-				}
-				else
-				{
-					// Tell the player when only their filter stands between them and a match.
-					for (auto& candidate : candidates) candidate.isIncluded = true;
-					isQuickPlayFilterBlocking = Utils::SelectQuickPlayPlaylist(candidates, playlistCatalog.isLoaded, playlistCatalog.isStale, partySize).has_value();
-				}
-			}
 
-			const auto selected = std::ranges::find_if(entries, [&playlistId, playlistRevision](const ClientPlaylist& entry)
+			const auto selected = std::ranges::find_if(playlistCatalog.entries, [&playlistId, playlistRevision](const ClientPlaylist& entry)
 			{
 				return entry.id == playlistId && entry.revision == playlistRevision;
 			});
 
 			const bool isSelectable = playlistCatalog.isLoaded && !playlistCatalog.isStale
-				&& selected != entries.end() && selected->availability == "AVAILABLE"
+				&& selected != playlistCatalog.entries.end() && selected->availability == "AVAILABLE"
 				&& (!isQuickPlay || selected->audience == "PUBLIC");
-			if (!playlistCatalog.isLoaded || playlistCatalog.isStale) selectionError = "ZWNET_CATALOG_UNAVAILABLE";
-			else if (isQuickPlay || (selected != entries.end() && selected->availability == "NO_CAPACITY"))
-				selectionError = "ZWNET_NO_PUBLIC_CAPACITY";
-			if (isQuickPlay && isQuickPlayFilterBlocking) selectionError = "ZWNET_QUICKPLAY_FILTER_EMPTY";
 
 			if (isSelectable)
 			{
 				verifiedContent = selected->verifiedContent;
 				playlistName = selected->name;
 				playlistSettings = selected->zombieSettingsSummary;
+				playlistMode = selected->zombieMode;
 			}
 		}
 
@@ -3519,7 +3464,7 @@ namespace Components
 
 			if (isCurrent)
 			{
-				SetState("IN_PARTY", selectionError);
+				SetState("IN_PARTY", "ZWNET_PLAYLIST_REFRESH_REQUIRED");
 			}
 
 			SchedulePlaylistCatalogPublish();
@@ -3531,6 +3476,13 @@ namespace Components
 			isPlaylistSelectionStarting = false;
 			return;
 		}
+
+		ScopeExit searchGuard([]
+		{
+			isPlaylistSearchStarting = false;
+			isPlaylistSelectionStarting = false;
+			SchedulePlaylistCatalogPublish();
+		});
 
 		SchedulePlaylistCatalogPublish();
 		ResetMatchLobbySoundSnapshot();
@@ -3554,7 +3506,7 @@ namespace Components
 			return true;
 		};
 
-		const auto accept = [selectorGeneration, playlistId, playlistName, playlistSettings, playlistRevision](const std::string& state)
+		const auto accept = [selectorGeneration, playlistId, playlistName, playlistMode, playlistSettings, playlistRevision](const std::string& state)
 		{
 			if (!IsCurrentPlaylistActivation(selectorGeneration))
 			{
@@ -3565,11 +3517,10 @@ namespace Components
 			++playlistSelectorGeneration;
 			isSearching = true;
 			SetState(state);
-			const auto transitionGeneration = joinTransitionGeneration.load();
 
-			Scheduler::Once([playlistId, playlistName, playlistSettings, playlistRevision, transitionGeneration]
+			Scheduler::Once([playlistId, playlistName, playlistMode, playlistSettings, playlistRevision]
 			{
-				if (!isActive || !isSearching || transitionGeneration != joinTransitionGeneration)
+				if (!isActive)
 				{
 					return;
 				}
@@ -3578,12 +3529,15 @@ namespace Components
 				Dvar::Var("zwnet_search_playlist_name").Set(playlistName);
 				Dvar::Var("zwnet_search_playlist_revision").Set(static_cast<int>(playlistRevision));
 				Dvar::Var("zwnet_search_playlist_settings").Set(playlistSettings);
+				Dvar::Var("zwnet_vote_zombiemode").Set(playlistMode);
 				SetPlaylistActionError("");
 				Command::Execute("closemenu popup_zwnet_playlists", false);
 			}, Scheduler::Pipeline::MAIN);
 
 			return true;
 		};
+
+		auto party = Request("GET", "/zwnet/parties/current");
 
 		if (isCancelled())
 		{
@@ -3683,12 +3637,7 @@ namespace Components
 					code = ResponseErrorCode(*selectedParty);
 				}
 
-				if (code == "PLAYLIST_NO_CAPACITY")
-				{
-					RefreshPlaylistCatalog(true);
-					fail("ZWNET_NO_PUBLIC_CAPACITY");
-				}
-				else if (code == "PLAYLIST_REVISION_STALE" || code == "PLAYLIST_ACCESS_DENIED")
+				if (code == "PLAYLIST_REVISION_STALE" || code == "PLAYLIST_ACCESS_DENIED" || code == "PLAYLIST_NO_CAPACITY")
 				{
 					RefreshPlaylistCatalog(true);
 					fail("ZWNET_PLAYLIST_REFRESH_REQUIRED");
@@ -3742,7 +3691,7 @@ namespace Components
 			{ "client_version", clientVersion },
 			{ "mod_version", modVersion },
 			{ "content", verifiedContent },
-			{ "ping_ms", servicePingMs > 0 ? servicePingMs.load() : 50 },
+			{ "ping_ms", 50 },
 		};
 
 		const auto result = Request("POST", "/zwnet/matchmaking/search", search);
@@ -3759,8 +3708,7 @@ namespace Components
 
 			if (isQueued)
 			{
-				Request("POST", "/zwnet/matchmaking/disconnect",
-					{ { "match_id", JsonString(*result, "match_id") }, { "terminal", true }, { "preserve_party", true } });
+				Request("POST", "/zwnet/matchmaking/cancel");
 
 				const auto current = Request("GET", "/zwnet/parties/current");
 
@@ -3795,12 +3743,7 @@ namespace Components
 				return;
 			}
 
-			if (code == "PLAYLIST_NO_CAPACITY")
-			{
-				RefreshPlaylistCatalog(true);
-				fail("ZWNET_NO_PUBLIC_CAPACITY");
-			}
-			else if (code == "PLAYLIST_REVISION_STALE" || code == "PARTY_PLAYLIST_MISMATCH" || code == "PLAYLIST_ACCESS_DENIED")
+			if (code == "PLAYLIST_REVISION_STALE" || code == "PARTY_PLAYLIST_MISMATCH" || code == "PLAYLIST_NO_CAPACITY" || code == "PLAYLIST_ACCESS_DENIED")
 			{
 				RefreshPlaylistCatalog(true);
 				fail("ZWNET_PLAYLIST_REFRESH_REQUIRED");
@@ -4389,17 +4332,14 @@ namespace Components
 
 	void ZWNet::RefreshLobby()
 	{
-		const auto generation = joinTransitionGeneration.load();
-		if (!isActive || isInGame || isClosingOnlineSession) return;
 		auto party = Request("GET", "/zwnet/parties/current");
 
-		if (generation != joinTransitionGeneration || !party || party->is_null() || party->contains("error"))
+		if (!party || party->is_null() || party->contains("error"))
 		{
 			return;
 		}
 
 		*party = PublishLocalRank(std::move(*party));
-		if (generation != joinTransitionGeneration || isInGame) return;
 		UpdateLobbyDvars(*party);
 
 		const auto partyState = party->value("state", "IDLE");
@@ -4841,7 +4781,7 @@ namespace Components
 		SchedulePlaylistCatalogPublish();
 	}
 
-	void ZWNet::CancelMatchmaking(const bool openFindMatch)
+	void ZWNet::CancelMatchmaking()
 	{
 		auto generation = joinTransitionGeneration.load();
 		// X/ESC is an explicit departure, not an interrupted connection.
@@ -4911,29 +4851,11 @@ namespace Components
 		if (generation != joinTransitionGeneration) return;
 		UpdateLobbyDvars(*party);
 		SetState("IN_PARTY");
-		ScheduleMatchmakingLobby(openFindMatch);
 		RefreshPlaylistCatalog(true);
 		UpdatePresence();
 	}
 
-	bool ZWNet::ReleaseFailedMatch()
-	{
-		std::string matchId;
-		{
-			std::lock_guard _(stateMutex);
-			matchId = pendingFailedMatchRelease;
-		}
-		if (matchId.empty()) return true;
-		const auto result = Request("POST", "/zwnet/matchmaking/disconnect",
-			{ { "match_id", matchId }, { "terminal", true }, { "preserve_party", true } });
-		if (!result || !result->is_object() || result->contains("error") || result->value("ok", true) == false) return false;
-		std::lock_guard _(stateMutex);
-		if (pendingFailedMatchRelease != matchId) return false;
-		pendingFailedMatchRelease.clear();
-		return true;
-	}
-
-	void ZWNet::CloseOnlineSession(const bool isShuttingDown, const bool isTerminal, const bool releaseFailedMatch)
+	void ZWNet::CloseOnlineSession(const bool isShuttingDown, const bool isTerminal)
 	{
 		TraceOnlineTransition(isShuttingDown ? "close_shutdown" : (isTerminal ? "close_terminal" : "close_transient"));
 		CancelJoinInProgressPreview();
@@ -4977,18 +4899,7 @@ namespace Components
 			body["terminal"] = true;
 		}
 
-		if (releaseFailedMatch && !matchId.empty())
-		{
-			{
-				std::lock_guard _(stateMutex);
-				pendingFailedMatchRelease = matchId;
-			}
-			ReleaseFailedMatch();
-		}
-		else
-		{
-			Request("POST", "/zwnet/matchmaking/disconnect", body);
-		}
+		Request("POST", "/zwnet/matchmaking/disconnect", body);
 		Request("POST", "/social/presence", { { "status", "OFFLINE" }, { "sequence", NextPresenceSequence() }, { "joinable", false } });
 
 		isSearching = false;
@@ -5083,29 +4994,11 @@ namespace Components
 		SetState("IN_PARTY");
 		RefreshPlaylistCatalog(true);
 		UpdatePresence();
-		ScheduleMatchmakingLobby(false);
 
-		return true;
-	}
-
-	void ZWNet::ScheduleMatchmakingLobby(const bool openFindMatch)
-	{
-		const auto generation = joinTransitionGeneration.load();
-		Scheduler::Schedule([generation, openFindMatch, frontendInitialized = false]() mutable
+		Scheduler::Schedule([generation, frontendInitialized = false]() mutable
 		{
 			if (!isActive || generation != joinTransitionGeneration)
 			{
-				return true;
-			}
-			auto* const lobby = Game::uiContext ? Game::Menus_FindByName(Game::uiContext, "zwnet_matchmaking") : nullptr;
-			if (openFindMatch && lobby && Game::Menu_IsVisible(Game::uiContext, lobby))
-			{
-				// Search cancellation already has a live frontend. Closing its
-				// entire stack can reactivate the native title screen.
-				ClearMatchDvars();
-				Dvar::Var("zwnet_match_id").Set("");
-				Dvar::Var("zwnet_managed_session").Set(false);
-				Game::Menus_OpenByName(Game::uiContext, "popup_zwnet_playlists");
 				return true;
 			}
 
@@ -5113,6 +5006,7 @@ namespace Components
 			// is overwritten by that initialization, especially on a slow VPS.
 			if (Game::CL_IsCgameInitialized(0) || Game::CL_GetLocalClientConnectionState(0) != Game::CA_DISCONNECTED
 				|| !Game::uiContext) return false;
+			auto* const lobby = Game::Menus_FindByName(Game::uiContext, "zwnet_matchmaking");
 			if (!lobby) return false;
 			bool frontendVisible = Game::Menu_IsVisible(Game::uiContext, lobby);
 			for (const char* menuName : { "main_text", "pregame_loaderror" })
@@ -5129,11 +5023,9 @@ namespace Components
 			Dvar::Var("com_errorMessage").Set("");
 			Dvar::Var("com_errorTitle").Set("");
 			Game::Dvar_SetFromStringByName("partyend_reason", "");
+			Game::Menus_CloseAll(Game::uiContext);
 
-			// Keep the native "main" root alive. Closing the entire stack can
-			// make the engine replace our lobby with its title screen next frame.
-			for (const char* menuName : { "class", "team_marinesopfor", "main_text", "pregame_loaderror",
-				"popup_zwnet_connecting", "error_popmenu_lobby" })
+			for (const char* menuName : { "class", "team_marinesopfor" })
 			{
 				Game::menuDef_t* const menu = Game::Menus_FindByName(Game::uiContext, menuName);
 
@@ -5145,12 +5037,11 @@ namespace Components
 
 			Game::Menus_OpenByName(Game::uiContext, "zwnet_matchmaking");
 			const bool visible = Game::Menu_IsVisible(Game::uiContext, lobby);
-			if (visible && openFindMatch)
-			{
-				Game::Menus_OpenByName(Game::uiContext, "popup_zwnet_playlists");
-			}
+			if (visible) Logger::Print("ZWNET completed match: preserved lobby visible after frontend initialization\n");
 			return visible;
 		}, Scheduler::Pipeline::MAIN, 100ms);
+
+		return true;
 	}
 
 	void ZWNet::ReturnToIdleMenu(const Events::NativeDisconnectError& nativeError)
@@ -5177,9 +5068,7 @@ namespace Components
 		{
 			// Closing an existing error popup can clear its DVARs. Finish all menu
 			// transitions before restoring this exact disconnect's captured error.
-			// Native Com_Error can already have opened error_popmenu underneath
-			// our lobby dialog. Remove it too, or OK leaves an empty popup behind.
-			for (const char* menuName : { "popup_zwnet_connecting", "error_popmenu", "error_popmenu_lobby" })
+			for (const char* menuName : { "popup_zwnet_connecting", "error_popmenu_lobby" })
 			{
 				if (auto* const menu = Game::Menus_FindByName(Game::uiContext, menuName))
 					Game::Menus_CloseRequest(Game::uiContext, menu);
@@ -5270,7 +5159,7 @@ namespace Components
 			return;
 		}
 
-		CloseOnlineSession(false, isTerminal, wasMatchmaking && nativeError.hasNativeError);
+		CloseOnlineSession(false, isTerminal);
 
 		if (wasMatchmaking)
 		{
@@ -6250,6 +6139,20 @@ namespace Components
 		{
 			const auto partySelected = findEntry(playlistCatalog.partySelectedId);
 			if (partySelected != playlistCatalog.entries.end()) partyPlaylistName = partySelected->name;
+			// Follow the party's exact playlist revision, including on invited
+			// clients. Hovering another row must never change the vote's mode.
+			if (partySelected != playlistCatalog.entries.end() && partySelected->revision == playlistCatalog.partySelectedRevision)
+			{
+				Dvar::Var("zwnet_vote_zombiemode").Set(partySelected->zombieMode);
+			}
+			else if (!isPinned)
+			{
+				Dvar::Var("zwnet_vote_zombiemode").Set("");
+			}
+		}
+		else if (!isPinned)
+		{
+			Dvar::Var("zwnet_vote_zombiemode").Set("");
 		}
 		Dvar::Var("zwnet_party_playlist_name").Set(partyPlaylistName);
 	}
@@ -6289,7 +6192,6 @@ namespace Components
 		// Invalidate on the input thread, not behind a pending HTTP/hash task.
 		++joinTransitionGeneration;
 		++playlistSelectorGeneration;
-		++lobbySnapshotGeneration;
 		isCompletedMatchReturnPending = false;
 		isSearching = false;
 		CancelJoinInProgressPreview();
@@ -6523,9 +6425,7 @@ namespace Components
 
 	void ZWNet::UpdateMatchmaking()
 	{
-		// Playing clients receive completion through the server DVAR/disconnect.
-		// Do not reread arenas, rank files or rebuild menu rosters every second.
-		if (!isActive || !isSearching || isInGame || isClosingOnlineSession)
+		if (!isActive || !isSearching)
 		{
 			return;
 		}
@@ -6545,7 +6445,7 @@ namespace Components
 		}
 
 		const auto status = Request("GET", "/zwnet/matchmaking/status");
-		if (!isSearching || isInGame || joinTransitionGeneration != transitionGeneration) return;
+		if (!isSearching || joinTransitionGeneration != transitionGeneration) return;
 
 		if (isPartyValid)
 		{
@@ -6670,11 +6570,11 @@ namespace Components
 					Dvar::Var("zwnet_vote_reveal_time").Set(revealTimeMs);
 				}
 
-				const bool mapChanged = Dvar::Var("ui_mapname").Get<std::string>() != map;
+				SetDisplayText("ui_mapname", map);
 				SetDisplayText("zwnet_vote_winner_id", map);
 				SetDisplayText("zwnet_vote_winner_name", ResolveVoteMapDisplayName(map, mapName));
 				SetDisplayText("zwnet_vote_winner_image", ResolveVoteMapImage(map, mapImage));
-				if (mapChanged) Maps::SynchronizeMapDvars(map);
+				Maps::SynchronizeMapDvars(map);
 			}, Scheduler::Pipeline::MAIN);
 		}
 
@@ -6705,11 +6605,7 @@ namespace Components
 			return;
 		}
 
-		const auto pingStarted = std::chrono::steady_clock::now();
 		const auto response = Request("GET", "/api/status");
-		const auto pingSample = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
-			std::chrono::steady_clock::now() - pingStarted).count());
-		const int bestPing = response ? RecordServicePing(pingSample) : servicePingMs.load();
 
 		const auto now = Utils::OnlineMetric::Clock::now();
 		if (response)
@@ -6732,25 +6628,21 @@ namespace Components
 		const auto onlinePlayers = onlinePlayerMetric.Current(now);
 		const auto runningGames = runningGameMetric.Current(now);
 
-		Scheduler::Once([onlinePlayers, runningGames, bestPing]
+		Scheduler::Once([onlinePlayers, runningGames]
 		{
 			if (!isActive || !isNetworkMetricsEnabled)
 			{
 				return;
 			}
 
-			Dvar::Var("zwnet_service_ping_known").Set(bestPing > 0);
-			Dvar::Var("zwnet_service_ping_ms").Set(bestPing);
-
 			Dvar::Var("zwnet_online_players_known").Set(onlinePlayers.has_value());
 			Dvar::Var("zwnet_running_games_known").Set(runningGames.has_value());
-			Dvar::Var("zwnet_running_games_count").Set(std::clamp(runningGames.value_or(0), 0, 999999));
 			Dvar::Var("zwnet_online_players_text").Set(onlinePlayers
 				? std::format("{} {} ONLINE", *onlinePlayers, *onlinePlayers == 1 ? "PLAYER" : "PLAYERS")
 				: "Could not fetch online player count.");
 			Dvar::Var("zwnet_running_games_text").Set(runningGames
-				? std::format("{} {} in progress", *runningGames, *runningGames == 1 ? "game" : "games")
-				: "");
+				? std::format("{} RUNNING {}", *runningGames, *runningGames == 1 ? "GAME" : "GAMES")
+				: "Could not fetch running game count.");
 			PublishPlaylistCatalog();
 		}, Scheduler::Pipeline::MAIN);
 	}
@@ -6805,6 +6697,7 @@ namespace Components
 		Dvar::Register("zwnet_quickplay_error", "", Game::DVAR_NONE, "Quick Play feedback for compatible private menus");
 		Dvar::Register("zwnet_catalog_busy", false, Game::DVAR_NONE, "Playlist activation is in flight");
 		Dvar::Register("zwnet_quickplay_excluded", "", Game::DVAR_ARCHIVE, "Playlist IDs unticked in the Quick Play filter");
+		Dvar::Register("zwnet_quickplay_details", true, Game::DVAR_NONE, "Find Match shows the Quick Play overview instead of playlist details");
 		Dvar::Register("zwnet_qpf_count_text", "", Game::DVAR_NONE, "Quick Play filter selection summary");
 		Dvar::Register("zwnet_catalog_selected_population", "PLAYLIST PLAYERS UNAVAILABLE", Game::DVAR_NONE, "Fresh authoritative player count in the focused playlist");
 		Dvar::Register("zwnet_qpf_all_selected", true, Game::DVAR_NONE, "Every public playlist is in Quick Play");
@@ -6850,11 +6743,8 @@ namespace Components
 		Dvar::Register("zwnet_join_preview_seconds", 0, 0, 3, Game::DVAR_NONE, "Join-in-progress preview duration");
 		Dvar::Register("zwnet_online_players_known", false, Game::DVAR_NONE, "Online-player metric is authoritative and fresh");
 		Dvar::Register("zwnet_online_players_text", "PLAYERS ONLINE UNAVAILABLE", Game::DVAR_NONE, "Online-player metric label");
-		Dvar::Register("zwnet_service_ping_known", false, Game::DVAR_NONE, "Round trip to the ZWNet service has been measured");
-		Dvar::Register("zwnet_service_ping_ms", 0, 0, 999, Game::DVAR_NONE, "Best recent round trip to the ZWNet service (ms)");
-		Dvar::Register("zwnet_running_games_count", 0, 0, 999999, Game::DVAR_NONE, "Games in progress (valid when zwnet_running_games_known)");
 		Dvar::Register("zwnet_running_games_known", false, Game::DVAR_NONE, "Running-game metric is authoritative and fresh");
-		Dvar::Register("zwnet_running_games_text", "", Game::DVAR_NONE, "Games-in-progress metric label (empty when unknown)");
+		Dvar::Register("zwnet_running_games_text", "RUNNING GAMES UNAVAILABLE", Game::DVAR_NONE, "Running-game metric label");
 
 		static std::deque<std::string> memberDvarNames;
 
@@ -6881,6 +6771,7 @@ namespace Components
 		Dvar::Register("zwnet_vote_proposal_id", "", Game::DVAR_NONE, "Current map vote");
 		Dvar::Register("zwnet_vote_seconds", 0, 0, 60, Game::DVAR_NONE, "Map vote time remaining");
 		Dvar::Register("zwnet_vote_selection", "", Game::DVAR_NONE, "Local map vote selection");
+		Dvar::Register("zwnet_vote_zombiemode", "", Game::DVAR_NONE, "Zombie mode of the matchmaking playlist revision");
 
 		RegisterStringDvars({ { "zwnet_vote_map_a_id", "" }, { "zwnet_vote_map_b_id", "" } }, "Map vote internal id");
 		RegisterStringDvars({ { "zwnet_vote_map_a_name", "" }, { "zwnet_vote_map_b_name", "" } }, "Map vote display name");
@@ -7334,10 +7225,8 @@ namespace Components
 		{
 			TraceOnlineTransition("ui_cancel_matchmaking");
 			CancelPendingJoinPreparation();
-			const auto generation = joinTransitionGeneration.load();
-			EnqueueAsync([generation]
+			EnqueueAsync([]
 			{
-				if (generation != joinTransitionGeneration) return;
 				CancelMatchmaking();
 			});
 		});
@@ -7361,8 +7250,6 @@ namespace Components
 		{
 			TraceOnlineTransition("ui_quit_to_matchmaking");
 			CancelPendingJoinPreparation();
-			isMatchmakingQuitRequested = true;
-			isServerJoinTransition = false;
 			isTerminalDisconnectRequested = true;
 			Command::Execute("disconnect", false);
 		});
@@ -7538,11 +7425,11 @@ namespace Components
 		{
 			TraceOnlineTransition(wasConnected ? "native_disconnected_connected" : "native_disconnected_unconnected");
 			const auto nativeError = Events::CurrentNativeDisconnectError();
-			auto disconnectGeneration = joinTransitionGeneration.load();
+			const auto disconnectGeneration = joinTransitionGeneration.load();
 			const bool wasInGame = isInGame.exchange(false);
 			Dvar::Var("zwnet_match_return").Set(false);
 
-			if (isServerJoinTransition.exchange(false) && !nativeError.hasNativeError && !nativeError.isExplicitDisconnect)
+			if (isServerJoinTransition.exchange(false) && !nativeError.hasNativeError)
 			{
 				Logger::Print("ZWNET server join transition: preserving online session\n");
 				return;
@@ -7564,15 +7451,7 @@ namespace Components
 
 			if (wasMatchmaking)
 			{
-				const bool returnToLobby = isMatchmakingQuitRequested.exchange(false)
-					|| Utils::IsExplicitLobbyDeparture(nativeError.isExplicitDisconnect, wasConnected,
-						nativeError.hasNativeError, isCompletedMatchReturnPending);
-				if (returnToLobby)
-				{
-					CancelPendingJoinPreparation();
-					disconnectGeneration = joinTransitionGeneration.load();
-				}
-				EnqueueAsync([isTerminal, wasMatchmaking, nativeError, disconnectGeneration, wasConnected, wasInGame, returnToLobby]
+				EnqueueAsync([isTerminal, wasMatchmaking, nativeError, disconnectGeneration, wasConnected, wasInGame]
 				{
 					if (joinTransitionGeneration != disconnectGeneration) return;
 					bool hasCurrentMatch = false;
@@ -7583,21 +7462,32 @@ namespace Components
 					// Recheck at execution as both native callbacks can arrive before
 					// the first worker has confirmed completion and cleared its match.
 					if (!Utils::ShouldHandleManagedDisconnect(hasCurrentMatch, wasMatchmaking, wasConnected)) return;
-					if (returnToLobby)
-					{
-						CancelMatchmaking(false);
-						return;
-					}
 					HandleServerDisconnect(isTerminal, wasMatchmaking, nativeError, wasInGame);
 				});
 			}
-			else if (nativeError.isExplicitDisconnect && nativeError.wasPrivateMatchHost)
-			{
-				Party::SchedulePrivateLobbyReturn();
-			}
 			else if (isPrivateMatchClient)
 			{
-				Party::SchedulePrivateLobbyReturn();
+				Scheduler::Once([]
+				{
+					Command::Execute("xrequirelivesignin", false);
+					Command::Execute("set systemlink 0", false);
+					Command::Execute("set splitscreen 0", false);
+					Command::Execute("set onlinegame 1", false);
+					Command::Execute("exec default_xboxlive.cfg", false);
+					Command::Execute("set party_maxplayers 4", false);
+					Command::Execute("set party_maxprivatepartyplayers 4", false);
+					Command::Execute("set xblive_privateserver 0", false);
+					Command::Execute("set xblive_rankedmatch 0", false);
+					Command::Execute("xstartprivateparty", false);
+					Command::Execute("set ui_mptype 0", false);
+					Command::Execute("xcheckezpatch", false);
+					Command::Execute("exec default_xboxlive.cfg", false);
+					Command::Execute("set xblive_rankedmatch 0", false);
+					Command::Execute("ui_enumeratesaved", false);
+					Command::Execute("set xblive_privateserver 1", false);
+					Command::Execute("xstartprivatematch", false);
+					Command::Execute("openmenu menu_xboxlive_privatelobby", false);
+				}, Scheduler::Pipeline::MAIN, 250ms);
 			}
 		});
 

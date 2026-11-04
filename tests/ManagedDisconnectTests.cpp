@@ -15,11 +15,6 @@ int main()
 {
 	try
 	{
-		Require(Utils::IsExplicitLobbyDeparture(true, true, false, false), "Console disconnect from a played match must release the assignment");
-		Require(!Utils::IsExplicitLobbyDeparture(true, true, false, true), "The server's Game Over disconnect must preserve the completed return");
-		Require(!Utils::IsExplicitLobbyDeparture(false, true, false, false), "Native join teardown must not become a user quit");
-		Require(!Utils::IsExplicitLobbyDeparture(true, true, true, false), "An existing connection error must keep its error handling");
-		Require(!Utils::IsExplicitLobbyDeparture(true, false, false, false), "Duplicate unconnected cleanup must not release a new assignment");
 		for (const bool managed : { false, true })
 			for (const bool connected : { false, true })
 				Require(Utils::ShouldHandleManagedDisconnect(true, managed, connected),

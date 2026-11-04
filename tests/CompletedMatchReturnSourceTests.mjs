@@ -28,13 +28,13 @@ test('lobby return waits for authoritative completion and revalidates cancellati
   assert.match(returning,/isCompletedMatchReturnPending = false/);
   assert.match(returning,/IsConfirmedAssignedMatchEnd/);
   assert.match(returning,/ResetManagedRoute\(\);\s*generation = joinTransitionGeneration.load\(\)/);
-  assert.doesNotMatch(returning,/Menus_CloseAll/);
+  assert.match(returning,/Menus_CloseAll/);
   const cancellation=method('void ZWNet::CancelPendingJoinPreparation()', 'static bool IsCurrentJoinPreview(');
   assert.match(cancellation,/isCompletedMatchReturnPending = false/);
 });
 
 test('explicit X cancellation releases assignment while retaining the party and reports failed cleanup',()=>{
-  const cancel=method('void ZWNet::CancelMatchmaking(', 'void ZWNet::CloseOnlineSession(');
+  const cancel=method('void ZWNet::CancelMatchmaking()', 'void ZWNet::CloseOnlineSession(');
   assert.match(cancel,/"terminal", true/);
   assert.match(cancel,/"preserve_party", true/);
   assert.ok(cancel.indexOf('result->contains("error")')<cancel.indexOf('currentMatchId.clear()'));
@@ -43,12 +43,12 @@ test('explicit X cancellation releases assignment while retaining the party and 
 });
 
 test('completed lobby return waits for rebuilt frontend menus instead of racing native UI initialization',()=>{
-  const returning=method('void ZWNet::ScheduleMatchmakingLobby(', 'void ZWNet::ReturnToIdleMenu(');
-  assert.match(returning,/Scheduler::Schedule\(\[generation, openFindMatch, frontendInitialized = false\]/);
+  const returning=method('bool ZWNet::ReturnToMatchmakingLobby(', 'void ZWNet::ReturnToIdleMenu(');
+  assert.match(returning,/Scheduler::Schedule\(\[generation, frontendInitialized = false\]/);
   assert.match(returning,/CL_GetLocalClientConnectionState\(0\) != Game::CA_DISCONNECTED/);
   assert.match(returning,/"main_text", "pregame_loaderror"/);
   assert.match(returning,/frontendInitialized = frontendInitialized \|\| frontendVisible/);
-  assert.ok(returning.indexOf('if (!frontendInitialized) return false')<returning.indexOf('Menus_CloseRequest'));
+  assert.ok(returning.indexOf('if (!frontendInitialized) return false')<returning.indexOf('Menus_CloseAll'));
   assert.match(returning,/return visible;/);
   assert.doesNotMatch(returning,/MAIN, 500ms/);
 });
@@ -69,24 +69,4 @@ test('the installed V11 menu uses the existing elapsed timer and displays post-m
   assert.match(menu,/exp text\(dvarString\("zwnet_search_elapsed_text"\)\)/);
   assert.doesNotMatch(menu,/milliseconds\(\) - dvarInt\("zwnet_search_active"\)/);
   assert.match(menu,/"POST_MATCH"/);
-});
-
-test('installed matchmaking menus remove ready controls and route deliberate quits through cleanup',{skip:!process.env.ZW3_GAME_ROOT},()=>{
-  const root=process.env.ZW3_GAME_ROOT+'/zw3/core/ui_mp/';
-  const menu=readFileSync(root+'zwnet_matchmaking.menu','utf8');
-  assert.doesNotMatch(menu,/ZWNET_MM_READY_SLOT|ZWNET_ToggleReady|Ready up/i);
-  const opening=menu.slice(menu.indexOf('onOpen'),menu.indexOf('onClose'));
-  assert.doesNotMatch(opening,/ZWNET_CloseOnlineSession/);
-  for(const name of ['class','team_marinesopfor']) {
-    const pause=readFileSync(root+'scriptmenus/'+name+'.menu','utf8');
-    assert.match(pause,/if \(dvarBool\("zwnet_managed_session"\)\) \{ uiScript "ZWNET_QuitToMatchmaking"; \} else \{ exec "disconnect"; \}/);
-  }
-  const popup=readFileSync(root+'popup_zwnet_playlists.menu','utf8');
-  assert.match(popup,/rect 0 0 640 480 4 4/);
-  assert.match(popup,/fullScreen 1/);
-  assert.doesNotMatch(popup,/^\s*(?:popup|blurWorld|legacySplitScreenScale)\b/m);
-  assert.match(popup,/ZWNET_AutoQuickPlay/);
-  assert.match(popup,/onEsc \{ close self; \}/);
-  assert.match(popup,/zwnet_catalog_busy/);
-  assert.match(popup,/ui_zwnet_error_text/);
 });

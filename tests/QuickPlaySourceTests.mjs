@@ -21,26 +21,22 @@ test('both input actions retain visible-menu, opening-click, leader and duplicat
   assert.match(activation, /CanActivatePlaylistSelection\(\)/);
 });
 
-test('Quick Play refreshes capacity and uses the current backend party before choosing from verified entries', () => {
-  assert.match(quickPlay, /ActivatePlaylist\(\{\}, 0, true\)/);
-  assert.doesNotMatch(quickPlay, /playlistCatalog\.entries|Request\(/);
-  assert.ok(start.indexOf('RefreshPlaylistCatalog(true)') < start.indexOf('Utils::SelectQuickPlayPlaylist'));
-  assert.ok(start.indexOf('"/zwnet/parties/current"') < start.indexOf('Utils::SelectQuickPlayPlaylist'));
-  assert.match(start, /party->at\("members"\)\.size\(\)/);
-  assert.match(start, /for \(const auto& entry : entries\)/);
-  assert.match(start, /std::ranges::all_of\(entry\.requiredContent/);
-  assert.match(start, /std::ranges::find\(entry\.verifiedContent, contentId\)/);
-  assert.match(start, /Utils::SelectQuickPlayPlaylist\(candidates, playlistCatalog\.isLoaded, playlistCatalog\.isStale, partySize\)/);
-  assert.doesNotMatch(start, /playlistCatalog\.page|ActivatePlaylistSlot\(/);
+test('Quick Play uses all verified catalog entries and the existing authoritative party count', () => {
+  assert.match(quickPlay, /Dvar::Var\("zwnet_lobby_member_count"\)\.Get<int>\(\)/);
+  assert.match(quickPlay, /for \(const auto& entry : playlistCatalog\.entries\)/);
+  assert.match(quickPlay, /std::ranges::all_of\(entry\.requiredContent/);
+  assert.match(quickPlay, /std::ranges::find\(entry\.verifiedContent, contentId\)/);
+  assert.match(quickPlay, /Utils::SelectQuickPlayPlaylist\(candidates, playlistCatalog\.isLoaded, playlistCatalog\.isStale/);
+  assert.doesNotMatch(quickPlay, /playlistCatalog\.page|ActivatePlaylistSlot\(|Request\(/);
+  assert.match(quickPlay, /No compatible public playlist for your party/);
 });
 
 test('explicit selection and Quick Play share ID plus revision activation and one request pipeline', () => {
   assert.match(slot, /ActivatePlaylist\(playlistId, playlistRevision, false\)/);
-  assert.match(quickPlay, /ActivatePlaylist\(\{\}, 0, true\)/);
+  assert.match(quickPlay, /ActivatePlaylist\(playlistId, playlistRevision, true\)/);
   assert.match(activation, /entry\.id == playlistId && entry\.revision == playlistRevision/);
-  assert.match(activation, /!playlistCatalog\.isLoaded/);
-  assert.match(activation, /entry\.availability != "AVAILABLE" && entry\.availability != "NO_CAPACITY"/);
-  assert.match(start, /!isQuickPlay \|\| selected->audience == "PUBLIC"/);
+  assert.match(activation, /!playlistCatalog\.isLoaded \|\| playlistCatalog\.isStale/);
+  assert.match(activation, /isQuickPlay && entry\.audience != "PUBLIC"/);
   assert.match(activation, /isPlaylistSelectionStarting\.exchange\(true\)/);
   assert.match(activation, /const auto generation = playlistSelectorGeneration\.load\(\)/);
   assert.match(activation, /StartQuickPlay\(playlistId, playlistRevision, generation, isQuickPlay\)/);
@@ -80,6 +76,5 @@ test('input-thread cancellation invalidates queued playlist activation before wo
   assert.match(start, /if \(!IsCurrentPlaylistActivation\(selectorGeneration\)\)/);
   const searchResponse = start.slice(start.indexOf('const auto result = Request("POST", "/zwnet/matchmaking/search"'));
   assert.ok(searchResponse.indexOf('!IsCurrentPlaylistActivation(selectorGeneration)') < searchResponse.indexOf('accept(joinedState)'));
-  assert.match(searchResponse, /if \(isQueued\)[\s\S]*?Request\("POST", "\/zwnet\/matchmaking\/disconnect"/);
-  assert.match(searchResponse, /"preserve_party", true/);
+  assert.match(searchResponse, /if \(isQueued\)[\s\S]*?Request\("POST", "\/zwnet\/matchmaking\/cancel"\)/);
 });

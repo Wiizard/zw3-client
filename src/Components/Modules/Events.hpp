@@ -21,8 +21,6 @@ namespace Components
 			bool hasNativeError = false;
 			std::string message;
 			std::string title;
-			bool isExplicitDisconnect = false;
-			bool wasPrivateMatchHost = false;
 		};
 
 		Events();

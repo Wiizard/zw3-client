@@ -3709,22 +3709,6 @@ namespace Components
       return hooksInstalled && !s.startup_presented && front_end () && IsEnabled () && !quitting ();
     }
 
-    // The menus wait for the first backdrop frame while the startup load runs.
-    // The wait is capped, so a slow or stuck load can't hide the menus for good.
-    //
-    bool Backdrop::HoldsMenus ()
-    {
-      constexpr int max_hold_msec (20000);
-      static int held_since (-1);
-
-      if (!IsStartupLoading ())
-        return false;
-
-      const int now (Sys_Milliseconds ());
-      if (held_since < 0) held_since = now;
-      return now - held_since < max_hold_msec;
-    }
-
     // The quit command, before the engine shuts down: it doesn't go through
     // Com_Quit_f, so g_quitRequested isn't set (see quitting ()).
     //

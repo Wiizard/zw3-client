@@ -60,9 +60,6 @@ namespace Components::Menu
 		static bool IsEnabled();
 		static bool IsShown();
 		static bool IsStartupLoading();
-		// True while the front-end menus should wait for the first backdrop
-		// frame, so the main menu never appears before the scene behind it.
-		static bool HoldsMenus();
 		static void BeginShutdown();
 		static bool PreserveMenuMusic();
 		static bool Hides(const Game::Material* material);

@@ -30,6 +30,27 @@ test('Quick Play creates a party only after confirmed absence and return require
 });
 
 const menuRoot=process.env.ZW3_MENU_ROOT||process.env.ZW3_GAME_ROOT;
+test('vote mode follows the accepted playlist and exact party revision instead of private settings',()=>{
+  const start=method('void ZWNet::StartQuickPlay(', 'void ZWNet::SelectPlaylist(');
+  assert.match(start,/playlistMode = selected->zombieMode/);
+  assert.match(start,/zwnet_vote_zombiemode"\).Set\(playlistMode\)/);
+  const publish=method('void ZWNet::PublishPlaylistCatalog()', 'void ZWNet::CancelJoinInProgressPreview(');
+  const partyMode=publish.slice(publish.indexOf('std::string partyPlaylistName;'));
+  assert.match(partyMode,/partySelected->revision == playlistCatalog.partySelectedRevision/);
+  assert.match(partyMode,/zwnet_vote_zombiemode"\).Set\(partySelected->zombieMode\)/);
+  assert.doesNotMatch(partyMode,/active->zombieMode|Dvar::Var\("zombiemode"\)/);
+  assert.match(method('static void ClearMatchDvars()', 'static void ClearMemberDvars('),/zwnet_vote_zombiemode"\).Set\(""\)/);
+});
+
+test('shipped vote and winner labels use the playlist mode',{skip:!menuRoot},()=>{
+  const menu=fs.readFileSync(menuRoot+'/zw3/core/ui_mp/zwnet_matchmaking.menu','utf8');
+  for(const name of ['label_map_mode_vote_a','label_map_mode_vote_b','label_map_mode_winner']){
+    const item=menu.split('\n').find(line=>line.includes(`name "${name}"`));
+    assert.match(item,/dvarString\("zwnet_vote_zombiemode"\)/);
+    assert.doesNotMatch(item,/dvarString\("zombiemode"\)/);
+  }
+});
+
 test('deployed menu variants agree, remove Ready and separate thumbnails from names and vote totals',{skip:!menuRoot},()=>{
   for(const file of ['zwnet_matchmaking.menu','zwnet_party_lobby.menu']){
     const core=fs.readFileSync(menuRoot+'/zw3/core/ui_mp/'+file,'utf8');

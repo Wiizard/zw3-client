@@ -15,7 +15,6 @@
 #include "Logger.hpp"
 #include "Network.hpp"
 #include "Scheduler.hpp"
-#include "Singleton.hpp"
 #include "Toast.hpp"
 #include "UIScript.hpp"
 #include "ZWNet.hpp"
@@ -108,13 +107,6 @@ namespace Components
 
 		Utils::IO::CreateDir(directory.string());
 
-		// Extra local instances keep their own identity (guid_2.dat, ...), so they
-		// neither overwrite the first instance's nor redo the security-level work
-		// on every launch. Slot 0 means no slot was free: keep a process-only key.
-		const int slot = Dedicated::IsEnabled() ? 1 : Singleton::GetInstanceSlot();
-		if (slot == 0) return {};
-		if (slot > 1) return (directory / std::format("guid_{}.dat", slot)).string();
-
 		return (directory / "guid.dat").string();
 	}
 
@@ -166,10 +158,7 @@ namespace Components
 	{
 		guidToken.Clear();
 		computeToken.Clear();
-		// Machine entropy would give every extra instance the first instance's key.
-		const bool isExtraInstance = !Singleton::IsFirstInstance() && !Dedicated::IsEnabled();
-		guidKey = Utils::Cryptography::ECC::GenerateKey(512, isExtraInstance ? std::string{} : GetMachineEntropy());
-		if (isExtraInstance) guidToken = std::string(1, '\0');
+		guidKey = Utils::Cryptography::ECC::GenerateKey(512, GetMachineEntropy());
 
 		StoreKey();
 	}
@@ -186,6 +175,7 @@ namespace Components
 		{
 			return;
 		}
+
 		const auto guidPath = GetGuidFilePath();
 
 		Proto::Auth::Certificate cert;
@@ -775,7 +765,7 @@ namespace Components
 		return true;
 	}
 
-	bool Auth::IsSameMachineAddress(const Network::Address& address)
+	static bool IsSameMachineAddress(const Network::Address& address)
 	{
 		if (address.IsLoopback())
 		{

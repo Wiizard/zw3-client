@@ -9,12 +9,9 @@
 #include <set>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
 #include <vector>
 #include <nlohmann/json.hpp>
 
-// Exercise production request/transition functions with controllable HTTP and
-// main-thread scheduling, including cancellation while requests are in flight.
 namespace Components
 {
   using Json = nlohmann::json;

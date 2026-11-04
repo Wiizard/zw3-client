@@ -5967,21 +5967,42 @@ namespace Components
 		const auto generation = playlistCatalog.generation; // Caller holds catalog mutex.
 		EnqueueAsync([path, name, digest = *digest, generation]
 		{
-			Utils::WebIO request("ZW3 playlist image", std::string(apiBase) + path);
-			request.SetTimeout(3500);
-			request.SetProgressCallback([&request](const std::size_t received, const std::size_t total)
+			std::string bytes;
+			bool shouldFetch = isActive && isPlaylistSelectorOpen && !isInGame && !isSearching
+				&& !isPlaylistSelectionStarting && !isPlaylistSearchStarting;
+			if (shouldFetch)
 			{
-				if (received > 2 * 1024 * 1024 || total > 2 * 1024 * 1024) request.CancelDownload();
-			});
-			bool success = false;
-			auto bytes = request.Get(&success);
-			if (!success || !Utils::IsBoundedPlaylistPng(bytes)
-				|| EncodeLowerHex(Utils::Cryptography::SHA256::Compute(bytes)) != digest) bytes.clear();
-			Scheduler::Once([path, name, generation, bytes = std::move(bytes)]
+				std::lock_guard _(playlistCatalog.mutex);
+				const auto selected = std::ranges::find_if(playlistCatalog.entries, [](const ClientPlaylist& entry)
+				{
+					return entry.id == playlistCatalog.selectedId;
+				});
+				shouldFetch = generation == playlistCatalog.generation && selected != playlistCatalog.entries.end() && selected->imageUrl == path;
+			}
+			if (shouldFetch) try
+			{
+				Utils::WebIO request("ZW3 playlist image", std::string(apiBase) + path);
+				request.SetTimeout(3500);
+				request.SetProgressCallback([&request](const std::size_t received, const std::size_t total)
+				{
+					if (received > 2 * 1024 * 1024 || total > 2 * 1024 * 1024) request.CancelDownload();
+				});
+				bool success = false;
+				bytes = request.Get(&success);
+				if (!success || !Utils::IsBoundedPlaylistPng(bytes)
+					|| EncodeLowerHex(Utils::Cryptography::SHA256::Compute(bytes)) != digest) bytes.clear();
+			}
+			catch (const std::exception&)
+			{
+				// Optional artwork must never turn a working playlist into an error.
+				bytes.clear();
+			}
+			Scheduler::Once([path, name, generation, shouldFetch, bytes = std::move(bytes)]
 			{
 				const auto cached = images.find(path);
 				if (cached == images.end()) return;
 				cached->second.pending = false;
+				if (!shouldFetch) cached->second.retryAfter = {};
 				if (bytes.empty()) return;
 				if (!isActive || isInGame || !isPlaylistSelectorOpen)
 				{

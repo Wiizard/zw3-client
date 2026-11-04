@@ -96,6 +96,14 @@ namespace Components
 
 	static bool isPrivatePartyJoin = false;
 
+	// A player who joined a private match already in progress connected to the
+	// match directly, so they aren't in the host's party: when the match ends
+	// nothing brings them back to the host's lobby. Remember the host so they
+	// can rejoin it, unless they chose to leave.
+	static Network::Address privateMatchRejoinTarget;
+	static bool isPrivateMatchRejoinArmed = false;
+	static int privateMatchRejoinAttempts = 0;
+
 	bool Party::IsPrivateMatchClient()
 	{
 		if (!isPrivatePartyJoin || IsHostingParty())
@@ -383,6 +391,30 @@ namespace Components
 		Command::Execute("set xblive_privateserver 1", false);
 		Command::Execute("xstartprivatematch", false);
 		Command::Execute("openmenu menu_xboxlive_privatelobby", false);
+	}
+
+	void Party::SchedulePrivateLobbyReturn()
+	{
+		static bool pending = false;
+		if (pending) return;
+		pending = true;
+		const auto startedAt = Game::Sys_Milliseconds();
+		Scheduler::Schedule([startedAt, disconnectedAt = -1]() mutable
+		{
+			const auto now = Game::Sys_Milliseconds();
+			if (now - startedAt > 10'000) { pending = false; return true; }
+			if (Game::CL_IsCgameInitialized(0)) return false;
+			if (Game::CL_GetLocalClientConnectionState(0) != Game::CA_DISCONNECTED)
+			{
+				pending = false;
+				return true;
+			}
+			if (disconnectedAt < 0) { disconnectedAt = now; return false; }
+			if (now - disconnectedAt < 150) return false;
+			pending = false;
+			RecreatePrivateMatchLobby();
+			return true;
+		}, Scheduler::Pipeline::MAIN, 50ms);
 	}
 
 	static bool SetStringIfChanged(const char* name, const std::string& value)
@@ -1842,13 +1874,19 @@ namespace Components
 		}
 		if (traceDedicatedQuery) Logger::Print("dedicated query: map fields available\n");
 
-		if (Maps::GetUserMap()->IsValid())
+		// Advertise the hash of the map we advertise. After a match on a custom
+		// map, that map can stay loaded while the lobby has moved to another one;
+		// its hash under the new name makes joiners think they need a download,
+		// which a player-hosted match can't serve ("Failed to download the modlist!").
+		auto* const loadedUserMap = Maps::GetUserMap();
+		const auto advertisedMap = info.Get("mapname");
+		if (loadedUserMap->IsValid() && _stricmp(loadedUserMap->GetName().data(), advertisedMap.data()) == 0)
 		{
-			info.Set("usermaphash", Utils::String::VA("%i", Maps::GetUserMap()->GetHash()));
+			info.Set("usermaphash", Utils::String::VA("%i", loadedUserMap->GetHash()));
 		}
 		else if (IsInUserMapLobby())
 		{
-			info.Set("usermaphash", Utils::String::VA("%i", Maps::GetUsermapHash(info.Get("mapname"))));
+			info.Set("usermaphash", Utils::String::VA("%i", Maps::GetUsermapHash(advertisedMap)));
 		}
 
 		if (Dedicated::IsEnabled())
@@ -1880,6 +1918,14 @@ namespace Components
 		}
 
 		info.Set("matchtype", std::to_string(static_cast<int>(matchType)));
+
+		// A private match that is already being played can't take new players
+		// through its party lobby: the lobby join registers them, nobody tells
+		// them to connect, and they time out in an empty lobby. Tell joiners to
+		// connect to the running match directly instead.
+		const bool isPartyMatchInProgress = matchType == MatchType::PrivateParty && !Dedicated::IsEnabled()
+			&& Dvar::Var("sv_running").Get<bool>() && Game::CL_IsCgameInitialized(0);
+		info.Set("zw3_party_ingame", InfoFlag(isPartyMatchInProgress));
 
 		info.Set("wwwDownload", InfoFlag(Download::sv_wwwDownload.Get<bool>()));
 		info.Set("wwwUrl", Download::sv_wwwBaseUrl.Get<std::string>());
@@ -2060,7 +2106,9 @@ namespace Components
 		const auto wanted = static_cast<std::uint32_t>(
 			std::strtoul(info.Get("securityLevel").data(), nullptr, 10));
 
-		if (wanted > Auth::GetSecurityLevel())
+		// A server on this PC lets us in below its level (see Auth::ParseConnectData),
+		// so don't make the player wait minutes raising it for a local join.
+		if (wanted > Auth::GetSecurityLevel() && !Auth::IsSameMachineAddress(address))
 		{
 			Logger::Print("raising security level from {} to {} for {}, this takes a moment\n",
 				Auth::GetSecurityLevel(), wanted, address.GetString());
@@ -2101,6 +2149,9 @@ namespace Components
 		}
 
 		const bool isUsermap = !info.Get("usermaphash").empty();
+		// Warm the known destination while content verification and the native
+		// handshake run, rather than waiting for the blocking level load.
+		Maps::PrefetchMapAssets(info.Get("mapname"));
 		const auto usermapHash = std::strtoul(info.Get("usermaphash").data(), nullptr, 10);
 		if (Flags::HasFlag("log")) Logger::Print("join trace: checking map content\n");
 
@@ -2167,11 +2218,30 @@ namespace Components
 			return true;
 		}
 
-		if (matchType == MatchType::PrivateParty)
+		const bool isPartyMatchInProgress = matchType == MatchType::PrivateParty && info.Get("zw3_party_ingame") == "1";
+
+		if (matchType == MatchType::PrivateParty && !isPartyMatchInProgress)
 		{
 			isPrivatePartyJoin = true;
 			PlaylistContinue();
 			return true;
+		}
+
+		if (isPartyMatchInProgress)
+		{
+			isPrivatePartyJoin = true;
+			if (Flags::HasFlag("log")) Logger::Print("join trace: private match already in progress, connecting to it directly\n");
+
+			// Another game on this PC: a loopback address only reaches our own process.
+			if (joinContainer.target.IsLoopback() && *Game::numIP)
+			{
+				joinContainer.target.SetIP(Game::localIP[0].full);
+				joinContainer.target.SetType(Game::NA_IP);
+			}
+
+			privateMatchRejoinTarget = joinContainer.target;
+			isPrivateMatchRejoinArmed = true;
+			privateMatchRejoinAttempts = 0;
 		}
 
 		if (maxClients && clients >= maxClients)
@@ -2731,6 +2801,14 @@ namespace Components
 
 		joinContainer.isAwaitingPlaylist = false;
 
+		// The engine only leaves CA_CONNECTED once local stats are loaded. The
+		// direct join path (connectMatch) ensures that; the party path did not,
+		// so a client that had not loaded stats yet (a fresh extra local
+		// instance, for one) joined the party, got accepted by the host, then sat
+		// on "Loading map" until it timed out when the party moved into the match.
+		Game::LiveStorage_EnsureWeHaveStats(0);
+		if (Flags::HasFlag("log")) Logger::Print("join trace: native stats initialized for the party join\n");
+
 		const ::Steam::SteamID id = GenerateLobbyId();
 
 		if (joinContainer.target.IsLoopback())
@@ -2972,10 +3050,14 @@ namespace Components
 
 		UIScript::Add("SaveQuitToPrivateLobby", [](const UIScript::Token&)
 		{
-			const bool isPrivateMatchHost = IsHostingParty() && Dvar::Var("xblive_privatematch").Get<bool>();
+			// A matchmaking (managed) match is never a private match, even for the
+			// party leader: never recreate the private lobby over the matchmaking one.
+			const bool isPrivateMatchHost = IsHostingParty() && Dvar::Var("xblive_privatematch").Get<bool>()
+				&& !Dvar::Var("zwnet_managed_session").Get<bool>();
 
 			if (!isPrivateMatchHost)
 			{
+				isPrivateMatchRejoinArmed = false;
 				Command::Execute("disconnect", false);
 				return;
 			}
@@ -2984,34 +3066,54 @@ namespace Components
 			SaveSelectedMapPreference(true);
 			Command::Execute("disconnect", false);
 
-			const auto startedAt = Game::Sys_Milliseconds();
-
-			Scheduler::Schedule([startedAt, disconnectedAt = -1]() mutable
-			{
-				const auto now = Game::Sys_Milliseconds();
-
-				if (Game::CL_IsCgameInitialized(0))
-				{
-					return (now - startedAt) > 10'000;
-				}
-
-				if (disconnectedAt < 0)
-				{
-					disconnectedAt = now;
-					return false;
-				}
-
-				if ((now - disconnectedAt) < 150)
-				{
-					return false;
-				}
-
-				RecreatePrivateMatchLobby();
-				return true;
-			}, Scheduler::Pipeline::MAIN, 50ms);
+			SchedulePrivateLobbyReturn();
 		});
 
 		Scheduler::Once(ApplyCustomizationSettings, Scheduler::Pipeline::MAIN, 1s);
+
+		// Bring a mid-match joiner back to the host's lobby when the match ends.
+		Scheduler::Loop([]
+		{
+			static bool wasInMatch = false;
+			static int rejoinAt = 0;
+
+			if (Dedicated::IsEnabled()) return;
+
+			if (Game::CL_IsCgameInitialized(0))
+			{
+				wasInMatch = true;
+				return;
+			}
+
+			const auto now = Game::Sys_Milliseconds();
+			if (wasInMatch)
+			{
+				wasInMatch = false;
+				// Give the host a moment to get back to its lobby.
+				rejoinAt = isPrivateMatchRejoinArmed ? now + 4'000 : 0;
+			}
+
+			if (!rejoinAt || now < rejoinAt || joinContainer.isValid
+				|| Game::CL_GetLocalClientConnectionState(0) != Game::CA_DISCONNECTED)
+			{
+				return;
+			}
+
+			if (!isPrivateMatchRejoinArmed || (!IsHostingParty() && HasJoinableHostLobby())
+				|| privateMatchRejoinAttempts >= 4 || !privateMatchRejoinTarget.IsValid())
+			{
+				// Left on purpose, back in a lobby, or the host is gone.
+				isPrivateMatchRejoinArmed = false;
+				rejoinAt = 0;
+				return;
+			}
+
+			++privateMatchRejoinAttempts;
+			Logger::Print("party: the private match ended, rejoining the host's lobby at {} (attempt {})\n",
+				privateMatchRejoinTarget.GetString(), privateMatchRejoinAttempts);
+			Connect(privateMatchRejoinTarget);
+			rejoinAt = now + 5'000;
+		}, Scheduler::Pipeline::MAIN, 250ms);
 
 		Scheduler::Loop([]
 		{

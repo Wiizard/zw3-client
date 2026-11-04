@@ -196,6 +196,15 @@ namespace Components
 		return mainWindow && IsWindowVisible(mainWindow) && !IsIconic(mainWindow) && GetForegroundWindow() == mainWindow;
 	}
 
+	bool Window::RefreshInputActivation()
+	{
+		if (!HasFocus() || GetCurrentThreadId() != windowThreadId) return false;
+		// Loading can suspend input after the initial WM_ACTIVATE. Reapply the
+		// native activation once the frontend is ready, without stealing focus.
+		SendMessageA(mainWindow, WM_ACTIVATE, WA_ACTIVE, 0);
+		return true;
+	}
+
 	void Window::ApplyDisplayModeDvars()
 	{
 		auto* const r_displayMode = *Game::r_displayMode;

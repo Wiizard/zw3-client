@@ -61,6 +61,15 @@ int main()
 		Require(Selected(unavailable, 2) == "off-page-public", "A valid public playlist beyond the five visible rows remains selectable");
 		Require(Selected({ { "dev-only", "RESTRICTED", "AVAILABLE", 4, true } }).empty(), "Restricted-only access must require an explicit development playlist click");
 		Require(Selected({}).empty(), "An empty catalog must not invent a default playlist");
+
+		std::vector<Utils::QuickPlayPlaylist> filtered{
+			{ "zombies-quickplay", "PUBLIC", "AVAILABLE", 4, true, false },
+			{ "b-public", "PUBLIC", "AVAILABLE", 4, true, true },
+			{ "a-public", "PUBLIC", "AVAILABLE", 4, true, false },
+		};
+		Require(Selected(filtered) == "b-public", "The Quick Play filter must skip unticked playlists, including the standard queue");
+		filtered[1].isIncluded = false;
+		Require(Selected(filtered).empty(), "A filter with nothing ticked must not fall back to an excluded playlist");
 		std::cout << "Quick Play public selection, content, capacity, freshness and page-independent tests passed\n";
 		return 0;
 	}

@@ -29,6 +29,7 @@ namespace Components
 		static bool IsDragging();
 
 		static void PumpLoadingEvents();
+		static bool RefreshInputActivation();
 
 		static HWND GetWindow();
 

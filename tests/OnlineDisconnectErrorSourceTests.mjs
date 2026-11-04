@@ -10,7 +10,7 @@ const handling = source.slice(source.indexOf('void ZWNet::HandleServerDisconnect
 
 test('native error snapshot is captured in the callback and copied before asynchronous cleanup', () => {
   assert.ok(disconnected.indexOf('Events::CurrentNativeDisconnectError()') < disconnected.indexOf('isInGame.exchange(false)'));
-  assert.match(disconnected, /EnqueueAsync\(\[isTerminal, wasMatchmaking, nativeError, disconnectGeneration, wasConnected, wasInGame\]/);
+  assert.match(disconnected, /EnqueueAsync\(\[isTerminal, wasMatchmaking, nativeError, disconnectGeneration, wasConnected, wasInGame, returnToLobby\]/);
   assert.match(disconnected, /HandleServerDisconnect\(isTerminal, wasMatchmaking, nativeError, wasInGame\)/);
   assert.match(disconnected, /isServerJoinTransition\.exchange\(false\) && !nativeError\.hasNativeError/);
   assert.doesNotMatch(disconnected, /nativeError\.(message|title)/);
@@ -28,7 +28,7 @@ test('completed-match duplicate callbacks cannot treat a delayed managed DVAR as
 test('native error cannot be mistaken for a completed match, while normal completion remains unchanged', () => {
   assert.match(handling, /wasMatchmaking && !isTerminal && !nativeError\.hasNativeError && ReturnToMatchmakingLobby\(\)/);
   assert.match(handling, /wasInGame && nativeError\.hasNativeError && ReturnToMatchmakingLobby\(true\)/);
-  assert.ok(handling.indexOf('CloseOnlineSession(false, isTerminal)') < handling.indexOf('ScheduleReturnToIdleMenu(std::move(nativeError))'));
+  assert.ok(handling.indexOf('CloseOnlineSession(false, isTerminal, wasMatchmaking && nativeError.hasNativeError)') < handling.indexOf('ScheduleReturnToIdleMenu(std::move(nativeError))'));
   assert.match(disconnected, /else if \(isPrivateMatchClient\)/);
 });
 
@@ -36,6 +36,7 @@ test('error return restores its snapshot after menu changes and never opens the 
   const branchStart = returning.indexOf('if (nativeError.hasNativeError)');
   const branchEnd = returning.indexOf('\n\t\t\treturn;', branchStart);
   const errorBranch = returning.slice(branchStart, branchEnd);
+  assert.match(errorBranch, /for \(const char\* menuName : \{ "popup_zwnet_connecting", "error_popmenu", "error_popmenu_lobby" \}\)/);
   assert.ok(errorBranch.indexOf('Menus_CloseRequest') < errorBranch.indexOf('Menus_OpenByName(Game::uiContext, "pregame_loaderror")'));
   assert.ok(errorBranch.indexOf('Menus_OpenByName(Game::uiContext, "pregame_loaderror")') < errorBranch.indexOf('Dvar::Var("com_errorMessage").Set('));
   assert.ok(errorBranch.indexOf('Dvar::Var("com_errorTitle").Set(') < errorBranch.indexOf('Menus_OpenByName(Game::uiContext, "error_popmenu_lobby")'));
@@ -48,4 +49,10 @@ test('superseded errors cannot clean up a new join or reopen an old error dialog
   assert.match(scheduled, /nativeError = std::move\(nativeError\)/);
   assert.ok(scheduled.indexOf('nativeError.hasNativeError && joinTransitionGeneration != returnGeneration') < scheduled.indexOf('CL_IsCgameInitialized'));
   assert.match(scheduled, /ReturnToIdleMenu\(nativeError\)/);
+});
+
+test('Play Online releases a failed assignment before reading or resuming its party', () => {
+  const entry = source.slice(source.indexOf('void ZWNet::CompleteOnlineEntry('), source.indexOf('void ZWNet::AbandonOnlineSession('));
+  assert.ok(entry.indexOf('if (!ReleaseFailedMatch())') < entry.indexOf('const auto party = CurrentOrNewParty()'));
+  assert.match(entry, /if \(!ReleaseFailedMatch\(\)\)[\s\S]*?ScheduleReturnToIdleMenu\(std::move\(error\)\);\s*return;/);
 });

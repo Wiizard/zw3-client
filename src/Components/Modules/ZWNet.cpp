@@ -156,6 +156,7 @@ namespace Components
 	static std::string currentPlayerId;
 	static std::string currentProposalId;
 	static std::string currentMatchId;
+	static std::string pendingFailedMatchRelease;
 	static std::string presenceUiState = "OFFLINE";
 
 	static std::mutex asyncTaskMutex;
@@ -393,6 +394,7 @@ namespace Components
 		std::vector<std::string> requiredContent;
 		std::vector<std::string> verifiedContent;
 		std::int64_t revision = 0;
+		Utils::OnlineMetric playerPopulation;
 	};
 
 	struct ClientPlaylistCatalog
@@ -1382,6 +1384,7 @@ namespace Components
 			entry.audience = row.at("audience").get<std::string>();
 			entry.availability = row.at("availability").get<std::string>();
 			entry.revision = row.at("revision").get<std::int64_t>();
+			entry.playerPopulation.Observe(Utils::ReadOnlineMetric(row, "player_count"), Utils::OnlineMetric::Clock::now());
 
 			if (row.contains("min_players") && row.at("min_players").is_number_integer())
 			{
@@ -2762,6 +2765,18 @@ namespace Components
 			{
 				return;
 			}
+			// A rejected join must be released before party/status can resume it.
+			// Keep this pending on service failure so Play Online retries cleanup.
+			if (!ReleaseFailedMatch())
+			{
+				Events::NativeDisconnectError error;
+				error.hasNativeError = true;
+				error.message = FriendlyErrorText("ZWNET_REQUEST_FAILED");
+				error.title = "Connection error";
+				SetState("ERROR", "ZWNET_REQUEST_FAILED");
+				ScheduleReturnToIdleMenu(std::move(error));
+				return;
+			}
 
 			const auto party = CurrentOrNewParty();
 
@@ -3239,6 +3254,19 @@ namespace Components
 		{
 			StartQuickPlay(playlistId, playlistRevision, generation, isQuickPlay);
 		});
+	}
+
+	void ZWNet::HighlightQuickPlayFilterSlot(const int slot)
+	{
+		if (!isPlaylistSelectorOpen || isPlaylistSelectionStarting || slot < 0 || slot >= static_cast<int>(quickPlayFilterPageSize)) return;
+		{
+			std::lock_guard _(playlistCatalog.mutex);
+			const auto indices = QuickPlayFilterIndicesLocked();
+			const auto position = quickPlayFilterPage * quickPlayFilterPageSize + slot;
+			if (!playlistCatalog.isLoaded || position >= indices.size()) return;
+			playlistCatalog.selectedId = playlistCatalog.entries[indices[position]].id;
+		}
+		PublishPlaylistCatalog();
 	}
 
 	void ZWNet::ToggleQuickPlayFilterSlot(const int slot)
@@ -4880,7 +4908,24 @@ namespace Components
 		UpdatePresence();
 	}
 
-	void ZWNet::CloseOnlineSession(const bool isShuttingDown, const bool isTerminal)
+	bool ZWNet::ReleaseFailedMatch()
+	{
+		std::string matchId;
+		{
+			std::lock_guard _(stateMutex);
+			matchId = pendingFailedMatchRelease;
+		}
+		if (matchId.empty()) return true;
+		const auto result = Request("POST", "/zwnet/matchmaking/disconnect",
+			{ { "match_id", matchId }, { "terminal", true }, { "preserve_party", true } });
+		if (!result || !result->is_object() || result->contains("error") || result->value("ok", true) == false) return false;
+		std::lock_guard _(stateMutex);
+		if (pendingFailedMatchRelease != matchId) return false;
+		pendingFailedMatchRelease.clear();
+		return true;
+	}
+
+	void ZWNet::CloseOnlineSession(const bool isShuttingDown, const bool isTerminal, const bool releaseFailedMatch)
 	{
 		TraceOnlineTransition(isShuttingDown ? "close_shutdown" : (isTerminal ? "close_terminal" : "close_transient"));
 		CancelJoinInProgressPreview();
@@ -4924,7 +4969,18 @@ namespace Components
 			body["terminal"] = true;
 		}
 
-		Request("POST", "/zwnet/matchmaking/disconnect", body);
+		if (releaseFailedMatch && !matchId.empty())
+		{
+			{
+				std::lock_guard _(stateMutex);
+				pendingFailedMatchRelease = matchId;
+			}
+			ReleaseFailedMatch();
+		}
+		else
+		{
+			Request("POST", "/zwnet/matchmaking/disconnect", body);
+		}
 		Request("POST", "/social/presence", { { "status", "OFFLINE" }, { "sequence", NextPresenceSequence() }, { "joinable", false } });
 
 		isSearching = false;
@@ -5113,7 +5169,9 @@ namespace Components
 		{
 			// Closing an existing error popup can clear its DVARs. Finish all menu
 			// transitions before restoring this exact disconnect's captured error.
-			for (const char* menuName : { "popup_zwnet_connecting", "error_popmenu_lobby" })
+			// Native Com_Error can already have opened error_popmenu underneath
+			// our lobby dialog. Remove it too, or OK leaves an empty popup behind.
+			for (const char* menuName : { "popup_zwnet_connecting", "error_popmenu", "error_popmenu_lobby" })
 			{
 				if (auto* const menu = Game::Menus_FindByName(Game::uiContext, menuName))
 					Game::Menus_CloseRequest(Game::uiContext, menu);
@@ -5204,7 +5262,7 @@ namespace Components
 			return;
 		}
 
-		CloseOnlineSession(false, isTerminal);
+		CloseOnlineSession(false, isTerminal, wasMatchmaking && nativeError.hasNativeError);
 
 		if (wasMatchmaking)
 		{
@@ -5943,6 +6001,10 @@ namespace Components
 
 		if (hasActive)
 		{
+			const auto population = active->playerPopulation.Current(Utils::OnlineMetric::Clock::now());
+			Dvar::Var("zwnet_catalog_selected_population").Set(population
+				? std::format("{} {} IN PLAYLIST", *population, *population == 1 ? "PLAYER" : "PLAYERS")
+				: "PLAYLIST PLAYERS UNAVAILABLE");
 			isSelectionCurrent = playlistCatalog.partySelectedId.empty()
 				|| (active->id == playlistCatalog.partySelectedId && active->revision == playlistCatalog.partySelectedRevision);
 		}
@@ -6008,6 +6070,7 @@ namespace Components
 		else
 		{
 			Dvar::Var("zwnet_catalog_selected_name").Set("NO AVAILABLE PLAYLIST");
+			Dvar::Var("zwnet_catalog_selected_population").Set("PLAYLIST PLAYERS UNAVAILABLE");
 			Dvar::Var("zwnet_catalog_selected_description").Set("Select an available playlist to find a match.");
 			Dvar::Var("zwnet_catalog_selected_audience").Set("");
 			Dvar::Var("zwnet_catalog_selected_availability").Set("NO_SELECTION");
@@ -6550,6 +6613,18 @@ namespace Components
 		{
 			onlinePlayerMetric.Observe(Utils::ReadOnlineMetric(*response, "online_players"), now);
 			runningGameMetric.Observe(Utils::ReadOnlineMetric(*response, "running_games"), now);
+			if (response->is_object() && !response->contains("error") && response->contains("playlists") && response->at("playlists").is_array())
+			{
+				std::lock_guard _(playlistCatalog.mutex);
+				for (const auto& row : response->at("playlists"))
+				{
+					if (!row.is_object()) continue;
+					const auto id = JsonString(row, "id");
+					for (auto* entries : { &playlistCatalog.entries, &playlistCatalog.pendingEntries })
+						for (auto& entry : *entries)
+							if (entry.id == id) entry.playerPopulation.Observe(Utils::ReadOnlineMetric(row, "player_count"), now);
+				}
+			}
 		}
 		const auto onlinePlayers = onlinePlayerMetric.Current(now);
 		const auto runningGames = runningGameMetric.Current(now);
@@ -6573,6 +6648,7 @@ namespace Components
 			Dvar::Var("zwnet_running_games_text").Set(runningGames
 				? std::format("{} {} in progress", *runningGames, *runningGames == 1 ? "game" : "games")
 				: "");
+			PublishPlaylistCatalog();
 		}, Scheduler::Pipeline::MAIN);
 	}
 
@@ -6627,6 +6703,7 @@ namespace Components
 		Dvar::Register("zwnet_catalog_busy", false, Game::DVAR_NONE, "Playlist activation is in flight");
 		Dvar::Register("zwnet_quickplay_excluded", "", Game::DVAR_ARCHIVE, "Playlist IDs unticked in the Quick Play filter");
 		Dvar::Register("zwnet_qpf_count_text", "", Game::DVAR_NONE, "Quick Play filter selection summary");
+		Dvar::Register("zwnet_catalog_selected_population", "PLAYLIST PLAYERS UNAVAILABLE", Game::DVAR_NONE, "Fresh authoritative player count in the focused playlist");
 		Dvar::Register("zwnet_qpf_all_selected", true, Game::DVAR_NONE, "Every public playlist is in Quick Play");
 		Dvar::Register("zwnet_qpf_page", 1, 1, 100, Game::DVAR_NONE, "Quick Play filter page");
 		Dvar::Register("zwnet_qpf_pages", 1, 1, 100, Game::DVAR_NONE, "Quick Play filter page count");
@@ -7130,6 +7207,11 @@ namespace Components
 			ToggleQuickPlayFilterSlot(token.Get<int>());
 		});
 
+		UIScript::Add("ZWNET_HighlightQuickPlayFilter", [](const UIScript::Token& token)
+		{
+			HighlightQuickPlayFilterSlot(token.Get<int>());
+		});
+
 		UIScript::Add("ZWNET_QuickPlayFilterAll", [](const UIScript::Token&)
 		{
 			SelectAllQuickPlayFilter();
@@ -7353,11 +7435,11 @@ namespace Components
 		{
 			TraceOnlineTransition(wasConnected ? "native_disconnected_connected" : "native_disconnected_unconnected");
 			const auto nativeError = Events::CurrentNativeDisconnectError();
-			const auto disconnectGeneration = joinTransitionGeneration.load();
+			auto disconnectGeneration = joinTransitionGeneration.load();
 			const bool wasInGame = isInGame.exchange(false);
 			Dvar::Var("zwnet_match_return").Set(false);
 
-			if (isServerJoinTransition.exchange(false) && !nativeError.hasNativeError)
+			if (isServerJoinTransition.exchange(false) && !nativeError.hasNativeError && !nativeError.isExplicitDisconnect)
 			{
 				Logger::Print("ZWNET server join transition: preserving online session\n");
 				return;
@@ -7379,7 +7461,14 @@ namespace Components
 
 			if (wasMatchmaking)
 			{
-				const bool returnToLobby = isMatchmakingQuitRequested.exchange(false);
+				const bool returnToLobby = isMatchmakingQuitRequested.exchange(false)
+					|| Utils::IsExplicitLobbyDeparture(nativeError.isExplicitDisconnect, wasConnected,
+						nativeError.hasNativeError, isCompletedMatchReturnPending);
+				if (returnToLobby)
+				{
+					CancelPendingJoinPreparation();
+					disconnectGeneration = joinTransitionGeneration.load();
+				}
 				EnqueueAsync([isTerminal, wasMatchmaking, nativeError, disconnectGeneration, wasConnected, wasInGame, returnToLobby]
 				{
 					if (joinTransitionGeneration != disconnectGeneration) return;
@@ -7399,29 +7488,13 @@ namespace Components
 					HandleServerDisconnect(isTerminal, wasMatchmaking, nativeError, wasInGame);
 				});
 			}
+			else if (nativeError.isExplicitDisconnect && nativeError.wasPrivateMatchHost)
+			{
+				Party::SchedulePrivateLobbyReturn();
+			}
 			else if (isPrivateMatchClient)
 			{
-				Scheduler::Once([]
-				{
-					Command::Execute("xrequirelivesignin", false);
-					Command::Execute("set systemlink 0", false);
-					Command::Execute("set splitscreen 0", false);
-					Command::Execute("set onlinegame 1", false);
-					Command::Execute("exec default_xboxlive.cfg", false);
-					Command::Execute("set party_maxplayers 4", false);
-					Command::Execute("set party_maxprivatepartyplayers 4", false);
-					Command::Execute("set xblive_privateserver 0", false);
-					Command::Execute("set xblive_rankedmatch 0", false);
-					Command::Execute("xstartprivateparty", false);
-					Command::Execute("set ui_mptype 0", false);
-					Command::Execute("xcheckezpatch", false);
-					Command::Execute("exec default_xboxlive.cfg", false);
-					Command::Execute("set xblive_rankedmatch 0", false);
-					Command::Execute("ui_enumeratesaved", false);
-					Command::Execute("set xblive_privateserver 1", false);
-					Command::Execute("xstartprivatematch", false);
-					Command::Execute("openmenu menu_xboxlive_privatelobby", false);
-				}, Scheduler::Pipeline::MAIN, 250ms);
+				Party::SchedulePrivateLobbyReturn();
 			}
 		});
 

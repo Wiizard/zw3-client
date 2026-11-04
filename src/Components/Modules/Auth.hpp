@@ -17,6 +17,9 @@ namespace Components
 		static std::uint64_t GetKeyHash(const std::string& key);
 
 		static std::uint32_t GetSecurityLevel();
+		// The address is this PC (loopback or one of its own IPs). Servers let
+		// such clients in below their security level.
+		static bool IsSameMachineAddress(const Network::Address& address);
 		static void IncreaseSecurityLevel(std::uint32_t level, const std::string& command = {});
 
 		static std::uint32_t GetZeroBits(const Utils::Cryptography::Token& token, const std::string& publicKey);

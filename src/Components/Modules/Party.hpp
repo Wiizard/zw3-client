@@ -24,6 +24,7 @@ namespace Components
 		// What the private lobby's START MATCH does before xpartygo: clears a
 		// pending save load and applies the chosen zombies mode.
 		static void PreparePrivateMatchStart();
+		static void SchedulePrivateLobbyReturn();
 
 		static void Connect(const Network::Address& target, bool downloadOnly = false, bool isUnmanagedRequired = false, bool preserveLobbyTransition = false);
 

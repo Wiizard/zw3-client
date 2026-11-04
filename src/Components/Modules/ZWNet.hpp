@@ -47,6 +47,7 @@ namespace Components
 		static void ActivatePlaylist(const std::string& playlistId, std::int64_t playlistRevision, bool isQuickPlay);
 		static void ChangePlaylistPage(int direction);
 		static void ToggleQuickPlayFilterSlot(int slot);
+		static void HighlightQuickPlayFilterSlot(int slot);
 		static void SelectAllQuickPlayFilter();
 		static void ChangeQuickPlayFilterPage(int direction);
 		static void AcknowledgePlaylistNotice();
@@ -59,7 +60,8 @@ namespace Components
 		static void CancelSearch();
 		static void CancelMatchmaking(bool openFindMatch = true);
 		static void ScheduleMatchmakingLobby(bool openFindMatch);
-		static void CloseOnlineSession(bool isShuttingDown, bool isTerminal);
+		static void CloseOnlineSession(bool isShuttingDown, bool isTerminal, bool releaseFailedMatch = false);
+		static bool ReleaseFailedMatch();
 		static void HandleServerDisconnect(bool isTerminal, bool wasMatchmaking, Events::NativeDisconnectError nativeError, bool wasInGame);
 		static bool ReturnToMatchmakingLobby(bool requireAssignedCompletion = false);
 		static void ScheduleReturnToIdleMenu(Events::NativeDisconnectError nativeError = {});

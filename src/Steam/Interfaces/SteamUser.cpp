@@ -32,7 +32,7 @@ namespace Steam
 
 		if (!idBits)
 		{
-			if (Components::Singleton::IsFirstInstance() && !Components::Dedicated::IsEnabled())
+			if (!Components::Dedicated::IsEnabled())
 			{
 				idBits = Components::Auth::GetKeyHash();
 			}

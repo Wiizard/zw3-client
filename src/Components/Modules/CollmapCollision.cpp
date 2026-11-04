@@ -1,6 +1,7 @@
 #include "STDInclude.hpp"
 
 #include "CollmapCollision.hpp"
+#include "CollmapGeometry.hpp"
 #include "ClipMap.hpp"
 #include "GSC/Script.hpp"
 #include "Logger.hpp"
@@ -527,7 +528,7 @@ namespace Components
 		{
 			const auto* const model = static_cast<const Game::XModel*>(header);
 
-			if (model && model->physCollmap && model->physCollmap->count && model->physCollmap->geoms)
+			if (CollmapGeometry::Available(model))
 			{
 				static_cast<std::vector<const Game::XModel*>*>(data)->push_back(model);
 			}
@@ -575,7 +576,12 @@ namespace Components
 
 		for (const auto* const model : models)
 		{
-			const auto* const physCollmap = model->physCollmap;
+			// A model's collision binding can change after asset enumeration.
+			const auto* const physCollmap = CollmapGeometry::Available(model);
+			if (!physCollmap)
+			{
+				continue;
+			}
 
 			if (const auto existing = handles.find(physCollmap); existing != handles.end())
 			{

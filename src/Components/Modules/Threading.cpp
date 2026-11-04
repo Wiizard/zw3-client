@@ -35,12 +35,7 @@ namespace Components
 
 	constexpr std::uintptr_t ip_socket = 0x14678C430;
 
-	constexpr std::uintptr_t SV_Frame_SV_CheckLoadGameCall = 0x14023C557;
-	constexpr std::uintptr_t SV_CheckLoadGame = 0x1402360D0;
-	constexpr std::uintptr_t sv_timeResidual = 0x1464FDF04;
-
 	static Utils::Hook frameWaitHook;
-	static Utils::Hook serverFrameWaitHook;
 
 	static double droppedFractionMs = 0.0;
 
@@ -141,41 +136,16 @@ namespace Components
 		return *frameTime - lastFrameTime;
 	}
 
-	static int SV_CheckLoadGame_Hk()
-	{
-		const int isRestarting = reinterpret_cast<int(*)()>(Utils::Hook::Rebase(SV_CheckLoadGame))();
-
-		if (!isRestarting)
-		{
-			const int residual = *reinterpret_cast<int*>(Utils::Hook::Rebase(sv_timeResidual));
-
-			if (residual < 50)
-			{
-				// The native game worker can still own the script VM here. A
-				// connect packet dispatched from this pacing hook would enter the
-				// same VM on MAIN and overwrite the worker's shared jump buffers.
-				// Only wait/wake here; the regular engine event loop owns dispatch.
-				NetSleep(50 - residual, false);
-			}
-		}
-
-		return isRestarting;
-	}
-
 	Threading::Threading()
 	{
 		timeBeginPeriod(1);
 
 		if (Dedicated::IsEnabled())
 		{
-			if (!Utils::Hook::BranchesTo(SV_Frame_SV_CheckLoadGameCall, SV_CheckLoadGame, HOOK_CALL)
-				|| !serverFrameWaitHook.Initialize(SV_Frame_SV_CheckLoadGameCall, reinterpret_cast<void*>(SV_CheckLoadGame_Hk), HOOK_CALL)->Install()->IsInstalled())
-			{
-				Logger::Error("threading: could not seat the server frame wait, the dedicated server keeps the engine's pacing\n");
-				return;
-			}
-
-			serverFrameWaitHook.Quick();
+			// Keep the engine's event-pumping wait BEFORE it measures frame time.
+			// Waiting inside SV_CheckLoadGame used the previous residual, delayed
+			// already-due ticks and fed uneven durations into the client smoother.
+			// Never dispatch server packets here: the game worker owns the VM.
 			return;
 		}
 

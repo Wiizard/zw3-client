@@ -8,6 +8,7 @@
 #include "Scheduler.hpp"
 #include "RendererDepthBias.hpp"
 #include "RendererArchitecture.hpp"
+#include "FxSpotlight.hpp"
 
 extern "C"
 {
@@ -303,6 +304,11 @@ namespace Components
 		if (!RendererDepthBias::Install())
 		{
 			Logger::Error("renderer: decal depth-bias calls differ; precise BO3 decal offsets not installed\n");
+		}
+
+		if (!FxSpotlight::Install())
+		{
+			Logger::Error("renderer: spotlight spawn calls differ; BO3 spotlight lifecycle correction not installed\n");
 		}
 
 		// Apply the same general cull policy as the converter to existing BO3

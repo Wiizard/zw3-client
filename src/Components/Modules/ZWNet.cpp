@@ -387,6 +387,7 @@ namespace Components
 		std::string mapId;
 		std::string mapImage;
 		std::string rotationSummary;
+		std::string zombieMode;
 		std::string zombieSettingsSummary;
 		int minPlayers = 1;
 		int maxPlayers = 4;
@@ -1218,7 +1219,7 @@ namespace Components
 		}
 	}
 
-	static bool TryParseZombieSettings(const nlohmann::json& row, std::string& summary)
+	static bool TryParseZombieSettings(const nlohmann::json& row, std::string& mode, std::string& summary)
 	{
 		std::string zombieMode = "NORMAL";
 		bool hasHitmarkers = true;
@@ -1257,6 +1258,7 @@ namespace Components
 			return false;
 		}
 
+		mode = zombieMode;
 		summary = std::format("{} / HITMARKERS {} / COUNTER {} / DAMAGE {} / DAY-NIGHT {} / OMNI {}", zombieMode,
 			OnOffText(hasHitmarkers), OnOffText(hasZombieCounter), OnOffText(hasDamageNumbers),
 			OnOffText(hasDayNightCycle), OnOffText(hasOmnimovement));
@@ -1396,7 +1398,7 @@ namespace Components
 				entry.maxPlayers = row.at("max_players").get<int>();
 			}
 
-			if (!TryParseZombieSettings(row, entry.zombieSettingsSummary))
+			if (!TryParseZombieSettings(row, entry.zombieMode, entry.zombieSettingsSummary))
 			{
 				return false;
 			}
@@ -2233,6 +2235,7 @@ namespace Components
 	static void ClearMatchDvars()
 	{
 		Dvar::Var("zwnet_vote_active").Set(false);
+		Dvar::Var("zwnet_vote_zombiemode").Set("");
 		Dvar::Var("zwnet_vote_selection").Set("");
 		Dvar::Var("zwnet_start_phase").Set("");
 		Dvar::Var("zwnet_start_seconds").Set(0);
@@ -3449,6 +3452,7 @@ namespace Components
 			? party->at("members").size() : 0;
 		std::vector<std::string> verifiedContent;
 		std::string playlistName;
+		std::string playlistMode;
 		std::string playlistSettings;
 		std::string selectionError = "ZWNET_PLAYLIST_REFRESH_REQUIRED";
 		bool isQuickPlayFilterBlocking = false;
@@ -3499,6 +3503,7 @@ namespace Components
 			{
 				verifiedContent = selected->verifiedContent;
 				playlistName = selected->name;
+				playlistMode = selected->zombieMode;
 				playlistSettings = selected->zombieSettingsSummary;
 			}
 		}
@@ -3546,7 +3551,7 @@ namespace Components
 			return true;
 		};
 
-		const auto accept = [selectorGeneration, playlistId, playlistName, playlistSettings, playlistRevision](const std::string& state)
+		const auto accept = [selectorGeneration, playlistId, playlistName, playlistMode, playlistSettings, playlistRevision](const std::string& state)
 		{
 			if (!IsCurrentPlaylistActivation(selectorGeneration))
 			{
@@ -3559,7 +3564,7 @@ namespace Components
 			SetState(state);
 			const auto transitionGeneration = joinTransitionGeneration.load();
 
-			Scheduler::Once([playlistId, playlistName, playlistSettings, playlistRevision, transitionGeneration]
+			Scheduler::Once([playlistId, playlistName, playlistMode, playlistSettings, playlistRevision, transitionGeneration]
 			{
 				if (!isActive || !isSearching || transitionGeneration != joinTransitionGeneration)
 				{
@@ -3570,6 +3575,7 @@ namespace Components
 				Dvar::Var("zwnet_search_playlist_name").Set(playlistName);
 				Dvar::Var("zwnet_search_playlist_revision").Set(static_cast<int>(playlistRevision));
 				Dvar::Var("zwnet_search_playlist_settings").Set(playlistSettings);
+				Dvar::Var("zwnet_vote_zombiemode").Set(playlistMode);
 				SetPlaylistActionError("");
 				Command::Execute("closemenu popup_zwnet_playlists", false);
 			}, Scheduler::Pipeline::MAIN);
@@ -6147,6 +6153,20 @@ namespace Components
 		{
 			const auto partySelected = findEntry(playlistCatalog.partySelectedId);
 			if (partySelected != playlistCatalog.entries.end()) partyPlaylistName = partySelected->name;
+			// Follow the party's exact playlist revision, including on invited
+			// clients. Hovering another row must never change the vote's mode.
+			if (partySelected != playlistCatalog.entries.end() && partySelected->revision == playlistCatalog.partySelectedRevision)
+			{
+				Dvar::Var("zwnet_vote_zombiemode").Set(partySelected->zombieMode);
+			}
+			else if (!isPinned)
+			{
+				Dvar::Var("zwnet_vote_zombiemode").Set("");
+			}
+		}
+		else if (!isPinned)
+		{
+			Dvar::Var("zwnet_vote_zombiemode").Set("");
 		}
 		Dvar::Var("zwnet_party_playlist_name").Set(partyPlaylistName);
 	}
@@ -6778,6 +6798,7 @@ namespace Components
 		Dvar::Register("zwnet_vote_proposal_id", "", Game::DVAR_NONE, "Current map vote");
 		Dvar::Register("zwnet_vote_seconds", 0, 0, 60, Game::DVAR_NONE, "Map vote time remaining");
 		Dvar::Register("zwnet_vote_selection", "", Game::DVAR_NONE, "Local map vote selection");
+		Dvar::Register("zwnet_vote_zombiemode", "", Game::DVAR_NONE, "Zombie mode of the matchmaking playlist revision");
 
 		RegisterStringDvars({ { "zwnet_vote_map_a_id", "" }, { "zwnet_vote_map_b_id", "" } }, "Map vote internal id");
 		RegisterStringDvars({ { "zwnet_vote_map_a_name", "" }, { "zwnet_vote_map_b_name", "" } }, "Map vote display name");

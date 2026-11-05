@@ -10,14 +10,31 @@ namespace Components
 	extern "C"
 	{
 		void Com_Frame_WaitStub();
+		void Com_Frame_DedicatedMsecStub();
+		void SV_DedicatedFrameBudgetStub();
 
 		std::uintptr_t Com_Frame_WaitResume = 0;
+		std::uintptr_t Com_Frame_DedicatedMsecResume = 0;
+		std::uintptr_t SV_DedicatedFrameRun = 0;
+		std::uintptr_t SV_DedicatedFrameSkip = 0;
+		std::uintptr_t SV_DedicatedTime = 0;
+		std::uintptr_t SV_DedicatedTargetTime = 0;
 
 		int Threading_ComFrameWait(int minMsec);
 	}
 
 	constexpr std::uintptr_t Com_Frame_WaitLoop = 0x1401F4400;
 	constexpr std::uintptr_t Com_Frame_WaitDone = 0x1401F4432;
+	constexpr std::uintptr_t Com_Frame_SmoothMsec = 0x1401F446D;
+	constexpr std::uintptr_t Com_Frame_ApplyTimeScale = 0x1401F4600;
+	static const std::uint8_t smoothMsecEntry[] = { 0x4C, 0x63, 0xD7, 0x44, 0x8B, 0xC8 };
+	static const std::uint8_t applyTimeScaleEntry[] = { 0x41, 0x8B, 0xD9 };
+	constexpr std::uintptr_t SV_Thread_FrameTest = 0x14023D488;
+	constexpr std::uintptr_t SV_Thread_FrameRun = 0x14023D491;
+	constexpr std::uintptr_t SV_Thread_FrameSkip = 0x14023D561;
+	static const std::uint8_t serverFrameTest[] = { 0x45, 0x85, 0xF6, 0x0F, 0x84, 0xD0, 0x00, 0x00, 0x00 };
+	constexpr std::uintptr_t svs_time = 0x14340EC80;
+	constexpr std::uintptr_t sv_thread_targetTime = 0x1464FDF0C;
 
 	static const std::uint8_t waitLoop[] =
 	{
@@ -41,6 +58,8 @@ namespace Components
 
 	static Utils::Hook frameWaitHook;
 	static Utils::Hook serverFrameWaitHook;
+	static Utils::Hook dedicatedMsecHook;
+	static Utils::Hook dedicatedFrameBudgetHook;
 
 	static double droppedFractionMs = 0.0;
 
@@ -168,6 +187,55 @@ namespace Components
 
 		if (Dedicated::IsEnabled())
 		{
+			// A native worker timeout can race with the main thread's frame event.
+			// Both wakeups used to simulate a tick, even if the target was already
+			// reached. Only run a game tick while SV_Frame has budgeted one; packet
+			// processing, worker ownership and event signaling stay in native code.
+			if (Utils::Hook::MatchesBytes(SV_Thread_FrameTest, serverFrameTest, sizeof(serverFrameTest)))
+			{
+				SV_DedicatedFrameRun = Utils::Hook::Rebase(SV_Thread_FrameRun);
+				SV_DedicatedFrameSkip = Utils::Hook::Rebase(SV_Thread_FrameSkip);
+				SV_DedicatedTime = Utils::Hook::Rebase(svs_time);
+				SV_DedicatedTargetTime = Utils::Hook::Rebase(sv_thread_targetTime);
+				if (dedicatedFrameBudgetHook.Initialize(SV_Thread_FrameTest, SV_DedicatedFrameBudgetStub, HOOK_CALL)->Install()->IsInstalled())
+				{
+					dedicatedFrameBudgetHook.Quick();
+					Logger::Print("threading: dedicated worker advances only to the scheduled server time\n");
+				}
+				else
+				{
+					Logger::Error("threading: could not install dedicated worker timing fix\n");
+				}
+			}
+			else
+			{
+				Logger::Error("threading: server frame gate does not match the supported engine; worker timing left unchanged\n");
+			}
+
+			// The client's three-frame filter carries time from frames over 40 ms
+			// into later frames even though it already passed that time through.
+			// A sleeping dedicated server hits this path regularly and advances
+			// faster than wall time. Keep the clamped elapsed milliseconds; the
+			// native timescale/fixedtime handling and server worker remain intact.
+			if (Utils::Hook::MatchesBytes(Com_Frame_SmoothMsec, smoothMsecEntry, sizeof(smoothMsecEntry))
+				&& Utils::Hook::MatchesBytes(Com_Frame_ApplyTimeScale, applyTimeScaleEntry, sizeof(applyTimeScaleEntry)))
+			{
+				Com_Frame_DedicatedMsecResume = Utils::Hook::Rebase(Com_Frame_ApplyTimeScale);
+				if (dedicatedMsecHook.Initialize(Com_Frame_SmoothMsec, Com_Frame_DedicatedMsecStub, HOOK_CALL)->Install()->IsInstalled())
+				{
+					dedicatedMsecHook.Quick();
+					Logger::Print("threading: dedicated simulation uses elapsed time without client frame smoothing\n");
+				}
+				else
+				{
+					Logger::Error("threading: could not install dedicated frame timing fix\n");
+				}
+			}
+			else
+			{
+				Logger::Error("threading: frame smoothing does not match the supported engine; dedicated timing left unchanged\n");
+			}
+
 			if (!Utils::Hook::BranchesTo(SV_Frame_SV_CheckLoadGameCall, SV_CheckLoadGame, HOOK_CALL)
 				|| !serverFrameWaitHook.Initialize(SV_Frame_SV_CheckLoadGameCall, reinterpret_cast<void*>(SV_CheckLoadGame_Hk), HOOK_CALL)->Install()->IsInstalled())
 			{

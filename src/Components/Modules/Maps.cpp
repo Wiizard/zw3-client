@@ -1200,6 +1200,33 @@ namespace Components
 			SynchronizeMapDvars(mapName);
 		});
 
+		// A private lobby client (or second local instance) gets the host's map
+		// through ui_mapname after the lobby menu has opened, so the preview image
+		// followed the host but the name kept the local choice. Re-resolve the
+		// display name whenever ui_mapname changes outside a match.
+		if (!Dedicated::IsEnabled())
+		{
+			Scheduler::Loop([]
+			{
+				static std::string lastMapName;
+
+				if (Game::CL_IsCgameInitialized(0))
+				{
+					return;
+				}
+
+				const auto mapName = Dvar::Var("ui_mapname").Get<std::string>();
+
+				if (mapName.empty() || mapName == lastMapName)
+				{
+					return;
+				}
+
+				lastMapName = mapName;
+				SynchronizeMapDvars(mapName);
+			}, Scheduler::Pipeline::MAIN, 250ms);
+		}
+
 		GSC::Script::AddFunction("GetMapList", GSCr_GetMapList);
 		GSC::Script::AddFunction("GetMapArenaInfo", GSCr_GetMapArenaInfo);
 

@@ -4340,6 +4340,7 @@ namespace Components
 		Add("ui_mp/zwnet_matchmaking.menu");
 		Add("ui_mp/popup_zwnet_playlists.menu");
 		Add("ui_mp/popup_zwnet_quickplay_filter.menu");
+		Add("ui_mp/popup_zwnet_map_gallery.menu");
 		Add("ui_mp/popup_zwnet_player_card.menu");
 		Add("ui_mp/menu_quest_challenges.menu");
 		Add("ui_mp/popup_upnp.menu");

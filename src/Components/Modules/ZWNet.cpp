@@ -278,6 +278,30 @@ namespace Components
 
 	constexpr std::size_t playlistPageSize = 5;
 	constexpr std::size_t playlistMaxMaps = 512;
+	// Find Match map gallery: the focused playlist's maps, one page at a time,
+	// plus the first few for the hover strip on the details card.
+	constexpr std::size_t playlistMapPageSize = 9;
+	constexpr std::size_t playlistMapStripSize = 4;
+
+	constexpr std::array playlistMapNameDvars
+	{
+		"zwnet_catalog_map_0_name", "zwnet_catalog_map_1_name", "zwnet_catalog_map_2_name", "zwnet_catalog_map_3_name", "zwnet_catalog_map_4_name", "zwnet_catalog_map_5_name", "zwnet_catalog_map_6_name", "zwnet_catalog_map_7_name", "zwnet_catalog_map_8_name"
+	};
+
+	constexpr std::array playlistMapImageDvars
+	{
+		"zwnet_catalog_map_0_image", "zwnet_catalog_map_1_image", "zwnet_catalog_map_2_image", "zwnet_catalog_map_3_image", "zwnet_catalog_map_4_image", "zwnet_catalog_map_5_image", "zwnet_catalog_map_6_image", "zwnet_catalog_map_7_image", "zwnet_catalog_map_8_image"
+	};
+
+	constexpr std::array playlistMapStripNameDvars
+	{
+		"zwnet_catalog_map_strip_0_name", "zwnet_catalog_map_strip_1_name", "zwnet_catalog_map_strip_2_name", "zwnet_catalog_map_strip_3_name"
+	};
+
+	constexpr std::array playlistMapStripImageDvars
+	{
+		"zwnet_catalog_map_strip_0_image", "zwnet_catalog_map_strip_1_image", "zwnet_catalog_map_strip_2_image", "zwnet_catalog_map_strip_3_image"
+	};
 	constexpr auto contentManifestPath = "zw3/core/zwnet-content-manifest.json";
 	constexpr std::uintmax_t contentManifestMaxBytes = 256 * 1024;
 	constexpr std::size_t contentManifestMaxEntries = 256;
@@ -375,6 +399,13 @@ namespace Components
 		std::string sha256;
 	};
 
+	struct ClientPlaylistMap
+	{
+		std::string id;
+		std::string name;
+		std::string image;
+	};
+
 	struct ClientPlaylist
 	{
 		std::string id;
@@ -387,6 +418,7 @@ namespace Components
 		std::string mapImage;
 		std::string imageUrl;
 		std::string rotationSummary;
+		std::vector<ClientPlaylistMap> maps;
 		std::string zombieMode;
 		std::string zombieSettingsSummary;
 		int minPlayers = 1;
@@ -411,6 +443,9 @@ namespace Components
 		std::int64_t partySelectedRevision = 0;
 		std::uint64_t generation = 0;
 		std::size_t page = 0;
+		// Map gallery page, reset when the focused playlist changes.
+		std::size_t mapPage = 0;
+		std::string mapPageOwner;
 		bool isLoaded = false;
 		bool isStale = false;
 		bool isInFlight = false;
@@ -1092,7 +1127,7 @@ namespace Components
 		{
 			for (auto& entry : entries)
 			{
-				entry.availabilityDetail = "No compatible server capacity is available.";
+				entry.availabilityDetail = "All servers are busy right now. Please try again in a minute.";
 
 				if (entry.availability == "AVAILABLE")
 				{
@@ -1114,7 +1149,7 @@ namespace Components
 
 			if (entry.availability != "AVAILABLE")
 			{
-				entry.availabilityDetail = "No compatible server capacity is available.";
+				entry.availabilityDetail = "All servers are busy right now. Please try again in a minute.";
 				continue;
 			}
 
@@ -1257,6 +1292,8 @@ namespace Components
 			return false;
 		}
 
+		entry.maps.clear();
+
 		std::vector<std::string> mapNames;
 
 		for (const auto& map : maps)
@@ -1268,6 +1305,7 @@ namespace Components
 
 			const auto mapId = map.at("id").get<std::string>();
 			const auto mapName = SafePlaylistText(map.at("name").get<std::string>(), 60);
+			const auto mapImage = map.contains("image") && map.at("image").is_string() ? map.at("image").get<std::string>() : std::string{};
 
 			const bool isPlainMapId = std::ranges::all_of(mapId, [](const unsigned char character)
 			{
@@ -1295,6 +1333,7 @@ namespace Components
 			}
 
 			mapNames.push_back(mapName);
+			entry.maps.push_back({ mapId, mapName, mapImage.size() <= 80 ? mapImage : std::string{} });
 		}
 
 		if (mapNames.size() == 1)
@@ -2089,7 +2128,7 @@ namespace Components
 			{ "ZWNET_RELAY_TIMEOUT", "The relay did not confirm the connection. Return to the lobby and try again." },
 			{ "ZWNET_SERVER_NOT_READY", "The assigned ZW3 server is no longer available. Return to the lobby and search again." },
 			{ "ZWNET_DESCRIPTOR_INVALID", "The assigned server address is invalid." },
-			{ "ZWNET_ACCOUNT_LINK_REQUIRED", "Link this GUID in ZW3 Stats Settings." },
+			{ "ZWNET_ACCOUNT_LINK_REQUIRED", "To play online, select Link Account and sign in with Discord on ZW3 Stats. Link your player ID (GUID), then return to the game and select Play Online again." },
 			{ "ZWNET_SESSION_STORAGE_FAILED", "The secure ZW3 session could not be stored." },
 			{ "ZWNET_REGISTRATION_UNAVAILABLE", "The ZW3 account page is unavailable." },
 			{ "ZWNET_PARTY_FAILED", "The ZW3 party could not be created or loaded." },
@@ -3362,6 +3401,34 @@ namespace Components
 			else if (direction > 0 && playlistCatalog.page + 1 < pageCount)
 			{
 				++playlistCatalog.page;
+			}
+		}
+
+		PublishPlaylistCatalog();
+	}
+
+	void ZWNet::ChangePlaylistMapPage(const int direction)
+	{
+		if (direction < -1 || direction > 1)
+		{
+			return;
+		}
+
+		{
+			std::lock_guard _(playlistCatalog.mutex);
+
+			if (direction == 0)
+			{
+				playlistCatalog.mapPage = 0;
+			}
+			else if (direction < 0 && playlistCatalog.mapPage > 0)
+			{
+				--playlistCatalog.mapPage;
+			}
+			else if (direction > 0)
+			{
+				// PublishPlaylistMapDvarsLocked clamps to the last page.
+				++playlistCatalog.mapPage;
 			}
 		}
 
@@ -5111,9 +5178,18 @@ namespace Components
 
 		if (nativeError.hasNativeError)
 		{
+			auto title = nativeError.title;
+			if (auto* const notice = Game::Menus_FindByName(Game::uiContext, "error_popmenu_party");
+				notice && Game::Menu_IsVisible(Game::uiContext, notice))
+			{
+				// The native party popup renders a fixed Notice heading.
+				title = "Notice";
+			}
+
 			// Closing an existing error popup can clear its DVARs. Finish all menu
 			// transitions before restoring this exact disconnect's captured error.
-			for (const char* menuName : { "popup_zwnet_connecting", "error_popmenu_lobby" })
+			for (const char* menuName : { "popup_zwnet_connecting", "error_popmenu", "error_popmenu_submenu",
+				"error_popmenu_party", "error_popmenu_lobby" })
 			{
 				if (auto* const menu = Game::Menus_FindByName(Game::uiContext, menuName))
 					Game::Menus_CloseRequest(Game::uiContext, menu);
@@ -5121,7 +5197,7 @@ namespace Components
 			Game::Menus_OpenByName(Game::uiContext, "pregame_loaderror");
 			Dvar::Var("com_errorMessage").Set(nativeError.message.empty()
 				? FriendlyErrorText("ZWNET_CONNECTION_FAILED") : nativeError.message);
-			Dvar::Var("com_errorTitle").Set(nativeError.title.empty() ? "Connection error" : nativeError.title);
+			Dvar::Var("com_errorTitle").Set(title.empty() ? "Connection error" : title);
 			Game::Menus_OpenByName(Game::uiContext, "error_popmenu_lobby");
 			return;
 		}
@@ -5867,6 +5943,61 @@ namespace Components
 		return mapId;
 	}
 
+	// Publishes the focused playlist's maps for the Find Match gallery.
+	// Caller holds playlistCatalog.mutex.
+	static void PublishPlaylistMapDvarsLocked(const ClientPlaylist* active)
+	{
+		static const std::vector<ClientPlaylistMap> noMaps;
+		const auto& maps = active ? active->maps : noMaps;
+		const auto owner = active ? active->id : std::string{};
+
+		if (playlistCatalog.mapPageOwner != owner)
+		{
+			playlistCatalog.mapPageOwner = owner;
+			playlistCatalog.mapPage = 0;
+		}
+
+		const auto pageCount = std::max<std::size_t>(1, (maps.size() + playlistMapPageSize - 1) / playlistMapPageSize);
+		playlistCatalog.mapPage = std::min(playlistCatalog.mapPage, pageCount - 1);
+
+		Dvar::Var("zwnet_catalog_map_count").Set(static_cast<int>(maps.size()));
+		Dvar::Var("zwnet_catalog_map_page").Set(static_cast<int>(playlistCatalog.mapPage + 1));
+		Dvar::Var("zwnet_catalog_map_pages").Set(static_cast<int>(pageCount));
+		Dvar::Var("zwnet_catalog_map_count_text").Set(maps.size() == 1 ? std::string("1 MAP") : std::format("{} MAPS", maps.size()));
+		Dvar::Var("zwnet_catalog_map_page_text").Set(pageCount > 1
+			? std::format("PAGE {} / {}", playlistCatalog.mapPage + 1, pageCount) : std::string{});
+
+		const auto publish = [&maps](const std::size_t index, const char* nameDvar, const char* imageDvar)
+		{
+			if (index < maps.size())
+			{
+				SetDisplayText(nameDvar, ResolveVoteMapDisplayName(maps[index].id, maps[index].name));
+				Dvar::Var(imageDvar).Set(ResolveVoteMapImage(maps[index].id, maps[index].image));
+			}
+			else
+			{
+				Dvar::Var(nameDvar).Set("");
+				Dvar::Var(imageDvar).Set("");
+			}
+		};
+
+		for (std::size_t slot = 0; slot < playlistMapStripSize; ++slot)
+		{
+			publish(slot, playlistMapStripNameDvars[slot], playlistMapStripImageDvars[slot]);
+		}
+
+		// The last strip tile carries "+N MORE" when the rest do not fit.
+		Dvar::Var("zwnet_catalog_map_strip_more").Set(maps.size() > playlistMapStripSize
+			? std::format("+{} MORE", maps.size() - (playlistMapStripSize - 1)) : std::string{});
+
+		const auto first = playlistCatalog.mapPage * playlistMapPageSize;
+
+		for (std::size_t slot = 0; slot < playlistMapPageSize; ++slot)
+		{
+			publish(first + slot, playlistMapNameDvars[slot], playlistMapImageDvars[slot]);
+		}
+	}
+
 	std::string ZWNet::ResolvePlaylistImage(const std::string& path)
 	{
 		const auto digest = Utils::PlaylistImageDigest(path);
@@ -6103,6 +6234,7 @@ namespace Components
 
 			Dvar::Var("zwnet_catalog_selected_players").Set(std::format("{}-{} PLAYERS", active->minPlayers, active->maxPlayers));
 			Dvar::Var("zwnet_catalog_selected_zombie_settings").Set(active->zombieSettingsSummary);
+			PublishPlaylistMapDvarsLocked(&*active);
 		}
 		else
 		{
@@ -6126,6 +6258,7 @@ namespace Components
 			Dvar::Var("zwnet_catalog_selected_image").Set("");
 			Dvar::Var("zwnet_catalog_selected_players").Set("");
 			Dvar::Var("zwnet_catalog_selected_zombie_settings").Set("");
+			PublishPlaylistMapDvarsLocked(nullptr);
 		}
 
 		const bool isSelectionStarting = isPlaylistSelectionStarting;
@@ -6651,7 +6784,11 @@ namespace Components
 			return;
 		}
 
+		// Time the status request: the search screen shows it as the service ping.
+		const auto requestStartedAt = std::chrono::steady_clock::now();
 		const auto response = Request("GET", "/api/status");
+		const auto pingMs = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+			std::chrono::steady_clock::now() - requestStartedAt).count());
 
 		const auto now = Utils::OnlineMetric::Clock::now();
 		if (response)
@@ -6674,12 +6811,19 @@ namespace Components
 		const auto onlinePlayers = onlinePlayerMetric.Current(now);
 		const auto runningGames = runningGameMetric.Current(now);
 
-		Scheduler::Once([onlinePlayers, runningGames]
+		const bool hasPing = static_cast<bool>(response);
+
+		Scheduler::Once([onlinePlayers, runningGames, hasPing, pingMs]
 		{
 			if (!isActive || !isNetworkMetricsEnabled)
 			{
 				return;
 			}
+
+			// zwnet_matchmaking.menu: "N games found" and "Searching for best ping (N ms)".
+			Dvar::Var("zwnet_running_games_count").Set(runningGames ? static_cast<int>(*runningGames) : 0);
+			Dvar::Var("zwnet_service_ping_known").Set(hasPing);
+			Dvar::Var("zwnet_service_ping_ms").Set(hasPing ? std::clamp(pingMs, 0, 9999) : 0);
 
 			Dvar::Var("zwnet_online_players_known").Set(onlinePlayers.has_value());
 			Dvar::Var("zwnet_running_games_known").Set(runningGames.has_value());
@@ -6739,6 +6883,24 @@ namespace Components
 		Dvar::Register("zwnet_catalog_selected_image", "", Game::DVAR_NONE, "Selected playlist preview material");
 		Dvar::Register("zwnet_catalog_selected_players", "", Game::DVAR_NONE, "Selected playlist player range");
 		Dvar::Register("zwnet_catalog_selected_zombie_settings", "", Game::DVAR_NONE, "Selected playlist zombie settings");
+		Dvar::Register("zwnet_catalog_map_count", 0, 0, static_cast<int>(playlistMaxMaps), Game::DVAR_NONE, "Map count of the focused playlist");
+		Dvar::Register("zwnet_catalog_map_page", 1, 1, static_cast<int>(playlistMaxMaps), Game::DVAR_NONE, "Map gallery page");
+		Dvar::Register("zwnet_catalog_map_pages", 1, 1, static_cast<int>(playlistMaxMaps), Game::DVAR_NONE, "Map gallery page count");
+		Dvar::Register("zwnet_catalog_map_count_text", "0 MAPS", Game::DVAR_NONE, "Map count label of the focused playlist");
+		Dvar::Register("zwnet_catalog_map_page_text", "", Game::DVAR_NONE, "Map gallery page label");
+		Dvar::Register("zwnet_catalog_map_strip_more", "", Game::DVAR_NONE, "Maps beyond the hover strip");
+
+		for (std::size_t slot = 0; slot < playlistMapPageSize; ++slot)
+		{
+			Dvar::Register(playlistMapNameDvars[slot], "", Game::DVAR_NONE, "Map gallery slot name");
+			Dvar::Register(playlistMapImageDvars[slot], "", Game::DVAR_NONE, "Map gallery slot preview material");
+		}
+
+		for (std::size_t slot = 0; slot < playlistMapStripSize; ++slot)
+		{
+			Dvar::Register(playlistMapStripNameDvars[slot], "", Game::DVAR_NONE, "Map strip slot name");
+			Dvar::Register(playlistMapStripImageDvars[slot], "", Game::DVAR_NONE, "Map strip slot preview material");
+		}
 		Dvar::Register("zwnet_catalog_action_error", "", Game::DVAR_NONE, "Playlist activation feedback");
 		Dvar::Register("zwnet_quickplay_error", "", Game::DVAR_NONE, "Quick Play feedback for compatible private menus");
 		Dvar::Register("zwnet_catalog_busy", false, Game::DVAR_NONE, "Playlist activation is in flight");
@@ -6791,6 +6953,9 @@ namespace Components
 		Dvar::Register("zwnet_online_players_text", "PLAYERS ONLINE UNAVAILABLE", Game::DVAR_NONE, "Online-player metric label");
 		Dvar::Register("zwnet_running_games_known", false, Game::DVAR_NONE, "Running-game metric is authoritative and fresh");
 		Dvar::Register("zwnet_running_games_text", "RUNNING GAMES UNAVAILABLE", Game::DVAR_NONE, "Running-game metric label");
+		Dvar::Register("zwnet_running_games_count", 0, 0, std::numeric_limits<int>::max(), Game::DVAR_NONE, "Running-game count for the search screen");
+		Dvar::Register("zwnet_service_ping_known", false, Game::DVAR_NONE, "Service ping was measured");
+		Dvar::Register("zwnet_service_ping_ms", 0, 0, 9999, Game::DVAR_NONE, "Round trip to the online service in milliseconds");
 
 		static std::deque<std::string> memberDvarNames;
 
@@ -6905,7 +7070,7 @@ namespace Components
 		Localization::Set("ZWNET_DESCRIPTOR_INVALID", "The connection response was invalid.");
 		Localization::Set("ZWNET_CONTENT_CHECK_FAILED", "The assigned map could not be verified. Check your game files and try again.");
 		Localization::Set("ZWNET_CONNECTION_FAILED", "The game connection ended with an error. Return to the lobby and try again.");
-		Localization::Set("ZWNET_ACCOUNT_LINK_REQUIRED", "Link this GUID in ZW3 Stats Settings.");
+		Localization::Set("ZWNET_ACCOUNT_LINK_REQUIRED", "To play online, select Link Account and sign in with Discord on ZW3 Stats. Link your player ID (GUID), then return to the game and select Play Online again.");
 		Localization::Set("ZWNET_SESSION_STORAGE_FAILED", "The secure ZW3 session could not be stored.");
 		Localization::Set("ZWNET_REGISTRATION_UNAVAILABLE", "The ZW3 registration page is unavailable.");
 		Localization::Set("ZWNET_PARTY_FAILED", "The party could not be created or loaded.");
@@ -7242,6 +7407,12 @@ namespace Components
 			ChangePlaylistPage(token.Get<int>());
 		});
 
+		// "-1" / "1" step the map gallery, "0" returns to its first page.
+		UIScript::Add("ZWNET_PlaylistMapPage", [](const UIScript::Token& token)
+		{
+			ChangePlaylistMapPage(token.Get<int>());
+		});
+
 		UIScript::Add("ZWNET_ToggleQuickPlayFilter", [](const UIScript::Token& token)
 		{
 			ToggleQuickPlayFilterSlot(token.Get<int>());
@@ -7472,6 +7643,7 @@ namespace Components
 			const auto disconnectGeneration = joinTransitionGeneration.load();
 			const bool wasInGame = isInGame.exchange(false);
 			const bool isTerminal = isTerminalDisconnectRequested.exchange(false);
+			const bool isLocalMatchLeave = Party::ConsumeLocalMatchLeave();
 			Dvar::Var("zwnet_match_return").Set(false);
 
 			if (isServerJoinTransition.exchange(false) && !isTerminal && !nativeError.hasNativeError)
@@ -7491,7 +7663,12 @@ namespace Components
 
 			const bool isManaged = Dvar::Var("zwnet_managed_session").Get<bool>();
 			const bool wasMatchmaking = Utils::ShouldHandleManagedDisconnect(hasMatch, isManaged, wasConnected);
-			const bool isPrivateMatchClient = wasConnected && !wasMatchmaking && Party::IsPrivateMatchClient();
+			// x86 behaviour: a private match client (non-host or a second local
+			// instance) that leaves goes back to a private match lobby. The lobby
+			// state may already be torn down here, so fall back to the dvars x86 used.
+			const bool isPrivateMatchClient = wasConnected && !wasMatchmaking
+				&& (Party::IsPrivateMatchClient()
+					|| (!Dvar::Var("party_host").Get<bool>() && Dvar::Var("xblive_privatematch").Get<bool>()));
 
 			if (wasMatchmaking)
 			{
@@ -7509,7 +7686,55 @@ namespace Components
 					HandleServerDisconnect(isTerminal, wasMatchmaking, nativeError, wasInGame);
 				});
 			}
-			else if (isPrivateMatchClient || isTerminal)
+			else if (isPrivateMatchClient)
+			{
+				// x86 behaviour: a private match client that leaves the match goes back
+				// to its own private lobby. This disconnect also fires while the client
+				// moves from the party lobby into the host's match (CL_ConnectFromParty),
+				// so only act once it has stayed disconnected; if it starts connecting
+				// again, or is still in the host's party, leave it alone.
+				const auto startedAt = Game::Sys_Milliseconds();
+				Scheduler::Schedule([startedAt, isLocalMatchLeave, disconnectedSince = -1]() mutable
+				{
+					const auto now = Game::Sys_Milliseconds();
+
+					if (Game::CL_IsCgameInitialized(0) || Game::CL_GetLocalClientConnectionState(0) != Game::CA_DISCONNECTED)
+					{
+						return true; // Joining a match (or already back in one).
+					}
+
+					if (disconnectedSince < 0)
+					{
+						disconnectedSince = now;
+					}
+
+					if ((now - disconnectedSince) < 1'000 && (now - startedAt) < 5'000)
+					{
+						return false;
+					}
+
+					if (isLocalMatchLeave || !Party::IsPrivateMatchClient())
+					{
+						Party::ReturnToPrivateMatchLobby();
+
+						// The host ending the match is not an error for this player:
+						// drop the native "Disconnected from server" notice over the lobby.
+						const auto closeNotices = []
+						{
+							for (const auto* menu : { "error_popmenu", "error_popmenu_lobby", "error_popmenu_party", "error_popmenu_submenu" })
+							{
+								Command::Execute(std::format("closemenu {}", menu), false);
+							}
+						};
+
+						closeNotices();
+						Scheduler::Once(closeNotices, Scheduler::Pipeline::MAIN, 500ms);
+					}
+
+					return true;
+				}, Scheduler::Pipeline::MAIN, 100ms);
+			}
+			else if (isTerminal)
 			{
 				ScheduleReturnToIdleMenu({}, true);
 			}

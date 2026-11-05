@@ -18,6 +18,11 @@ namespace Components
 
 		static bool IsHostingParty();
 		static bool IsPrivateMatchClient();
+		// Rebuilds the local private match lobby (after leaving a private match).
+		static void ReturnToPrivateMatchLobby();
+		// The local player chose to leave (pause menu QUIT); read once on disconnect.
+		static void MarkLocalMatchLeave();
+		static bool ConsumeLocalMatchLeave();
 		static void CancelPendingJoin();
 		static void BroadcastLobbyTransition();
 		static bool IsLobbySceneClient();

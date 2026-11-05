@@ -103,6 +103,9 @@ namespace Components
 	static bool isPrivatePartyJoin = false;
 	static std::uint64_t connectRequestGeneration = 0;
 
+	// Set when the local player picks QUIT; read once by the disconnect handler.
+	static bool isLocalMatchLeave = false;
+
 	void Party::CancelPendingJoin()
 	{
 		++connectRequestGeneration;
@@ -399,6 +402,21 @@ namespace Components
 		Command::Execute("set xblive_privateserver 1", false);
 		Command::Execute("xstartprivatematch", false);
 		Command::Execute("openmenu menu_xboxlive_privatelobby", false);
+	}
+
+	void Party::ReturnToPrivateMatchLobby()
+	{
+		RecreatePrivateMatchLobby();
+	}
+
+	void Party::MarkLocalMatchLeave()
+	{
+		isLocalMatchLeave = true;
+	}
+
+	bool Party::ConsumeLocalMatchLeave()
+	{
+		return std::exchange(isLocalMatchLeave, false);
 	}
 
 	static bool SetStringIfChanged(const char* name, const std::string& value)
@@ -3004,13 +3022,35 @@ namespace Components
 			ApplySelectedMapPreference();
 		});
 
+		// Pause menu QUIT for a private match client: the player chose to leave,
+		// so they go to their own private lobby instead of rejoining the host.
+		UIScript::Add("LeavePrivateMatch", [](const UIScript::Token&)
+		{
+			CancelPendingJoin();
+			MarkLocalMatchLeave();
+			Command::Execute("disconnect", false);
+		});
+
 		UIScript::Add("SaveQuitToPrivateLobby", [](const UIScript::Token&)
 		{
 			const bool isPrivateMatchHost = IsHostingParty() && Dvar::Var("xblive_privatematch").Get<bool>();
 
 			if (!isPrivateMatchHost)
 			{
-				ZWNet::QuitToPlayOnline();
+				// As on x86: a managed match goes back through ZWNet; anything else
+				// is a plain disconnect, and the native disconnect handler returns a
+				// private match client to its private lobby.
+				if (Dvar::Var("zwnet_managed_session").Get<bool>())
+				{
+					ZWNet::QuitToPlayOnline();
+				}
+				else
+				{
+					CancelPendingJoin();
+					MarkLocalMatchLeave();
+					Command::Execute("disconnect", false);
+				}
+
 				return;
 			}
 

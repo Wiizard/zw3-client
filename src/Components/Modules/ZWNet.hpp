@@ -48,6 +48,7 @@ namespace Components
 		static void ActivateQuickPlay();
 		static void ActivatePlaylist(const std::string& playlistId, std::int64_t playlistRevision, bool isQuickPlay);
 		static void ChangePlaylistPage(int direction);
+		static void ChangePlaylistMapPage(int direction);
 		static void ToggleQuickPlayFilterSlot(int slot);
 		static void HighlightQuickPlayFilterSlot(int slot);
 		static void SelectAllQuickPlayFilter();

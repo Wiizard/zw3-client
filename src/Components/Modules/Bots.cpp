@@ -8,6 +8,7 @@
 #include "BotAI/Iw4.hpp"
 #include "CharacterAssignments.hpp"
 #include "Command.hpp"
+#include "Dedicated.hpp"
 #include "Dvar.hpp"
 #include "Events.hpp"
 #include "FileSystem.hpp"
@@ -1534,6 +1535,114 @@ namespace Components
 				SynchronizeBotIdentity(clientNum, true);
 			}
 		}, Scheduler::Pipeline::SERVER, 250ms);
+
+		// A private match holds at most maxPartySize players. Smart bots fill the
+		// seats real players leave free, but the game script spawns the lobby's bot
+		// setting as is, so a player who joins (a friend or a second local instance)
+		// can end up next to a full set of bots. Drop one surplus bot at a time
+		// until the match fits again, the same way an admission replaces a bot.
+		Scheduler::Loop([]
+		{
+			if (Dedicated::IsEnabled() || !Dvar::Var("sv_running").Get<bool>() || !Dvar::Var("xblive_privatematch").Get<bool>())
+			{
+				return;
+			}
+
+			// Never interfere while a player is being admitted or is still loading in:
+			// the admission path hands that player a bot's seat and character itself.
+			if (CharacterAssignments::HasPendingAdmission(Game::Sys_Milliseconds()))
+			{
+				return;
+			}
+
+			const int maxClients = (*Game::sv_maxclients)->current.integer;
+			int realPlayers = 0;
+			int bots = 0;
+			std::vector<int> botClients;
+			std::unordered_set<int> realCharacters;
+
+			for (int clientNum = 0; clientNum < maxClients; ++clientNum)
+			{
+				const auto& client = Game::svs_clients[clientNum];
+
+				if (client.header.state < Game::CS_CONNECTED)
+				{
+					continue;
+				}
+
+				if (client.bIsTestClient)
+				{
+					++bots;
+					botClients.push_back(clientNum);
+				}
+				else
+				{
+					if (client.header.state < Game::CS_ACTIVE)
+					{
+						return; // Still loading in; its character is not settled yet.
+					}
+
+					++realPlayers;
+					// Read only: resolving here could assign a character early.
+					const auto character = CharacterAssignments::GetClientCharacterId(clientNum);
+					if (CharacterAssignments::IsValid(character)) realCharacters.insert(static_cast<int>(character));
+				}
+			}
+
+			if (bots == 0 || realPlayers + bots <= CharacterAssignments::maxPartySize)
+			{
+				return;
+			}
+
+			// Pick the bot that does not belong, so every remaining model matches
+			// the lobby roster: first a bot wearing a real player's character, then
+			// a bot whose character is not on the published roster, then the newest.
+			std::unordered_set<std::string> rosterBots;
+			for (int slot = 1; slot <= CharacterAssignments::maxPartySize; ++slot)
+			{
+				const auto player = Dvar::Var(std::format("character_{}_player", slot)).Get<std::string>();
+				if (player.starts_with("[BOT]"))
+				{
+					rosterBots.insert(CharacterAssignments::Normalize(Dvar::Var(std::format("character_{}", slot)).Get<std::string>()));
+				}
+			}
+
+			int surplusBot = botClients.back();
+			bool isChosen = false;
+
+			for (const int clientNum : botClients)
+			{
+				if (realCharacters.contains(static_cast<int>(CharacterAssignments::GetClientCharacterId(clientNum))))
+				{
+					surplusBot = clientNum;
+					isChosen = true;
+					break;
+				}
+			}
+
+			if (!isChosen && !rosterBots.empty())
+			{
+				for (auto it = botClients.rbegin(); it != botClients.rend(); ++it)
+				{
+					const auto name = CharacterAssignments::Normalize(CharacterAssignments::ToString(CharacterAssignments::GetClientCharacterId(*it)));
+					if (!rosterBots.contains(name))
+					{
+						surplusBot = *it;
+						break;
+					}
+				}
+			}
+
+			Logger::Print("bots: {} players and {} bots exceed the party size, dropping bot {}\n", realPlayers, bots, surplusBot);
+
+			auto* const cl = &Game::svs_clients[surplusBot];
+			CharacterAssignments::ClearClientSlot(surplusBot);
+			botDisplayNames[surplusBot].clear();
+			botIcons[surplusBot].clear();
+			ZeroMemory(&botAi[surplusBot], sizeof(botAi[surplusBot]));
+			botAi[surplusBot].weapon = 1;
+			Game::SV_DropClient(cl, "EXE_DISCONNECTED", false);
+		}, Scheduler::Pipeline::SERVER, 1s);
 
 		Events::OnClientDisconnect([](const int clientNum) -> void
 		{

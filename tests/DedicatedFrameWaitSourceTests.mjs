@@ -1,35 +1,29 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { test } from 'node:test';
-
-const source = readFileSync(new URL('../src/Components/Modules/Threading.cpp', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-const wait = source.slice(source.indexOf('static void NetSleep('), source.indexOf('int Threading_ComFrameWait(int minMsec)\n\t{'));
-const server = source.slice(source.indexOf('static int SV_CheckLoadGame_Hk()'), source.indexOf('Threading::Threading()'));
-const client = source.slice(source.indexOf('int Threading_ComFrameWait(int minMsec)\n\t{'), source.indexOf('static int SV_CheckLoadGame_Hk()'));
-
-test('dedicated pacing waits passively and never dispatches packets or script events', () => {
-  assert.match(server, /NetSleep\(50 - residual, false\);/);
-  assert.doesNotMatch(server, /NetSleep\(50 - residual\);|Com_ServerPacketEvent\)\)\(\)|Com_EventLoop\)\)\(\)/);
-  assert.match(wait, /const bool dispatchEvents = true/);
-  const guard = wait.indexOf('if (readyCount <= 0 || !dispatchEvents)');
-  const nativeDispatch = wait.indexOf('const auto* const runningDvar');
-  assert.ok(guard > 0 && nativeDispatch > guard);
-  assert.match(wait.slice(guard, nativeDispatch), /return;/);
+import {readFileSync} from 'node:fs';
+import {test} from 'node:test';
+const read=file=>readFileSync(new URL('../'+file,import.meta.url),'utf8');
+const threading=read('src/Components/Modules/Threading.cpp');
+const dedicated=read('src/Components/Modules/Dedicated.cpp');
+const asm=read('src/Components/Modules/DedicatedStubs.asm');
+const network=read('src/Components/Modules/Network.cpp');
+test('dedicated pacing does not sleep or dispatch VM events inside SV_Frame',()=>{
+ assert.doesNotMatch(threading,/SV_CheckLoadGame_Hk|serverFrameWaitHook|NetSleep\(50 - residual/);
+ assert.match(threading,/if \(Dedicated::IsEnabled\(\)\)[\s\S]*?return;/);
 });
-
-test('passive waits retain the existing socket wakeup, invalid-socket fallback and original pacing interval', () => {
-  assert.match(wait, /select\(0, &readSet, nullptr, nullptr, &timeout\)/);
-  assert.match(wait, /socketHandle == 0 \|\| socketHandle == INVALID_SOCKET/);
-  assert.match(wait, /Sleep\(static_cast<DWORD>\(waitMs\)\);/);
-  assert.match(server, /if \(residual < 50\)/);
-  assert.match(server, /const int isRestarting = reinterpret_cast<int\(\*\)\(\)>/);
-  assert.match(server, /return isRestarting;/);
+test('dedicated raw elapsed time rejoins native timescale processing with rollback and byte guards',()=>{
+ assert.match(dedicated,/Com_Frame_ModifyMsecCall = 0x1401F4468/);
+ assert.match(dedicated,/Com_Frame_SlowMotion = 0x1401F4603/);
+ assert.match(dedicated,/BranchesTo\(Com_Frame_ModifyMsecCall, CL_ModifyMsec, HOOK_CALL\)/);
+ assert.match(dedicated,/frameMsecHook\.Uninstall\(\)/);
+ assert.match(asm,/mov r9d, ecx\s+mov ebx, ecx\s+xorps xmm3, xmm3\s+add rsp, 8\s+jmp qword ptr \[Dedicated_FrameMsec_Resume\]/);
+ assert.match(dedicated,/BranchesTo\(Com_Frame_ServerFrameCall, SV_Frame, HOOK_CALL\)/);
+ assert.match(dedicated,/DedicatedTimeBudget::Reconcile\(\*Game::svs_time, target, residual\)/);
+ assert.match(dedicated,/serverBudgetHook\.Uninstall\(\)/);
 });
-
-test('client frame waits and the native server-frame hook target remain unchanged', () => {
-  assert.match(client, /NetSleep\(remainingMs - 2\);/);
-  assert.match(client, /NetSleep\(0\);/);
-  assert.doesNotMatch(client, /NetSleep\([^;]*, false\)/);
-  assert.match(source, /SV_Frame_SV_CheckLoadGameCall = 0x14023C557;/);
-  assert.match(source, /BranchesTo\(SV_Frame_SV_CheckLoadGameCall, SV_CheckLoadGame, HOOK_CALL\)/);
+test('snapshot scheduling keeps the native sender and only adjusts active rate-limited dedicated snapshots',()=>{
+ assert.match(network,/if \(!Dedicated::IsEnabled\(\)\) return;/);
+ assert.match(network,/BranchesTo\(SV_SendClientSnapshot_SendMessageCall, SV_SendMessageToClient, HOOK_CALL\)/);
+ assert.match(network,/active && client->header.state == Game::CS_ACTIVE && rateDelayed/);
+ assert.match(network,/before == \*Game::svs_time/);
+ assert.match(network,/SnapshotRatePolicy::Deadline\(before, previous, client->nextSnapshotTime\)/);
 });

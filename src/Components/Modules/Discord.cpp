@@ -119,7 +119,7 @@ namespace Components
 	bool Discord::IsZWNetPreGameState(const std::string& state)
 	{
 		return state == "SEARCH_STARTING" || state == "SEARCHING" || state == "MATCH_FOUND"
-			|| state == "MAP_VOTE" || state == "READY_CHECK" || state == "WAITING_FOR_READY"
+			|| state == "MAP_VOTE"
 			|| state == "RESERVING_SERVER" || state == "STARTING_SERVER" || state == "SERVER_STARTING"
 			|| state == "COUNTDOWN" || state == "CONNECTING" || state == "DIRECT_CONNECTION"
 			|| state == "RELAY_CONNECTION";
@@ -133,8 +133,6 @@ namespace Components
 			{ "SEARCHING", "Searching for a match" },
 			{ "MATCH_FOUND", "Joining match lobby" },
 			{ "MAP_VOTE", "Voting for the next map" },
-			{ "READY_CHECK", "Waiting for all players to be ready" },
-			{ "WAITING_FOR_READY", "Waiting for all players to be ready" },
 			{ "RESERVING_SERVER", "Setting up match" },
 			{ "STARTING_SERVER", "Setting up match" },
 			{ "SERVER_STARTING", "Setting up match" },

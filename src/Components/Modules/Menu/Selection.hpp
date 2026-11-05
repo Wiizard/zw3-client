@@ -39,8 +39,8 @@ namespace Components::Menu::BackdropData
 			}
 			else if (lobby.matchmaking && !lobby.voting)
 			{
-				constexpr array<string_view, 13> picked_states{
-					"MATCH_FOUND", "READY_CHECK", "WAITING_FOR_READY", "RESERVING_SERVER",
+				constexpr array<string_view, 11> picked_states{
+					"MATCH_FOUND", "RESERVING_SERVER",
 					"STARTING_SERVER", "SERVER_STARTING", "COUNTDOWN", "JOIN_PREVIEW",
 					"CONNECTING", "DIRECT_CONNECTION", "RELAY_CONNECTION", "RESETTING", "POST_MATCH"
 				};

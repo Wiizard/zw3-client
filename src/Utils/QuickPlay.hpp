@@ -14,6 +14,8 @@ namespace Utils
 		std::string_view availability;
 		int maxPlayers;
 		bool hasVerifiedContent;
+		// False when the player unticked this playlist in the Quick Play filter.
+		bool isIncluded = true;
 	};
 
 	// Catalog position, the selected row and restricted development access must
@@ -27,7 +29,7 @@ namespace Utils
 		for (std::size_t index = 0; index < playlists.size(); ++index)
 		{
 			const auto& playlist = playlists[index];
-			if (playlist.id.empty() || playlist.audience != "PUBLIC" || playlist.availability != "AVAILABLE"
+			if (playlist.id.empty() || !playlist.isIncluded || playlist.audience != "PUBLIC" || playlist.availability != "AVAILABLE"
 				|| !playlist.hasVerifiedContent || playlist.maxPlayers < 1
 				|| partySize > static_cast<std::size_t>(playlist.maxPlayers)) continue;
 

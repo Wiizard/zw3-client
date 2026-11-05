@@ -17,10 +17,12 @@ test('invited managed parties open the backend roster in idle and active matchma
 test('idle party resumption invalidates old connection routes and match previews', () => {
   assert.match(resume, /CancelJoinInProgressPreview\(\)/);
   const idle = resume.slice(resume.indexOf('if (!isMatchmaking)'), resume.indexOf('isSearching = isMatchmaking'));
-  for (const cleanup of ['ResetManagedRoute();', 'currentMatchId.clear();', 'currentProposalId.clear();',
-    'ClearMatchDvars();', 'Dvar::Var("zwnet_managed_session").Set(false);']) {
+  for (const cleanup of ['ResetManagedRoute();', 'currentMatchId.clear();', 'currentProposalId.clear();']) {
     assert.ok(idle.includes(cleanup), `Missing idle cleanup: ${cleanup}`);
   }
+  assert.match(resume, /joinTransitionGeneration != transitionGeneration/);
+  assert.match(resume, /currentPartyId != partyId/);
+  assert.match(resume, /if \(!isMatchmaking && !isSearching && !isPlaylistSelectionStarting && !isPlaylistSearchStarting\)\s*\{\s*ClearMatchDvars\(\)/);
   assert.doesNotMatch(resume, /Request\(/, 'resuming an invitation must not reconfigure or recreate the party');
 });
 

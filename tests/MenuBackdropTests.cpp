@@ -125,11 +125,11 @@ for(i = 0; i < fires.size; i++) { playfx(level.firefx, fires[i].origin); }
 		Require(!selector.choose(lobby).follows_lobby && selector.choose(lobby).choice.stage == privateMap, "searching ignores stale map dvars");
 		lobby.matchmaking_state = "MAP_VOTE";
 		Require(selector.choose(lobby).choice.stage == privateMap, "vote candidates do not change the backdrop before a winner is chosen");
-		lobby.matchmaking_state = "WAITING_FOR_READY";
+		lobby.matchmaking_state = "MAP_VOTE";
 		lobby.voting = true;
 		Require(selector.choose(lobby).choice.stage == privateMap, "an active vote cannot expose a stale winner");
 		lobby.voting = false;
-		for (const auto state : {"MATCH_FOUND", "READY_CHECK", "WAITING_FOR_READY", "RESERVING_SERVER", "SERVER_STARTING", "COUNTDOWN", "JOIN_PREVIEW", "CONNECTING"})
+		for (const auto state : {"MATCH_FOUND", "RESERVING_SERVER", "SERVER_STARTING", "COUNTDOWN", "JOIN_PREVIEW", "CONNECTING"})
 		{
 			lobby.matchmaking_state = state;
 			Require(selector.choose(lobby).follows_lobby && selector.choose(lobby).choice.stage == find_stage("mp_oilrig"), "confirmed vote or playlist map follows through server startup");
@@ -139,7 +139,7 @@ for(i = 0; i < fires.size; i++) { playfx(level.firefx, fires[i].origin); }
 		lobby.matchmaking = false;
 		Require(selector.choose(lobby).choice.stage == privateMap, "main menu keeps the private selection instead of the previous matchmaking winner");
 		lobby.matchmaking = true;
-		for (const auto state : {"IDLE", "IN_PARTY", "ONLINE", "ERROR", "OFFLINE"})
+		for (const auto state : {"", "IDLE", "IN_PARTY", "ONLINE", "ERROR", "OFFLINE"})
 		{
 			lobby.matchmaking_state = state;
 			Require(selector.choose(lobby).choice.stage == privateMap, "cancelling or leaving matchmaking keeps the private selection");

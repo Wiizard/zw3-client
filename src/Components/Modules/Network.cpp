@@ -1,6 +1,7 @@
 #include "STDInclude.hpp"
 #include "Utils/ServerQuery.hpp"
 #include "Utils/ReliableCommandQueue.hpp"
+#include "Utils/SnapshotRatePolicy.hpp"
 
 #include "Network.hpp"
 #include "ClientSlots.hpp"
@@ -2034,8 +2035,48 @@ namespace Components
 		playerStateDeltaHook.Quick();
 	}
 
+	constexpr std::uintptr_t SV_SendClientSnapshot_SendMessageCall = 0x140242142;
+	constexpr std::uintptr_t SV_SendMessageToClient = 0x140242440;
+	static Utils::Hook snapshotDeadlineHook;
+
+	static void SendSnapshotMessage(Game::msg_t* message, Game::client_s* client)
+	{
+		const int previous = client->nextSnapshotTime;
+		const int before = *Game::svs_time;
+		const bool active = client->header.state == Game::CS_ACTIVE;
+		reinterpret_cast<void(*)(Game::msg_t*, Game::client_s*)>(
+			Utils::Hook::Rebase(SV_SendMessageToClient))(message, client);
+
+		// The native sender computes max(requested interval, byte-rate delay).
+		// Starting that delay again at the rounded tick turns a 57 ms budget
+		// into 100 ms forever. Carry only its sub-tick remainder forward;
+		// retain native bandwidth limits, fragment handling and inactive states.
+		const auto rateDelayed = *reinterpret_cast<const int*>(reinterpret_cast<const std::uint8_t*>(client) + 0xC);
+		if (active && client->header.state == Game::CS_ACTIVE && rateDelayed
+			&& before == *Game::svs_time)
+		{
+			client->nextSnapshotTime = Utils::SnapshotRatePolicy::Deadline(before, previous, client->nextSnapshotTime);
+		}
+	}
+
+	static void PreserveSnapshotRateDeadline()
+	{
+		if (!Dedicated::IsEnabled()) return;
+		static const std::uint8_t rateFlagStore[] = { 0x44, 0x89, 0x4B, 0x0C };
+		if (!Utils::Hook::BranchesTo(SV_SendClientSnapshot_SendMessageCall, SV_SendMessageToClient, HOOK_CALL)
+			|| !Utils::Hook::MatchesBytes(0x140242616, rateFlagStore, sizeof(rateFlagStore))
+			|| !snapshotDeadlineHook.Initialize(SV_SendClientSnapshot_SendMessageCall,
+				reinterpret_cast<void*>(SendSnapshotMessage), HOOK_CALL)->Install()->IsInstalled())
+		{
+			Logger::Error("network: snapshot sender does not match; retaining native rate scheduling\n");
+			return;
+		}
+		snapshotDeadlineHook.Quick();
+	}
+
 	Network::Network()
 	{
+		PreserveSnapshotRateDeadline();
 		RaiseLimits();
 		RaiseMessageLength();
 		DisableUnusedPackets();

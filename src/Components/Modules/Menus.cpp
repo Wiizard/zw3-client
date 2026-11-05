@@ -4338,6 +4338,7 @@ namespace Components
 		Add("ui_mp/popup_zwnet_connecting.menu");
 		Add("ui_mp/zwnet_matchmaking.menu");
 		Add("ui_mp/popup_zwnet_playlists.menu");
+		Add("ui_mp/popup_zwnet_quickplay_filter.menu");
 		Add("ui_mp/popup_zwnet_player_card.menu");
 		Add("ui_mp/menu_quest_challenges.menu");
 		Add("ui_mp/popup_upnp.menu");
@@ -4404,6 +4405,18 @@ namespace Components
 			}
 		}
 		const bool hasName = menu && menu->window.name;
+		const bool isBehindFindMatch = hasName && (_stricmp(menu->window.name, "main") == 0
+			|| _stricmp(menu->window.name, "main_text") == 0
+			|| _stricmp(menu->window.name, "pregame_loaderror") == 0
+			|| _stricmp(menu->window.name, "zwnet_matchmaking") == 0
+			|| _stricmp(menu->window.name, "menu_xboxlive_privatelobby") == 0);
+		if (isBehindFindMatch && context)
+		{
+			// Find Match retains its shipped name and lobby stack for Back and
+			// cancellation. Paint only its full-screen page over the 3D scene.
+			auto* const findMatch = Game::Menus_FindByName(context, "popup_zwnet_playlists");
+			if (findMatch && findMatch->fullScreen && Game::Menu_IsVisible(context, findMatch)) return false;
+		}
 		const bool isHeldForScene = hasName && (_stricmp(menu->window.name, "main_text") == 0
 			|| _stricmp(menu->window.name, "pregame_loaderror") == 0
 			|| _stricmp(menu->window.name, "menu_xboxlive_privatelobby") == 0

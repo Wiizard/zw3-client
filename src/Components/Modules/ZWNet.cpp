@@ -4191,22 +4191,50 @@ namespace Components
 		});
 	}
 
-	static void ConnectWhenUnmanaged(const std::string& endpoint)
+	bool ZWNet::PrepareEndpointJoin(const Network::Address& target)
 	{
-		Scheduler::Once([endpoint]
+		std::string previousMatch;
+		bool hadOnlineSession;
+		bool wasAssignedEndpoint;
 		{
+			std::lock_guard _(stateMutex);
+			previousMatch = currentMatchId;
+			hadOnlineSession = !currentPartyId.empty() || !previousMatch.empty();
+			const Network::Address assigned(Dvar::Var("zwnet_server_endpoint").Get<std::string>());
+			wasAssignedEndpoint = !previousMatch.empty() && assigned.IsValid() && assigned == target;
+		}
+		if (isActive && hadOnlineSession)
+		{
+			// Finish departure before the serialized worker resolves a new target.
+			// Never let old disconnect cleanup run against the new assignment.
+			EnqueueAsync([previousMatch]
+			{
+				Request("POST", "/zwnet/matchmaking/disconnect", {{"match_id", previousMatch}, {"terminal", true}});
+			});
+		}
+		AbandonOnlineSession();
+		isTerminalDisconnectRequested = false;
+		isServerJoinTransition = true;
+		return wasAssignedEndpoint;
+	}
+
+	static void ConnectWhenUnmanaged(const std::string& endpoint, const std::uint64_t generation, const bool unmanagedRequired = true)
+	{
+		Scheduler::Once([endpoint, generation, unmanagedRequired]
+		{
+			if (!isActive || generation != joinTransitionGeneration) return;
 			isEndpointJoinInFlight = false;
 
 			const Network::Address target(endpoint);
 
 			if (target.IsValid())
 			{
-				Party::Connect(target, false, true);
+				Party::Connect(target, false, unmanagedRequired);
 			}
 		}, Scheduler::Pipeline::MAIN);
 	}
 
-	bool ZWNet::BeginEndpointJoin(const std::string& endpoint)
+	bool ZWNet::BeginEndpointJoin(const std::string& endpoint, const bool wasAssignedEndpoint)
 	{
 		if (!isActive || endpoint.empty() || endpoint.size() > 255)
 		{
@@ -4219,6 +4247,9 @@ namespace Components
 		{
 			return false;
 		}
+		CancelPendingJoinPreparation();
+		const auto generation = joinTransitionGeneration.load();
+		isServerJoinTransition = false;
 
 		bool isKnownAssignedEndpoint = false;
 		bool hasAccessToken = false;
@@ -4228,20 +4259,22 @@ namespace Components
 			hasAccessToken = !accessToken.empty();
 
 			const Network::Address assignedTarget(Dvar::Var("zwnet_server_endpoint").Get<std::string>());
-			isKnownAssignedEndpoint = !currentMatchId.empty() && assignedTarget.IsValid() && assignedTarget == requestedTarget;
+			isKnownAssignedEndpoint = wasAssignedEndpoint || (!currentMatchId.empty() && assignedTarget.IsValid() && assignedTarget == requestedTarget);
 		}
 
 		isEndpointJoinInFlight = true;
 
 		if (!hasAccessToken)
 		{
-			ConnectWhenUnmanaged(endpoint);
+			ConnectWhenUnmanaged(endpoint, generation);
 			return true;
 		}
 
-		EnqueueAsync([endpoint, isKnownAssignedEndpoint]
+		EnqueueAsync([endpoint, isKnownAssignedEndpoint, generation]
 		{
+			if (!isActive || generation != joinTransitionGeneration) return;
 			const auto response = Request("POST", "/zwnet/matchmaking/join-by-endpoint", { { "endpoint", endpoint } });
+			if (!isActive || generation != joinTransitionGeneration) return;
 
 			if (!response || !response->is_object())
 			{
@@ -4252,7 +4285,7 @@ namespace Components
 					return;
 				}
 
-				ConnectWhenUnmanaged(endpoint);
+				ConnectWhenUnmanaged(endpoint, generation);
 				return;
 			}
 
@@ -4265,18 +4298,7 @@ namespace Components
 
 			if (!response->value("managed", false))
 			{
-				Scheduler::Once([endpoint]
-				{
-					isEndpointJoinInFlight = false;
-
-					const Network::Address target(endpoint);
-
-					if (target.IsValid())
-					{
-						Party::Connect(target);
-					}
-				}, Scheduler::Pipeline::MAIN);
-
+				ConnectWhenUnmanaged(endpoint, generation, false);
 				return;
 			}
 
@@ -4296,6 +4318,15 @@ namespace Components
 		});
 
 		return true;
+	}
+
+	void ZWNet::QuitToPlayOnline()
+	{
+		CancelPendingJoinPreparation();
+		Party::CancelPendingJoin();
+		isServerJoinTransition = false;
+		isTerminalDisconnectRequested = true;
+		Command::Execute("disconnect", false);
 	}
 
 	void ZWNet::EnterLobby(std::string map)
@@ -4855,7 +4886,7 @@ namespace Components
 		UpdatePresence();
 	}
 
-	void ZWNet::CloseOnlineSession(const bool isShuttingDown, const bool isTerminal)
+	void ZWNet::CloseOnlineSession(const bool isShuttingDown, const bool isTerminal, const bool returningToMenu)
 	{
 		TraceOnlineTransition(isShuttingDown ? "close_shutdown" : (isTerminal ? "close_terminal" : "close_transient"));
 		CancelJoinInProgressPreview();
@@ -4924,14 +4955,16 @@ namespace Components
 
 		SetState("IDLE");
 
-		Scheduler::Once([isTerminal]
+		Scheduler::Once([isTerminal, returningToMenu]
 		{
 			if (!isActive)
 			{
 				return;
 			}
 
-			if (isTerminal)
+			// A scheduled frontend return owns abandonment and its generation.
+			// Abandoning here as well would invalidate that return before it runs.
+			if (isTerminal && !returningToMenu)
 			{
 				AbandonOnlineSession();
 				return;
@@ -5044,7 +5077,7 @@ namespace Components
 		return true;
 	}
 
-	void ZWNet::ReturnToIdleMenu(const Events::NativeDisconnectError& nativeError)
+	void ZWNet::ReturnToIdleMenu(const Events::NativeDisconnectError& nativeError, const bool explicitLeave)
 	{
 		AbandonOnlineSession();
 		Dvar::Var("zwnet_managed_session").Set(false);
@@ -5053,6 +5086,18 @@ namespace Components
 		Command::Execute("set xblive_privateserver 0", false);
 		Command::Execute("set xblive_privatematch 0", false);
 		Command::Execute("set xblive_rankedmatch 0", false);
+
+		if (explicitLeave)
+		{
+			// Leave the native party and rebuild the idle online lobby through the
+			// normal service-entry flow, without resuming the departed match.
+			Command::Execute("xstopparty", true);
+			Command::Execute("xstopprivateparty", true);
+			Game::Menus_CloseAll(Game::uiContext);
+			Game::Menus_OpenByName(Game::uiContext, "zwnet_matchmaking");
+			Game::Menus_OpenByName(Game::uiContext, "popup_zwnet_connecting");
+			return;
+		}
 
 		for (const char* menuName : { "class", "team_marinesopfor", "zwnet_matchmaking" })
 		{
@@ -5085,7 +5130,7 @@ namespace Components
 		Game::Menus_OpenByName(Game::uiContext, "popup_zwnet_connecting");
 	}
 
-	void ZWNet::ScheduleReturnToIdleMenu(Events::NativeDisconnectError nativeError)
+	void ZWNet::ScheduleReturnToIdleMenu(Events::NativeDisconnectError nativeError, const bool explicitLeave)
 	{
 		if (isIdleReturnPending.exchange(true))
 		{
@@ -5095,17 +5140,17 @@ namespace Components
 		const auto startedAt = Game::Sys_Milliseconds();
 		const auto returnGeneration = joinTransitionGeneration.load();
 
-		Scheduler::Schedule([startedAt, returnGeneration, nativeError = std::move(nativeError), disconnectedAt = -1]() mutable
+		Scheduler::Schedule([startedAt, returnGeneration, explicitLeave, nativeError = std::move(nativeError), disconnectedAt = -1]() mutable
 		{
 			// Do not put an older connection error over a newer join/explicit leave.
-			if (nativeError.hasNativeError && joinTransitionGeneration != returnGeneration)
+			if (joinTransitionGeneration != returnGeneration)
 			{
-				isIdleReturnPending = false;
 				return true;
 			}
 			const auto now = Game::Sys_Milliseconds();
 
-			if (Game::CL_IsCgameInitialized(0))
+			if (Game::CL_IsCgameInitialized(0) || Game::CL_GetLocalClientConnectionState(0) != Game::CA_DISCONNECTED
+				|| !Game::uiContext || !Game::Menus_FindByName(Game::uiContext, explicitLeave ? "zwnet_matchmaking" : "pregame_loaderror"))
 			{
 				const bool hasTimedOut = (now - startedAt) > 10'000;
 
@@ -5129,7 +5174,7 @@ namespace Components
 			}
 
 			isIdleReturnPending = false;
-			ReturnToIdleMenu(nativeError);
+			ReturnToIdleMenu(nativeError, explicitLeave);
 			return true;
 		}, Scheduler::Pipeline::MAIN, 50ms);
 	}
@@ -5159,11 +5204,11 @@ namespace Components
 			return;
 		}
 
-		CloseOnlineSession(false, isTerminal);
+		CloseOnlineSession(false, isTerminal, wasMatchmaking);
 
 		if (wasMatchmaking)
 		{
-			ScheduleReturnToIdleMenu(std::move(nativeError));
+			ScheduleReturnToIdleMenu(std::move(nativeError), isTerminal);
 		}
 	}
 
@@ -6191,6 +6236,7 @@ namespace Components
 	{
 		// Invalidate on the input thread, not behind a pending HTTP/hash task.
 		++joinTransitionGeneration;
+		isIdleReturnPending = false;
 		++playlistSelectorGeneration;
 		isCompletedMatchReturnPending = false;
 		isSearching = false;
@@ -7249,9 +7295,7 @@ namespace Components
 		UIScript::Add("ZWNET_QuitToMatchmaking", [](const UIScript::Token&)
 		{
 			TraceOnlineTransition("ui_quit_to_matchmaking");
-			CancelPendingJoinPreparation();
-			isTerminalDisconnectRequested = true;
-			Command::Execute("disconnect", false);
+			QuitToPlayOnline();
 		});
 
 		UIScript::Add("ZWNET_CloseOnlineSession", [](const UIScript::Token&)
@@ -7266,16 +7310,16 @@ namespace Components
 			}
 
 			const bool wasMatch = Dvar::Var("zwnet_managed_session").Get<bool>() || isInGame || hasMatch;
+			if (wasMatch && Game::CL_IsCgameInitialized(0))
+			{
+				QuitToPlayOnline();
+				return;
+			}
 
 			EnqueueAsync([]
 			{
 				CloseOnlineSession(false, true);
 			});
-
-			if (wasMatch && Game::CL_IsCgameInitialized(0))
-			{
-				ScheduleReturnToIdleMenu();
-			}
 		});
 
 		UIScript::Add("ZWNetLogin", [](const UIScript::Token&)
@@ -7427,9 +7471,10 @@ namespace Components
 			const auto nativeError = Events::CurrentNativeDisconnectError();
 			const auto disconnectGeneration = joinTransitionGeneration.load();
 			const bool wasInGame = isInGame.exchange(false);
+			const bool isTerminal = isTerminalDisconnectRequested.exchange(false);
 			Dvar::Var("zwnet_match_return").Set(false);
 
-			if (isServerJoinTransition.exchange(false) && !nativeError.hasNativeError)
+			if (isServerJoinTransition.exchange(false) && !isTerminal && !nativeError.hasNativeError)
 			{
 				Logger::Print("ZWNET server join transition: preserving online session\n");
 				return;
@@ -7447,7 +7492,6 @@ namespace Components
 			const bool isManaged = Dvar::Var("zwnet_managed_session").Get<bool>();
 			const bool wasMatchmaking = Utils::ShouldHandleManagedDisconnect(hasMatch, isManaged, wasConnected);
 			const bool isPrivateMatchClient = wasConnected && !wasMatchmaking && Party::IsPrivateMatchClient();
-			const bool isTerminal = isTerminalDisconnectRequested.exchange(false);
 
 			if (wasMatchmaking)
 			{
@@ -7465,29 +7509,9 @@ namespace Components
 					HandleServerDisconnect(isTerminal, wasMatchmaking, nativeError, wasInGame);
 				});
 			}
-			else if (isPrivateMatchClient)
+			else if (isPrivateMatchClient || isTerminal)
 			{
-				Scheduler::Once([]
-				{
-					Command::Execute("xrequirelivesignin", false);
-					Command::Execute("set systemlink 0", false);
-					Command::Execute("set splitscreen 0", false);
-					Command::Execute("set onlinegame 1", false);
-					Command::Execute("exec default_xboxlive.cfg", false);
-					Command::Execute("set party_maxplayers 4", false);
-					Command::Execute("set party_maxprivatepartyplayers 4", false);
-					Command::Execute("set xblive_privateserver 0", false);
-					Command::Execute("set xblive_rankedmatch 0", false);
-					Command::Execute("xstartprivateparty", false);
-					Command::Execute("set ui_mptype 0", false);
-					Command::Execute("xcheckezpatch", false);
-					Command::Execute("exec default_xboxlive.cfg", false);
-					Command::Execute("set xblive_rankedmatch 0", false);
-					Command::Execute("ui_enumeratesaved", false);
-					Command::Execute("set xblive_privateserver 1", false);
-					Command::Execute("xstartprivatematch", false);
-					Command::Execute("openmenu menu_xboxlive_privatelobby", false);
-				}, Scheduler::Pipeline::MAIN, 250ms);
+				ScheduleReturnToIdleMenu({}, true);
 			}
 		});
 

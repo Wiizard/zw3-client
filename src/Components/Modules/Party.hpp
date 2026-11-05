@@ -18,6 +18,7 @@ namespace Components
 
 		static bool IsHostingParty();
 		static bool IsPrivateMatchClient();
+		static void CancelPendingJoin();
 		static void BroadcastLobbyTransition();
 		static bool IsLobbySceneClient();
 

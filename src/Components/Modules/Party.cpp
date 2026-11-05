@@ -86,15 +86,31 @@ namespace Components
 
 	bool Party::IsHostingParty()
 	{
-		if (IsHostOf(Game::g_lobbyData))
+		// A client can own its local social party while playing on somebody
+		// else's server. In a match, only the local server grants host controls.
+		if (Game::CL_IsCgameInitialized(0))
 		{
-			return true;
+			return Dedicated::IsRunning();
 		}
+
+		const auto* const lobby = reinterpret_cast<const std::uint8_t*>(Game::g_lobbyData);
+		if (*reinterpret_cast<const int*>(lobby + partyInParty) != 0)
+			return IsHostOf(Game::g_lobbyData);
 
 		return IsHostOf(Game::g_partyData);
 	}
 
 	static bool isPrivatePartyJoin = false;
+	static std::uint64_t connectRequestGeneration = 0;
+
+	void Party::CancelPendingJoin()
+	{
+		++connectRequestGeneration;
+		joinContainer.isValid = false;
+		joinContainer.isAwaitingPlaylist = false;
+		isPrivatePartyJoin = false;
+		LobbyScene::StopTransition();
+	}
 
 	bool Party::IsPrivateMatchClient()
 	{
@@ -2846,19 +2862,34 @@ namespace Components
 				return;
 			}
 
-			if (Game::CL_IsCgameInitialized(0))
-			{
-				isPrivatePartyJoin = false;
-				Command::Execute("disconnect", false);
-				Command::Execute(params->Join(0), false);
-				return;
-			}
-
 			const Network::Address target(params->Get(1));
-
-			if (!target.IsValid() || !ZWNet::BeginEndpointJoin(target.GetString()))
+			if (!target.IsValid()) return;
+			CancelPendingJoin();
+			const bool wasAssignedEndpoint = ZWNet::PrepareEndpointJoin(target);
+			const auto generation = connectRequestGeneration;
+			const auto connect = [target, generation, wasAssignedEndpoint]
 			{
-				Connect(target);
+				if (generation != connectRequestGeneration) return;
+				if (!ZWNet::BeginEndpointJoin(target.GetString(), wasAssignedEndpoint)) Connect(target);
+			};
+			if (Game::CL_IsCgameInitialized(0) || Game::CL_GetLocalClientConnectionState(0) >= Game::CA_CONNECTING)
+			{
+				Command::Execute("disconnect", false);
+				const auto startedAt = Game::Sys_Milliseconds();
+				// Do not requeue connect inside the same command-buffer drain.
+				// Let native teardown finish before starting the next connection.
+				Scheduler::Schedule([connect, generation, startedAt]
+				{
+					if (generation != connectRequestGeneration) return true;
+					if (Game::CL_IsCgameInitialized(0) || Game::CL_GetLocalClientConnectionState(0) != Game::CA_DISCONNECTED)
+						return Game::Sys_Milliseconds() - startedAt > 10'000;
+					connect();
+					return true;
+				}, Scheduler::Pipeline::MAIN, 50ms);
+			}
+			else
+			{
+				connect();
 			}
 		});
 
@@ -2976,21 +3007,24 @@ namespace Components
 
 			if (!isPrivateMatchHost)
 			{
-				Command::Execute("disconnect", false);
+				ZWNet::QuitToPlayOnline();
 				return;
 			}
 
 			SaveCustomizationSettings();
 			SaveSelectedMapPreference(true);
+			CancelPendingJoin();
 			Command::Execute("disconnect", false);
 
 			const auto startedAt = Game::Sys_Milliseconds();
+			const auto returnGeneration = connectRequestGeneration;
 
-			Scheduler::Schedule([startedAt, disconnectedAt = -1]() mutable
+			Scheduler::Schedule([startedAt, returnGeneration, disconnectedAt = -1]() mutable
 			{
+				if (returnGeneration != connectRequestGeneration) return true;
 				const auto now = Game::Sys_Milliseconds();
 
-				if (Game::CL_IsCgameInitialized(0))
+				if (Game::CL_IsCgameInitialized(0) || Game::CL_GetLocalClientConnectionState(0) != Game::CA_DISCONNECTED)
 				{
 					return (now - startedAt) > 10'000;
 				}

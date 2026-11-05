@@ -27,7 +27,8 @@ test('UI transition sources are fixed labels recorded before state invalidation'
   ]) {
     const handler = source.slice(source.indexOf(sourceName), source.indexOf(sourceName) + 260);
     assert.ok(handler.indexOf(`TraceOnlineTransition("${event}")`) > 0);
-    assert.ok(handler.indexOf(`TraceOnlineTransition("${event}")`) < handler.indexOf('CancelPendingJoinPreparation()'));
+    const cancellation = event === 'ui_quit_to_matchmaking' ? 'QuitToPlayOnline()' : 'CancelPendingJoinPreparation()';
+    assert.ok(handler.indexOf(`TraceOnlineTransition("${event}")`) < handler.indexOf(cancellation));
   }
 });
 

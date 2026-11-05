@@ -12,7 +12,7 @@ test('native error snapshot is captured in the callback and copied before asynch
   assert.ok(disconnected.indexOf('Events::CurrentNativeDisconnectError()') < disconnected.indexOf('isInGame.exchange(false)'));
   assert.match(disconnected, /EnqueueAsync\(\[isTerminal, wasMatchmaking, nativeError, disconnectGeneration, wasConnected, wasInGame\]/);
   assert.match(disconnected, /HandleServerDisconnect\(isTerminal, wasMatchmaking, nativeError, wasInGame\)/);
-  assert.match(disconnected, /isServerJoinTransition\.exchange\(false\) && !nativeError\.hasNativeError/);
+  assert.match(disconnected, /isServerJoinTransition\.exchange\(false\) && !isTerminal && !nativeError\.hasNativeError/);
   assert.doesNotMatch(disconnected, /nativeError\.(message|title)/);
 });
 
@@ -28,8 +28,8 @@ test('completed-match duplicate callbacks cannot treat a delayed managed DVAR as
 test('native error cannot be mistaken for a completed match, while normal completion remains unchanged', () => {
   assert.match(handling, /wasMatchmaking && !isTerminal && !nativeError\.hasNativeError && ReturnToMatchmakingLobby\(\)/);
   assert.match(handling, /wasInGame && nativeError\.hasNativeError && ReturnToMatchmakingLobby\(true\)/);
-  assert.ok(handling.indexOf('CloseOnlineSession(false, isTerminal)') < handling.indexOf('ScheduleReturnToIdleMenu(std::move(nativeError))'));
-  assert.match(disconnected, /else if \(isPrivateMatchClient\)/);
+  assert.ok(handling.indexOf('CloseOnlineSession(false, isTerminal, wasMatchmaking)') < handling.indexOf('ScheduleReturnToIdleMenu(std::move(nativeError), isTerminal)'));
+  assert.match(disconnected, /else if \(isPrivateMatchClient \|\| isTerminal\)/);
 });
 
 test('error return restores its snapshot after menu changes and never opens the automatic connect popup', () => {
@@ -46,6 +46,6 @@ test('error return restores its snapshot after menu changes and never opens the 
 test('superseded errors cannot clean up a new join or reopen an old error dialog', () => {
   assert.match(disconnected, /if \(joinTransitionGeneration != disconnectGeneration\) return;/);
   assert.match(scheduled, /nativeError = std::move\(nativeError\)/);
-  assert.ok(scheduled.indexOf('nativeError.hasNativeError && joinTransitionGeneration != returnGeneration') < scheduled.indexOf('CL_IsCgameInitialized'));
-  assert.match(scheduled, /ReturnToIdleMenu\(nativeError\)/);
+  assert.ok(scheduled.indexOf('if (joinTransitionGeneration != returnGeneration)') < scheduled.indexOf('CL_IsCgameInitialized'));
+  assert.match(scheduled, /ReturnToIdleMenu\(nativeError, explicitLeave\)/);
 });

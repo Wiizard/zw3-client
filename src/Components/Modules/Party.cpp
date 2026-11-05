@@ -2764,6 +2764,9 @@ namespace Components
 			}
 		}
 
+		// Native party-go connects to this endpoint later, without connectMatch.
+		// Record the wire format after localhost has been mapped to a LAN address.
+		Network::RecordServerBuild(joinContainer.target, joinContainer.info.Get("x64") != "1");
 		lobbyMap[id.bits] = joinContainer.target;
 
 		reinterpret_cast<char(*)(std::uint64_t, char)>(Utils::Hook::Rebase(Steam_JoinLobby))(id.bits, 0);

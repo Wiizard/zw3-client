@@ -4,6 +4,7 @@
 #include "ConnectProtocol.hpp"
 #include "Console.hpp"
 #include "Dedicated.hpp"
+#include "Events.hpp"
 #include "Flags.hpp"
 
 namespace Components
@@ -39,10 +40,15 @@ namespace Components
 			return;
 		}
 
-		if (MessageBoxA(nullptr, "Do you want to start another instance?\nNot all features will be available!", "Game already running",
-			MB_ICONEXCLAMATION | MB_YESNO) == IDNO)
+		// The constructor runs under the DLL loader lock. A modal dialog can
+		// deadlock with accessibility hooks that need to start another thread.
+		Events::OnClientInit([]
 		{
-			ExitProcess(EXIT_SUCCESS);
-		}
+			if (MessageBoxA(nullptr, "Do you want to start another instance?\nNot all features will be available!", "Game already running",
+				MB_ICONEXCLAMATION | MB_YESNO) == IDNO)
+			{
+				ExitProcess(EXIT_SUCCESS);
+			}
+		});
 	}
 }

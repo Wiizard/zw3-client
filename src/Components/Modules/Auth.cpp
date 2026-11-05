@@ -15,6 +15,7 @@
 #include "Logger.hpp"
 #include "Network.hpp"
 #include "Scheduler.hpp"
+#include "Singleton.hpp"
 #include "Toast.hpp"
 #include "UIScript.hpp"
 #include "ZWNet.hpp"
@@ -644,6 +645,34 @@ namespace Components
 		managedConnectTicket.refreshPending = false;
 	}
 
+	static bool IsSameMachineAddress(const Network::Address& address)
+	{
+		if (address.IsLoopback())
+		{
+			return true;
+		}
+
+		for (int i = 0; i < *Game::numIP; ++i)
+		{
+			if (address.GetIP() == Game::localIP[i].full)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	static bool CanUseLocalInstanceIdentity(const Network::Address& address, std::uint64_t certificateXuid)
+	{
+		// The native party maps localhost to a LAN address. Local instances share
+		// a certificate but require distinct player IDs in the lobby and match.
+		// A valid signature is still required; managed and remote joins stay bound
+		// to the certificate ID.
+		return IsSameMachineAddress(address) && !GetAdmissionConfig().isEnabled
+			&& certificateXuid == Auth::GetKeyHash();
+	}
+
 	bool Auth::SendConnectDataStub(Game::netsrc_t source, const Game::netadr_t* target, const void* data, int length)
 	{
 		if (!target || !data || length <= 0)
@@ -693,7 +722,7 @@ namespace Components
 
 		const Network::Address address{target};
 
-		if (!address.IsLoopback())
+		if (!address.IsLoopback() && (Singleton::IsFirstInstance() || !CanUseLocalInstanceIdentity(address, GetKeyHash())))
 		{
 			info.Set("xuid", Utils::String::VA("%llX", GetKeyHash()));
 		}
@@ -763,24 +792,6 @@ namespace Components
 		Network::SendCommand(source, address, "connect", connectData.SerializeAsString());
 
 		return true;
-	}
-
-	static bool IsSameMachineAddress(const Network::Address& address)
-	{
-		if (address.IsLoopback())
-		{
-			return true;
-		}
-
-		for (int i = 0; i < *Game::numIP; ++i)
-		{
-			if (address.GetIP() == Game::localIP[i].full)
-			{
-				return true;
-			}
-		}
-
-		return false;
 	}
 
 	void Auth::ParseConnectData(Game::msg_t* message, const Game::netadr_t* from)
@@ -886,7 +897,8 @@ namespace Components
 			return;
 		}
 
-		if (xuid != GetKeyHash(connectData.publickey()))
+		const auto certificateXuid = GetKeyHash(connectData.publickey());
+		if (xuid != certificateXuid && !CanUseLocalInstanceIdentity(address, certificateXuid))
 		{
 			Logger::Print("refused a connect from {}, xuid {:#x} is not this certificate's\n",
 				address.GetString(), xuid);

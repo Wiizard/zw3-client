@@ -31,7 +31,6 @@ namespace Components
 	constexpr std::uintptr_t com_frameTime = 0x141BD9AD8;
 
 	constexpr std::uintptr_t com_sv_running = 0x141BD9A90;
-	constexpr std::uintptr_t Com_ServerPacketEvent = 0x1401F5F20;
 
 	constexpr std::uintptr_t ip_socket = 0x14678C430;
 
@@ -41,6 +40,16 @@ namespace Components
 
 	static void NetSleep(const int waitMs, const bool dispatchEvents = true)
 	{
+		const auto* const runningDvar = *reinterpret_cast<Game::dvar_t* const*>(Utils::Hook::Rebase(com_sv_running));
+		if (runningDvar && runningDvar->current.enabled)
+		{
+			// Listen servers have the same VM ownership rules as dedicated servers.
+			// Leave packets queued for the server worker instead of running client
+			// commands and scripts concurrently on the frame-wait thread.
+			Sleep(static_cast<DWORD>(waitMs));
+			return;
+		}
+
 		const SOCKET socketHandle = *reinterpret_cast<const SOCKET*>(Utils::Hook::Rebase(ip_socket));
 
 		if (socketHandle == 0 || socketHandle == INVALID_SOCKET)
@@ -70,16 +79,7 @@ namespace Components
 			return;
 		}
 
-		const auto* const runningDvar = *reinterpret_cast<Game::dvar_t* const*>(Utils::Hook::Rebase(com_sv_running));
-
-		if (runningDvar && runningDvar->current.enabled)
-		{
-			reinterpret_cast<void(*)()>(Utils::Hook::Rebase(Com_ServerPacketEvent))();
-		}
-		else
-		{
-			reinterpret_cast<void(*)()>(Utils::Hook::Rebase(Com_EventLoop))();
-		}
+		reinterpret_cast<void(*)()>(Utils::Hook::Rebase(Com_EventLoop))();
 	}
 
 	int Threading_ComFrameWait(int minMsec)

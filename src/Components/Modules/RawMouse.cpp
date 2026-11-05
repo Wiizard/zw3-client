@@ -4,6 +4,7 @@
 
 #include "RawMouse.hpp"
 #include "Events.hpp"
+#include "FastFiles.hpp"
 #include "Gamepad.hpp"
 #include "LobbyScene.hpp"
 #include "Logger.hpp"
@@ -513,6 +514,8 @@ namespace Components
 
 	void RawMouse::IN_Frame()
 	{
+		static bool resumeAfterLoading = true;
+		if (!FastFiles::MainMenuReady()) resumeAfterLoading = true;
 		if (startupDiagnostics.IsActive())
 		{
 			using Diagnostics = Utils::MouseStartupDiagnostics;
@@ -527,9 +530,17 @@ namespace Components
 		}
 		if (Window::IsLoadingScreenMovable() || Window::IsDragging())
 		{
+			resumeAfterLoading = true;
 			SuspendMouseInput();
 			Window::PumpLoadingEvents();
 			return;
+		}
+		// With intro 0 there may be no later focus transition after loading.
+		// Retry on the window thread until activation can actually be applied.
+		if (resumeAfterLoading && FastFiles::MainMenuReady() && Window::RefreshInputActivation())
+		{
+			resumeAfterLoading = false;
+			ResetMouseRawEvents();
 		}
 
 		if (Window::HasFocus())

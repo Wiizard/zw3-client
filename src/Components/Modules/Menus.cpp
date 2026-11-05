@@ -17,6 +17,7 @@
 #include "UIScript.hpp"
 #include "SPLoadscreens.hpp"
 #include "LobbyScene.hpp"
+#include "Menu/Backdrop.hpp"
 #include "Renderer.hpp"
 
 #include "Utils/MenuPreprocessor.hpp"
@@ -4417,11 +4418,15 @@ namespace Components
 			auto* const findMatch = Game::Menus_FindByName(context, "popup_zwnet_playlists");
 			if (findMatch && findMatch->fullScreen && Game::Menu_IsVisible(context, findMatch)) return false;
 		}
-		const bool isHeldForScene = hasName && (_stricmp(menu->window.name, "main_text") == 0
+		// The main menu and the lobby pages wait for the first backdrop frame,
+		// so the scene is already up when they appear.
+		const bool isHeldForScene = hasName && (_stricmp(menu->window.name, "main") == 0
+			|| _stricmp(menu->window.name, "main_text") == 0
 			|| _stricmp(menu->window.name, "pregame_loaderror") == 0
 			|| _stricmp(menu->window.name, "menu_xboxlive_privatelobby") == 0
-			|| _stricmp(menu->window.name, "zwnet_matchmaking") == 0);
-		if (isHeldForScene && LobbyScene::IsStartupLoading()) return false;
+			|| _stricmp(menu->window.name, "zwnet_matchmaking") == 0
+			|| _stricmp(menu->window.name, "popup_zwnet_playlists") == 0);
+		if (isHeldForScene && ::Components::Menu::Backdrop::HoldsMenus()) return false;
 
 		if (LobbyScene::IsTransitionActive())
 		{

@@ -140,7 +140,7 @@ namespace Components
 			{ "CONNECTING", "Connecting to match" },
 			{ "DIRECT_CONNECTION", "Joining match" },
 			{ "RELAY_CONNECTION", "Joining match" },
-			{ "IN_MATCH", "Playing matchmaking" },
+			{ "IN_MATCH", "In a public match" },
 		};
 
 		if (state == "ERROR")
@@ -592,7 +592,7 @@ namespace Components
 			}
 			else
 			{
-				details = "Preparing ZW3 matchmaking";
+				details = "Preparing public match";
 			}
 		}
 		else if (!isInGame && isMainMenu)
@@ -688,7 +688,7 @@ namespace Components
 
 			if (zwnetParty)
 			{
-				details = std::format("ZW3 matchmaking on {}", map);
+				details = std::format("Playing Zombies on {}", map);
 				state = GetZWNetPresenceState(zwnetParty->state, zwnetParty->members, 4);
 				ApplyZWNetDiscordParty(*zwnetParty, partyId, joinSecret, partySize, partyMax, partyPrivacy, canJoin);
 			}

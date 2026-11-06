@@ -469,10 +469,7 @@ namespace Components::Menu
 		// wall.
 		void UpdateLineup()
 		{
-			// A lobby shows the characters of the players in it; everywhere
-			// else the whole crew stands together.
-			const bool inLobby = MenuVisible("menu_xboxlive_privatelobby") || MenuVisible("zwnet_matchmaking") || MenuVisible("zwnet_party_lobby");
-			const auto roster = inLobby ? Roster() : std::array<int, 4>{0, 1, 2, 3};
+			const auto roster = Roster();
 			if (lineupCount >= 0 && roster == lineupRoster) return;
 			const int count = static_cast<int>(std::ranges::count_if(roster, [](int m) { return m >= 0; }));
 			lineupRoster = roster;

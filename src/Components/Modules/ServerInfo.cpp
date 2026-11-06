@@ -1,6 +1,7 @@
 #include "STDInclude.hpp"
 
 #include "ServerInfo.hpp"
+#include "Auth.hpp"
 #include "CharacterAssignments.hpp"
 #include "ClientSlots.hpp"
 #include "Dedicated.hpp"
@@ -18,6 +19,7 @@
 #include "GSC/Field.hpp"
 #include "GSC/Script.hpp"
 #include "Utils/ManagedRuntimeQuery.hpp"
+#include <charconv>
 
 namespace Components
 {
@@ -49,6 +51,25 @@ namespace Components
 	static std::array<int, Game::MAX_CLIENTS> connectingLastPacketAdvanceAt{};
 	static std::array<bool, Game::MAX_CLIENTS> isConnectingStale{};
 	static std::array<ZombieRankState, Game::MAX_CLIENTS> zombieRanks{};
+
+	struct PrivateRank
+	{
+		int level;
+		int prestige;
+		std::chrono::steady_clock::time_point expiresAt;
+	};
+
+	static std::unordered_map<std::uint64_t, PrivateRank> privateRanks;
+
+	static std::optional<PrivateRank> GetPrivateRank(std::uint64_t xuid)
+	{
+		const auto found = privateRanks.find(xuid);
+		if (found != privateRanks.end() && found->second.expiresAt > std::chrono::steady_clock::now())
+		{
+			return found->second;
+		}
+		return std::nullopt;
+	}
 
 	static void SetUIDvar(const char* name, const std::string& value)
 	{
@@ -131,6 +152,7 @@ namespace Components
 		AddGuidCandidate(candidates, std::to_string(static_cast<std::int64_t>(guid)));
 		AddGuidCandidate(candidates, std::format("{:X}", guid));
 		AddGuidCandidate(candidates, std::format("{:x}", guid));
+		AddGuidCandidate(candidates, std::format("{:016x}", guid));
 		AddGuidCandidate(candidates, std::to_string(lowGuid));
 		AddGuidCandidate(candidates, std::to_string(static_cast<std::int32_t>(lowGuid)));
 		AddGuidCandidate(candidates, std::format("{:X}", lowGuid));
@@ -181,6 +203,83 @@ namespace Components
 		AddGuidCandidate(guids, userInfo.Get("guid"));
 
 		return TryReadZombieRank(guids, level, prestige);
+	}
+
+	static bool TryReadLocalZombieRank(int& level, int& prestige)
+	{
+		std::vector<std::string> guids;
+		AddGuidCandidates(guids, Auth::GetKeyHash());
+		return TryReadZombieRank(guids, level, prestige);
+	}
+
+	static bool IsUnmanagedPrivateMatch()
+	{
+		return !Dedicated::IsEnabled() && Dvar::Var("xblive_privatematch").Get<bool>()
+			&& !Dvar::Var("zwnet_managed_session").Get<bool>();
+	}
+
+	static void PublishPrivateRank()
+	{
+		const auto target = Party::Target();
+		if (!target.IsValid() || Party::IsHostingParty() || !IsUnmanagedPrivateMatch()
+			|| (!Party::IsLobbySceneClient() && !Game::CL_IsCgameInitialized(0)))
+		{
+			return;
+		}
+
+		int level = 0;
+		int prestige = 0;
+		if (TryReadLocalZombieRank(level, prestige))
+		{
+			Network::SendCommand(target, "zw3PrivateRank", std::format("{} {}", level, prestige));
+		}
+	}
+
+	static void ReceivePrivateRank(Network::Address& address, const std::string& data)
+	{
+		if (!Party::IsHostingParty() || !IsUnmanagedPrivateMatch() || data.size() > 6)
+		{
+			return;
+		}
+
+		int level = 0;
+		int prestige = 0;
+		const auto end = data.data() + data.size();
+		const auto first = std::from_chars(data.data(), end, level);
+		if (first.ec != std::errc{} || first.ptr == end || *first.ptr != ' ' || level < 0 || level > 53)
+		{
+			return;
+		}
+		const auto second = std::from_chars(first.ptr + 1, end, prestige);
+		if (second.ec != std::errc{} || second.ptr != end || prestige < 0 || prestige > 255)
+		{
+			return;
+		}
+
+		std::uint64_t xuid = 0;
+		if (Dedicated::IsRunning())
+		{
+			for (const auto& client : std::span(Game::svs_clients, *Game::svs_clientCount))
+			{
+				if (client.header.state >= Game::CS_CONNECTED && !client.bIsTestClient
+					&& Network::Address(&client.header.netchan.remoteAddress) == address)
+				{
+					xuid = CharacterAssignments::GetClientXuid(client);
+					break;
+				}
+			}
+		}
+		else
+		{
+			xuid = Party::GetLobbyMemberXuid(address);
+		}
+
+		if (xuid != 0 && xuid != Party::GetLocalPlayerXuid())
+		{
+			const auto now = std::chrono::steady_clock::now();
+			std::erase_if(privateRanks, [now](const auto& entry) { return entry.second.expiresAt <= now; });
+			privateRanks[xuid] = { level, prestige, now + 5s };
+		}
 	}
 
 	static void UpdateZombieRankState(int clientNum, std::uint64_t xuid, int now)
@@ -377,16 +476,24 @@ namespace Components
 
 				if (!isBot)
 				{
-					std::vector<std::string> guids;
-					AddGuidCandidates(guids, FindLobbyPlayerXuid(playerName));
-
-					int savedLevel = 0;
-					int savedPrestige = 0;
-
-					if (TryReadZombieRank(guids, savedLevel, savedPrestige))
+					if (slot == 0)
 					{
-						level = savedLevel;
-						prestige = savedPrestige;
+						TryReadLocalZombieRank(level, prestige);
+					}
+					else
+					{
+						const auto xuid = FindLobbyPlayerXuid(playerName);
+						if (const auto rank = GetPrivateRank(xuid))
+						{
+							level = rank->level;
+							prestige = rank->prestige;
+						}
+						else
+						{
+							std::vector<std::string> guids;
+							AddGuidCandidates(guids, xuid);
+							TryReadZombieRank(guids, level, prestige);
+						}
 					}
 				}
 
@@ -939,6 +1046,15 @@ namespace Components
 				UpdateZombieRankState(clientNum, xuid, now);
 				player.rank = zombieRanks[clientNum].level;
 				player.prestige = zombieRanks[clientNum].prestige;
+				if (IsUnmanagedPrivateMatch())
+				{
+					if (const auto rank = GetPrivateRank(xuid); rank
+						&& std::pair(rank->prestige, rank->level) > std::pair(player.prestige, player.rank))
+					{
+						player.rank = rank->level;
+						player.prestige = rank->prestige;
+					}
+				}
 			}
 
 			const bool isDead = client->sess.cs.team == Game::TEAM_SPECTATOR;
@@ -1332,6 +1448,8 @@ namespace Components
 		Network::OnPacket("getStatus", HandleGetStatus);
 		Network::OnPacket("getZWNetRuntime", HandleManagedRuntimeQuery);
 		Network::OnPacket("statusResponse", HandleStatusResponse);
+		Network::OnPacket("zw3PrivateRank", ReceivePrivateRank);
+		Scheduler::Loop(PublishPrivateRank, Scheduler::Pipeline::MAIN, 1s);
 
 		Network::OnPacket("getZW3LobbyRanks", [](Network::Address& address, [[maybe_unused]] const std::string& data)
 		{
@@ -1346,9 +1464,9 @@ namespace Components
 			Network::SendCommand(address, "zw3LobbyRankUpdate", snapshot);
 		});
 
-		Network::OnPacket("zw3LobbyRankUpdate", [](Network::Address&, const std::string& data)
+		Network::OnPacket("zw3LobbyRankUpdate", [](Network::Address& address, const std::string& data)
 		{
-			if (Party::IsHostingParty())
+			if (Party::IsHostingParty() || !(address == Party::Target()))
 			{
 				return;
 			}

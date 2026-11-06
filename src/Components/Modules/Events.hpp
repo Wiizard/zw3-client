@@ -21,6 +21,8 @@ namespace Components
 			bool hasNativeError = false;
 			std::string message;
 			std::string title;
+			bool isInGameDisconnectCommand = false;
+			bool wasManagedSession = false;
 		};
 
 		Events();

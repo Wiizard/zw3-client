@@ -337,6 +337,22 @@ namespace Components
 		handlersSV[command] = callback;
 	}
 
+	static bool CanPauseZombieMatch(int clientNum)
+	{
+		const auto& sender = Game::svs_clients[clientNum];
+		if (sender.header.netchan.remoteAddress.type != Game::NA_LOOPBACK)
+		{
+			return false;
+		}
+
+		const std::span clients(Game::svs_clients, *Game::svs_clientCount);
+		return std::ranges::none_of(clients, [&sender](const Game::client_s& client)
+		{
+			return &client != &sender && client.header.state >= Game::CS_CONNECTED
+				&& !client.bIsTestClient && client.header.netchan.remoteAddress.type != Game::NA_BOT;
+		});
+	}
+
 	void ClientCommand::ClientCommandStub(const int clientNum)
 	{
 		const auto ent = &Game::g_entities[clientNum];
@@ -349,6 +365,14 @@ namespace Components
 
 		Command::ServerParams params;
 		const auto command = Utils::String::ToLower(params.Get(0));
+
+		// The script counts allied humans. A guest or spectator opening their menu
+		// can pause all AI if only one human is on the allied team, then leave.
+		if (command == "mr" && params.Size() == 4 && std::string_view(params.Get(3)) == "zw_open_notify"
+			&& !CanPauseZombieMatch(clientNum))
+		{
+			return;
+		}
 
 		if (const auto itr = handlersSV.find(command); itr != handlersSV.end())
 		{

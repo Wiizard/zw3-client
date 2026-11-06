@@ -34,6 +34,7 @@ namespace Components
 		static void Connect(const Network::Address& target, bool downloadOnly = false, bool isUnmanagedRequired = false, bool preserveLobbyTransition = false);
 
 		static std::uint64_t GetLocalPlayerXuid();
+		static std::uint64_t GetLobbyMemberXuid(const Network::Address& address);
 
 		static Network::Address Target();
 

@@ -138,6 +138,35 @@ namespace Utils
 		}
 	}
 
+	bool TryReadClipboardText(char* out, std::size_t outSize)
+	{
+		if (outSize == 0)
+		{
+			return false;
+		}
+
+		out[0] = '\0';
+		if (!OpenClipboard(nullptr))
+		{
+			return false;
+		}
+
+		const HANDLE handle = GetClipboardData(CF_TEXT);
+		const auto* const text = handle ? static_cast<const char*>(GlobalLock(handle)) : nullptr;
+		if (text)
+		{
+			const auto available = std::min(GlobalSize(handle), outSize - 1);
+			const auto* const end = static_cast<const char*>(std::memchr(text, '\0', available));
+			const auto length = end ? static_cast<std::size_t>(end - text) : available;
+			std::memcpy(out, text, length);
+			out[length] = '\0';
+			GlobalUnlock(handle);
+		}
+
+		CloseClipboard();
+		return text != nullptr;
+	}
+
 	void SafeShellExecute(HWND hwnd, LPCSTR operation, LPCSTR file, LPCSTR parameters, LPCSTR directory, INT showCommand)
 	{
 		[=]

@@ -302,6 +302,7 @@ namespace Components
 	constexpr std::uintptr_t Scr_SetModel_SetModelCall = 0x140179EAA;
 	constexpr std::uintptr_t G_SetModel = 0x1401AC270;
 	constexpr std::uintptr_t G_DObjUpdate = 0x1401AAB80;
+	constexpr std::uintptr_t G_EntityStateSetPartBits = 0x1401AB4F0;
 	constexpr std::uintptr_t Scr_Attach_EntAttachCall = 0x140181726;
 	constexpr std::uintptr_t G_EntAttach = 0x1401AAE70;
 	constexpr std::uintptr_t Scr_Detach_EntDetachCall = 0x14017A281;
@@ -367,14 +368,23 @@ namespace Components
 		return index;
 	}
 
-	static void SetCrewBotModel(Game::gentity_s* ent, const char* model)
+	static void SetScriptModel(Game::gentity_s* ent, const char* model)
 	{
 		if (const auto index = CrewBotModelIndex(ent))
 		{
 			model = ModelCache::cachedModelsReallocated[index]->name;
 		}
 
+		const auto oldModel = ent->model;
 		Utils::Hook::Call<void(Game::gentity_s*, const char*)>(G_SetModel)(ent, model);
+
+		if (ent->client && ent->model != oldModel)
+		{
+			// The DObj rebuild clears the entity mask. Clear the player-state copy
+			// too, so snapshots cannot reapply bone indices from the old model.
+			const std::uint32_t partBits[6]{};
+			Utils::Hook::Call<void(Game::gentity_s*, const std::uint32_t*)>(G_EntityStateSetPartBits)(ent, partBits);
+		}
 	}
 
 	static int AttachCrewBotModel(Game::gentity_s* ent, const char* model, const unsigned int tag, const int ignoreCollision)
@@ -1357,7 +1367,7 @@ namespace Components
 			{ SV_AddTestClient_ClientBeginCall, ClientBegin, reinterpret_cast<void*>(ClientBegin_Hk) },
 			{ SV_AddTestClient_ClientNotifyCall, ClientNotify, reinterpret_cast<void*>(ClientNotify_Hk) },
 			{ Scr_Spawn_ClientSpawnCall, ClientSpawn, reinterpret_cast<void*>(ClientSpawn_Hk) },
-			{ Scr_SetModel_SetModelCall, G_SetModel, reinterpret_cast<void*>(SetCrewBotModel) },
+			{ Scr_SetModel_SetModelCall, G_SetModel, reinterpret_cast<void*>(SetScriptModel) },
 			{ Scr_Attach_EntAttachCall, G_EntAttach, reinterpret_cast<void*>(AttachCrewBotModel) },
 			{ Scr_Detach_EntDetachCall, G_EntDetach, reinterpret_cast<void*>(DetachCrewBotModel) },
 		};

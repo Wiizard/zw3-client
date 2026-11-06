@@ -4382,6 +4382,7 @@ namespace Components
 		Add("ui_mp/popup_customclan.menu");
 		Add("ui_mp/popup_customtitle.menu");
 		Add("ui_mp/popup_friends.menu");
+		Add("ui_mp/popup_social_remove_friend.menu");
 		Add("ui_mp/resetclass.menu");
 		Add("ui_mp/security_increase_popmenu.menu");
 		Add("ui_mp/startup_messages.menu");

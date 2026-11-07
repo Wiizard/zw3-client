@@ -156,6 +156,9 @@ namespace Components
 	static std::string currentPlayerId;
 	static std::string currentProposalId;
 	static std::string currentMatchId;
+	// A match whose server refused this client before it got in game, for
+	// example because its GUID does not match the linked stats account.
+	static std::string rejectedMatchId;
 	static std::string presenceUiState = "OFFLINE";
 
 	static std::mutex asyncTaskMutex;
@@ -5539,6 +5542,32 @@ namespace Components
 		auto expected = expectedGeneration;
 		if (!isActive || !joinTransitionGeneration.compare_exchange_strong(expected, expectedGeneration + 1)) return;
 		const auto preparationGeneration = expectedGeneration + 1;
+
+		bool wasRejected = false;
+		{
+			std::lock_guard _(stateMutex);
+			wasRejected = !matchId.empty() && rejectedMatchId == matchId;
+		}
+
+		if (wasRejected)
+		{
+			// The server will refuse this client again, so connecting would only
+			// repeat the error. Release the assignment and keep the party instead.
+			Logger::Print("ZWNET match {} refused this client; releasing it instead of reconnecting\n", matchId);
+			isManagedReconnectInFlight = false;
+			isServerJoinTransition = false;
+			Auth::ClearManagedConnectTicket();
+			Scheduler::Once([]
+			{
+				Command::Execute("closemenu popup_reconnectingtoparty", false);
+			}, Scheduler::Pipeline::MAIN);
+
+			CancelMatchmaking();
+
+			std::lock_guard _(stateMutex);
+			if (rejectedMatchId == matchId) rejectedMatchId.clear();
+			return;
+		}
 		if (!isRelay && IsRelayUsedForMatch(matchId))
 		{
 			isManagedReconnectInFlight = false;
@@ -7697,6 +7726,13 @@ namespace Components
 			{
 				std::lock_guard _(stateMutex);
 				hasMatch = !currentMatchId.empty();
+
+				// An error before reaching the game means the server refused the
+				// connection. Remember it so Play Online does not reconnect in a loop.
+				if (hasMatch && nativeError.hasNativeError && !wasInGame && !isTerminal)
+				{
+					rejectedMatchId = currentMatchId;
+				}
 			}
 
 			const bool isManaged = nativeError.wasManagedSession || Dvar::Var("zwnet_managed_session").Get<bool>();

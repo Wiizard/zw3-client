@@ -1781,7 +1781,7 @@ namespace Components::Remix
 		const int tag = static_cast<int>(TextureTag::Ui);
 		std::string stockOpinions;
 		// The explicit MarkUiPhase draw ends our 3D scene. Texture matches must not end it sooner.
-		uiTextureBoundary.Update(!IsFrontendRendering(), saved[tag], pushed[tag], withdrawn[tag],
+		uiTextureBoundary.Update(!IsRasterMenuRendering(), saved[tag], pushed[tag], withdrawn[tag],
 			[api, &stockOpinions](std::uint64_t hash, bool include)
 			{
 				char text[24];

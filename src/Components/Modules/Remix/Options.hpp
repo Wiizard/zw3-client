@@ -44,8 +44,8 @@ namespace Components::Remix
 	std::wstring GetRemixDataDirectory();
 
 	void UpdateOptions(IDirect3DDevice9* device);
-	void SetFrontendRendering(bool isFrontend);
-	bool IsFrontendRendering();
+	void SetRasterMenuRendering(bool useRasterMenu);
+	bool IsRasterMenuRendering();
 
 	void SetDiSampleCount(int count);
 

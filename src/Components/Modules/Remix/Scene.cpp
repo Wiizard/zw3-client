@@ -4,6 +4,7 @@
 #include "SceneWarmup.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -132,8 +133,8 @@ namespace Components::Remix
 
 	static void __fastcall StandardDrawDetour(void* viewInfo)
 	{
-		// Menu maps need their baked lighting and shaders while frontend raytracing is disabled.
-		if (IsFrontendRendering())
+		// Raster menu frames use the original shaders and baked lighting.
+		if (IsRasterMenuRendering())
 		{
 			originalStandardDraw(viewInfo);
 			return;
@@ -370,7 +371,7 @@ namespace Components::Remix
 
 	static void __fastcall PostEffectsDetour(void* viewInfo)
 	{
-		if (IsFrontendRendering() && originalPostEffects)
+		if (IsRasterMenuRendering() && originalPostEffects)
 		{
 			originalPostEffects(viewInfo);
 			return;
@@ -494,7 +495,7 @@ namespace Components::Remix
 
 	static void __fastcall EmissivePassDetour(void* viewInfo)
 	{
-		if (!sceneDevice || IsFrontendRendering())
+		if (!sceneDevice || IsRasterMenuRendering())
 		{
 			originalEmissivePass(viewInfo);
 			return;
@@ -525,7 +526,7 @@ namespace Components::Remix
 
 	static void DrawWithPremultipliedRemap(TessDrawList original, void* context, void** iterator)
 	{
-		if (!sceneDevice || IsFrontendRendering())
+		if (!sceneDevice || IsRasterMenuRendering())
 		{
 			original(context, iterator);
 			return;
@@ -564,7 +565,7 @@ namespace Components::Remix
 
 	static void __fastcall ParticleCloudTessDetour(void* context, void** iterator)
 	{
-		if (!sceneDevice || IsFrontendRendering())
+		if (!sceneDevice || IsRasterMenuRendering())
 		{
 			originalParticleCloudTess(context, iterator);
 			return;
@@ -695,6 +696,40 @@ namespace Components::Remix
 		return true;
 	}
 
+	using UiIsFullscreen = int(__fastcall*)(int);
+	static UiIsFullscreen originalUiIsFullscreen = nullptr;
+	static std::atomic_bool isFullscreenUi = false;
+
+	static int __fastcall RecordFullscreenUi(int localClientNum)
+	{
+		const int fullscreen = originalUiIsFullscreen(localClientNum);
+		isFullscreenUi.store(fullscreen != 0);
+		return fullscreen;
+	}
+
+	static void InstallFullscreenUiHook()
+	{
+		// Capture the engine's fullscreen decision on the game thread, before the render thread consumes it.
+		const Iw4::CallSite& call = Engine::CurrentBuild().scrDrawScreenFieldIsFullscreenCall;
+		if (call.address == 0)
+		{
+			return;
+		}
+
+		const auto site = Engine::RebaseAddress(call.address);
+		const auto original = Hook::ResolveCallTarget(site);
+		if (!original)
+		{
+			return;
+		}
+
+		originalUiIsFullscreen = reinterpret_cast<UiIsFullscreen>(original);
+		if (!Hook::PatchCall(site, call.bytes, sizeof(call.bytes), reinterpret_cast<const void*>(&RecordFullscreenUi), nullptr))
+		{
+			originalUiIsFullscreen = nullptr;
+		}
+	}
+
 	bool InstallHooks()
 	{
 		if (isInstalled || hasAttempted)
@@ -738,6 +773,7 @@ namespace Components::Remix
 
 		isInstalled = true;
 		stats.isHookInstalled = true;
+		InstallFullscreenUiHook();
 		Device::OnBeginScene(&PrepareFrame);
 
 		Log() << "remix: handing the scene camera to Remix at the start of RB_StandardDrawCommands";
@@ -877,8 +913,9 @@ namespace Components::Remix
 
 		sceneDevice = device;
 		stats.hasDevice = device != nullptr;
-		SetFrontendRendering(!Game::CL_IsCgameInitialized(0));
-		if (IsFrontendRendering()) sceneWarmup.Reset();
+		const bool isInGame = Game::CL_IsCgameInitialized(0);
+		SetRasterMenuRendering(!isInGame || isFullscreenUi.load());
+		if (!isInGame) sceneWarmup.Reset();
 
 		static bool hasAppliedConfig = false;
 
@@ -1097,7 +1134,7 @@ namespace Components::Remix
 
 	void OnPostEffectsBegin()
 	{
-		if (!sceneDevice || IsFrontendRendering())
+		if (!sceneDevice || IsRasterMenuRendering())
 		{
 			return;
 		}

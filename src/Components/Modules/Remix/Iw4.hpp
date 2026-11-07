@@ -23,6 +23,7 @@ namespace Components::Remix::Iw4
 		CallSite emissivePassCall;
 		CallSite rbDrawSunPostEffectsCall;
 		CallSite rbStandardDrawCommandsJump;
+		CallSite scrDrawScreenFieldIsFullscreenCall;
 		CallSite bspSurfaceListCall;
 		CallSite bspSurfaceListSecondPassCall;
 		CallSite staticModelRigidCall;
@@ -118,6 +119,7 @@ namespace Components::Remix::Iw4
 		.emissivePassCall = { 0x1400738FF, { 0xE8, 0xBC, 0x70, 0x00, 0x00 } },
 		.rbDrawSunPostEffectsCall = { 0x140073919, { 0xE8, 0xB2, 0x2B, 0xFF, 0xFF } },
 		.rbStandardDrawCommandsJump = { 0x140073997, { 0xE9, 0xE4, 0xFB, 0xFF, 0xFF } },
+		.scrDrawScreenFieldIsFullscreenCall = { 0x140101912, { 0xE8, 0x49, 0xE0, 0x16, 0x00 } },
 		.bspSurfaceListCall = { 0x140050936, { 0xE8, 0x35, 0x66, 0x02, 0x00 } },
 		.bspSurfaceListSecondPassCall = { 0x140050962, { 0xE8, 0x09, 0x66, 0x02, 0x00 } },
 		.staticModelRigidCall = { 0x140050BA5, { 0xE8, 0xB6, 0x59, 0x02, 0x00 } },

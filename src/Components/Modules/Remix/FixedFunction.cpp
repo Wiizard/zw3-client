@@ -397,7 +397,7 @@ namespace Components::Remix
 		ModelGroupTrace(void* context, const char* groupKind) : kind(groupKind), beforeDraws(groupDraws),
 			beforeCached(stats.cachedSkinnedSurfaces)
 		{
-			if (IsFrontendRendering()) return;
+			if (IsRasterMenuRendering()) return;
 			const auto args = reinterpret_cast<std::uintptr_t>(context);
 			const auto state = ReadAt<std::uintptr_t>(args + Iw4::drawListArgsState);
 			const auto currentMaterial = ReadAt<std::uintptr_t>(state + Iw4::stateMaterial);
@@ -1493,7 +1493,7 @@ namespace Components::Remix
 
 	static bool IsDynamicLightList(void* context)
 	{
-		if (!stats.isHookInstalled || !sceneDevice || IsFrontendRendering())
+		if (!stats.isHookInstalled || !sceneDevice || IsRasterMenuRendering())
 		{
 			return false;
 		}
@@ -1506,7 +1506,7 @@ namespace Components::Remix
 
 	static bool ShouldDrawFixedFunction(void* context)
 	{
-		if (!stats.isHookInstalled || !sceneDevice || IsFrontendRendering())
+		if (!stats.isHookInstalled || !sceneDevice || IsRasterMenuRendering())
 		{
 			return false;
 		}
@@ -3200,7 +3200,7 @@ namespace Components::Remix
 
 	static void __fastcall AddStaticModelSurfacesDetour(void* view)
 	{
-		if (IsFrontendRendering())
+		if (IsRasterMenuRendering())
 		{
 			originalAddStaticModelSurfaces(view);
 			return;
@@ -7398,7 +7398,7 @@ namespace Components::Remix
 		sceneDevice = device;
 		viewSurfaces = 0;
 		++sceneNumber;
-		if (!IsFrontendRendering()) AppendModelHistory("frame\t" + std::to_string(sceneNumber));
+		if (!IsRasterMenuRendering()) AppendModelHistory("frame\t" + std::to_string(sceneNumber));
 		ApplyEngineDrawDistance();
 		didBuildCamoThisView = false;
 

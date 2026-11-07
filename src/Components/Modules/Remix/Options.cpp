@@ -54,7 +54,7 @@ namespace Components::Remix
 	static int diSampleCount = 0;
 	static unsigned reassertFrame = 0;
 	static constexpr unsigned reassertInterval = 60;
-	static std::atomic_bool isFrontendRendering = false;
+	static std::atomic_bool isRasterMenuRendering = false;
 	static const std::string raytracingOption = "rtx.enableRaytracing";
 	static const std::string raytracingDisabled = "False";
 	static const std::string raytracingDefault = "True";
@@ -173,8 +173,8 @@ namespace Components::Remix
 
 	static const std::string* FindEffectiveValue(const std::string& name, const OptionState& state)
 	{
-		// The lobby uses its own shaders and full-size render targets, which Remix can mistake for a game scene.
-		if (isFrontendRendering && name == raytracingOption)
+		// Fullscreen menus can skip the game scene, so Remix must leave their raster output intact.
+		if (isRasterMenuRendering && name == raytracingOption)
 		{
 			return &raytracingDisabled;
 		}
@@ -202,20 +202,20 @@ namespace Components::Remix
 		return nullptr;
 	}
 
-	void SetFrontendRendering(const bool isFrontend)
+	void SetRasterMenuRendering(const bool useRasterMenu)
 	{
-		if (isFrontendRendering != isFrontend)
+		if (isRasterMenuRendering != useRasterMenu)
 		{
-			isFrontendRendering = isFrontend;
+			isRasterMenuRendering = useRasterMenu;
 			pending[raytracingOption] = { 0.0f };
-			Log() << "remix: " << (isFrontend ? "frontend uses the original raster renderer"
+			Log() << "remix: " << (useRasterMenu ? "menu uses the original raster renderer"
 				: "game scene restores the configured raytracing mode");
 		}
 	}
 
-	bool IsFrontendRendering()
+	bool IsRasterMenuRendering()
 	{
-		return isFrontendRendering.load();
+		return isRasterMenuRendering.load();
 	}
 
 	std::wstring GetRemixDataDirectory()
@@ -308,7 +308,7 @@ namespace Components::Remix
 		state.ownValue = value;
 		state.hasOwnValue = true;
 
-		if (FindLayerValue(name) || (isFrontendRendering && name == raytracingOption))
+		if (FindLayerValue(name) || (isRasterMenuRendering && name == raytracingOption))
 		{
 			return;
 		}

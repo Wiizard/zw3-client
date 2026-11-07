@@ -59,20 +59,20 @@ int main(int argc, char** argv)
 		auto* device = reinterpret_cast<IDirect3DDevice9*>(1);
 		for (int visit = 0; visit < 3; ++visit)
 		{
-			SetFrontendRendering(true);
-			if (!IsFrontendRendering()) throw std::runtime_error("Menu draw hooks did not enter raster mode");
+			SetRasterMenuRendering(true);
+			if (!IsRasterMenuRendering()) throw std::runtime_error("Menu draw hooks did not enter raster mode");
 			UpdateOptions(device);
 			RequireMode("False");
 			const auto writes = raytracingWrites.size();
-			SetFrontendRendering(true);
+			SetRasterMenuRendering(true);
 			UpdateOptions(device);
 			if (raytracingWrites.size() != writes) throw std::runtime_error("An unchanged lobby rewrote the rendering mode");
-			SetFrontendRendering(false);
-			if (IsFrontendRendering()) throw std::runtime_error("Game draw hooks did not restore Remix mode");
+			SetRasterMenuRendering(false);
+			if (IsRasterMenuRendering()) throw std::runtime_error("Game draw hooks did not restore Remix mode");
 			UpdateOptions(device);
 			RequireMode(baseline == "default" ? "True" : baseline);
 		}
-		SetFrontendRendering(true);
+		SetRasterMenuRendering(true);
 		SetLayerOptions(mapLayer, { { "rtx.enableRaytracing", "True" } }, 0.0f);
 		UpdateOptions(device);
 		RequireMode("False");
@@ -81,15 +81,15 @@ int main(int argc, char** argv)
 		ResetModifiedOptions();
 		UpdateOptions(device);
 		RequireMode("False");
-		SetFrontendRendering(false);
+		SetRasterMenuRendering(false);
 		UpdateOptions(device);
 		RequireMode("True");
 		SetLayerOptions(mapLayer, { { "rtx.enableRaytracing", "False" } }, 0.0f);
 		UpdateOptions(device);
 		RequireMode("False");
-		SetFrontendRendering(true);
+		SetRasterMenuRendering(true);
 		UpdateOptions(device);
-		SetFrontendRendering(false);
+		SetRasterMenuRendering(false);
 		UpdateOptions(device);
 		RequireMode("False");
 		ClearLayer(mapLayer, 0.0f);

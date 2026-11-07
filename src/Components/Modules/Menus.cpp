@@ -3230,6 +3230,17 @@ namespace Components
 			}
 		}
 
+		if (menu->window.name && _stricmp(menu->window.name, "pc_options_game") == 0)
+		{
+			// Older menu bundles still define a control and a separate label for ui_backdrop.
+			const auto end = std::remove_if(items, items + itemCount, [](const Game::itemDef_s* item)
+			{
+				return (item->dvar && _stricmp(item->dvar, "ui_backdrop") == 0)
+					|| (item->text && _stricmp(item->text, "MENU BACKGROUND") == 0);
+			});
+			itemCount = static_cast<int>(end - items);
+		}
+
 		menu->itemCount = itemCount;
 		menu->items = items;
 
@@ -4110,6 +4121,46 @@ namespace Components
 		}
 	}
 
+	constexpr std::uintptr_t Menu_HandleKey_TextFieldCall = 0x140265016;
+	constexpr std::uintptr_t Item_TextField_HandleKey = 0x1402633E0;
+	constexpr std::uintptr_t g_editItem = 0x1465806A8;
+	constexpr unsigned int keyCharFlag = 0x400;
+	constexpr unsigned int keyPaste = keyCharFlag | 0x16; // Ctrl+V arrives as a WM_CHAR.
+	constexpr int textFieldBufferSize = 1024;
+
+	static int Item_TextField_HandleKey_Hook(Game::UiContext* context, Game::itemDef_s* item, unsigned int key)
+	{
+		const auto handleKey = reinterpret_cast<int(*)(Game::UiContext*, Game::itemDef_s*, unsigned int)>(
+			Utils::Hook::Rebase(Item_TextField_HandleKey));
+		if (key != keyPaste)
+		{
+			return handleKey(context, item, key);
+		}
+
+		char clipboard[textFieldBufferSize];
+		if (item && Utils::TryReadClipboardText(clipboard, sizeof(clipboard)))
+		{
+			const auto* const editingItem = reinterpret_cast<Game::itemDef_s* const*>(Utils::Hook::Rebase(g_editItem));
+			for (const unsigned char character : std::string_view(clipboard))
+			{
+				// The native handler interprets some higher byte values as navigation keys.
+				if (character < ' ' || character > '~')
+				{
+					continue;
+				}
+
+				// The native handler can advance to another field when this one fills up.
+				if (*editingItem != item || item->cursorPos[0] >= textFieldBufferSize - 1
+					|| !handleKey(context, item, keyCharFlag | character))
+				{
+					break;
+				}
+			}
+		}
+
+		return 1;
+	}
+
 	Menus::Menus()
 	{
 		Command::Add("loadmenu", LoadMenu_f);
@@ -4173,6 +4224,17 @@ namespace Components
 
 		if (!Dedicated::IsEnabled())
 		{
+			static Utils::Hook textFieldKeyHook;
+			if (Utils::Hook::BranchesTo(Menu_HandleKey_TextFieldCall, Item_TextField_HandleKey, HOOK_CALL)
+				&& textFieldKeyHook.Initialize(Menu_HandleKey_TextFieldCall, Item_TextField_HandleKey_Hook, HOOK_CALL)->Install()->IsInstalled())
+			{
+				textFieldKeyHook.Quick();
+			}
+			else
+			{
+				Logger::Error("menus: could not hook the text field key handler for clipboard paste\n");
+			}
+
 			Scheduler::Once([]
 			{
 				const std::lock_guard lock(loadingMutex);
@@ -4320,6 +4382,7 @@ namespace Components
 		Add("ui_mp/popup_customclan.menu");
 		Add("ui_mp/popup_customtitle.menu");
 		Add("ui_mp/popup_friends.menu");
+		Add("ui_mp/popup_social_remove_friend.menu");
 		Add("ui_mp/resetclass.menu");
 		Add("ui_mp/security_increase_popmenu.menu");
 		Add("ui_mp/startup_messages.menu");

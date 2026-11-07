@@ -153,6 +153,7 @@ namespace Components
 		std::size_t valueSize;
 	};
 
+	// The native party connect timeout gives remote hosts time to answer each join attempt.
 	static const DvarDefaultSite zeroDefaults[] =
 	{
 		{ { 0x14010A7E2, Utils::Hook::leaRcx, 0x14037AA28 }, 0x14010A7ED, { 0x41, 0x8D, 0x50, 0x0A }, 4, 3, 1 },
@@ -160,7 +161,6 @@ namespace Components
 		{ { 0x14010AB2B, Utils::Hook::leaRcx, 0x14037B060 }, 0x14010AB36, { 0x41, 0x8D, 0x50, 0x3C }, 4, 3, 1 },
 		{ { 0x14023A703, Utils::Hook::leaRcx, 0x14039E820 }, 0x14023A6EE, { 0x8D, 0x53, 0x03 }, 3, 2, 1 },
 		{ { 0x14010A928, Utils::Hook::leaRcx, 0x14037AC90 }, 0x14010A935, { 0x41, 0x8D, 0x50, 0x04 }, 4, 3, 1 },
-		{ { 0x14010AB46, Utils::Hook::leaRcx, 0x14037B088 }, 0x14010AB62, { 0xBA, 0xE8, 0x03, 0x00, 0x00 }, 5, 1, 4 },
 		{ { 0x14010AD31, Utils::Hook::leaRcx, 0x14037B550 }, 0x14010AD4D, { 0xBA, 0xD0, 0x07, 0x00, 0x00 }, 5, 1, 4 },
 		{ { 0x14023A8AF, Utils::Hook::leaRcx, 0x14039EB00 }, 0x14023A8CB, { 0xBA, 0xC8, 0x00, 0x00, 0x00 }, 5, 1, 4 },
 	};
@@ -172,7 +172,6 @@ namespace Components
 		"party_minLobbyTime",
 		"sv_reconnectlimit",
 		"party_vetoDelayTime",
-		"party_connectTimeout",
 		"party_searchPauseTime",
 		"sv_hugeSnapshotDelay",
 	};

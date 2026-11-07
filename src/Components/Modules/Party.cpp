@@ -1725,6 +1725,20 @@ namespace Components
 		return ::Steam::User::LocalId().bits;
 	}
 
+	std::uint64_t Party::GetLobbyMemberXuid(const Network::Address& address)
+	{
+		if (!IsHostOf(Game::g_lobbyData))
+		{
+			return 0;
+		}
+
+		constexpr std::uintptr_t Party_FindFirstMemberAtAddr = 0x140109740;
+		const auto findMember = Utils::Hook::Call<int(const Game::PartyData*, const Game::netadr_t*)>(Party_FindFirstMemberAtAddr);
+		const int slot = findMember(Game::g_lobbyData, address.Get());
+		const auto& members = Game::g_lobbyData->partyMembers;
+		return slot >= 0 && static_cast<std::size_t>(slot) < std::size(members) ? members[slot].player : 0;
+	}
+
 	static std::string ReadGetInfoRequest(const Network::Address& address, const std::string& data)
 	{
 		std::string payload = data;
@@ -1993,6 +2007,44 @@ namespace Components
 		Command::Execute("openmenu menu_xboxlive_partyended", false);
 	}
 
+	static void ConnectToRunningMatch(const Network::Address& target, const Utils::InfoString& info, long clients, long maxClients, bool isPrivateMatch)
+	{
+		const auto mapName = info.Get("mapname");
+		const auto gameType = info.Get("gametype");
+		const auto connectMatch = [target, version = info.Get("version"), mapName, gameType,
+			isX86 = info.Get("x64") != "1", clients, maxClients, isPrivateMatch]
+		{
+			if (isPrivateMatch)
+			{
+				Dvar::Var("xblive_privatematch").Set(true);
+			}
+			Dvar::Var("xblive_privateserver").Set(true);
+			Dvar::Var("sv_version").Set(version);
+
+			Game::Menus_CloseAll(Game::uiContext);
+			if (Flags::HasFlag("log")) Logger::Print("join trace: connection menus closed\n");
+
+			Game::_XSESSION_INFO hostInfo{};
+			hostInfo.hostAddress.ina.S_un.S_addr = target.GetIP();
+			auto raw = *target.Get();
+
+			Network::RecordServerBuild(target, isX86);
+
+			Game::LiveStorage_EnsureWeHaveStats(0);
+			if (Flags::HasFlag("log")) Logger::Print("join trace: native stats initialized\n");
+
+			Logger::Print("connecting to {} on {} {}, {}/{} players\n", target.GetString(), mapName, gameType, clients, maxClients);
+
+			Game::CL_ConnectFromParty(0, &hostInfo, raw, 0, 0, mapName.data(), gameType.data());
+			if (Flags::HasFlag("log")) Logger::Print("join trace: engine connection initiated\n");
+		};
+
+		if (!LobbyScene::DeferLaunch(connectMatch, mapName))
+		{
+			connectMatch();
+		}
+	}
+
 	bool Party::HandleJoinResponse(const Network::Address& address, const Utils::InfoString& info)
 	{
 		if (!joinContainer.isValid || !(address == joinContainer.target))
@@ -2063,17 +2115,6 @@ namespace Components
 			SetStringIfChanged("party_currentHost", info.Get("hostname"));
 		}
 
-		if (info.Get("wwwDownload") == "1")
-		{
-			Download::sv_wwwDownload.Set(true);
-			Download::sv_wwwBaseUrl.Set(info.Get("wwwUrl"));
-		}
-		else
-		{
-			Download::sv_wwwDownload.Set(false);
-			Download::sv_wwwBaseUrl.Set("");
-		}
-
 		std::string receivedChallenge;
 
 		if (matchType == MatchType::DedicatedMatch || matchType == MatchType::PartyLobby)
@@ -2133,6 +2174,33 @@ namespace Components
 			ConnectError("A password is required to join this server! Set it at the bottom of the serverlist.");
 			return true;
 		}
+
+		if (matchType == MatchType::PrivateParty)
+		{
+			if (joinContainer.isDownloadOnly)
+			{
+				ConnectError("This private lobby does not offer mod downloads.");
+				return true;
+			}
+
+			joinContainer.motd = TextRenderer::StripMaterialTextIcons(info.Get("sv_motd"));
+
+			// The native party sleeps once the host starts the map. Join the running
+			// server directly instead of waiting in the lobby for another party-go.
+			if (info.Get("sv_running") == "1" && !info.Get("mapname").starts_with("menu_"))
+			{
+				ConnectToRunningMatch(address, info, clients, maxClients, true);
+				return true;
+			}
+
+			isPrivatePartyJoin = true;
+			PlaylistContinue();
+			return true;
+		}
+
+		const bool isWwwDownload = info.Get("wwwDownload") == "1";
+		Download::sv_wwwDownload.Set(isWwwDownload);
+		Download::sv_wwwBaseUrl.Set(isWwwDownload ? info.Get("wwwUrl") : "");
 
 		const bool isUsermap = !info.Get("usermaphash").empty();
 		const auto usermapHash = std::strtoul(info.Get("usermaphash").data(), nullptr, 10);
@@ -2201,49 +2269,13 @@ namespace Components
 			return true;
 		}
 
-		if (matchType == MatchType::PrivateParty)
-		{
-			isPrivatePartyJoin = true;
-			PlaylistContinue();
-			return true;
-		}
-
 		if (maxClients && clients >= maxClients)
 		{
 			ConnectError("@EXE_SERVERISFULL");
 			return true;
 		}
 
-		const auto connectMatch = [target = joinContainer.target, version = info.Get("version"), mapName = info.Get("mapname"),
-			gameType = info.Get("gametype"), isX86 = info.Get("x64") != "1", serverName = address.GetString(), clients, maxClients]
-		{
-			Dvar::Var("xblive_privateserver").Set(true);
-			Dvar::Var("sv_version").Set(version);
-
-			Game::Menus_CloseAll(Game::uiContext);
-			if (Flags::HasFlag("log")) Logger::Print("join trace: connection menus closed\n");
-
-			Game::_XSESSION_INFO hostInfo{};
-
-			hostInfo.hostAddress.ina.S_un.S_addr = target.GetIP();
-
-			auto raw = *target.Get();
-
-			Network::RecordServerBuild(target, isX86);
-
-			Game::LiveStorage_EnsureWeHaveStats(0);
-			if (Flags::HasFlag("log")) Logger::Print("join trace: native stats initialized\n");
-
-			Logger::Print("connecting to {} on {} {}, {}/{} players\n", serverName, mapName, gameType, clients, maxClients);
-
-			Game::CL_ConnectFromParty(0, &hostInfo, raw, 0, 0, mapName.data(), gameType.data());
-			if (Flags::HasFlag("log")) Logger::Print("join trace: engine connection initiated\n");
-		};
-
-		if (!LobbyScene::DeferLaunch(connectMatch, info.Get("mapname")))
-		{
-			connectMatch();
-		}
+		ConnectToRunningMatch(address, info, clients, maxClients, false);
 
 		return true;
 	}
@@ -2661,6 +2693,92 @@ namespace Components
 		}
 	}
 
+	// The x64 engine stores separate LAN and public ports in the Steam lobby address.
+	struct NativeLobbyAddress
+	{
+		std::uint32_t localIp;
+		std::uint32_t publicIp;
+		std::uint16_t localPort;
+		std::uint16_t publicPort;
+	};
+
+	struct NativeLobbySession
+	{
+		Game::XNKID sessionId;
+		NativeLobbyAddress address;
+	};
+
+	static_assert(offsetof(NativeLobbyAddress, publicPort) == 10);
+	static_assert(offsetof(NativeLobbySession, address) == 8);
+
+	constexpr std::uintptr_t Net_FindNatRoute = 0x1401B3430;
+	constexpr std::uintptr_t Net_IsNatRoutePending = 0x1401B3BE0;
+	constexpr std::uintptr_t Live_JoinPendingLobby_FindNatRouteCall = 0x1402A328A;
+	constexpr std::uintptr_t Live_JoinPendingLobby_IsNatRoutePendingCall = 0x1402A32EB;
+	constexpr std::uintptr_t Net_ResolveLobbyAddress_FindNatRouteCall = 0x1402A84A2;
+
+	static const Game::netadr_t* GetPrivatePartyRoute(const NativeLobbyAddress* address)
+	{
+		// getinfo already verified that this exact endpoint answered the join challenge.
+		const auto target = Party::Target();
+		if (isPrivatePartyJoin && address && target.GetType() == Game::NA_IP
+			&& address->publicIp == target.GetIP() && address->publicPort == target.GetPort())
+		{
+			thread_local Game::netadr_t direct;
+			direct = *target.Get();
+			return &direct;
+		}
+
+		return nullptr;
+	}
+
+	static const Game::netadr_t* FindLobbyRoute(const NativeLobbyAddress* address)
+	{
+		if (const auto* const direct = GetPrivatePartyRoute(address))
+		{
+			return direct;
+		}
+
+		return reinterpret_cast<const Game::netadr_t*(*)(const NativeLobbyAddress*)>(Utils::Hook::Rebase(Net_FindNatRoute))(address);
+	}
+
+	static bool IsLobbyRoutePending(const NativeLobbySession* session)
+	{
+		return !GetPrivatePartyRoute(&session->address)
+			&& reinterpret_cast<bool(*)(const NativeLobbySession*)>(Utils::Hook::Rebase(Net_IsNatRoutePending))(session);
+	}
+
+	static void KeepPrivateLobbyRoute()
+	{
+		struct CallSite
+		{
+			std::uintptr_t call;
+			std::uintptr_t original;
+			void* replacement;
+		};
+		const CallSite sites[] =
+		{
+			{ Live_JoinPendingLobby_FindNatRouteCall, Net_FindNatRoute, reinterpret_cast<void*>(FindLobbyRoute) },
+			{ Live_JoinPendingLobby_IsNatRoutePendingCall, Net_IsNatRoutePending, reinterpret_cast<void*>(IsLobbyRoutePending) },
+			{ Net_ResolveLobbyAddress_FindNatRouteCall, Net_FindNatRoute, reinterpret_cast<void*>(FindLobbyRoute) },
+		};
+
+		static Utils::Hook hooks[std::size(sites)];
+		for (std::size_t i = 0; i < std::size(sites); ++i)
+		{
+			const auto& site = sites[i];
+			if (!Utils::Hook::BranchesTo(site.call, site.original, HOOK_CALL)
+				|| !hooks[i].Initialize(site.call, site.replacement, HOOK_CALL)->Install()->IsInstalled())
+			{
+				for (auto& hook : hooks) hook.Uninstall();
+				Logger::Error("party: could not preserve the direct lobby address at {:#x}\n", site.call);
+				return;
+			}
+		}
+
+		for (auto& hook : hooks) hook.Quick();
+	}
+
 	static void PatchPartyHost()
 	{
 		if (Utils::Hook::MatchesBytes(PartyHost_UsingAssignedTeams_PrivateTest, assignedTeamsPrivateTest, sizeof(assignedTeamsPrivateTest)))
@@ -2821,6 +2939,7 @@ namespace Components
 		DisableHostMigration();
 		PatchPartyHost();
 		PatchLobbyJoins();
+		KeepPrivateLobbyRoute();
 		PatchPartyGo();
 
 		if (Utils::Hook::MatchesBytes(g_natType, natTypeStrict, sizeof(natTypeStrict)))

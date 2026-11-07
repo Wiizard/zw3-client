@@ -12,6 +12,8 @@ namespace Utils
 
 	std::filesystem::path GetBaseFilesLocation();
 
+	bool TryReadClipboardText(char* out, std::size_t outSize);
+
 	void SafeShellExecute(HWND hwnd, LPCSTR operation, LPCSTR file, LPCSTR parameters, LPCSTR directory, INT showCommand);
 	void OpenUrl(const std::string& url);
 

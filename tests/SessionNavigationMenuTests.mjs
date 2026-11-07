@@ -6,16 +6,17 @@ const gameRoot = process.env.ZW3_GAME_ROOT;
 const readMenu = path => readFileSync(`${gameRoot}/zw3/core/ui_mp/${path}`, 'utf8');
 const source = readFileSync(new URL('../src/Components/Modules/ZWNet.cpp', import.meta.url), 'utf8');
 
-test('Quit enters the menu actually labelled Play Online and rebuilds its online party', { skip: !gameRoot }, () => {
-  const returning = source.slice(source.indexOf('if (explicitLeave)'), source.indexOf('void ZWNet::ScheduleReturnToIdleMenu('));
-  const branch = returning.slice(0, returning.indexOf('\n\t\t\treturn;'));
-  const target = /Menus_OpenByName\(Game::uiContext, "([^"]+)"\)/.exec(branch)?.[1];
-  assert.ok(target);
-  const menu = readMenu(`${target}.menu`);
-  assert.match(menu, /text "PLAY ONLINE"/);
-  assert.match(menu, /"FIND MATCH"/);
-  assert.match(branch, /"popup_zwnet_connecting"/);
-  assert.match(readMenu('popup_zwnet_connecting.menu'), /uiScript "ZWNET_ConnectOnline"/);
+test('leaving matchmaking connects to online services before opening Play Online', { skip: !gameRoot }, () => {
+  const returning = source.slice(source.indexOf('void ZWNet::ReturnToIdleMenu('), source.indexOf('void ZWNet::ScheduleReturnToIdleMenu('));
+  const explicitLeave = returning.slice(returning.indexOf('if (explicitLeave)'), returning.indexOf('\n\t\t\treturn;'));
+  assert.match(explicitLeave, /Menus_OpenByName\(Game::uiContext, "pregame_loaderror"\);\s+Game::Menus_OpenByName\(Game::uiContext, "popup_zwnet_connecting"\)/);
+  assert.doesNotMatch(explicitLeave, /Menus_OpenByName\(Game::uiContext, "zwnet_matchmaking"\)/);
+  const popup = readMenu('popup_zwnet_connecting.menu');
+  assert.match(popup, /text "CONNECTING TO ONLINE SERVICES"/);
+  assert.match(popup, /uiScript "ZWNET_ConnectOnline"/);
+  const completed = source.slice(source.indexOf('void ZWNet::CompleteOnlineEntry('), source.indexOf('void ZWNet::AbandonOnlineSession('));
+  assert.match(completed, /Menus_CloseRequest\(Game::uiContext, connecting\)[\s\S]+Menus_OpenByName\(Game::uiContext, "zwnet_matchmaking"\)/);
+  assert.match(readMenu('zwnet_matchmaking.menu'), /text "PLAY ONLINE"/);
 });
 
 test('leaving the native Private Match lobby goes to Play Online rather than Main Menu', { skip: !gameRoot }, () => {

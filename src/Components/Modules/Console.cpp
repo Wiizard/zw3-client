@@ -1000,34 +1000,6 @@ namespace Components
 		return bestColumn;
 	}
 
-	static bool TryReadClipboard(char* out, std::size_t outSize)
-	{
-		out[0] = '\0';
-
-		if (!OpenClipboard(nullptr))
-		{
-			return false;
-		}
-
-		bool didRead = false;
-		const HANDLE handle = GetClipboardData(CF_TEXT);
-
-		if (handle)
-		{
-			const char* const text = static_cast<const char*>(GlobalLock(handle));
-
-			if (text)
-			{
-				std::snprintf(out, outSize, "%s", text);
-				GlobalUnlock(handle);
-				didRead = true;
-			}
-		}
-
-		CloseClipboard();
-		return didRead;
-	}
-
 	static bool TryWriteClipboard(HGLOBAL block)
 	{
 		if (!OpenClipboard(nullptr))
@@ -1222,7 +1194,7 @@ namespace Components
 	{
 		char clipboard[inputCapacity];
 
-		if (!TryReadClipboard(clipboard, sizeof(clipboard)))
+		if (!Utils::TryReadClipboardText(clipboard, sizeof(clipboard)))
 		{
 			return;
 		}

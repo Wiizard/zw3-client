@@ -117,35 +117,18 @@ namespace Components
 		friendsList.insert(friendsList.end(), offlineList.begin(), offlineList.end());
 	}
 
-	static std::string SocialIconText(const std::string& iconName, const std::string& value, const char size = 0x34)
+	static std::string SocialIconText(const std::string& iconName, const std::string& value)
 	{
 		std::string text;
 		text.push_back('^');
 		text.push_back(1);
-		text.push_back(size);
-		text.push_back(size);
+		text.push_back(0x34);
+		text.push_back(0x34);
 		text.push_back(static_cast<char>(iconName.size()));
 		text.append(iconName);
 		text.append(" ");
 		text.append(value);
 		return text;
-	}
-
-	static void LoadSocialSkin()
-	{
-		constexpr const char* files[] = { "panel_left", "panel_right", "tab_neutral", "tab_active", "button", "columns",
-			"friends", "requests", "add", "refresh", "remove", "join", "info", "player", "prestige_unknown", "online", "offline" };
-		bool ready = true;
-		for (const auto* file : files)
-		{
-			const auto name = std::string("zw3_social_") + file;
-			if (Materials::GetRuntimeMaterial(name)) continue;
-			std::string bytes;
-			if (!Utils::IO::ReadFile(std::string("zw3/core/ui_mp/social/") + file + ".png", &bytes)
-				|| bytes.size() > 2 * 1024 * 1024 || !Materials::CreateNewsMaterialFromImageBytes(name, bytes)) ready = false;
-		}
-		Dvar::Var("ui_social_skin_ready").Set(ready);
-		if (!ready) Logger::Print("Friends interface assets are missing or could not be loaded\n");
 	}
 
 	static bool IsPublicGuid(const std::string& value)
@@ -255,6 +238,9 @@ namespace Components
 	static std::atomic_bool isSocialRefreshBusy = false;
 	static std::atomic_bool isPartyInvitePollBusy = false;
 	static std::atomic_bool isSocialRosterCurrent = false;
+
+	// Only the UI scripts access the pending removal.
+	static std::string pendingFriendRemovalDiscordId;
 
 	static std::mutex socialMutex;
 	static std::mutex socialErrorMutex;
@@ -447,39 +433,125 @@ namespace Components
 	}
 	static bool IsZwnetPartyId(const std::string& value);
 
+	// Roster groups, best first: joinable, playing or in a lobby, idle online, offline.
+	static int SocialFriendGroup(const SocialFriend& user)
+	{
+		if (!user.online)
+		{
+			return 3;
+		}
+
+		if (user.isJoinable)
+		{
+			return 0;
+		}
+
+		return user.status == "ONLINE" ? 2 : 1;
+	}
+
+	static bool SocialFriendComesFirst(const SocialFriend& left, const SocialFriend& right)
+	{
+		const int leftGroup = SocialFriendGroup(left);
+		const int rightGroup = SocialFriendGroup(right);
+		if (leftGroup != rightGroup)
+		{
+			return leftGroup < rightGroup;
+		}
+
+		// Color codes would otherwise sort every colored name before the plain ones.
+		const auto leftName = TextRenderer::StripColors(left.displayName);
+		const auto rightName = TextRenderer::StripColors(right.displayName);
+		const int byName = _stricmp(leftName.c_str(), rightName.c_str());
+		return byName == 0 ? left.id < right.id : byName < 0;
+	}
+
+	static void SyncSocialListCursor(const float feeder, const unsigned int index)
+	{
+		const auto* menu = Game::Menus_FindByName(Game::uiContext, "popup_friends");
+		if (!menu || !menu->items)
+		{
+			return;
+		}
+
+		for (int i = 0; i < menu->itemCount; ++i)
+		{
+			auto* item = menu->items[i];
+			if (!item || item->special != feeder || item->cursorPos[0] == static_cast<int>(index))
+			{
+				continue;
+			}
+
+			item->cursorPos[0] = static_cast<int>(index);
+			auto* list = Game::Item_GetListBoxDef(item);
+			if (list && list->elementHeight > 0.0f)
+			{
+				const int rows = std::max(1, static_cast<int>(item->window.rect.h / list->elementHeight));
+				const int row = static_cast<int>(index);
+				list->startPos[0] = std::clamp(list->startPos[0], std::max(0, row - rows + 1), row);
+			}
+			return;
+		}
+	}
+
 	static void PublishSocialRosterState()
 	{
-		unsigned int total = 0;
-		unsigned int online = 0;
-		bool joinable = false;
-		std::string reason = "Select a ZW3 friend first.";
-		{
-			std::lock_guard _(socialMutex);
-			total = static_cast<unsigned int>(socialFriends.size());
-			for (const auto& user : socialFriends)
-			{
-				if (user.online) ++online;
-			}
-			if (currentSocialFriend < socialFriends.size())
-			{
-				const auto& user = socialFriends[currentSocialFriend];
-				joinable = user.online && user.isJoinable && IsZwnetPartyId(user.zwnetPartyId);
-				reason = joinable ? "Join this friend's current ZW3 party." : user.online
-					? "This friend's session is not currently joinable." : "This friend is offline.";
-			}
-		}
-		const bool current = isSocialRosterCurrent;
-		if (!current)
-		{
-			joinable = false;
-			reason = "Friend status is temporarily unavailable. Refresh and try again.";
-		}
-		Scheduler::Once([total, online, joinable, reason, current]
+		Scheduler::Once([]
 		{
 			if (!isSocialActive) return;
-			Dvar::Var("ui_social_roster_summary").Set(current ? std::format("{} ONLINE  |  {} TOTAL", online, total) : "FRIENDS UNAVAILABLE");
+
+			unsigned int total = 0;
+			unsigned int online = 0;
+			unsigned int joinableCount = 0;
+			unsigned int selection = 0;
+			bool joinable = false;
+			bool invitable = false;
+			bool removable = false;
+			std::string name;
+			std::string reason = "Select a friend to see available actions.";
+			{
+				std::lock_guard _(socialMutex);
+				total = static_cast<unsigned int>(socialFriends.size());
+				for (const auto& user : socialFriends)
+				{
+					if (user.online) ++online;
+					if (SocialFriendGroup(user) == 0) ++joinableCount;
+				}
+				if (currentSocialFriend < socialFriends.size())
+				{
+					const auto& user = socialFriends[currentSocialFriend];
+					selection = currentSocialFriend;
+					name = user.displayName;
+					removable = !user.discordId.empty();
+					invitable = user.online;
+					joinable = user.online && user.isJoinable && IsZwnetPartyId(user.zwnetPartyId);
+					reason = joinable ? "Join their party or invite them to yours." : user.online
+						? "You can invite this friend. Their party isn't available to join."
+						: "This friend is offline. Join and Party Invite are unavailable.";
+				}
+			}
+			const bool current = isSocialRosterCurrent;
+			if (!current)
+			{
+				joinable = false;
+				reason = "Friend status is temporarily unavailable. Refresh and try again.";
+			}
+			SyncSocialListCursor(socialFriendFeeder, selection);
+			std::string summary = "FRIENDS UNAVAILABLE";
+			if (current && joinableCount > 0)
+			{
+				summary = std::format("{} JOINABLE  |  {} ONLINE  |  {} TOTAL", joinableCount, online, total);
+			}
+			else if (current)
+			{
+				summary = std::format("{} ONLINE  |  {} TOTAL", online, total);
+			}
+			Dvar::Var("ui_social_roster_summary").Set(summary);
 			Dvar::Var("ui_social_friend_count").Set(static_cast<int>(total));
+			Dvar::Var("ui_social_roster_current").Set(current);
+			Dvar::Var("ui_social_selected_name").Set(name);
+			Dvar::Var("ui_social_selected_removable").Set(removable);
 			Dvar::Var("ui_social_selected_joinable").Set(joinable);
+			Dvar::Var("ui_social_selected_invitable").Set(current && invitable);
 			Dvar::Var("ui_social_selected_join_reason").Set(reason);
 		}, Scheduler::Pipeline::MAIN);
 	}
@@ -866,6 +938,8 @@ namespace Components
 			updated.emplace_back(std::move(user));
 		}
 
+		std::ranges::sort(updated, SocialFriendComesFirst);
+
 		{
 			std::lock_guard _(socialMutex);
 			const auto selectedId = currentSocialFriend < socialFriends.size() ? socialFriends[currentSocialFriend].id : std::string{};
@@ -1040,7 +1114,17 @@ namespace Components
 	static bool TryRefreshIncomingRequests()
 	{
 		const auto response = SocialApiRequest("GET", "/social/friends/requests");
-		return response && TryReplaceIncomingRequests(*response);
+		const bool success = response && TryReplaceIncomingRequests(*response);
+		Scheduler::Once([success]
+		{
+			if (!isSocialActive) return;
+
+			std::lock_guard _(socialMutex);
+			SyncSocialListCursor(socialRequestFeeder, currentIncomingRequest);
+			Dvar::Var("ui_social_request_count").Set(success || !incomingRequests.empty()
+				? static_cast<int>(incomingRequests.size()) : -1);
+		}, Scheduler::Pipeline::MAIN);
+		return success;
 	}
 
 	static void RunSocialTask(const std::string& pendingStatus, std::function<std::string()> task)
@@ -1106,24 +1190,32 @@ namespace Components
 				value = user.displayName;
 				break;
 			case 2:
-				value = "UNAVAILABLE";
+				value = "--";
 
 				if (user.isRankKnown)
 				{
 					const auto icon = user.rankPrestige < 8 ? std::format("prestige_{}", user.rankPrestige + 1) : "skullicon";
 					value = SocialIconText(icon, std::format("PRESTIGE {}", user.rankPrestige));
 				}
-				else value = SocialIconText("zw3_social_prestige_unknown", value);
 
 				break;
 			case 3:
-				value = user.status;
-
-				if (user.isJoinable)
+				// Green: joinable or idle online. Yellow: busy in a lobby or match.
+				switch (SocialFriendGroup(user))
 				{
-					value += " / JOINABLE";
+				case 0:
+					value = "^2JOINABLE ^7- " + user.status;
+					break;
+				case 1:
+					value = "^3" + user.status;
+					break;
+				case 2:
+					value = "^2" + user.status;
+					break;
+				default:
+					value = user.status;
+					break;
 				}
-				value = SocialIconText(user.online ? "zw3_social_online" : "zw3_social_offline", value, 0x24);
 
 				break;
 			default:
@@ -2182,20 +2274,12 @@ namespace Components
 			UpdateFriends();
 		});
 
-		UIScript::Add("LoadFriendsSkin", [](const UIScript::Token&)
-		{
-			LoadSocialSkin();
-		});
-		Scheduler::Loop([]
-		{
-			if (!isSocialActive || !Game::uiContext || Materials::GetRuntimeMaterial("zw3_social_panel_left")) return;
-			auto* const menu = Game::Menus_FindByName(Game::uiContext, "popup_friends");
-			if (menu && Game::Menu_IsVisible(Game::uiContext, menu)) LoadSocialSkin();
-		}, Scheduler::Pipeline::MAIN, 1s);
-
 		UIScript::Add("RefreshFriends", [](const UIScript::Token&)
 		{
 			UpdateFriends();
+
+			// Set now so the menu shows "loading" on its first frame, not "unavailable".
+			Dvar::Var("ui_social_invite_busy").Set(true);
 
 			RunSocialTask("Refreshing ZW3 friends...", []() -> std::string
 			{
@@ -2383,6 +2467,11 @@ namespace Components
 
 		UIScript::Add("RemoveSelectedFriend", [](const UIScript::Token&)
 		{
+			if (isSocialBusy.load() || !pendingFriendRemovalDiscordId.empty())
+			{
+				return;
+			}
+
 			const auto user = SelectedSocialFriend();
 
 			if (!user)
@@ -2391,14 +2480,38 @@ namespace Components
 				return;
 			}
 
-			RunSocialTask("Removing friend...", [user]() -> std::string
+			if (user->discordId.empty())
 			{
-				if (user->discordId.empty())
-				{
-					return "The Stats friend response has no removable Discord identity.";
-				}
+				SetSocialUi("The Stats friend response has no removable Discord identity.", false);
+				return;
+			}
 
-				if (!SocialApiRequest("POST", "/social/friends/remove", { { "discord_user_id", user->discordId } }, true))
+			pendingFriendRemovalDiscordId = user->discordId;
+			Dvar::Var("ui_social_remove_friend_name").Set(user->displayName);
+
+			if (!Game::Menus_OpenByName(Game::uiContext, "popup_social_remove_friend"))
+			{
+				pendingFriendRemovalDiscordId.clear();
+				SetSocialUi("The remove friend confirmation could not be opened.", false);
+			}
+		});
+
+		UIScript::Add("CancelRemoveFriend", [](const UIScript::Token&)
+		{
+			pendingFriendRemovalDiscordId.clear();
+		});
+
+		UIScript::Add("ConfirmRemoveFriend", [](const UIScript::Token&)
+		{
+			auto discordId = std::exchange(pendingFriendRemovalDiscordId, {});
+			if (discordId.empty())
+			{
+				return;
+			}
+
+			RunSocialTask("Removing friend...", [discordId = std::move(discordId)]() -> std::string
+			{
+				if (!SocialApiRequest("POST", "/social/friends/remove", { { "discord_user_id", discordId } }, true))
 				{
 					return "The friend could not be removed.";
 				}
@@ -2453,6 +2566,11 @@ namespace Components
 			if (!user)
 			{
 				SetSocialUi("Select a ZW3 friend first.", false);
+				return;
+			}
+			if (!isSocialRosterCurrent || !user->online)
+			{
+				SetSocialUi(isSocialRosterCurrent ? "This friend is offline." : "Friend status is temporarily unavailable. Refresh and try again.", false);
 				return;
 			}
 
@@ -2762,12 +2880,17 @@ namespace Components
 		{
 			Dvar::Register("ui_social_status_message", "ZW3 social is ready.", Game::DVAR_NONE, "Stable, non-technical status shown by the ZW3 social menu");
 			Dvar::Register("ui_social_invite_busy", false, Game::DVAR_NONE, "Prevents duplicate ZW3 social menu actions");
-			Dvar::Register("ui_social_skin_ready", false, Game::DVAR_NONE, "Friends interface textures have loaded");
 			Dvar::Register("ui_social_friend_count", 0, 0, 512, Game::DVAR_NONE, "Authoritative friend roster size");
+			Dvar::Register("ui_social_request_count", -1, -1, 128, Game::DVAR_NONE, "Incoming request count, or -1 when unavailable");
+			Dvar::Register("ui_social_roster_current", false, Game::DVAR_NONE, "Friend roster has current data");
+			Dvar::Register("ui_social_selected_name", "", Game::DVAR_NONE, "Selected friend's display name");
+			Dvar::Register("ui_social_selected_removable", false, Game::DVAR_NONE, "Selected friend has a removable identity");
 			Dvar::Register("ui_social_roster_summary","LOADING FRIENDS...",Game::DVAR_NONE,"Counts from the current authoritative friend roster");
 			Dvar::Register("ui_social_selected_joinable",false,Game::DVAR_NONE,"Selected friend has a supported current join target");
+			Dvar::Register("ui_social_selected_invitable", false, Game::DVAR_NONE, "Selected friend is online and can receive a party invitation");
 			Dvar::Register("ui_social_selected_join_reason","Select a ZW3 friend first.",Game::DVAR_NONE,"Reason for the selected friend's join availability");
 			Dvar::Register("ui_social_friend_guid", "", Game::DVAR_NONE, "Public ZW3 GUID entered for a friend request");
+			Dvar::Register("ui_social_remove_friend_name", "", Game::DVAR_NONE, "Name shown in the remove friend confirmation");
 			Dvar::Register("ui_social_own_guid", "", Game::DVAR_ROM, "Local public ZW3 GUID shown in the social menu");
 			Dvar::Register("ui_social_game_invite_message", "", Game::DVAR_NONE, "The ZW3 party invitation being shown");
 			Dvar::Register("ui_social_game_invite_details", "", Game::DVAR_NONE, "The size of the ZW3 party in the invitation");

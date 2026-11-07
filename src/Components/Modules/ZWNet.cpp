@@ -5161,7 +5161,9 @@ namespace Components
 			Command::Execute("xstopparty", true);
 			Command::Execute("xstopprivateparty", true);
 			Game::Menus_CloseAll(Game::uiContext);
-			Game::Menus_OpenByName(Game::uiContext, "zwnet_matchmaking");
+			Dvar::Var("com_errorMessage").Set("");
+			Dvar::Var("com_errorTitle").Set("");
+			Game::Menus_OpenByName(Game::uiContext, "pregame_loaderror");
 			Game::Menus_OpenByName(Game::uiContext, "popup_zwnet_connecting");
 			return;
 		}
@@ -5216,7 +5218,8 @@ namespace Components
 		const auto startedAt = Game::Sys_Milliseconds();
 		const auto returnGeneration = joinTransitionGeneration.load();
 
-		Scheduler::Schedule([startedAt, returnGeneration, explicitLeave, nativeError = std::move(nativeError), disconnectedAt = -1]() mutable
+		Scheduler::Schedule([startedAt, returnGeneration = returnGeneration, explicitLeave, nativeError = std::move(nativeError),
+			disconnectedAt = -1, openedAt = -1, hasShownPlayOnline = false]() mutable
 		{
 			// Do not put an older connection error over a newer join/explicit leave.
 			if (joinTransitionGeneration != returnGeneration)
@@ -5226,8 +5229,10 @@ namespace Components
 			const auto now = Game::Sys_Milliseconds();
 
 			if (Game::CL_IsCgameInitialized(0) || Game::CL_GetLocalClientConnectionState(0) != Game::CA_DISCONNECTED
-				|| !Game::uiContext || !Game::Menus_FindByName(Game::uiContext, explicitLeave ? "zwnet_matchmaking" : "pregame_loaderror"))
+				|| !Game::uiContext || !Game::Menus_FindByName(Game::uiContext, explicitLeave ? "zwnet_matchmaking" : "pregame_loaderror")
+				|| (explicitLeave && !Game::Menus_FindByName(Game::uiContext, "popup_zwnet_connecting")))
 			{
+				disconnectedAt = -1;
 				const bool hasTimedOut = (now - startedAt) > 10'000;
 
 				if (hasTimedOut)
@@ -5236,6 +5241,36 @@ namespace Components
 				}
 
 				return hasTimedOut;
+			}
+
+			if (explicitLeave)
+			{
+				const auto isVisible = [](const char* name)
+				{
+					auto* const menu = Game::Menus_FindByName(Game::uiContext, name);
+					return menu && Game::Menu_IsVisible(Game::uiContext, menu);
+				};
+				const bool titleVisible = isVisible("main_text");
+				if (openedAt >= 0)
+				{
+					hasShownPlayOnline = hasShownPlayOnline || isVisible("zwnet_matchmaking");
+					if (titleVisible)
+					{
+						// Restore the current step if native frontend initialization replaces it.
+						const char* menu = hasShownPlayOnline ? "zwnet_matchmaking" : "popup_zwnet_connecting";
+						Game::Menus_CloseRequest(Game::uiContext, Game::Menus_FindByName(Game::uiContext, "main_text"));
+						if (!isVisible(menu)) Game::Menus_OpenByName(Game::uiContext, menu);
+					}
+					return now - openedAt >= 1'000;
+				}
+
+				// A disconnected client still has the old UI context until the
+				// native error path opens the rebuilt frontend.
+				if (!titleVisible && !isVisible("pregame_loaderror") && !isVisible("zwnet_matchmaking"))
+				{
+					disconnectedAt = -1;
+					if (now - startedAt < 10'000) return false;
+				}
 			}
 
 			if (disconnectedAt < 0)
@@ -5251,7 +5286,10 @@ namespace Components
 
 			isIdleReturnPending = false;
 			ReturnToIdleMenu(nativeError, explicitLeave);
-			return true;
+			if (!explicitLeave) return true;
+			returnGeneration = joinTransitionGeneration.load();
+			openedAt = now;
+			return false;
 		}, Scheduler::Pipeline::MAIN, 50ms);
 	}
 
@@ -7661,8 +7699,36 @@ namespace Components
 				hasMatch = !currentMatchId.empty();
 			}
 
-			const bool isManaged = Dvar::Var("zwnet_managed_session").Get<bool>();
-			const bool wasMatchmaking = Utils::ShouldHandleManagedDisconnect(hasMatch, isManaged, wasConnected);
+			const bool isManaged = nativeError.wasManagedSession || Dvar::Var("zwnet_managed_session").Get<bool>();
+			const bool wasMatchmaking = Utils::ShouldHandleManagedDisconnect(hasMatch, isManaged || wasInGame, wasConnected);
+			const bool isExplicitLeave = isTerminal || (nativeError.isInGameDisconnectCommand && !nativeError.hasNativeError
+				&& !isCompletedMatchReturnPending);
+			if (wasMatchmaking && isExplicitLeave)
+			{
+				CancelPendingJoinPreparation();
+				Party::CancelPendingJoin();
+				ResetManagedRoute();
+				isEndpointJoinInFlight = false;
+
+				std::string matchId;
+				{
+					std::lock_guard _(stateMutex);
+					matchId.swap(currentMatchId);
+				}
+
+				// Keep the terminal request ahead of online entry's refresh, but do
+				// not make showing Play Online wait on the network worker.
+				EnqueueAsync([matchId = std::move(matchId)]
+				{
+					auto body = nlohmann::json{{"terminal", true}};
+					if (!matchId.empty()) body["match_id"] = matchId;
+					Request("POST", "/zwnet/matchmaking/disconnect", body);
+					Request("POST", "/social/presence", {{"status", "OFFLINE"}, {"sequence", NextPresenceSequence()}, {"joinable", false}});
+				});
+				ScheduleReturnToIdleMenu({}, true);
+				return;
+			}
+
 			// x86 behaviour: a private match client (non-host or a second local
 			// instance) that leaves goes back to a private match lobby. The lobby
 			// state may already be torn down here, so fall back to the dvars x86 used.

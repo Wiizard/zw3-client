@@ -119,13 +119,14 @@ namespace Components
 		return ClassifyDisconnectReason(std::string_view(dvar->current.string, length));
 	}
 
+	constexpr std::uintptr_t CL_Disconnect_f_ConnectedCall = 0x1400F954A;
 	constexpr std::uintptr_t CL_DisconnectCalls[] =
 	{
 		0x1400F89B7,
 		0x1400F8D23,
 		0x1400F924C,
 		0x1400F92DB,
-		0x1400F954A,
+		CL_Disconnect_f_ConnectedCall,
 		0x1400F95E2,
 		0x1400FC5AD,
 		0x1400FD614,
@@ -437,6 +438,14 @@ namespace Components
 		const bool wasConnected = uiActive->connectionState >= CA_CONNECTING;
 		const int errorEntered = ReadNativeErrorEntered();
 		NativeDisconnectError nativeError;
+		const auto returnedTo = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+		nativeError.isInGameDisconnectCommand = uiActive->connectionState == Game::CA_ACTIVE
+			&& returnedTo == Utils::Hook::Rebase(CL_Disconnect_f_ConnectedCall) + 5;
+		if (wasConnected)
+		{
+			const auto* const managed = Game::Dvar_FindVar("zwnet_managed_session");
+			nativeError.wasManagedSession = managed && managed->current.enabled;
+		}
 		if (errorEntered == 1)
 		{
 			nativeError.hasNativeError = true;
@@ -462,7 +471,6 @@ namespace Components
 			} traceScope(isTracing);
 			try
 			{
-				const auto returnedTo = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
 				const auto caller = std::ranges::find_if(CL_DisconnectCalls, [returnedTo](const std::uintptr_t site)
 				{
 					return returnedTo == Utils::Hook::Rebase(site) + 5;

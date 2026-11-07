@@ -396,6 +396,7 @@ namespace Components
 
         const stage* shown_stage {nullptr};
         string map;     // As the zone is named: mp_rust.
+        string base_zone; // The level a Special Ops zone is played on, or empty.
         string world;   // As the world is named: maps/mp/mp_rust.d3dbsp.
         spawn standing {};
 
@@ -1370,6 +1371,7 @@ namespace Components
         enter (phase::idle);
         s.shown_stage = nullptr;
         s.map.clear ();
+        s.base_zone.clear ();
         s.world.clear ();
         s.front_end_since = -1;
         s.shown = false;
@@ -1899,6 +1901,31 @@ namespace Components
         return r;
       }
 
+      // The zone with the world a Special Ops zone is played in, or empty.
+      //
+      // A Special Ops zone (so_killspree_trainer, so_crossing_so_bridge) only
+      // adds its mission to a campaign level (trainer, so_bridge): the world,
+      // clip map and entities are the level's, in the level's own zone. The
+      // level is the end of the name, so take the longest part after an
+      // underscore that is installed as a zone of its own.
+      //
+      string
+      base_level_zone (string_view map)
+      {
+        if (!map.starts_with ("so_"))
+          return {};
+
+        for (size_t p (map.find ('_')); p != string_view::npos; p = map.find ('_', p + 1))
+        {
+          const string candidate (map.substr (p + 1));
+
+          if (!candidate.empty () && zone_file (candidate))
+            return candidate;
+        }
+
+        return {};
+      }
+
       // Pick and request the map.
       //
       void
@@ -2057,6 +2084,22 @@ namespace Components
           sizes[static_cast<size_t> (ranges::find (installed, &st) -
                                      installed.begin ())]);
 
+        // A Special Ops zone needs its level's zone, which counts toward
+        // what the map needs as if it were part of it.
+        //
+        string base (base_level_zone (st.map));
+
+        if (!base.empty ())
+        {
+          error_code ec;
+          const uintmax_t z (filesystem::file_size (*zone_file (base), ec));
+
+          if (!ec)
+            file_size += z;
+          else
+            base.clear ();
+        }
+
         // The zones that go with every map, those installed, which count
         // toward what the map needs as if they were part of it.
         //
@@ -2106,6 +2149,7 @@ namespace Components
 
         s.shown_stage = &st;
         s.map = st.map;
+        s.base_zone = move (base);
         s.world = world_name (s.map);
         s.zone_free_before = static_cast<int64_t> (r.zone_free);
         s.entries_free_before = r.entries_free;
@@ -2115,7 +2159,14 @@ namespace Components
         // menus keep running meanwhile. The name has to outlive the load,
         // which s.map does.
         //
-        vector<XZoneInfo> zs {XZoneInfo {s.map.c_str (), zone_flag_level, 0}};
+        // The level goes in before the mission that is added to it.
+        //
+        vector<XZoneInfo> zs;
+
+        if (!s.base_zone.empty ())
+          zs.push_back (XZoneInfo {s.base_zone.c_str (), zone_flag_level, 0});
+
+        zs.push_back (XZoneInfo {s.map.c_str (), zone_flag_level, 0});
 
         for (const string* n: extra)
           zs.push_back (XZoneInfo {n->c_str (), zone_flag_level, 0});
@@ -2126,6 +2177,9 @@ namespace Components
         s.loading_since = Sys_Milliseconds ();
 
         LogLine{} << "backdrop: loading " << s.map;
+
+        if (!s.base_zone.empty ())
+          LogLine{} << "backdrop: loading " << s.base_zone << ", the level " << s.map << " is played on";
 
         for (const string* n: extra)
           LogLine{} << "backdrop: loading " << *n << " with it";
@@ -2218,6 +2272,9 @@ namespace Components
           if (!sp)
             if (auto a (lobby_alias.find (s.map)); a != lobby_alias.end ())
               sp = mod_spawn (a->second);
+
+          if (!sp && !s.base_zone.empty ())
+            sp = mod_spawn (s.base_zone);
 
           if (sp)
             LogLine{} << format ("backdrop: standing on the mod's spawn for {} at ({:.0f}, {:.0f}, {:.0f})",

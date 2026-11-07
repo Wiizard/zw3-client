@@ -169,11 +169,16 @@ namespace Components
 		reinterpret_cast<void(*)(int)>(Utils::Hook::Rebase(SV_Frame))(msec);
 	}
 
+	static bool IsManagedAdmissionRequired()
+	{
+		char mode[16]{};
+		return GetEnvironmentVariableA("ZWNET_ADMISSION_MODE", mode, sizeof(mode)) == 8 && std::strcmp(mode, "REQUIRED") == 0;
+	}
+
 	static Game::dvar_t* RegisterDedicatedNetPort(const char* name, int value, int minimum, int maximum,
 		unsigned int flags, const char* description)
 	{
-		char mode[16]{};
-		if (GetEnvironmentVariableA("ZWNET_ADMISSION_MODE", mode, sizeof(mode)) == 8 && std::strcmp(mode, "REQUIRED") == 0)
+		if (IsManagedAdmissionRequired())
 		{
 			// +set is executed after NET_Init in this x64 engine. Use the agent's
 			// signed reservation at the real port-registration point instead.
@@ -426,9 +431,35 @@ namespace Components
 		}
 	}
 
+	bool Dedicated::IsManagedServer()
+	{
+		if (IsManagedAdmissionRequired())
+		{
+			return true;
+		}
+
+		if (!zwnet_match_id.IsValid())
+		{
+			return false;
+		}
+
+		const auto matchId = zwnet_match_id.Get<std::string>();
+		return !matchId.empty() && matchId != "00000000-0000-0000-0000-000000000000";
+	}
+
+	bool Dedicated::ShowInServerBrowser()
+	{
+		if (IsManagedServer())
+		{
+			return false;
+		}
+
+		return !zwnet_show_in_server_browser.IsValid() || zwnet_show_in_server_browser.Get<std::string>() != "0";
+	}
+
 	void Dedicated::Heartbeat()
 	{
-		if (sv_lanOnly.Get<bool>() || zwnet_show_in_server_browser.Get<std::string>() == "0")
+		if (sv_lanOnly.Get<bool>() || !ShowInServerBrowser())
 		{
 			return;
 		}

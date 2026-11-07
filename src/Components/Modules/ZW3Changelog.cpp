@@ -71,13 +71,17 @@ namespace Components
 
 		return lower == "system"
 			|| lower == "new"
+			|| lower == "new maps"
+			|| lower == "new weapons"
 			|| lower == "changed"
 			|| lower == "changes"
+			|| lower == "general improvements"
 			|| lower == "fixed"
 			|| lower == "fixes"
 			|| lower == "removed"
 			|| lower == "security"
 			|| lower == "notice"
+			|| lower == "special thanks"
 			|| lower == "other";
 	}
 

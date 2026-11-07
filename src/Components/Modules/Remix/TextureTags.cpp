@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "Core.hpp"
+#include "CutoutDecalPolicy.hpp"
 #include "Device.hpp"
 #include "Engine.hpp"
 #include "Iw4.hpp"
@@ -91,6 +92,7 @@ namespace Components::Remix
 	{
 		std::uint32_t tagMask = 0;
 		bool hasGeometryUser = false;
+		bool hasConvertedDecalAlias = false;
 		bool hasNonUiUser = false;
 		std::string materialNames;
 		int materialCount = 0;
@@ -939,12 +941,7 @@ namespace Components::Remix
 			return { -1, false, false, false, false, true };
 		}
 
-		const bool isCutoutDecalName = Contains(baseName, "decal") || EndsWith(baseName, "_dec")
-			|| Contains(baseName, "_dec_") || ContainsAny(baseName, { "paper", "poster", "streetline", "crosswalk", "rug" });
-		const bool isCutoutDecal = blend == replaceBlend && facts.isAlphaTested && sortKey >= 6 && sortKey <= 16
-			&& isCutoutDecalName;
-
-		if (region == 1 && isCutoutDecal)
+		if (IsCutoutDecalState(region, sortKey, blend, facts.isAlphaTested) && IsCutoutDecalName(baseName))
 		{
 			return { static_cast<int>(TextureTag::Decal), false };
 		}
@@ -1502,7 +1499,15 @@ namespace Components::Remix
 
 			if (classification.isGeometry)
 			{
-				use.hasGeometryUser = true;
+				if (IsConvertedDecalAlias(StripComma(facts.name), facts.cameraRegion, facts.sortKey,
+					facts.blend, facts.isAlphaTested))
+				{
+					use.hasConvertedDecalAlias = true;
+				}
+				else
+				{
+					use.hasGeometryUser = true;
+				}
 			}
 
 			if (classification.isGlass)
@@ -1595,8 +1600,10 @@ namespace Components::Remix
 
 		const std::uint32_t decalBit = 1u << static_cast<int>(TextureTag::Decal);
 
-		for (const auto& entry : uses)
+		for (auto& entry : uses)
 		{
+			entry.second.hasGeometryUser = HasNonDecalGeometry(entry.second.hasGeometryUser,
+				entry.second.hasConvertedDecalAlias, (entry.second.tagMask & decalBit) != 0);
 			int tag = ResolveTag(entry.second);
 
 			if (tag == static_cast<int>(TextureTag::Decal) && floatingLayers.count(entry.first) != 0)

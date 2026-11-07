@@ -7170,7 +7170,9 @@ namespace Components::Remix
 				continue;
 			}
 
-			if (!drawState.isOpaque || drawState.isScrolling)
+			const bool isCutoutDecal = drawState.isAlphaTested && IsDecalColorMap(entry.first);
+
+			if ((!drawState.isOpaque && !isCutoutDecal) || drawState.isScrolling)
 			{
 				continue;
 			}
@@ -7190,6 +7192,19 @@ namespace Components::Remix
 			}
 
 			ApplyDrawState(device, drawState);
+
+			// Keep the same cut-out decal state when the engine culls this material's own draw.
+			// Otherwise an off-screen overlay can become opaque geometry again when the view turns.
+			device->SetRenderState(D3DRS_ALPHABLENDENABLE, isCutoutDecal ? TRUE : FALSE);
+
+			if (isCutoutDecal)
+			{
+				device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+				device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+				device->SetRenderState(D3DRS_SRCBLENDALPHA, D3DBLEND_SRCALPHA);
+				device->SetRenderState(D3DRS_DESTBLENDALPHA, D3DBLEND_INVSRCALPHA);
+				++stats.cutoutDecalLists;
+			}
 
 			D3DCOLOR neonColour = 0xFFFFFFFF;
 
@@ -7214,6 +7229,7 @@ namespace Components::Remix
 			}
 		}
 
+		device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
 		return drawn;
 	}
 

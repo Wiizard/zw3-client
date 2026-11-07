@@ -325,10 +325,8 @@ namespace Components
 
 	Logger::Logger()
 	{
-		if (Flags::HasFlag("log"))
-		{
-			SetLogFile("iw4x\\iw4x.log");
-		}
+		// The console output, this logger's included, is written to
+		// zw3/logs/zw3.log by Console::Print, so there is no iw4x.log.
 
 		Events::OnDvarInit([]
 		{

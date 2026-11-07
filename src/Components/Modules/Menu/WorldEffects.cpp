@@ -2,6 +2,7 @@
 #include "../FileSystem.hpp"
 #include "../Logger.hpp"
 #include "../Dedicated.hpp"
+#include "../Dvar.hpp"
 #include "../ZoneBuilder.hpp"
 #include "Engine.hpp"
 #include "EnvironmentData.hpp"
@@ -21,6 +22,25 @@ namespace Components::Menu::WorldEffects
         Glow glow {};
         float diffuse = 1, specular = 1;
         bool loaded = false, active = false;
+
+        // Where the mod replaces a map's own look in a match, the backdrop
+        // shows the mod's (zw/weather.gsc): estate is always night there,
+        // through Night(), with the "icbm" vision and no sun. Such a look is
+        // shown as it is in-game, without the backdrop's shadow lift.
+        struct mod_look { std::string_view map, vision; bool sun; };
+        constexpr mod_look mod_looks[] { {"estate", "icbm", false} };
+        bool as_in_game = false;
+
+        // r_drawSun as it was before a look without sun turned it off.
+        std::optional<bool> saved_sun;
+
+        void restore_sun()
+        {
+            if (!saved_sun) return;
+            Dvar::Var sun("r_drawSun");
+            if (sun.IsValid()) sun.Set(*saved_sun);
+            saved_sun.reset();
+        }
 
         std::string read(const std::string& path)
         {
@@ -64,6 +84,8 @@ namespace Components::Menu::WorldEffects
     void Reset()
     {
         loaded = false;
+        as_in_game = false;
+        restore_sun();
         if (active)
         {
             active = false;
@@ -88,7 +110,19 @@ namespace Components::Menu::WorldEffects
 
         const std::string mapScript = environment_source(read("maps/mp/" + map + ".gsc") + "\n" + read("maps/" + map + ".gsc"));
         const std::string art = environment_source(read("maps/createart/" + map + "_art.gsc"));
-        const std::string vision = read_vision_name(mapScript, read_vision_name(art, map));
+        const auto* look = std::ranges::find_if(mod_looks, [&](const mod_look& l) { return l.map == map; });
+        if (look == std::ranges::end(mod_looks)) look = nullptr;
+        as_in_game = look != nullptr;
+        const std::string vision = look ? std::string(look->vision) : read_vision_name(mapScript, read_vision_name(art, map));
+        if (look && !look->sun)
+        {
+            Dvar::Var sun("r_drawSun");
+            if (sun.IsValid())
+            {
+                saved_sun = sun.Get<bool>();
+                sun.Set(false);
+            }
+        }
         std::string visionText = read("vision/" + vision + ".vision");
         if (visionText.empty()) visionText = read("vision/default.vision");
         const auto fields = read_vision_fields(environment_source(visionText));
@@ -147,7 +181,7 @@ namespace Components::Menu::WorldEffects
             effects.push_back({entry->asset.header.fx, std::move(placement)});
         }
         loaded = true;
-        Logger::Print("backdrop environment: {} uses vision '{}' ({} fields), {} of {} authored FX placements ({} definitions, script bytes {}/{}, native {})\n", map, vision, fields.size(), effects.size(), placements.size(), names.size(), fx.size(), create.size(), nativeFx);
+        Logger::Print("backdrop environment: {} uses vision '{}'{} ({} fields), {} of {} authored FX placements ({} definitions, script bytes {}/{}, native {})\n", map, vision, as_in_game ? " as in-game" : "", fields.size(), effects.size(), placements.size(), names.size(), fx.size(), create.size(), nativeFx);
     }
 
     void Draw(Engine::refdef_t& view)
@@ -165,12 +199,15 @@ namespace Components::Menu::WorldEffects
         // on a set would: the dark tint up, a touch of brightness, and more
         // of the sun on the characters themselves (charPrimaryLightScale
         // only touches character models, not the world).
-        view.film.enabled = true;
-        view.film.brightness = std::max(view.film.brightness, 0.0f) + 0.03f;
-        for (float& c : view.film.tintDark) c = std::clamp(c * 1.6f, 1.2f, 2.2f);
-        for (float& c : view.film.tintMedium) c = std::clamp(c * 1.15f, 1.0f, 1.6f);
-        view.charPrimaryLightScale.diffuseScale = std::max(diffuse, 1.0f) * 1.6f;
-        view.charPrimaryLightScale.specularScale = std::max(specular, 1.0f) * 1.2f;
+        if (!as_in_game)
+        {
+            view.film.enabled = true;
+            view.film.brightness = std::max(view.film.brightness, 0.0f) + 0.03f;
+            for (float& c : view.film.tintDark) c = std::clamp(c * 1.6f, 1.2f, 2.2f);
+            for (float& c : view.film.tintMedium) c = std::clamp(c * 1.15f, 1.0f, 1.6f);
+            view.charPrimaryLightScale.diffuseScale = std::max(diffuse, 1.0f) * 1.6f;
+            view.charPrimaryLightScale.specularScale = std::max(specular, 1.0f) * 1.2f;
+        }
         if (effects.empty()) return;
         if (!active)
         {

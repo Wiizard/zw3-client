@@ -18,8 +18,89 @@
 
 #include <curses.h>
 
+#include <share.h>
+
 namespace Components
 {
+	// Everything the console shows also goes to zw3/logs/zw3.log, as it is
+	// printed: each write is flushed, so the file is current even if the
+	// game crashes. The last session's log is kept as zw3.log.previous.
+	namespace
+	{
+		std::mutex consoleLogMutex;
+		std::FILE* consoleLog = nullptr;
+		bool isConsoleLogOpened = false;
+		bool isConsoleLogLineStart = true;
+
+		std::FILE* OpenConsoleLog()
+		{
+			if (isConsoleLogOpened)
+			{
+				return consoleLog;
+			}
+
+			isConsoleLogOpened = true;
+
+			std::error_code ec;
+			std::filesystem::create_directories("zw3/logs", ec);
+
+			// Another instance still writing its log keeps it open, which makes
+			// the rename fail, so its log is never moved out from under it.
+			std::filesystem::rename("zw3/logs/zw3.log", "zw3/logs/zw3.log.previous", ec);
+
+			consoleLog = _fsopen("zw3/logs/zw3.log", "ab", _SH_DENYNO);
+			return consoleLog;
+		}
+
+		void WriteConsoleLog(const char* text)
+		{
+			std::lock_guard _(consoleLogMutex);
+
+			std::FILE* const file = OpenConsoleLog();
+			if (!file)
+			{
+				return;
+			}
+
+			std::string out;
+			out.reserve(std::strlen(text) + 32);
+
+			for (const char* c = text; *c != '\0'; ++c)
+			{
+				if (isConsoleLogLineStart)
+				{
+					const auto now = std::chrono::system_clock::now();
+					out += std::format("[{:%Y-%m-%d %H:%M:%S}] ", std::chrono::floor<std::chrono::seconds>(now));
+					isConsoleLogLineStart = false;
+				}
+
+				// Color codes are for the console's display only.
+				if (*c == '^' && c[1] >= '0' && c[1] <= '9')
+				{
+					++c;
+					continue;
+				}
+
+				if (*c == '\r')
+				{
+					continue;
+				}
+
+				if (*c == '\n')
+				{
+					out += "\r\n";
+					isConsoleLogLineStart = true;
+					continue;
+				}
+
+				out += *c;
+			}
+
+			std::fwrite(out.data(), 1, out.size(), file);
+			std::fflush(file);
+		}
+	}
+
 	bool Console::isOpen = false;
 	std::vector<Console::KeyObserver> Console::keyObservers;
 	bool Console::isBig = false;
@@ -749,6 +830,7 @@ namespace Components
 		}
 
 		PrintCurses(text);
+		WriteConsoleLog(text);
 
 		if (isAsyncConsoleEnabled)
 		{

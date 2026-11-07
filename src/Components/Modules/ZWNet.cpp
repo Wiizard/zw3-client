@@ -3225,13 +3225,16 @@ namespace Components
 
 			std::vector<Utils::QuickPlayPlaylist> candidates;
 			candidates.reserve(playlistCatalog.entries.size());
+			const auto now = Utils::OnlineMetric::Clock::now();
 			for (const auto& entry : playlistCatalog.entries)
 			{
 				const bool hasVerifiedContent = std::ranges::all_of(entry.requiredContent, [&entry](const std::string& contentId)
 				{
 					return std::ranges::find(entry.verifiedContent, contentId) != entry.verifiedContent.end();
 				});
-				candidates.push_back({ entry.id, entry.audience, entry.availability, entry.maxPlayers, hasVerifiedContent, !quickPlayExcluded.contains(entry.id) });
+				const auto population = entry.playerPopulation.Current(now);
+				candidates.push_back({ entry.id, entry.audience, entry.availability, entry.maxPlayers, hasVerifiedContent, !quickPlayExcluded.contains(entry.id),
+					population ? static_cast<int>(std::min<std::uint64_t>(*population, 1'000'000)) : -1 });
 			}
 			const auto selected = Utils::SelectQuickPlayPlaylist(candidates, playlistCatalog.isLoaded, playlistCatalog.isStale,
 				partySize > 0 ? static_cast<std::size_t>(partySize) : 0);

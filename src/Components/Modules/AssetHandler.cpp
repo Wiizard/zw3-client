@@ -2267,6 +2267,10 @@ namespace Components
 			Logger::Print("renderer budgets: lighting minimum {}, scene surface bytes {}, applied {}\n",
 				RenderBudgetPolicy::minimumStaticLighting, RenderBudgetPolicy::sceneSurfaceBytes, raised);
 			const bool commandsRaised = RendererBudgets::RaiseModelCommands();
+			if (commandsRaised)
+			{
+				Remix::Iw4::smodelRecordStride = RenderBudgetPolicy::modelCommandSlotBytes;
+			}
 			Logger::Print("renderer budgets: model command records {}, applied {}\n",
 				RenderBudgetPolicy::modelCommandSlots, commandsRaised);
 		}

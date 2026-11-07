@@ -498,6 +498,13 @@ namespace Components::Remix::Iw4
 	inline constexpr std::uintptr_t smodelRecordSurfaces = 0x00;
 	inline constexpr std::uintptr_t smodelRecordInstanceCount = 0x08;
 	inline constexpr std::uintptr_t smodelRecordInstances = 0x0A;
+	// Updated only after the native model-command producers and decoders are patched.
+	// This record layout is independent of the material-list header width.
+	inline std::size_t smodelRecordStride = 4;
+	inline std::uintptr_t SmodelRecordAddress(std::uintptr_t base, std::uint16_t token)
+	{
+		return base + smodelRecordStride * (token >> 4);
+	}
 	inline constexpr unsigned smodelListCountShift = 12;
 	inline constexpr std::size_t xSurfaceStride = 88;
 	inline constexpr std::uintptr_t xSurfaceVertCount = 0x02;

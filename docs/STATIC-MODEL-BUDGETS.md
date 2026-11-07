@@ -36,6 +36,9 @@ patches. Raising map cull distances alone can increase pressure on all three.
   are touched only as records are written. Allocation/guard failure leaves
   producers and decoders stock together. An unexpected runtime stream layout
   is rejected with the original model warning rather than mixing formats.
+  Remix's static-model readers use the same record stride, switched from four
+  to 512 bytes only after successful patching. This also applies to the unbaked
+  instance check; material-list header widening is a separate format change.
 - All nine calls to the native static-model material encoder use a wrapper.
   Only a newly initialized, empty stream is redirected to 16x storage. The
   original encoder, packed headers and draw ordering are unchanged. Storage
@@ -52,7 +55,12 @@ fallback attempts, plus command-record peaks and rejected stream layouts.
 
 ## Reproducible offline tests
 
-The tests need a read-only archived `.text` and `.rdata` capture from the supported
+`scripts/test-remix-model-commands.ps1` runs with x64 MSVC and no engine capture.
+It tests the actual Remix draw-record and unbaked-instance readers with stock
+and expanded records, all 65,536 tokens in each format, and both material-list
+header widths. The original four-byte decoder fails this regression fixture.
+
+The native engine tests need a read-only archived `.text` and `.rdata` capture from the supported
 engine (`0-0.text`, `rdata.bin`, `metadata.json`); proprietary engine code is not
 included in this repository. No game process is opened or started.
 

@@ -3059,7 +3059,7 @@ namespace Components::Remix
 
 		for (unsigned i = 0; i < count; ++i)
 		{
-			const std::uintptr_t record = base + 4 * (entries[i] >> 4);
+			const std::uintptr_t record = Iw4::SmodelRecordAddress(base, entries[i]);
 			const auto instanceCount = ReadAt<std::uint16_t>(record + Iw4::smodelRecordInstanceCount);
 
 			for (std::uint16_t instance = 0; instance < instanceCount; ++instance)
@@ -3258,7 +3258,7 @@ namespace Components::Remix
 
 		for (unsigned i = 0; i < count; ++i)
 		{
-			const std::uintptr_t record = base + 4 * (entries[i] >> 4);
+			const std::uintptr_t record = Iw4::SmodelRecordAddress(base, entries[i]);
 			const auto surfaces = ReadAt<std::uintptr_t>(record + Iw4::smodelRecordSurfaces);
 			const std::uintptr_t surface = surfaces + Iw4::xSurfaceStride * (entries[i] & 0xF);
 			const auto instanceCount = ReadAt<std::uint16_t>(record + Iw4::smodelRecordInstanceCount);

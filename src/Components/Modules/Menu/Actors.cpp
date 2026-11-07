@@ -43,6 +43,11 @@ namespace Components::Menu
 		bool lineup = true;
 		int lineupCount = -1;
 		std::array<int, 4> lineupRoster{-1, -1, -1, -1};
+		// A lineup that left someone out is placed again a little later: the
+		// traces that place the crew can fail on the first frames of a map.
+		int lineupPlaced = 0;
+		unsigned int lineupRetryAt = 0, lineupRetries = 0;
+		constexpr unsigned int lineupRetryMs = 500, lineupMaxRetries = 20;
 		float lineupSpacing = 52.0f;
 		std::optional<Vec> crewCenter;
 		// Kino's zombies: the Black Ops honor guard bodies with their separate
@@ -215,6 +220,7 @@ namespace Components::Menu
 		std::array<Survivor, survivorCount> survivors;
 		std::array<Zombie, zombieCount> zombies;
 		BackdropData::spawn standing{};
+		BackdropData::spawn anchorSpawn{};
 		std::string currentMap;
 		unsigned int nextSpawn = 0, spawnSequence = 0;
 		std::mutex snapshotMutex;
@@ -294,6 +300,16 @@ namespace Components::Menu
 				if (character && character->type == Game::DVAR_TYPE_STRING && character->current.string)
 					for (int i = 0; i < 4; ++i) if (!_stricmp(character->current.string, names[i])) model = i;
 				result[occupied++] = model;
+			}
+			// Before the party's roster arrives every owner still reads "None";
+			// the local player is always there, so never show an empty crew.
+			if (!occupied)
+			{
+				int model = 0;
+				const auto* character = Game::Dvar_FindVar("character_1");
+				if (character && character->type == Game::DVAR_TYPE_STRING && character->current.string)
+					for (int i = 0; i < 4; ++i) if (!_stricmp(character->current.string, names[i])) model = i;
+				result[0] = model;
 			}
 			return result;
 		}
@@ -470,7 +486,16 @@ namespace Components::Menu
 		void UpdateLineup()
 		{
 			const auto roster = Roster();
-			if (lineupCount >= 0 && roster == lineupRoster) return;
+			const unsigned int now = Now();
+			if (lineupCount >= 0 && roster == lineupRoster)
+			{
+				if (lineupPlaced >= lineupCount || lineupRetries >= lineupMaxRetries || !Due(now, lineupRetryAt)) return;
+				++lineupRetries;
+				// Ground the spawn again too: it may not have had a floor yet.
+				standing = anchorSpawn;
+				Ground(standing.origin);
+			}
+			else lineupRetries = 0;
 			const int count = static_cast<int>(std::ranges::count_if(roster, [](int m) { return m >= 0; }));
 			lineupRoster = roster;
 			lineupCount = count;
@@ -511,6 +536,17 @@ namespace Components::Menu
 				survivor.state.yaw = standing.yaw - side * 0.18f;
 				survivor.state.visible = true;
 			}
+			lineupPlaced = static_cast<int>(taken.size());
+			if (lineupPlaced < count)
+			{
+				lineupRetryAt = now + lineupRetryMs;
+				if (lineupRetries == 0 || lineupRetries == lineupMaxRetries)
+					Logger::Print("menu actors: {} of {} characters have nowhere to stand on {} at ({:.0f}, {:.0f}, {:.0f}){}\n",
+						count - lineupPlaced, count, currentMap, standing.origin[0], standing.origin[1], standing.origin[2],
+						lineupRetries == lineupMaxRetries ? ", giving up" : ", trying again");
+			}
+			else if (lineupRetries > 0)
+				Logger::Print("menu actors: all {} characters placed on {} after {} retries\n", count, currentMap, lineupRetries);
 		}
 
 		void Simulate(unsigned int now, float dt)
@@ -860,6 +896,8 @@ namespace Components::Menu
 		for (auto& actor : entities) actor.Release();
 		RestoreEyes();
 		lineupCount = -1;
+		lineupPlaced = 0;
+		lineupRetries = 0;
 		crewCenter.reset();
 		survivors = {};
 		zombies = {};
@@ -875,7 +913,7 @@ namespace Components::Menu
 		if (map != currentMap)
 		{
 			Reset();
-			standing = anchor;
+			anchorSpawn = standing = anchor;
 			Ground(standing.origin);
 			currentMap = map;
 			nextSpawn = Now() + 1200;

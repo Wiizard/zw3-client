@@ -70,6 +70,20 @@ int main()
 		Require(Selected(filtered) == "b-public", "The Quick Play filter must skip unticked playlists, including the standard queue");
 		filtered[1].isIncluded = false;
 		Require(Selected(filtered).empty(), "A filter with nothing ticked must not fall back to an excluded playlist");
+		std::vector<Utils::QuickPlayPlaylist> busy{
+			{ "zombies-quickplay", "PUBLIC", "AVAILABLE", 4, true, true, 0 },
+			{ "b-public", "PUBLIC", "AVAILABLE", 4, true, true, 1 },
+			{ "a-public", "PUBLIC", "AVAILABLE", 4, true, true, 0 },
+		};
+		Require(Selected(busy) == "b-public", "Quick Play must join the busiest ticked queue, where another searcher already waits");
+		busy[1].isIncluded = false;
+		Require(Selected(busy) == "zombies-quickplay", "An unticked busy queue must not be entered; equal counts keep the standard queue");
+		busy[0].isIncluded = false;
+		busy[2].population = -1;
+		Require(Selected(busy) == "a-public", "An unknown count must not outrank or block an eligible queue");
+		busy[2].population = 3;
+		busy.push_back({ "c-public", "PUBLIC", "AVAILABLE", 4, true, true, 3 });
+		Require(Selected(busy) == "a-public", "Equal counts fall back to the lowest ID");
 		std::cout << "Quick Play public selection, content, capacity, freshness and page-independent tests passed\n";
 		return 0;
 	}

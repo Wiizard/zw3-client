@@ -25,6 +25,10 @@ namespace Components
 
 		static bool IsEnabled();
 		static bool IsRunning();
+		// True for a server started by the ZWNET agent for matchmaking.
+		static bool IsManagedServer();
+		// Managed servers never appear in the normal server browser.
+		static bool ShowInServerBrowser();
 
 		static void Heartbeat();
 

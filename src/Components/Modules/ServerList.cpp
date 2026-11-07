@@ -1003,7 +1003,9 @@ namespace Components
 
 			refreshContainer.servers.erase(i);
 
-			if (info.Get("zwnet_show_in_server_browser") == "0")
+			// Matchmaking servers are joined through Find Match only. Servers on
+			// older builds do not report the browser flag, but do report a match.
+			if (info.Get("zwnet_show_in_server_browser") == "0" || info.Get("zwnet_managed_session") == "1")
 			{
 				std::erase_if(*target, [&address](const ServerInfo& known)
 				{

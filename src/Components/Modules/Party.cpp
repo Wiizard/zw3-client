@@ -1902,7 +1902,7 @@ namespace Components
 		if (Dedicated::IsEnabled())
 		{
 			info.Set("sv_motd", Dedicated::sv_motd.Get<std::string>());
-			info.Set("zwnet_show_in_server_browser", InfoFlag(Dedicated::zwnet_show_in_server_browser.Get<std::string>() != "0"));
+			info.Set("zwnet_show_in_server_browser", InfoFlag(Dedicated::ShowInServerBrowser()));
 
 			const auto matchId = Dvar::Var("zwnet_match_id").Get<std::string>();
 			const bool isManagedSession = !matchId.empty() && matchId != "00000000-0000-0000-0000-000000000000";

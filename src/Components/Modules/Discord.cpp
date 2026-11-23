@@ -35,6 +35,11 @@ namespace Components
 
 	static std::string lastDetails;
 	static std::string lastState;
+	// The latest computed activity, kept apart from the publish state above so
+	// readers always see it, even while Discord is not connected.
+	static std::mutex activityMutex;
+	static std::string activityDetails;
+	static std::string activityState;
 	static std::string lastPartyId;
 	static std::string lastJoinSecret;
 	static int lastPartySize = 0;
@@ -495,6 +500,12 @@ namespace Components
 		canJoin = false;
 	}
 
+	std::pair<std::string, std::string> Discord::GetActivity()
+	{
+		std::lock_guard activityLock(activityMutex);
+		return { activityDetails, activityState };
+	}
+
 	void Discord::UpdateDiscord()
 	{
 		std::lock_guard _(discordUpdateMutex);
@@ -772,6 +783,12 @@ namespace Components
 		if (details.empty())
 		{
 			details = "At the main menu";
+		}
+
+		{
+			std::lock_guard activityLock(activityMutex);
+			activityDetails = details;
+			activityState = state;
 		}
 
 		if (!joinSecretOverride.empty() && partyId == "zwnet_" + joinSecretOverridePartyId)

@@ -11,6 +11,11 @@ namespace Components
 
 		static std::string GetDiscordServerLink() { return "https://discord.gg/QqnF2NFNVV"; }
 
+		// The activity this client shows as its Discord Rich Presence, for example
+		// { "Playing Zombies on Nacht der Untoten", "In a private match" }.
+		// Updated every second whether or not Discord is running.
+		static std::pair<std::string, std::string> GetActivity();
+
 	private:
 		static void InitializeDiscord();
 

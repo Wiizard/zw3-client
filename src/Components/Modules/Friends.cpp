@@ -12,6 +12,7 @@
 #include "Auth.hpp"
 #include "Command.hpp"
 #include "Dedicated.hpp"
+#include "Discord.hpp"
 #include "Events.hpp"
 #include "Localization.hpp"
 #include "Logger.hpp"
@@ -200,6 +201,16 @@ namespace Components
 	constexpr std::size_t maxSocialFriends = 512;
 	constexpr std::size_t maxSocialRequests = 128;
 
+	// Mirrors Discord's four user statuses. Invisible users read as Offline,
+	// exactly as Discord shows them to their friends.
+	enum class SocialPresence
+	{
+		Online,
+		Idle,
+		DoNotDisturb,
+		Offline,
+	};
+
 	struct SocialFriend
 	{
 		std::string id;
@@ -207,7 +218,11 @@ namespace Components
 		std::string discordId;
 		std::string displayName;
 		std::string status;
+		std::string activityDetail;
 		std::string zwnetPartyId;
+		SocialPresence presence = SocialPresence::Offline;
+		bool isPresenceFromDiscord = false;
+		std::int64_t lastSeen = 0;
 		bool isJoinable = false;
 		bool online = false;
 		bool isRankKnown = false;
@@ -238,6 +253,16 @@ namespace Components
 	static std::atomic_bool isSocialRefreshBusy = false;
 	static std::atomic_bool isPartyInvitePollBusy = false;
 	static std::atomic_bool isSocialRosterCurrent = false;
+	static std::atomic_bool hasLoadedSocialRoster = false;
+
+	// When each friend was last seen online by this client, by public GUID.
+	// Covers friends the backend sends no last-seen time for, and survives
+	// restarts. Guarded by socialMutex.
+	static std::unordered_map<std::string, std::int64_t> socialLastSeen;
+	static bool isSocialLastSeenLoaded = false;
+	static bool isSocialLastSeenDirty = false;
+	static std::int64_t socialLastSeenSavedAt = 0;
+	constexpr auto socialLastSeenPath = "zw3/core/scriptdata/social_last_seen.json";
 
 	// Only the UI scripts access the pending removal.
 	static std::string pendingFriendRemovalDiscordId;
@@ -432,13 +457,354 @@ namespace Components
 		return Utils::SocialActivityText(std::move(status));
 	}
 	static bool IsZwnetPartyId(const std::string& value);
+	static std::string FirstSocialString(const nlohmann::json& object, std::initializer_list<const char*> keys);
 
-	// Roster groups, best first: joinable, playing or in a lobby, idle online, offline.
+	static std::optional<SocialPresence> ParseSocialPresence(std::string value)
+	{
+		value = ToLowerAscii(std::move(value));
+		std::ranges::replace(value, '-', '_');
+		std::ranges::replace(value, ' ', '_');
+
+		if (value == "online" || value == "active")
+		{
+			return SocialPresence::Online;
+		}
+
+		if (value == "idle" || value == "away" || value == "afk")
+		{
+			return SocialPresence::Idle;
+		}
+
+		if (value == "dnd" || value == "do_not_disturb" || value == "donotdisturb" || value == "busy")
+		{
+			return SocialPresence::DoNotDisturb;
+		}
+
+		if (value == "offline" || value == "invisible")
+		{
+			return SocialPresence::Offline;
+		}
+
+		return std::nullopt;
+	}
+
+	// Discord status as relayed by the ZW3 backend. Several shapes are accepted so
+	// the client keeps working while the backend field settles.
+	static std::optional<SocialPresence> ReadDiscordPresence(const nlohmann::json& row)
+	{
+		for (const auto* key : { "discord_status", "discord_presence", "presence_status", "user_status" })
+		{
+			if (const auto parsed = ParseSocialPresence(SocialJsonString(row, key)))
+			{
+				return parsed;
+			}
+		}
+
+		const auto readNested = [](const nlohmann::json& object) -> std::optional<SocialPresence>
+		{
+			if (!object.is_object())
+			{
+				return std::nullopt;
+			}
+
+			for (const auto* key : { "discord_status", "discord_presence", "presence_status", "user_status" })
+			{
+				if (const auto parsed = ParseSocialPresence(SocialJsonString(object, key)))
+				{
+					return parsed;
+				}
+			}
+
+			if (object.contains("discord") && object.at("discord").is_object())
+			{
+				return ParseSocialPresence(SocialJsonString(object.at("discord"), "status"));
+			}
+
+			return std::nullopt;
+		};
+
+		if (row.contains("presence"))
+		{
+			if (const auto parsed = readNested(row.at("presence")))
+			{
+				return parsed;
+			}
+		}
+
+		if (row.contains("discord") && row.at("discord").is_object())
+		{
+			return ParseSocialPresence(SocialJsonString(row.at("discord"), "status"));
+		}
+
+		return std::nullopt;
+	}
+
+	static std::int64_t ParseSocialTimestamp(const nlohmann::json& value)
+	{
+		std::int64_t seconds = 0;
+
+		if (value.is_number_unsigned())
+		{
+			seconds = static_cast<std::int64_t>(std::min<std::uint64_t>(value.get<std::uint64_t>(), static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())));
+		}
+		else if (value.is_number_integer())
+		{
+			seconds = value.get<std::int64_t>();
+		}
+		else if (value.is_number_float())
+		{
+			seconds = static_cast<std::int64_t>(value.get<double>());
+		}
+		else if (value.is_string())
+		{
+			const auto& text = value.get_ref<const std::string&>();
+
+			if (text.empty() || text.size() > 40)
+			{
+				return 0;
+			}
+
+			if (std::ranges::all_of(text, [](const unsigned char c) { return std::isdigit(c) != 0; }))
+			{
+				seconds = std::strtoll(text.data(), nullptr, 10);
+			}
+			else
+			{
+				// ISO 8601, read as UTC: 2026-11-23T20:40:00(.000)(Z|+00:00)
+				std::tm parts{};
+				if (std::sscanf(text.data(), "%4d-%2d-%2d%*c%2d:%2d:%2d", &parts.tm_year, &parts.tm_mon, &parts.tm_mday, &parts.tm_hour, &parts.tm_min, &parts.tm_sec) != 6)
+				{
+					return 0;
+				}
+
+				parts.tm_year -= 1900;
+				parts.tm_mon -= 1;
+				seconds = static_cast<std::int64_t>(_mkgmtime(&parts));
+			}
+		}
+
+		// Milliseconds since the epoch.
+		if (seconds > 100000000000)
+		{
+			seconds /= 1000;
+		}
+
+		return seconds > 0 ? seconds : 0;
+	}
+
+	static std::int64_t ReadSocialLastSeen(const nlohmann::json& row)
+	{
+		const auto readFrom = [](const nlohmann::json& object) -> std::int64_t
+		{
+			if (!object.is_object())
+			{
+				return 0;
+			}
+
+			for (const auto* key : { "last_seen", "last_seen_at", "last_online", "last_online_at", "last_active_at", "updated_at" })
+			{
+				if (object.contains(key))
+				{
+					if (const auto seconds = ParseSocialTimestamp(object.at(key)))
+					{
+						return seconds;
+					}
+				}
+			}
+
+			return 0;
+		};
+
+		if (const auto seconds = readFrom(row))
+		{
+			return seconds;
+		}
+
+		return row.contains("presence") ? readFrom(row.at("presence")) : 0;
+	}
+
+	// " · " drawn through the Unicode text renderer, with a plain fallback.
+	static const std::string& SocialSeparator()
+	{
+		static const std::string separator = []
+		{
+			const auto dot = TextRenderer::EncodeUtf8ForGame("\xC2\xB7", 4);
+			return dot.empty() ? std::string("  -  ") : " " + dot + " ";
+		}();
+		return separator;
+	}
+
+	// "IN LOBBY" -> "In lobby", for the card's second line.
+	static std::string SocialSentenceCase(std::string text)
+	{
+		bool isFirst = true;
+		for (auto& character : text)
+		{
+			const auto c = static_cast<unsigned char>(character);
+			if (std::isalpha(c))
+			{
+				character = static_cast<char>(isFirst ? std::toupper(c) : std::tolower(c));
+				isFirst = false;
+			}
+		}
+		return text;
+	}
+
+	// The part of a friend's activity after the state: map, round and party size.
+	static std::string ReadSocialActivityDetail(const nlohmann::json& row)
+	{
+		const nlohmann::json* sources[2] = { &row, nullptr };
+
+		if (row.contains("presence") && row.at("presence").is_object())
+		{
+			sources[1] = &row.at("presence");
+		}
+
+		std::string mapName;
+		int roundNumber = 0;
+		int partySize = 0;
+		int partyMax = 0;
+
+		for (const auto* source : sources)
+		{
+			if (!source)
+			{
+				continue;
+			}
+
+			if (mapName.empty())
+			{
+				mapName = FirstSocialString(*source, { "map_display_name", "map_name", "mapname", "map" });
+			}
+
+			if (roundNumber <= 0)
+			{
+				TryReadSocialInteger(*source, "round", roundNumber);
+			}
+
+			if (partySize <= 0 && !TryReadSocialInteger(*source, "party_size", partySize))
+			{
+				TryReadSocialInteger(*source, "member_count", partySize);
+			}
+
+			if (partyMax <= 0 && !TryReadSocialInteger(*source, "party_max", partyMax))
+			{
+				TryReadSocialInteger(*source, "max_members", partyMax);
+			}
+		}
+
+		std::vector<std::string> parts;
+
+		if (!mapName.empty())
+		{
+			parts.emplace_back(SafeSocialText(TextRenderer::StripColors(mapName), 32));
+		}
+
+		if (roundNumber > 0 && roundNumber < 10000)
+		{
+			parts.emplace_back(std::format("Round {}", roundNumber));
+		}
+
+		if (partySize > 0 && partySize <= 64)
+		{
+			parts.emplace_back(partyMax >= partySize && partyMax <= 64 ? std::format("{}/{}", partySize, partyMax) : std::format("{} in party", partySize));
+		}
+
+		std::string detail;
+
+		for (const auto& part : parts)
+		{
+			if (part.empty())
+			{
+				continue;
+			}
+
+			if (!detail.empty())
+			{
+				detail += SocialSeparator();
+			}
+
+			detail += part;
+		}
+
+		return detail;
+	}
+
+	static std::string FormatSocialLastSeen(const std::int64_t lastSeen)
+	{
+		if (lastSeen <= 0)
+		{
+			return {};
+		}
+
+		const auto elapsed = static_cast<std::int64_t>(std::time(nullptr)) - lastSeen;
+
+		if (elapsed < 60)
+		{
+			return "Last seen just now";
+		}
+
+		if (elapsed < 3600)
+		{
+			return std::format("Last seen {}m ago", elapsed / 60);
+		}
+
+		if (elapsed < 86400)
+		{
+			return std::format("Last seen {}h ago", elapsed / 3600);
+		}
+
+		if (elapsed < 86400 * 30)
+		{
+			return std::format("Last seen {}d ago", elapsed / 86400);
+		}
+
+		return "Last seen a while ago";
+	}
+
+	static const char* SocialPresenceName(const SocialPresence presence)
+	{
+		switch (presence)
+		{
+		case SocialPresence::Online: return "Online";
+		case SocialPresence::Idle: return "Idle";
+		case SocialPresence::DoNotDisturb: return "Do not disturb";
+		default: return "Offline";
+		}
+	}
+
+	// A colored status dot drawn through the Unicode text renderer, Discord style:
+	// green online, amber idle, red do not disturb, hollow offline.
+	static const std::string& SocialPresenceDot(const SocialPresence presence)
+	{
+		static const std::string filled = TextRenderer::EncodeUtf8ForGame("\xE2\x97\x8F", 4);
+		static const std::string hollow = TextRenderer::EncodeUtf8ForGame("\xE2\x97\x8B", 4);
+		static const std::string online = "^2" + (filled.empty() ? std::string("o") : filled);
+		static const std::string idle = "^3" + (filled.empty() ? std::string("o") : filled);
+		static const std::string busy = "^1" + (filled.empty() ? std::string("o") : filled);
+		static const std::string offline = "^7" + (hollow.empty() ? std::string("-") : hollow);
+
+		switch (presence)
+		{
+		case SocialPresence::Online: return online;
+		case SocialPresence::Idle: return idle;
+		case SocialPresence::DoNotDisturb: return busy;
+		default: return offline;
+		}
+	}
+
+	static bool IsSocialFriendVisible(const SocialFriend& user)
+	{
+		return user.online || user.presence != SocialPresence::Offline;
+	}
+
+	// Roster groups, best first: joinable, in a lobby or match, online in ZW3,
+	// idle in ZW3, do not disturb in ZW3, on Discord but not in ZW3, offline.
 	static int SocialFriendGroup(const SocialFriend& user)
 	{
 		if (!user.online)
 		{
-			return 3;
+			return user.presence != SocialPresence::Offline ? 5 : 6;
 		}
 
 		if (user.isJoinable)
@@ -446,7 +812,72 @@ namespace Components
 			return 0;
 		}
 
-		return user.status == "ONLINE" ? 2 : 1;
+		if (user.status != "ONLINE")
+		{
+			return 1;
+		}
+
+		switch (user.presence)
+		{
+		case SocialPresence::Idle: return 3;
+		case SocialPresence::DoNotDisturb: return 4;
+		default: return 2;
+		}
+	}
+
+	// The card's second line: what the friend is doing right now. The status
+	// dot already says online, idle or do not disturb, so this never repeats it,
+	// and an offline friend with no last-seen time gets no second line at all.
+	static std::string SocialActivityLine(const SocialFriend& user)
+	{
+		if (!user.online)
+		{
+			if (user.status == "UNAVAILABLE")
+			{
+				return "Status unavailable";
+			}
+
+			if (user.presence != SocialPresence::Offline)
+			{
+				return "On Discord";
+			}
+
+			return FormatSocialLastSeen(user.lastSeen);
+		}
+
+		std::string line;
+
+		if (user.isJoinable)
+		{
+			line = "^2Joinable^7" + SocialSeparator() + SocialSentenceCase(user.status);
+		}
+		else if (user.status == "ONLINE")
+		{
+			line = "In menus";
+		}
+		else
+		{
+			line = "^3" + SocialSentenceCase(user.status) + "^7";
+		}
+
+		if (!user.activityDetail.empty())
+		{
+			line += SocialSeparator() + user.activityDetail;
+		}
+
+		return line;
+	}
+
+	// The detail panel's line under the status: says where they are, without
+	// repeating the status label above it.
+	static std::string SocialDetailActivity(const SocialFriend& user)
+	{
+		if (!user.online && user.presence != SocialPresence::Offline)
+		{
+			return "Not playing ZW3";
+		}
+
+		return SocialActivityLine(user);
 	}
 
 	static bool SocialFriendComesFirst(const SocialFriend& left, const SocialFriend& right)
@@ -493,6 +924,257 @@ namespace Components
 		}
 	}
 
+	// The friends card list: a window of socialVisibleRows rows over the roster
+	// with Online and Offline section headers, published as one dvar per field
+	// per row. The engine keeps dvar name pointers, so the names live in tables.
+	constexpr int socialVisibleRows = 7;
+
+	namespace SocialRowDvar
+	{
+		constexpr const char* type[socialVisibleRows] = { "ui_social_row0_type", "ui_social_row1_type", "ui_social_row2_type", "ui_social_row3_type", "ui_social_row4_type", "ui_social_row5_type", "ui_social_row6_type" };
+		constexpr const char* name[socialVisibleRows] = { "ui_social_row0_name", "ui_social_row1_name", "ui_social_row2_name", "ui_social_row3_name", "ui_social_row4_name", "ui_social_row5_name", "ui_social_row6_name" };
+		constexpr const char* status[socialVisibleRows] = { "ui_social_row0_status", "ui_social_row1_status", "ui_social_row2_status", "ui_social_row3_status", "ui_social_row4_status", "ui_social_row5_status", "ui_social_row6_status" };
+		constexpr const char* presence[socialVisibleRows] = { "ui_social_row0_presence", "ui_social_row1_presence", "ui_social_row2_presence", "ui_social_row3_presence", "ui_social_row4_presence", "ui_social_row5_presence", "ui_social_row6_presence" };
+		constexpr const char* rank[socialVisibleRows] = { "ui_social_row0_rank", "ui_social_row1_rank", "ui_social_row2_rank", "ui_social_row3_rank", "ui_social_row4_rank", "ui_social_row5_rank", "ui_social_row6_rank" };
+		constexpr const char* icon[socialVisibleRows] = { "ui_social_row0_icon", "ui_social_row1_icon", "ui_social_row2_icon", "ui_social_row3_icon", "ui_social_row4_icon", "ui_social_row5_icon", "ui_social_row6_icon" };
+		constexpr const char* selected[socialVisibleRows] = { "ui_social_row0_selected", "ui_social_row1_selected", "ui_social_row2_selected", "ui_social_row3_selected", "ui_social_row4_selected", "ui_social_row5_selected", "ui_social_row6_selected" };
+		constexpr const char* joinable[socialVisibleRows] = { "ui_social_row0_joinable", "ui_social_row1_joinable", "ui_social_row2_joinable", "ui_social_row3_joinable", "ui_social_row4_joinable", "ui_social_row5_joinable", "ui_social_row6_joinable" };
+	}
+
+	struct SocialListEntry
+	{
+		bool isHeader = false;
+		std::string header;
+		unsigned int friendIndex = 0;
+	};
+
+	// Guarded by socialMutex.
+	static unsigned int socialListOffset = 0;
+	static bool isSocialListFollowingSelection = true;
+
+	static int SocialPresenceId(const SocialPresence presence)
+	{
+		switch (presence)
+		{
+		case SocialPresence::Online: return 0;
+		case SocialPresence::Idle: return 1;
+		case SocialPresence::DoNotDisturb: return 2;
+		default: return 3;
+		}
+	}
+
+	static std::string SocialPrestigeIcon(const SocialFriend& user)
+	{
+		if (!user.isRankKnown)
+		{
+			return "skullicon";
+		}
+
+		return user.rankPrestige < 8 ? std::format("prestige_{}", user.rankPrestige + 1) : std::string("skullicon");
+	}
+
+	// The roster is already sorted with everyone online first.
+	static std::vector<SocialListEntry> BuildSocialEntries()
+	{
+		std::vector<SocialListEntry> entries;
+		const auto onlineCount = static_cast<std::size_t>(std::ranges::count_if(socialFriends, IsSocialFriendVisible));
+		const auto offlineCount = socialFriends.size() - onlineCount;
+
+		for (unsigned int index = 0; index < socialFriends.size(); ++index)
+		{
+			if (index == 0 && onlineCount > 0)
+			{
+				entries.push_back({ true, std::format("ONLINE{}{}", SocialSeparator(), onlineCount), 0 });
+			}
+
+			if (index == onlineCount && offlineCount > 0)
+			{
+				entries.push_back({ true, std::format("OFFLINE{}{}", SocialSeparator(), offlineCount), 0 });
+			}
+
+			entries.push_back({ false, {}, index });
+		}
+
+		return entries;
+	}
+
+	// Keeps the selected card (and its section header when it starts the window)
+	// in view while the selection moves, and clamps the window otherwise.
+	static void UpdateSocialListWindow(const std::vector<SocialListEntry>& entries)
+	{
+		const auto rows = static_cast<unsigned int>(socialVisibleRows);
+		const auto size = static_cast<unsigned int>(entries.size());
+		const unsigned int maxOffset = size > rows ? size - rows : 0;
+
+		if (isSocialListFollowingSelection)
+		{
+			const auto selected = std::ranges::find_if(entries, [](const SocialListEntry& entry) { return !entry.isHeader && entry.friendIndex == currentSocialFriend; });
+			if (selected != entries.end())
+			{
+				auto position = static_cast<unsigned int>(std::distance(entries.begin(), selected));
+				if (position > 0 && entries[position - 1].isHeader)
+				{
+					--position;
+				}
+
+				const auto selectedRow = static_cast<unsigned int>(std::distance(entries.begin(), selected));
+				if (position < socialListOffset)
+				{
+					socialListOffset = position;
+				}
+				else if (selectedRow >= socialListOffset + rows)
+				{
+					socialListOffset = selectedRow - rows + 1;
+				}
+			}
+		}
+
+		socialListOffset = std::min(socialListOffset, maxOffset);
+	}
+
+	// Call on the main thread with socialMutex held.
+	static void PublishSocialRows(const bool isCurrent)
+	{
+		const auto entries = BuildSocialEntries();
+		UpdateSocialListWindow(entries);
+
+		for (int row = 0; row < socialVisibleRows; ++row)
+		{
+			const auto position = socialListOffset + static_cast<unsigned int>(row);
+			int type = 0;
+			int presence = 3;
+			bool isSelected = false;
+			bool isJoinable = false;
+			std::string name;
+			std::string status;
+			std::string rank;
+			std::string icon = "skullicon";
+
+			if (position < entries.size())
+			{
+				const auto& entry = entries[position];
+				if (entry.isHeader)
+				{
+					type = 1;
+					name = entry.header;
+				}
+				else if (entry.friendIndex < socialFriends.size())
+				{
+					const auto& user = socialFriends[entry.friendIndex];
+					type = 2;
+					name = user.displayName;
+					status = isCurrent ? SocialActivityLine(user) : std::string("Status unavailable");
+					presence = isCurrent ? SocialPresenceId(user.presence) : 3;
+					rank = user.isRankKnown ? std::format("Lv {}", user.rankLevel) : std::string{};
+					icon = SocialPrestigeIcon(user);
+					isSelected = entry.friendIndex == currentSocialFriend;
+					isJoinable = isCurrent && user.isJoinable;
+				}
+			}
+
+			Dvar::Var(SocialRowDvar::type[row]).Set(type);
+			Dvar::Var(SocialRowDvar::name[row]).Set(name);
+			Dvar::Var(SocialRowDvar::status[row]).Set(status);
+			Dvar::Var(SocialRowDvar::presence[row]).Set(presence);
+			Dvar::Var(SocialRowDvar::rank[row]).Set(rank);
+			Dvar::Var(SocialRowDvar::icon[row]).Set(icon);
+			Dvar::Var(SocialRowDvar::selected[row]).Set(isSelected);
+			Dvar::Var(SocialRowDvar::joinable[row]).Set(isJoinable);
+		}
+
+		const auto size = static_cast<unsigned int>(entries.size());
+		const bool canScroll = size > static_cast<unsigned int>(socialVisibleRows);
+		const float thumb = canScroll ? static_cast<float>(socialVisibleRows) / static_cast<float>(size) : 1.0f;
+		const float scroll = canScroll ? static_cast<float>(socialListOffset) / static_cast<float>(size - static_cast<unsigned int>(socialVisibleRows)) : 0.0f;
+		Dvar::Var("ui_social_list_thumb").Set(thumb);
+		Dvar::Var("ui_social_list_scroll").Set(scroll);
+		Dvar::Var("ui_social_list_can_scroll").Set(canScroll);
+	}
+
+	static void RegisterSocialRowDvars()
+	{
+		for (int row = 0; row < socialVisibleRows; ++row)
+		{
+			Dvar::Register(SocialRowDvar::type[row], 0, 0, 2, Game::DVAR_NONE, "Friends card row kind: 0 empty, 1 section header, 2 friend");
+			Dvar::Register(SocialRowDvar::name[row], "", Game::DVAR_NONE, "Friends card row first line");
+			Dvar::Register(SocialRowDvar::status[row], "", Game::DVAR_NONE, "Friends card row second line");
+			Dvar::Register(SocialRowDvar::presence[row], 3, 0, 3, Game::DVAR_NONE, "Friends card row status: 0 online, 1 idle, 2 do not disturb, 3 offline");
+			Dvar::Register(SocialRowDvar::rank[row], "", Game::DVAR_NONE, "Friends card row rank");
+			Dvar::Register(SocialRowDvar::icon[row], "skullicon", Game::DVAR_NONE, "Friends card row prestige material");
+			Dvar::Register(SocialRowDvar::selected[row], false, Game::DVAR_NONE, "Friends card row is the selected friend");
+			Dvar::Register(SocialRowDvar::joinable[row], false, Game::DVAR_NONE, "Friends card row friend is joinable");
+		}
+
+		Dvar::Register("ui_social_list_thumb", 1.0f, 0.0f, 1.0f, Game::DVAR_NONE, "Friends list scrollbar thumb size");
+		Dvar::Register("ui_social_list_scroll", 0.0f, 0.0f, 1.0f, Game::DVAR_NONE, "Friends list scroll position");
+		Dvar::Register("ui_social_list_can_scroll", false, Game::DVAR_NONE, "Friends list has more rows than fit");
+		Dvar::Register("ui_social_selected_presence_id", 3, 0, 3, Game::DVAR_NONE, "Selected friend's status: 0 online, 1 idle, 2 do not disturb, 3 offline");
+		Dvar::Register("ui_social_selected_status", "", Game::DVAR_NONE, "Selected friend's status label");
+		Dvar::Register("ui_social_selected_rank", "", Game::DVAR_NONE, "Selected friend's level and prestige");
+		Dvar::Register("ui_social_selected_icon", "skullicon", Game::DVAR_NONE, "Selected friend's prestige material");
+		// A filled circle for the menu's status dots, drawn by the Unicode text renderer.
+		Dvar::Register("ui_social_self_name", "", Game::DVAR_NONE, "Local player's name for the friends menu");
+		Dvar::Register("ui_social_self_rank", "", Game::DVAR_NONE, "Local player's level for the friends menu");
+		Dvar::Register("ui_social_self_icon", "skullicon", Game::DVAR_NONE, "Local player's prestige material for the friends menu");
+		Dvar::Register("ui_social_self_status", "", Game::DVAR_NONE, "Local player's live status for the friends menu");
+		Dvar::Register("ui_social_self_presence", 3, 0, 3, Game::DVAR_NONE, "Local player's status: 0 online, 3 offline");
+		static const std::string statusDot = TextRenderer::EncodeUtf8ForGame("\xE2\x97\x8F", 4);
+		Dvar::Register("ui_social_dot", statusDot.empty() ? "o" : statusDot.data(), Game::DVAR_ROM, "Status dot glyph used by the friends menu");
+	}
+
+	// The local player's card in the friends menu header: name, level and a
+	// live status taken from the ZWNet state and whether a match is running.
+	static void PublishSelfState()
+	{
+		auto rank = ReadLocalZombieRank();
+		std::string barracksIcon;
+
+		// Fall back to the rank Barracks loaded from ZWNet, unless Barracks is
+		// showing another player for comparison.
+		const auto readDvar = [](const char* name) { return Dvar::Var(name); };
+		if (!rank && readDvar("zw3_barracks_rank_known").IsValid() && readDvar("zw3_barracks_rank_known").Get<bool>()
+			&& !(readDvar("zwnet_barracks_compare_active").IsValid() && readDvar("zwnet_barracks_compare_active").Get<bool>()))
+		{
+			const int level = readDvar("zw3_barracks_rank_level").IsValid() ? readDvar("zw3_barracks_rank_level").Get<int>() : 0;
+			const int prestige = readDvar("zw3_barracks_rank_prestige").IsValid() ? readDvar("zw3_barracks_rank_prestige").Get<int>() : 0;
+			if (Utils::ValidSocialRank(level, prestige))
+			{
+				rank = std::pair{ level, prestige };
+				if (readDvar("zw3_barracks_rank_icon").IsValid())
+				{
+					barracksIcon = readDvar("zw3_barracks_rank_icon").Get<std::string>();
+				}
+			}
+		}
+		std::string state;
+		if (const Dvar::Var zwnetState("ui_zwnet_state"); zwnetState.IsValid())
+		{
+			state = zwnetState.Get<std::string>();
+		}
+
+		const bool isServiceDown = state == "ERROR" || state == "OFFLINE" || state == "LOGIN_REQUIRED";
+
+		// The same activity this client shows as its Discord Rich Presence, so the
+		// header always matches what friends see on Discord.
+		const auto [details, activityState] = Discord::GetActivity();
+		std::string status = details.empty() ? std::string("Online") : details;
+		if (!activityState.empty())
+		{
+			status += SocialSeparator() + activityState;
+		}
+
+		if (state == "LOGIN_REQUIRED")
+		{
+			status = "Not signed in" + SocialSeparator() + status;
+		}
+
+		Dvar::Var("ui_social_self_name").Set(Dvar::Name.Get<std::string>());
+		Dvar::Var("ui_social_self_rank").Set(rank ? std::format("Lv {}", rank->first) : std::string{});
+		Dvar::Var("ui_social_self_icon").Set(!barracksIcon.empty() ? barracksIcon : rank && rank->second < 8 ? std::format("prestige_{}", rank->second + 1) : std::string("skullicon"));
+		Dvar::Var("ui_social_self_status").Set(status);
+		Dvar::Var("ui_social_self_presence").Set(isServiceDown ? 3 : 0);
+	}
+
 	static void PublishSocialRosterState()
 	{
 		Scheduler::Once([]
@@ -501,54 +1183,100 @@ namespace Components
 
 			unsigned int total = 0;
 			unsigned int online = 0;
+			unsigned int inGame = 0;
 			unsigned int joinableCount = 0;
 			unsigned int selection = 0;
 			bool joinable = false;
 			bool invitable = false;
 			bool removable = false;
+			bool isSelected = false;
 			std::string name;
+			std::string presence;
+			std::string activity;
 			std::string reason = "Select a friend to see available actions.";
+			std::string statusLabel;
+			std::string rankLabel;
+			std::string icon = "skullicon";
+			int presenceId = 3;
+			const bool current = isSocialRosterCurrent;
 			{
 				std::lock_guard _(socialMutex);
+				PublishSocialRows(current);
 				total = static_cast<unsigned int>(socialFriends.size());
 				for (const auto& user : socialFriends)
 				{
-					if (user.online) ++online;
+					if (IsSocialFriendVisible(user)) ++online;
+					if (user.online) ++inGame;
 					if (SocialFriendGroup(user) == 0) ++joinableCount;
 				}
 				if (currentSocialFriend < socialFriends.size())
 				{
 					const auto& user = socialFriends[currentSocialFriend];
+					isSelected = true;
 					selection = currentSocialFriend;
 					name = user.displayName;
+					presence = SocialPresenceDot(user.presence) + " ^7" + SocialPresenceName(user.presence);
+					activity = SocialDetailActivity(user);
+					statusLabel = user.online || user.presence == SocialPresence::Offline
+						? std::string(SocialPresenceName(user.presence))
+						: std::format("{} on Discord", SocialPresenceName(user.presence));
+					presenceId = SocialPresenceId(user.presence);
+					rankLabel = user.isRankKnown ? std::format("Level {}{}Prestige {}", user.rankLevel, SocialSeparator(), user.rankPrestige) : std::string{};
+					icon = SocialPrestigeIcon(user);
 					removable = !user.discordId.empty();
 					invitable = user.online;
 					joinable = user.online && user.isJoinable && IsZwnetPartyId(user.zwnetPartyId);
-					reason = joinable ? "Join their party or invite them to yours." : user.online
-						? "You can invite this friend. Their party isn't available to join."
-						: "This friend is offline. Join and Party Invite are unavailable.";
+					if (joinable)
+					{
+						reason = "Join their party or invite them to yours.";
+					}
+					else if (user.online)
+					{
+						reason = "You can invite this friend. Their party isn't available to join.";
+					}
+					else if (user.presence != SocialPresence::Offline)
+					{
+						reason = "This friend is on Discord but not in ZW3 right now.";
+					}
+					else
+					{
+						reason = "This friend is offline. Join and Party Invite are unavailable.";
+					}
+					if (user.online && user.presence == SocialPresence::DoNotDisturb)
+					{
+						reason += " They are set to Do Not Disturb.";
+					}
 				}
 			}
-			const bool current = isSocialRosterCurrent;
 			if (!current)
 			{
 				joinable = false;
+				presenceId = 3;
+				statusLabel = "Status unavailable";
 				reason = "Friend status is temporarily unavailable. Refresh and try again.";
 			}
 			SyncSocialListCursor(socialFriendFeeder, selection);
 			std::string summary = "FRIENDS UNAVAILABLE";
-			if (current && joinableCount > 0)
+			if (current)
 			{
-				summary = std::format("{} JOINABLE  |  {} ONLINE  |  {} TOTAL", joinableCount, online, total);
-			}
-			else if (current)
-			{
-				summary = std::format("{} ONLINE  |  {} TOTAL", online, total);
+				summary = std::format("ONLINE - {}  |  IN ZW3 - {}  |  OFFLINE - {}", online, inGame, total - online);
+				if (joinableCount > 0)
+				{
+					summary = std::format("JOINABLE - {}  |  ", joinableCount) + summary;
+				}
 			}
 			Dvar::Var("ui_social_roster_summary").Set(summary);
 			Dvar::Var("ui_social_friend_count").Set(static_cast<int>(total));
+			Dvar::Var("ui_social_online_count").Set(static_cast<int>(online));
 			Dvar::Var("ui_social_roster_current").Set(current);
 			Dvar::Var("ui_social_selected_name").Set(name);
+			Dvar::Var("ui_social_selected_index").Set(isSelected ? static_cast<int>(selection) : -1);
+			Dvar::Var("ui_social_selected_presence").Set(current ? presence : std::string{});
+			Dvar::Var("ui_social_selected_activity").Set(current ? activity : std::string{});
+			Dvar::Var("ui_social_selected_status").Set(statusLabel);
+			Dvar::Var("ui_social_selected_presence_id").Set(presenceId);
+			Dvar::Var("ui_social_selected_rank").Set(rankLabel);
+			Dvar::Var("ui_social_selected_icon").Set(icon);
 			Dvar::Var("ui_social_selected_removable").Set(removable);
 			Dvar::Var("ui_social_selected_joinable").Set(joinable);
 			Dvar::Var("ui_social_selected_invitable").Set(current && invitable);
@@ -801,6 +1529,64 @@ namespace Components
 		return nullptr;
 	}
 
+	// Call with socialMutex held.
+	static void LoadSocialLastSeen()
+	{
+		if (isSocialLastSeenLoaded)
+		{
+			return;
+		}
+
+		isSocialLastSeenLoaded = true;
+		std::string data;
+		if (!Utils::IO::ReadFile(socialLastSeenPath, &data) || data.empty())
+		{
+			return;
+		}
+
+		try
+		{
+			const auto stored = nlohmann::json::parse(data);
+			if (!stored.is_object())
+			{
+				return;
+			}
+
+			for (const auto& [guid, seconds] : stored.items())
+			{
+				if (IsPublicGuid(guid) && seconds.is_number_integer() && seconds.get<std::int64_t>() > 0)
+				{
+					socialLastSeen[guid] = seconds.get<std::int64_t>();
+				}
+			}
+		}
+		catch (const nlohmann::json::exception&)
+		{
+			socialLastSeen.clear();
+		}
+	}
+
+	// Call with socialMutex held. Writes when something changed, at most every
+	// five minutes unless forced (on shutdown or when a friend goes offline).
+	static void SaveSocialLastSeen(const bool isForced)
+	{
+		const auto now = static_cast<std::int64_t>(std::time(nullptr));
+		if (!isSocialLastSeenDirty || (!isForced && now - socialLastSeenSavedAt < 300))
+		{
+			return;
+		}
+
+		nlohmann::json stored = nlohmann::json::object();
+		for (const auto& [guid, seconds] : socialLastSeen)
+		{
+			stored[guid] = seconds;
+		}
+
+		Utils::IO::WriteFile(socialLastSeenPath, stored.dump());
+		isSocialLastSeenDirty = false;
+		socialLastSeenSavedAt = now;
+	}
+
 	static bool TryReplaceSocialFriends(const nlohmann::json& response)
 	{
 		const auto* rows = FindRows(response, "friends");
@@ -890,6 +1676,16 @@ namespace Components
 				zwnetPartyId.clear();
 			}
 
+			// Discord's status wins when the backend relays it. A friend who is in
+			// ZW3 but invisible on Discord still reads as online here, because the
+			// ZW3 roster already reports them as playing.
+			const auto discordPresence = ReadDiscordPresence(row);
+			auto presence = discordPresence.value_or(online ? SocialPresence::Online : SocialPresence::Offline);
+			if (online && presence == SocialPresence::Offline)
+			{
+				presence = SocialPresence::Online;
+			}
+
 			auto displayName = SafeSocialText(SocialJsonString(row, "display_name"), 48);
 
 			if (displayName.empty())
@@ -924,7 +1720,11 @@ namespace Components
 			user.discordId = SafeSocialText(SocialJsonString(row, "discord_user_id"), 32);
 			user.displayName = std::move(displayName);
 			user.status = SafeSocialText(status, 32);
+			user.activityDetail = online ? ReadSocialActivityDetail(row) : std::string{};
 			user.zwnetPartyId = SafeSocialText(zwnetPartyId, 80);
+			user.presence = presence;
+			user.isPresenceFromDiscord = discordPresence.has_value();
+			user.lastSeen = ReadSocialLastSeen(row);
 			user.isJoinable = isJoinable;
 			user.online = online;
 			user.isRankKnown = isRankKnown;
@@ -940,9 +1740,62 @@ namespace Components
 
 		std::ranges::sort(updated, SocialFriendComesFirst);
 
+		std::vector<std::pair<std::string, std::string>> notifications;
+
 		{
 			std::lock_guard _(socialMutex);
+
+			// Last seen: record everyone online now, and give offline friends the
+			// later of the backend's time and the last time this client saw them.
+			LoadSocialLastSeen();
+			const auto now = static_cast<std::int64_t>(std::time(nullptr));
+			bool hasSomeoneGoneOffline = false;
+			for (auto& user : updated)
+			{
+				const auto previous = std::ranges::find_if(socialFriends, [&user](const SocialFriend& candidate) { return candidate.id == user.id; });
+				if (user.online)
+				{
+					socialLastSeen[user.id] = now;
+					isSocialLastSeenDirty = true;
+					continue;
+				}
+
+				if (previous != socialFriends.end() && previous->online)
+				{
+					hasSomeoneGoneOffline = true;
+				}
+
+				if (const auto stored = socialLastSeen.find(user.id); stored != socialLastSeen.end())
+				{
+					user.lastSeen = std::max(user.lastSeen, stored->second);
+				}
+			}
+			SaveSocialLastSeen(hasSomeoneGoneOffline);
+
 			const auto selectedId = currentSocialFriend < socialFriends.size() ? socialFriends[currentSocialFriend].id : std::string{};
+
+			// Only changes after the first load are news; the first load is the baseline.
+			if (hasLoadedSocialRoster)
+			{
+				for (const auto& user : updated)
+				{
+					const auto previous = std::ranges::find_if(socialFriends, [&user](const SocialFriend& candidate) { return candidate.id == user.id; });
+					if (previous == socialFriends.end())
+					{
+						continue;
+					}
+
+					if (user.online && !previous->online)
+					{
+						notifications.emplace_back(user.displayName, "is now online in ZW3");
+					}
+					else if (user.isJoinable && !previous->isJoinable)
+					{
+						notifications.emplace_back(user.displayName, "is in a joinable lobby");
+					}
+				}
+			}
+
 			socialFriends = std::move(updated);
 
 			for (const auto& user : socialFriends)
@@ -962,7 +1815,31 @@ namespace Components
 			}
 		}
 		isSocialRosterCurrent = true;
+		hasLoadedSocialRoster = true;
 		PublishSocialRosterState();
+
+		if (!notifications.empty())
+		{
+			Scheduler::Once([notifications = std::move(notifications)]
+			{
+				if (!isSocialActive || !Dvar::Var("cl_socialNotifications").Get<bool>() || Game::CL_IsCgameInitialized(0))
+				{
+					return;
+				}
+
+				// A burst (for example after waking from sleep) collapses into one toast.
+				if (notifications.size() > 2)
+				{
+					Toast::Show("skullicon", "Friends", std::format("{} friends changed status", notifications.size()), 3500);
+					return;
+				}
+
+				for (const auto& [name, description] : notifications)
+				{
+					Toast::Show("skullicon", name, description, 3500);
+				}
+			}, Scheduler::Pipeline::MAIN);
+		}
 
 		return true;
 	}
@@ -1102,6 +1979,8 @@ namespace Components
 				{
 					user.status = "UNAVAILABLE";
 					user.online = false;
+					user.presence = SocialPresence::Offline;
+					user.activityDetail.clear();
 					user.isJoinable = false;
 					user.zwnetPartyId.clear();
 				}
@@ -1123,6 +2002,7 @@ namespace Components
 			SyncSocialListCursor(socialRequestFeeder, currentIncomingRequest);
 			Dvar::Var("ui_social_request_count").Set(success || !incomingRequests.empty()
 				? static_cast<int>(incomingRequests.size()) : -1);
+			Dvar::Var("ui_social_request_index").Set(incomingRequests.empty() ? -1 : static_cast<int>(currentIncomingRequest));
 		}, Scheduler::Pipeline::MAIN);
 		return success;
 	}
@@ -1175,46 +2055,25 @@ namespace Components
 
 			const auto& user = socialFriends[index];
 
+			// Columns: status dot, name, live activity, rank.
 			switch (column)
 			{
 			case 0:
-				value = "--";
-
-				if (user.isRankKnown)
-				{
-					value = std::to_string(user.rankLevel);
-				}
-
+				value = SocialPresenceDot(user.presence);
 				break;
 			case 1:
 				value = user.displayName;
 				break;
 			case 2:
+				value = SocialActivityLine(user);
+				break;
+			case 3:
 				value = "--";
 
 				if (user.isRankKnown)
 				{
 					const auto icon = user.rankPrestige < 8 ? std::format("prestige_{}", user.rankPrestige + 1) : "skullicon";
-					value = SocialIconText(icon, std::format("PRESTIGE {}", user.rankPrestige));
-				}
-
-				break;
-			case 3:
-				// Green: joinable or idle online. Yellow: busy in a lobby or match.
-				switch (SocialFriendGroup(user))
-				{
-				case 0:
-					value = "^2JOINABLE ^7- " + user.status;
-					break;
-				case 1:
-					value = "^3" + user.status;
-					break;
-				case 2:
-					value = "^2" + user.status;
-					break;
-				default:
-					value = user.status;
-					break;
+					value = SocialIconText(icon, std::format("LV {}", user.rankLevel));
 				}
 
 				break;
@@ -1234,6 +2093,7 @@ namespace Components
 			if (index < socialFriends.size())
 			{
 				currentSocialFriend = index;
+				isSocialListFollowingSelection = true;
 			}
 		}
 		PublishSocialRosterState();
@@ -1280,14 +2140,42 @@ namespace Components
 		return Utils::String::VA("%s", value.data());
 	}
 
+	static void PublishIncomingRequestSelection()
+	{
+		Scheduler::Once([]
+		{
+			if (!isSocialActive) return;
+
+			int selection = -1;
+			{
+				std::lock_guard _(socialMutex);
+				if (currentIncomingRequest < incomingRequests.size())
+				{
+					selection = static_cast<int>(currentIncomingRequest);
+				}
+			}
+
+			if (selection >= 0)
+			{
+				SyncSocialListCursor(socialRequestFeeder, static_cast<unsigned int>(selection));
+			}
+
+			Dvar::Var("ui_social_request_index").Set(selection);
+		}, Scheduler::Pipeline::MAIN);
+	}
+
 	static void SelectIncomingRequest(const unsigned int index)
 	{
-		std::lock_guard _(socialMutex);
-
-		if (index < incomingRequests.size())
 		{
-			currentIncomingRequest = index;
+			std::lock_guard _(socialMutex);
+
+			if (index < incomingRequests.size())
+			{
+				currentIncomingRequest = index;
+			}
 		}
+
+		PublishIncomingRequestSelection();
 	}
 
 	static std::optional<SocialFriend> SelectedSocialFriend()
@@ -2300,6 +3188,85 @@ namespace Components
 			});
 		});
 
+		// Controller list navigation: step the selection one row and keep the
+		// listbox cursor and scroll position in sync, so the menu knows the edges.
+		UIScript::Add("SocialFriendStep", [](const UIScript::Token& token)
+		{
+			const int step = std::clamp(token.Get<int>(), -1, 1);
+			{
+				std::lock_guard _(socialMutex);
+				if (socialFriends.empty() || step == 0)
+				{
+					return;
+				}
+
+				const auto last = static_cast<int>(socialFriends.size()) - 1;
+				currentSocialFriend = static_cast<unsigned int>(std::clamp(static_cast<int>(currentSocialFriend) + step, 0, last));
+				isSocialListFollowingSelection = true;
+			}
+
+			Game::SND_PlayLocalSoundAliasByName(0, "mouse_over", 0);
+			PublishSocialRosterState();
+		});
+
+		// Mouse: clicking a card selects that friend; clicking a section header does nothing.
+		UIScript::Add("SocialSelectRow", [](const UIScript::Token& token)
+		{
+			const int row = token.Get<int>();
+			if (row < 0 || row >= socialVisibleRows)
+			{
+				return;
+			}
+
+			{
+				std::lock_guard _(socialMutex);
+				const auto entries = BuildSocialEntries();
+				const auto position = socialListOffset + static_cast<unsigned int>(row);
+				if (position >= entries.size() || entries[position].isHeader)
+				{
+					return;
+				}
+
+				currentSocialFriend = entries[position].friendIndex;
+				isSocialListFollowingSelection = true;
+			}
+
+			PublishSocialRosterState();
+		});
+
+		// Mouse wheel and scrollbar arrows: move the window without changing the selection.
+		UIScript::Add("SocialScroll", [](const UIScript::Token& token)
+		{
+			const int step = std::clamp(token.Get<int>(), -socialVisibleRows, socialVisibleRows);
+			{
+				std::lock_guard _(socialMutex);
+				const auto entries = BuildSocialEntries();
+				const int maxOffset = std::max(0, static_cast<int>(entries.size()) - socialVisibleRows);
+				socialListOffset = static_cast<unsigned int>(std::clamp(static_cast<int>(socialListOffset) + step, 0, maxOffset));
+				isSocialListFollowingSelection = false;
+			}
+
+			PublishSocialRosterState();
+		});
+
+		UIScript::Add("SocialRequestStep", [](const UIScript::Token& token)
+		{
+			const int step = std::clamp(token.Get<int>(), -1, 1);
+			{
+				std::lock_guard _(socialMutex);
+				if (incomingRequests.empty() || step == 0)
+				{
+					return;
+				}
+
+				const auto last = static_cast<int>(incomingRequests.size()) - 1;
+				currentIncomingRequest = static_cast<unsigned int>(std::clamp(static_cast<int>(currentIncomingRequest) + step, 0, last));
+			}
+
+			Game::SND_PlayLocalSoundAliasByName(0, "mouse_over", 0);
+			PublishIncomingRequestSelection();
+		});
+
 		UIScript::Add("LoadFriendRequests", [](const UIScript::Token&)
 		{
 			RunSocialTask("Refreshing friend requests...", []() -> std::string
@@ -2831,29 +3798,62 @@ namespace Components
 
 		Scheduler::Loop([]
 		{
-			if (!isSocialActive || isSocialBusy)
+			if (isSocialActive)
+			{
+				PublishSelfState();
+			}
+		}, Scheduler::Pipeline::MAIN, 2s);
+
+		// Live roster: a quick refresh while the friends popup is open, and a slower
+		// one in the background so status changes still raise a toast.
+		Scheduler::Loop([]
+		{
+			using clock = std::chrono::steady_clock;
+			static auto lastRefresh = clock::time_point{};
+
+			if (!isSocialActive || isSocialBusy || isSocialRefreshBusy)
 			{
 				return;
 			}
 
 			auto* const menu = Game::Menus_FindByName(Game::uiContext, "popup_friends");
+			const bool isMenuOpen = menu && Game::Menu_IsVisible(Game::uiContext, menu);
 
-			if (!menu || !Game::Menu_IsVisible(Game::uiContext, menu) || isSocialRefreshBusy.exchange(true))
+			int intervalSeconds = isMenuOpen
+				? std::clamp(Dvar::Var("ui_social_refresh_interval").Get<int>(), 3, 60)
+				: Dvar::Var("cl_socialPresenceInterval").Get<int>();
+
+			// Background polling is off when the interval is zero, and while in a match.
+			if (!isMenuOpen && (intervalSeconds <= 0 || Game::CL_IsCgameInitialized(0)))
 			{
 				return;
 			}
 
-			Scheduler::Once([]
+			intervalSeconds = std::max(intervalSeconds, 3);
+			const auto now = clock::now();
+
+			if (now - lastRefresh < std::chrono::seconds(intervalSeconds) || isSocialRefreshBusy.exchange(true))
+			{
+				return;
+			}
+
+			lastRefresh = now;
+
+			Scheduler::Once([isMenuOpen]
 			{
 				if (isSocialActive)
 				{
 					TryRefreshSocialFriends();
-					TryRefreshIncomingRequests();
+
+					if (isMenuOpen)
+					{
+						TryRefreshIncomingRequests();
+					}
 				}
 
 				isSocialRefreshBusy = false;
 			}, Scheduler::Pipeline::ASYNC);
-		}, Scheduler::Pipeline::MAIN, 15s);
+		}, Scheduler::Pipeline::MAIN, 1s);
 
 		Scheduler::Loop([]
 		{
@@ -2869,6 +3869,11 @@ namespace Components
 
 		Scheduler::OnShutdown([]
 		{
+			{
+				std::lock_guard _(socialMutex);
+				SaveSocialLastSeen(true);
+			}
+
 			isSocialActive = false;
 			isSocialBusy = false;
 			StoreFriendsList();
@@ -2889,6 +3894,15 @@ namespace Components
 			Dvar::Register("ui_social_selected_joinable",false,Game::DVAR_NONE,"Selected friend has a supported current join target");
 			Dvar::Register("ui_social_selected_invitable", false, Game::DVAR_NONE, "Selected friend is online and can receive a party invitation");
 			Dvar::Register("ui_social_selected_join_reason","Select a ZW3 friend first.",Game::DVAR_NONE,"Reason for the selected friend's join availability");
+			Dvar::Register("ui_social_selected_index", -1, -1, 512, Game::DVAR_NONE, "Roster row of the selected friend, or -1");
+			Dvar::Register("ui_social_request_index", -1, -1, 128, Game::DVAR_NONE, "Row of the selected incoming friend request, or -1");
+			RegisterSocialRowDvars();
+			Dvar::Register("ui_social_selected_presence", "", Game::DVAR_NONE, "Selected friend's Discord-style status with its colored dot");
+			Dvar::Register("ui_social_selected_activity", "", Game::DVAR_NONE, "Selected friend's live activity line");
+			Dvar::Register("ui_social_online_count", 0, 0, 512, Game::DVAR_NONE, "Friends online in ZW3 or on Discord");
+			Dvar::Register("ui_social_refresh_interval", 5, 3, 60, Game::DVAR_ARCHIVE, "Seconds between friend status refreshes while the friends menu is open");
+			Dvar::Register("cl_socialPresenceInterval", 30, 0, 600, Game::DVAR_ARCHIVE, "Seconds between background friend status refreshes outside a match, 0 to disable");
+			Dvar::Register("cl_socialNotifications", true, Game::DVAR_ARCHIVE, "Show a toast when a friend comes online or opens a joinable lobby");
 			Dvar::Register("ui_social_friend_guid", "", Game::DVAR_NONE, "Public ZW3 GUID entered for a friend request");
 			Dvar::Register("ui_social_remove_friend_name", "", Game::DVAR_NONE, "Name shown in the remove friend confirmation");
 			Dvar::Register("ui_social_own_guid", "", Game::DVAR_ROM, "Local public ZW3 GUID shown in the social menu");
